@@ -1554,6 +1554,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  participantAvatarImage: { width: 44, height: 44, borderRadius: 22 },
   participantAvatarAlt: { backgroundColor: "#E9EFF0" },
   participantName: { marginTop: 6, fontSize: 11, color: colors.muted },
   connectionLine: { width: 38, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
