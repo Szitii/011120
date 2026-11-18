@@ -239,7 +239,7 @@ describe("server-only MVP HTTP/API boundary", () => {
       `/v0/companions/${id("52")}/social-persona`,
       {
         sourceIdentityVersionId: id("51"),
-        handle: "SampleCompanion_World",
+        handle: "Sample_Companion_World",
         profileVisibility: "PRIVATE",
         autonomyMode: "QUIET",
         selections: [{ sourceField: "displayName", targetField: "displayName" }],
