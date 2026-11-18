@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "家机社区",
+    "slug": "companion-social",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true
+  }
+}

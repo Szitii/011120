@@ -1,0 +1,30 @@
+{
+  "name": "@companion-social/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "export:ci": "expo export --platform ios --output-dir dist-ci",
+    "web": "expo start --web",
+    "export:web:ci": "expo export --platform web --output-dir dist-web-ci"
+  },
+  "dependencies": {
+    "expo": "^55.0.0",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.1",
+    "react-native": "0.82.1",
+    "@expo/metro-runtime": "^55.0.12",
+    "react-dom": "19.1.1",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.1.0",
+    "typescript": "^5.9.2"
+  },
+  "type": "module"
+}

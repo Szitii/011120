@@ -1,0 +1,174 @@
+import type {
+  ActiveIdentityContext,
+  ClientApi,
+  CompanionIdentity,
+  CompanionProfile,
+  ControlsPatch,
+  ControlsResource,
+  EncounterDetail,
+  IdentityKind,
+  ImportReview,
+  LifeContinuityCollection,
+  LifeEventInboxCollection,
+  LifeEventInboxItem,
+  OwnerCompanionCollection,
+  ProjectionResult,
+  ProjectionSelection,
+  WorldCollection,
+} from "../contracts.ts";
+
+export class ApiProblemError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly messageClass: string;
+  readonly retryHint: string;
+  readonly traceId: string;
+
+  constructor(status: number, code: string, messageClass: string, retryHint: string, traceId: string) {
+    super(code);
+    this.name = "ApiProblemError";
+    this.status = status;
+    this.code = code;
+    this.messageClass = messageClass;
+    this.retryHint = retryHint;
+    this.traceId = traceId;
+  }
+}
+
+interface RealApiConfig { baseUrl: string; bearerToken: string; }
+
+export class RealApiAdapter implements ClientApi {
+  private readonly config: RealApiConfig;
+
+  constructor(config: RealApiConfig) {
+    this.config = config;
+  }
+
+  async identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext> {
+    const query = input ? `?activeSubjectKind=${encodeURIComponent(input.kind)}&activeSubjectId=${encodeURIComponent(input.id)}` : "";
+    return this.get<ActiveIdentityContext>(`/v0/identity-context${query}`);
+  }
+
+  ownerCompanions(): Promise<OwnerCompanionCollection> { return this.get("/v0/companions"); }
+  worldItems(): Promise<WorldCollection> { return this.get("/v0/world-items?limit=20"); }
+  lifeContinuity(viewer?: { kind: IdentityKind; id: string }): Promise<LifeContinuityCollection> {
+    const subject = viewer
+      ? `&activeSubjectKind=${encodeURIComponent(viewer.kind)}&activeSubjectId=${encodeURIComponent(viewer.id)}`
+      : "&activeSubjectKind=OWNER";
+    return this.get(`/v0/life-continuity?limit=30${subject}`);
+  }
+  encounterDetail(id: string): Promise<EncounterDetail> { return this.get(`/v0/encounters/${encodeURIComponent(id)}`); }
+  companionProfile(id: string, viewer?: { kind: IdentityKind; id: string }): Promise<CompanionProfile> {
+    const query = viewer
+      ? `?activeSubjectKind=${encodeURIComponent(viewer.kind)}&activeSubjectId=${encodeURIComponent(viewer.id)}`
+      : "?activeSubjectKind=OWNER";
+    return this.get(`/v0/companions/${encodeURIComponent(id)}/profile${query}`);
+  }
+  lifeEventInbox(): Promise<LifeEventInboxCollection> { return this.get("/v0/life-event-inbox?limit=20"); }
+  acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem> {
+    return this.send("PUT", `/v0/life-event-inbox/${encodeURIComponent(itemId)}/read`);
+  }
+  createCompanionImport(payload: Record<string, unknown>): Promise<ImportReview> {
+    return this.send("POST", "/v0/companion-imports", payload, { "Idempotency-Key": this.idempotencyKey("import") });
+  }
+  approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string): Promise<CompanionIdentity> {
+    return this.send(
+      "POST",
+      `/v0/companion-imports/${encodeURIComponent(importId)}/approve`,
+      { approvedCandidateIds, ...(companionId ? { companionId } : {}) },
+      { "Idempotency-Key": this.idempotencyKey("approve") },
+    );
+  }
+  projectSocialPersona(
+    companionId: string,
+    input: {
+      sourceIdentityVersionId: string;
+      handle: string;
+      profileVisibility: "PRIVATE" | "FRIENDS" | "PUBLIC";
+      autonomyMode: "QUIET" | "NORMAL" | "ACTIVE" | "CUSTOM";
+      selections: ProjectionSelection[];
+    },
+  ): Promise<ProjectionResult> {
+    return this.send(
+      "PUT",
+      `/v0/companions/${encodeURIComponent(companionId)}/social-persona`,
+      input,
+      { "Idempotency-Key": this.idempotencyKey("social-persona") },
+    );
+  }
+
+  controls(companionId: string): Promise<ControlsResource> {
+    return this.get(`/v0/controls?companionId=${encodeURIComponent(companionId)}`);
+  }
+  updateControls(companionId: string, revision: number, patch: ControlsPatch): Promise<ControlsResource> {
+    return this.send(
+      "PATCH",
+      `/v0/controls?companionId=${encodeURIComponent(companionId)}`,
+      patch,
+      { "If-Match": String(revision), "Idempotency-Key": this.idempotencyKey("controls") },
+    );
+  }
+
+  private idempotencyKey(prefix: string): string {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+  }
+
+  private async get<T>(path: string): Promise<T> {
+    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
+      headers: { Authorization: `Bearer ${this.config.bearerToken}`, Accept: "application/json" },
+    });
+    const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    if (!response.ok) {
+      throw new ApiProblemError(
+        response.status,
+        String(body?.code ?? "HTTP_ERROR"),
+        String(body?.messageClass ?? "INTERNAL"),
+        String(body?.retryHint ?? "DO_NOT_RETRY"),
+        String(body?.traceId ?? "unknown"),
+      );
+    }
+    return body as T;
+  }
+
+  private async send<T>(
+    method: "POST" | "PUT" | "PATCH",
+    path: string,
+    body?: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
+    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.config.bearerToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...extraHeaders,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const parsed = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    if (!response.ok) {
+      throw new ApiProblemError(
+        response.status,
+        String(parsed?.code ?? "HTTP_ERROR"),
+        String(parsed?.messageClass ?? "INTERNAL"),
+        String(parsed?.retryHint ?? "DO_NOT_RETRY"),
+        String(parsed?.traceId ?? "unknown"),
+      );
+    }
+    return parsed as T;
+  }
+}
+
+export function safeClientMessage(error: unknown): { title: string; retry: boolean } {
+  if (!(error instanceof ApiProblemError)) return { title: "没连上。", retry: true };
+  switch (error.status) {
+    case 401: return { title: "会话过期了。", retry: false };
+    case 403: return { title: "这里不能进。", retry: false };
+    case 404: return { title: "这条已经不在这儿。", retry: false };
+    case 409: return { title: "东西变了。", retry: true };
+    case 501: return { title: "这个还没开。", retry: false };
+    case 503: return { title: "现在没连上。", retry: true };
+    default: return { title: "没连上。", retry: error.retryHint !== "DO_NOT_RETRY" };
+  }
+}
