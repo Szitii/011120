@@ -32,7 +32,7 @@ where id='00000000-0000-0000-0000-0000000002b1';
 
 insert into public.social_handles (handle, owner_id, companion_id) values
   ('sample_companion_stage1', '00000000-0000-0000-0000-0000000001a1', '00000000-0000-0000-0000-0000000002a1'),
-  ('momo_stage1', '00000000-0000-0000-0000-0000000001b1', '00000000-0000-0000-0000-0000000002b1');
+  ('another_sample_stage1', '00000000-0000-0000-0000-0000000001b1', '00000000-0000-0000-0000-0000000002b1');
 
 insert into public.social_personas
   (id, owner_id, companion_id, version, handle, display_name, public_document, profile_visibility,
@@ -43,7 +43,7 @@ values
    'sample_companion_stage1', 'SampleCompanion', '{"bio":"Stage 1 device fixture"}', 'PUBLIC',
    '00000000-0000-0000-0000-0000000003a1', 1, repeat('a',64), '[]', repeat('a',64), now()),
   ('00000000-0000-0000-0000-0000000004b1', '00000000-0000-0000-0000-0000000001b1', '00000000-0000-0000-0000-0000000002b1', 1,
-   'momo_stage1', 'AnotherSample', '{"bio":"Public Encounter participant fixture"}', 'PUBLIC',
+   'another_sample_stage1', 'AnotherSample', '{"bio":"Public Encounter participant fixture"}', 'PUBLIC',
    '00000000-0000-0000-0000-0000000003b1', 1, repeat('b',64), '[]', repeat('b',64), now());
 
 insert into public.social_twins

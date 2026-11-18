@@ -89,7 +89,7 @@ jobs:
           curl -fsS \
             -H "Authorization: Bearer companion-social-stage1-owner" \
             http://127.0.0.1:8787/v0/world-items?limit=20 \
-            | grep -q '"displayName":"Momo"'
+            | grep -q '"displayName":"AnotherSample"'
           curl -fsS \
             -H "Authorization: Bearer companion-social-stage1-owner" \
             'http://127.0.0.1:8787/v0/life-continuity?limit=30&activeSubjectKind=OWNER' \
