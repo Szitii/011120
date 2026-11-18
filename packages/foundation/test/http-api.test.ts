@@ -177,7 +177,7 @@ describe("server-only MVP HTTP/API boundary", () => {
 
     const missingDisplay = await api.handle(request("PUT", path, {
       sourceIdentityVersionId: id("51"),
-      handle: "sample_companion_world",
+      handle: "sample_companion_social",
       profileVisibility: "PRIVATE",
       autonomyMode: "QUIET",
       selections: [{ sourceField: "personaTraits", targetField: "publicTraits" }],
@@ -186,7 +186,7 @@ describe("server-only MVP HTTP/API boundary", () => {
 
     const badMapping = await api.handle(request("PUT", path, {
       sourceIdentityVersionId: id("51"),
-      handle: "sample_companion_world",
+      handle: "sample_companion_social",
       profileVisibility: "PRIVATE",
       autonomyMode: "QUIET",
       selections: [{ sourceField: "displayName", targetField: "bio" }],
@@ -195,7 +195,7 @@ describe("server-only MVP HTTP/API boundary", () => {
 
     const duplicateTarget = await api.handle(request("PUT", path, {
       sourceIdentityVersionId: id("51"),
-      handle: "sample_companion_world",
+      handle: "sample_companion_social",
       profileVisibility: "PRIVATE",
       autonomyMode: "QUIET",
       selections: [
@@ -216,7 +216,7 @@ describe("server-only MVP HTTP/API boundary", () => {
 
     const base = {
       sourceIdentityVersionId: id("51"),
-      handle: "sample_companion_world",
+      handle: "sample_companion_social",
       profileVisibility: "PRIVATE",
       autonomyMode: "QUIET",
       selections: [{ sourceField: "displayName", targetField: "displayName" }],
@@ -239,7 +239,7 @@ describe("server-only MVP HTTP/API boundary", () => {
       `/v0/companions/${id("52")}/social-persona`,
       {
         sourceIdentityVersionId: id("51"),
-        handle: "Sample_Companion_World",
+        handle: "Sample_Companion_Social",
         profileVisibility: "PRIVATE",
         autonomyMode: "QUIET",
         selections: [{ sourceField: "displayName", targetField: "displayName" }],
@@ -250,7 +250,7 @@ describe("server-only MVP HTTP/API boundary", () => {
     const call = owner.calls.find((entry) => entry.name === "social-project");
     assert.ok(call);
     const input = call?.input as Parameters<OwnerApiPort["projectAndActivateSocialTwin"]>[0];
-    assert.equal(input.handle, "sample_companion_world");
+    assert.equal(input.handle, "sample_companion_social");
     assert.equal(input.companionId, id("52"));
     assert.deepEqual(input.selections, [{ sourceField: "displayName", targetField: "displayName" }]);
   });

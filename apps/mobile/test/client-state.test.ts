@@ -117,7 +117,7 @@ describe("real API adapter boundary", () => {
                   : url.endsWith("/v0/companion-imports")
                     ? { id: "import-1", status: "REVIEWABLE", statusHistory: ["UPLOADED", "QUARANTINED", "REVIEWABLE"], originalSha256: "a".repeat(64), byteLength: 10, parserVersion: "1", policyVersion: "1", sourceFormat: "CHARACTER_CARD_JSON_V2", findings: [], draft: { candidates: [{ id: "candidate-1", field: "displayName", value: "SampleCompanion", sourcePath: "$.name", sourceTrust: "EXTERNAL_UNTRUSTED", approvable: true, blockedByFindingIds: [] }] } }
                     : url.includes("/social-persona")
-                      ? { persona: { id: "p1", companionId: "c", version: 1, handle: "sample_companion_world", displayName: "SampleCompanion", profileVisibility: "PRIVATE" }, twin: { id: "t1", companionId: "c", activeSocialPersonaId: "p1", status: "ACTIVE", autonomyMode: "QUIET" } }
+                      ? { persona: { id: "p1", companionId: "c", version: 1, handle: "sample_companion_social", displayName: "SampleCompanion", profileVisibility: "PRIVATE" }, twin: { id: "t1", companionId: "c", activeSocialPersonaId: "p1", status: "ACTIVE", autonomyMode: "QUIET" } }
                       : url.includes("/controls")
                       ? { companionId: "c", schemaVersion: 1, revision: init?.method === "PATCH" ? 2 : 1, settings: { socialTwinVisibility: "PUBLIC", socialAutonomyMode: "QUIET", memorySharingScope: "PERMISSION_GATED_SOCIAL_ONLY", notificationsEnabled: true }, supported: { socialTwinVisibility: ["PRIVATE", "FRIENDS", "PUBLIC"], socialAutonomyMode: ["QUIET", "NORMAL", "ACTIVE", "CUSTOM"], memorySharingScope: ["PERMISSION_GATED_SOCIAL_ONLY"], notificationsEnabled: true } }
                       : { companionId: "c", socialTwinId: "s", socialPersonaId: "p", handle: "sample_companion", displayName: "SampleCompanion", profileVisibility: "PUBLIC", identityVersion: 1, socialPersonaVersion: 1, publicProfile: {}, viewer: { relationship: "OWNER_OF", capabilities: {} }, completeness: "COMPLETE" };
@@ -140,7 +140,7 @@ describe("real API adapter boundary", () => {
       await api.approveCompanionImport(review.id, ["candidate-1"]);
       await api.projectSocialPersona("companion-id", {
         sourceIdentityVersionId: "identity-1",
-        handle: "sample_companion_world",
+        handle: "sample_companion_social",
         profileVisibility: "PRIVATE",
         autonomyMode: "QUIET",
         selections: [{ sourceField: "displayName", targetField: "displayName" }],

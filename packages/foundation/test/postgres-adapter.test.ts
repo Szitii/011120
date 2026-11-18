@@ -97,14 +97,14 @@ describe("PostgreSQL persistence adapter",()=>{
   });
   it("maps persistent Social Persona projection activation",async()=>{
     const payload={
-      persona:{id:id("60"),companionId:id("52"),version:1,handle:"sample_companion_world",displayName:"SampleCompanion",profileVisibility:"PRIVATE"},
+      persona:{id:id("60"),companionId:id("52"),version:1,handle:"sample_companion_social",displayName:"SampleCompanion",profileVisibility:"PRIVATE"},
       twin:{id:id("61"),companionId:id("52"),activeSocialPersonaId:id("60"),status:"ACTIVE",autonomyMode:"QUIET"}
     };
     const db=new FakeExecutor({payload});
     const result=await new PostgresOwnerAdapter(db).projectAndActivateSocialTwin({
       companionId:id("52"),
       sourceIdentityVersionId:id("51"),
-      handle:"sample_companion_world",
+      handle:"sample_companion_social",
       profileVisibility:"PRIVATE",
       autonomyMode:"QUIET",
       selections:[{sourceField:"displayName",targetField:"displayName"}],
@@ -114,7 +114,7 @@ describe("PostgreSQL persistence adapter",()=>{
     assert.equal(result.twin.status,"ACTIVE");
     assert.match(db.calls[0]?.text??"",/project_and_activate_social_twin/);
     assert.deepEqual(db.calls[0]?.values,[
-      id("52"),id("51"),"sample_companion_world","PRIVATE","QUIET",
+      id("52"),id("51"),"sample_companion_social","PRIVATE","QUIET",
       JSON.stringify([{sourceField:"displayName",targetField:"displayName"}]),
       "a".repeat(64),"b".repeat(64)
     ]);

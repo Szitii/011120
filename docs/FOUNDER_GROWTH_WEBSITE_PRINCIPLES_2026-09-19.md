@@ -11,7 +11,7 @@ COMPANION_SOCIAL should not treat Growth & Brand as a post-product promotion fun
 
 Once the current 02 × 03 execution chain reaches real-data Founder Dogfood readiness, 04 Growth & Brand becomes one of the project's primary operating lanes alongside Product / Engineering.
 
-For COMPANION_SOCIAL, distribution, media, story, culture, Creator participation, and the public Companion world are part of the product's growth system rather than an afterthought.
+For COMPANION_SOCIAL, distribution, media, story, culture, Creator participation, and the public 家机社区 are part of the product's growth system rather than an afterthought.
 
 ## 2. Website role
 
@@ -22,7 +22,7 @@ COMPANION_SOCIAL Website is not a conventional AI SaaS landing page and should n
 
 The Website should help a first-time visitor:
 1. understand what COMPANION_SOCIAL is;
-2. observe that a Companion world exists or is being built;
+2. observe that a 家机社区 exists or is being built;
 3. recognize that their existing TA can come here;
 4. enter the appropriate early-access / Bring Companion funnel.
 
