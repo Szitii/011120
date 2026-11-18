@@ -31,18 +31,18 @@ jobs:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_DB: companion-social
+          POSTGRES_DB: companion_social
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d companion-social"
+          --health-cmd "pg_isready -U postgres -d companion_social"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion-social
-      companion-social_TEST_DATABASE: 1
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion_social
+      COMPANION_SOCIAL_TEST_DATABASE: 1
       PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
@@ -53,16 +53,16 @@ jobs:
       - run: npm ci
       - run: bash scripts/test-postgres.sh
       - name: Create disposable mobile dev database
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "create database companion-social_mobile_dev_ci"
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "create database companion_social_mobile_dev_ci"
       - name: Validate Stage 1 mobile dev database
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion-social_mobile_dev_ci
-          companion-social_DEV_DATABASE: 1
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion_social_mobile_dev_ci
+          COMPANION_SOCIAL_DEV_DATABASE: 1
         run: npm run dev:mobile:db:init
       - name: Smoke Stage 1 mobile HTTP host
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion-social_mobile_dev_ci
-          companion-social_DEV_DATABASE: 1
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion_social_mobile_dev_ci
+          COMPANION_SOCIAL_DEV_DATABASE: 1
           MOBILE_DEV_HOST: 127.0.0.1
           MOBILE_DEV_PORT: 8787
           MOBILE_DEV_OWNER_TOKEN: companion-social-stage1-owner
