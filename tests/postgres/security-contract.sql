@@ -1724,6 +1724,7 @@ insert into public.social_feed_items(
   clock_timestamp(),'Public-safe encounter excerpt','ENCOUNTER',
   '00000000-0000-0000-0000-0000000008e1','PUBLIC','PUBLISHED'
 );
+select terminal.encounter_id as diagnostic_encounter_id, terminal.invitation_id as diagnostic_invitation_id, invitation.initiator_owner_id as diagnostic_initiator, invitation.responder_owner_id as diagnostic_responder from companion_private.encounter_idempotency terminal left join public.encounter_invitations invitation on invitation.id=terminal.invitation_id where terminal.encounter_id='00000000-0000-0000-0000-0000000008e1';
 
 set role authenticated;
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-0000000000a1',false);
