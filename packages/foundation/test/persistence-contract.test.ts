@@ -62,6 +62,10 @@ const trustedContextMigration = readFileSync(
   new URL("../../../supabase/migrations/202609170017_trusted_encounter_context.sql", import.meta.url),
   "utf8",
 );
+const stage1PresentationMigration = readFileSync(
+  new URL("../../../supabase/migrations/202609220028_stage1_identity_participant_presentation.sql", import.meta.url),
+  "utf8",
+);
 const openapi = readFileSync(new URL("../../../openapi/v0.yaml", import.meta.url), "utf8");
 const mvpResponse = readFileSync(new URL("../../../docs/MVP_API_ENGINEERING_RESPONSE_V0_2.md", import.meta.url), "utf8");
 const packageManifest = JSON.parse(
