@@ -1,0 +1,48 @@
+begin;
+
+create or replace function public.list_owner_companions()
+returns table(item jsonb)
+language plpgsql stable security definer set search_path='' as $$
+declare actor public.owners%rowtype;
+begin
+  select * into actor
+  from public.owners
+  where auth_user_id=(select auth.uid()) and status='ACTIVE';
+
+  if not found then
+    raise exception using errcode='42501',message='active Owner authentication is required';
+  end if;
+
+  return query
+  select jsonb_strip_nulls(jsonb_build_object(
+    'companionId',c.id,
+    'displayName',ci.display_name,
+    'identityVersion',ci.version,
+    'status',c.status,
+    'socialReady',(st.id is not null and st.status<>'SUSPENDED' and sp.id is not null),
+    'socialTwinId',st.id,
+    'handle',sp.handle
+  ))
+  from public.companions c
+  join public.companion_identities ci
+    on ci.id=c.current_identity_version_id
+   and ci.companion_id=c.id
+   and ci.owner_id=actor.id
+  left join public.social_twins st
+    on st.companion_id=c.id
+   and st.owner_id=actor.id
+  left join public.social_personas sp
+    on sp.id=st.active_social_persona_id
+   and sp.companion_id=c.id
+  where c.owner_id=actor.id
+    and c.status not in ('DELETED','QUARANTINED')
+  order by c.created_at asc,c.id asc;
+end $$;
+
+revoke all on function public.list_owner_companions() from public,anon;
+grant execute on function public.list_owner_companions() to authenticated,service_role;
+
+comment on function public.list_owner_companions() is
+  'Owner-scoped Companion roster. socialReady is true only when an active Social Twin projection exists; imported identities are visible without implying social activation.';
+
+commit;
