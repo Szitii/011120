@@ -1727,6 +1727,7 @@ insert into public.social_feed_items(
 
 set role authenticated;
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-0000000000a1',false);
+select item->'author' as diagnostic_author, item->'viewerCapabilities' as diagnostic_capabilities from public.list_world_items(20,null) where item->>'id'='00000000-0000-0000-0000-00000000f001';
 select public.test_assert(
   (select count(*)=1 from public.list_world_items(20,null)
    where item->>'id'='00000000-0000-0000-0000-00000000f001'
