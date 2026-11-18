@@ -1,0 +1,101 @@
+name: foundation-checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  domain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm audit --omit=dev
+      - run: npm install --prefix apps/mobile --ignore-scripts
+      - run: npm run check --prefix apps/mobile
+      - run: npm run export:ci --prefix apps/mobile
+      - run: npm run export:web:ci --prefix apps/mobile
+
+  postgres-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: companion-social
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d companion-social"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion-social
+      companion-social_TEST_DATABASE: 1
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: bash scripts/test-postgres.sh
+      - name: Create disposable mobile dev database
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "create database companion-social_mobile_dev_ci"
+      - name: Validate Stage 1 mobile dev database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion-social_mobile_dev_ci
+          companion-social_DEV_DATABASE: 1
+        run: npm run dev:mobile:db:init
+      - name: Smoke Stage 1 mobile HTTP host
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion-social_mobile_dev_ci
+          companion-social_DEV_DATABASE: 1
+          MOBILE_DEV_HOST: 127.0.0.1
+          MOBILE_DEV_PORT: 8787
+          MOBILE_DEV_OWNER_TOKEN: companion-social-stage1-owner
+        run: |
+          npm run dev:mobile:api > /tmp/mobile-dev-api.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz >/tmp/mobile-health.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/mobile-dev-api.log
+            exit 1
+          fi
+          curl -fsS \
+            -H "Authorization: Bearer companion-social-stage1-owner" \
+            http://127.0.0.1:8787/v0/identity-context \
+            | grep -q '"kind":"OWNER"'
+          curl -fsS \
+            -H "Authorization: Bearer companion-social-stage1-owner" \
+            http://127.0.0.1:8787/v0/world-items?limit=20 \
+            | grep -q '"displayName":"Momo"'
+          curl -fsS \
+            -H "Authorization: Bearer companion-social-stage1-owner" \
+            'http://127.0.0.1:8787/v0/life-continuity?limit=30&activeSubjectKind=OWNER' \
+            | grep -q '"kind":"ENCOUNTER"'
+          curl -fsS \
+            -H "Authorization: Bearer companion-social-stage1-owner" \
+            'http://127.0.0.1:8787/v0/companions/00000000-0000-0000-0000-0000000002a1/profile?activeSubjectKind=OWNER' \
+            | grep -q '"relationship":"OWNER_OF"'
+          npm run test:mobile:residency
