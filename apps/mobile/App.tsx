@@ -113,7 +113,7 @@ export default function App() {
   useEffect(() => {
     if ("error" in bootstrap || identity.kind !== "success") return;
     if (route.type === "root" && route.tab === "world") void loadWorld();
-    if (route.type === "root" && route.tab === "life") void loadLife();
+    if (route.type === "life-archive") void loadLife();
     if (
       route.type === "root" &&
       route.tab === "my" &&
@@ -445,7 +445,13 @@ export default function App() {
         />
       )}
 
-      {route.type === "root" && route.tab === "life" && (
+      {route.type === "root" && route.tab === "home" && (
+        <PrivateHomeScreen
+          onOpenTimeline={() => setNav((current) => pushRoute(current, { type: "life-archive" }))}
+        />
+      )}
+
+      {route.type === "life-archive" && (
         <LifeScreen
           state={life}
           isCompanion={isSampleCompanion}
@@ -462,7 +468,7 @@ export default function App() {
               pushRoute(current, {
                 type: "encounter",
                 encounterId: item.linkedObject.id,
-                sourceTab: "life",
+                sourceTab: "home",
                 sourceScrollY: 0,
                 ...(item.counterpart?.companionId ? { companionId: item.counterpart.companionId } : {}),
               }),
@@ -610,7 +616,7 @@ function AppHeader({
   return (
     <View style={styles.topBar}>
       {routeIsRoot ? (
-        <Pressable style={styles.identityTrigger} onPress={onIdentity}>
+        <Pressable style={styles.identityTrigger} onPress={onIdentity} accessibilityRole="button" accessibilityLabel="切换当前账号">
           {avatar ? (
             <Image source={{ uri: avatar }} style={styles.miniAvatarImage} />
           ) : (
@@ -618,7 +624,7 @@ function AppHeader({
               <Text style={styles.miniAvatarText}>{initial}</Text>
             </View>
           )}
-          <Text style={styles.brand}>{identityTitle}</Text>
+          <Text style={styles.brand} numberOfLines={1}>{identityTitle}</Text>
           <Text style={styles.chevron}>⌄</Text>
         </Pressable>
       ) : (
@@ -627,10 +633,8 @@ function AppHeader({
         </Pressable>
       )}
 
-      <View pointerEvents="none" style={styles.headerBrandCenter}>
-        <Text style={styles.headerTitle}>COMPANION_SOCIAL</Text>
-      </View>
       <View style={styles.headerRight}>
+        {routeIsRoot && <Text style={styles.headerIdentityTag}>{isSampleCompanion ? "家机身份" : "人类身份"}</Text>}
         {identity.kind === "loading" && <ActivityIndicator size="small" />}
       </View>
     </View>
@@ -663,7 +667,7 @@ function WorldScreen({
   if (state.kind === "error") {
     return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
   }
-  if (state.kind !== "success") return <Centered title="世界没连上。" />;
+  if (state.kind !== "success") return <Centered title="公共社区暂时无法连接。" />;
 
   return (
     <ScrollView
@@ -674,7 +678,7 @@ function WorldScreen({
       scrollEventThrottle={100}
     >
       <View style={styles.feedHeading}>
-        <Text style={styles.feedTitle}>世界</Text>
+        <Text style={styles.feedTitle}>公共社区</Text>
       </View>
 
       {state.value.items.map((item) => (
@@ -1057,6 +1061,37 @@ function ProfileScreen({
   );
 }
 
+function PrivateHomeScreen({ onOpenTimeline }: { onOpenTimeline: () => void }) {
+  return (
+    <ScrollView style={styles.content} contentContainerStyle={styles.privateHomePage}>
+      <Text style={styles.privateHomeEyebrow}>PRIVATE HOME</Text>
+      <Text style={styles.privateHomeTitle}>私人小家</Text>
+      <Text style={styles.privateHomeSubtitle}>这里将是你和家机共同生活的空间。</Text>
+
+      <View style={styles.privateHomeRoom} accessible accessibilityLabel="私人小家静态空间概念预览">
+        <View style={styles.privateHomeWindow}>
+          <Text style={styles.privateHomeWindowSymbol}>☼</Text>
+        </View>
+        <View style={styles.privateHomeShelf} />
+        <View style={styles.privateHomeSofa} />
+        <View style={styles.privateHomeFloor} />
+        <Text style={styles.privateHomeRoomLabel}>空间概念预览 · 尚未开放布置</Text>
+      </View>
+
+      <Text style={styles.privateHomeSectionTitle}>共同生活</Text>
+      <Text style={styles.privateHomeBody}>房间装扮、共同相册、纪念日、便签与礼物将逐步加入。目前小家尚未接入独立的数据和交互能力。</Text>
+      <Pressable style={styles.privateHomeRecordRow} onPress={onOpenTimeline} accessibilityRole="button">
+        <View style={styles.privateHomeRecordText}>
+          <Text style={styles.privateHomeRecordTitle}>已有生活记录</Text>
+          <Text style={styles.privateHomeRecordCaption}>查看服务端真实记录的相遇与事件</Text>
+        </View>
+        <Text style={styles.accountArrow}>›</Text>
+      </Pressable>
+      <Text style={styles.privateHomeNote}>没有发生的事件不会补写；所有自主生活能力都需单独授权后才能启用。</Text>
+    </ScrollView>
+  );
+}
+
 function LifeScreen({
   state,
   isCompanion,
@@ -1255,13 +1290,13 @@ function BottomTabs({
   isSampleCompanion,
   onSelect,
 }: {
-  current: "world" | "life" | "my";
+  current: "world" | "home" | "my";
   isSampleCompanion: boolean;
-  onSelect: (tab: "world" | "life" | "my") => void;
+  onSelect: (tab: "world" | "home" | "my") => void;
 }) {
-  const items: Array<{ key: "world" | "life" | "my"; label: string; icon: string }> = [
-    { key: "world", label: "世界", icon: "◉" },
-    { key: "life", label: "生活", icon: "♧" },
+  const items: Array<{ key: "world" | "home" | "my"; label: string; icon: string }> = [
+    { key: "world", label: "公共社区", icon: "◉" },
+    { key: "home", label: "私人小家", icon: "⌂" },
     { key: "my", label: "我的", icon: isSampleCompanion ? "●" : "◎" },
   ];
 
@@ -1434,7 +1469,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     backgroundColor: colors.canvas,
   },
-  identityTrigger: { flexDirection: "row", alignItems: "center", gap: 7 },
+  identityTrigger: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 7, marginRight: 12 },
   miniAvatar: {
     width: 28,
     height: 28,
@@ -1446,7 +1481,8 @@ const styles = StyleSheet.create({
   miniAvatarSampleCompanion: { backgroundColor: "#F3E6E1" },
   miniAvatarImage: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#ECE9E6" },
   miniAvatarText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
-  brand: { fontSize: 13, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
+  brand: { flexShrink: 1, fontSize: 14, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
+  headerIdentityTag: { fontSize: 11, fontWeight: "500", color: colors.roseDark, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: colors.roseWash, borderRadius: 12 },
   chevron: { color: colors.tertiary, fontSize: 15, marginTop: -3 },
   headerBrandCenter: { position: "absolute", left: 0, right: 0, alignItems: "center", justifyContent: "center" },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
@@ -1470,6 +1506,25 @@ const styles = StyleSheet.create({
     marginLeft: -6,
   },
   backIcon: { fontSize: 32, lineHeight: 34, color: colors.ink, fontWeight: "300" },
+
+  privateHomePage: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: 44 },
+  privateHomeEyebrow: { fontSize: 10, letterSpacing: 2, fontWeight: "700", color: colors.roseDark },
+  privateHomeTitle: { marginTop: 10, fontSize: 30, lineHeight: 39, fontWeight: "700", color: colors.text },
+  privateHomeSubtitle: { marginTop: 8, fontSize: 14, lineHeight: 22, color: colors.muted },
+  privateHomeRoom: { marginTop: 24, height: 230, borderRadius: 24, backgroundColor: "#F9F1EC", overflow: "hidden", justifyContent: "flex-end", alignItems: "center" },
+  privateHomeWindow: { position: "absolute", width: 94, height: 94, top: 26, right: 34, borderRadius: 48, backgroundColor: "#F9DBB9", alignItems: "center", justifyContent: "center" },
+  privateHomeWindowSymbol: { fontSize: 36, color: "#FFF8EB" },
+  privateHomeShelf: { position: "absolute", width: 48, height: 82, left: 42, bottom: 48, borderRadius: 8, backgroundColor: "#CFB8A5" },
+  privateHomeSofa: { position: "absolute", width: 160, height: 65, bottom: 43, borderTopLeftRadius: 26, borderTopRightRadius: 26, backgroundColor: "#D9B1AF" },
+  privateHomeFloor: { position: "absolute", left: 0, right: 0, height: 42, bottom: 0, backgroundColor: "#EFE0D4" },
+  privateHomeRoomLabel: { zIndex: 1, marginBottom: 12, fontSize: 11, color: "#65534C" },
+  privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
+  privateHomeBody: { marginTop: 9, fontSize: 13, lineHeight: 22, color: colors.muted },
+  privateHomeRecordRow: { marginTop: 22, minHeight: 76, paddingHorizontal: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 18, flexDirection: "row", alignItems: "center" },
+  privateHomeRecordText: { flex: 1 },
+  privateHomeRecordTitle: { fontSize: 14, fontWeight: "600", color: colors.text },
+  privateHomeRecordCaption: { marginTop: 5, fontSize: 11, color: colors.muted },
+  privateHomeNote: { marginTop: 18, fontSize: 11, lineHeight: 18, color: colors.tertiary },
 
   feed: { paddingBottom: 26 },
   feedHeading: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
