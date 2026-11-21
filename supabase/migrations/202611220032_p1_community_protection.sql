@@ -96,8 +96,11 @@ begin
   elsif p_resource='blocks' then
     select coalesce(jsonb_agg(q.item order by q.created_at desc,q.id desc),'[]') into items from (
       select b.created_at,b.target_id id,jsonb_build_object('id',b.target_id,
-        'actor',companion_private.community_actor_json(b.target_id),'createdAt',b.created_at) item
-      from public.community_blocks b where b.actor_id=a.id
+        'actor',case when companion_private.community_profile_available(b.target_id,a.id)
+          then companion_private.community_actor_json(b.target_id)
+          else jsonb_build_object('id',b.target_id,'kind',ca.kind,'displayName','已屏蔽身份','handle','','bio','','avatar',null)
+          end,'createdAt',b.created_at) item
+      from public.community_blocks b join public.community_actors ca on ca.id=b.target_id where b.actor_id=a.id
         and (p_before_at is null or (b.created_at,b.target_id)<(p_before_at,p_before_id))
       order by b.created_at desc,b.target_id desc limit 21) q;
   else

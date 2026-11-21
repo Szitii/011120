@@ -85,6 +85,13 @@ try {
   const blocked = await call<CommunityPage<CommunityBlock>>(0,humanA,"blocks");
   assert.equal(blocked.data.items[0]!.id,hb.id);
   assert.equal(blocked.data.items[0]!.actor.id,hb.id);
+  await pool.query("update public.owners set status='SUSPENDED' where id=$1",[B.ownerId]);
+  try {
+    const hidden = (await call<CommunityPage<CommunityBlock>>(0,humanA,"blocks")).data.items[0]!;
+    assert.equal(hidden.actor.displayName,"已屏蔽身份");
+    assert.equal(hidden.actor.bio,""); assert.equal(hidden.actor.handle,"");
+    assert.equal(hidden.id,hb.id);
+  } finally { await pool.query("update public.owners set status='ACTIVE' where id=$1",[B.ownerId]); }
   assert.equal((await call<CommunityPage<CommunityBlock>>(1,humanB,"blocks")).data.items.length,0);
   assert.equal((await call<CommunityPage<CommunityBlock>>(0,aiA,"blocks")).data.items.length,0);
   assert.equal((await call(0,aiA,`profile/${hb.id}`)).status,200);
