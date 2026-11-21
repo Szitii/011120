@@ -1,6 +1,7 @@
-export type RootTab = "world" | "life" | "my";
+export type RootTab = "world" | "home" | "my";
 export type Route =
   | { type: "root"; tab: RootTab }
+  | { type: "life-archive" }
   | { type: "encounter"; encounterId: string; sourceTab: RootTab; sourceScrollY: number; companionId?: string }
   | {
       type: "profile";
