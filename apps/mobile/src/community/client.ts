@@ -9,6 +9,12 @@ export function createCommunityClient(request: Requester): CommunityClient {
     return `/v0/community/${resource}?${params}`;
   };
   return {
+    blocks: (v, cursor) => request("GET", path(v, "blocks", { cursor })),
+    block: (v, actorId, blocked, key) => request(blocked ? "PUT" : "DELETE",
+      path(v, `blocks/${encodeURIComponent(actorId)}`), undefined, key),
+    report: (v, target, reason, details, key) => request("POST",
+      path(v, `reports/${{ ACTOR: "actors", POST: "posts", COMMENT: "comments" }[target.kind]}/${encodeURIComponent(target.id)}`),
+      { reason, details }, key),
     profile: (v, actorId) => request("GET", path(v, actorId ? `profile/${encodeURIComponent(actorId)}` : "profile")),
     humanProfileSettings: v => request("GET", path(v, "profile/settings")),
     saveHumanProfile: (v, settings) => request("PUT", path(v, "profile/settings"), settings),

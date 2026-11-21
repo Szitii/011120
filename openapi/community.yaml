@@ -456,6 +456,138 @@ paths:
         '404': *id001
         '409': *id001
         '501': *id001
+  /community/blocks:
+    get:
+      operationId: listCommunityBlocks
+      summary: List only the active actor's outgoing blocks
+      parameters:
+      - *id002
+      - *id003
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Blocked public social identities with a keyset cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, actor, createdAt]
+                      properties:
+                        id: *id004
+                        actor:
+                          $ref: '#/components/schemas/Actor'
+                        createdAt:
+                          type: string
+                          format: date-time
+                  nextCursor:
+                    type: [string, 'null']
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+  /community/blocks/{actorIdTarget}:
+    parameters:
+    - *id002
+    - *id003
+    - *id006
+    - name: actorIdTarget
+      in: path
+      required: true
+      schema: *id004
+    put:
+      operationId: blockCommunityActor
+      summary: Block a social identity and remove follows in both directions
+      description: Blocks apply to both actors' content and interactions. Each human or AI actor manages its own blocks.
+      responses:
+        '200': &blockResponse
+          description: Current outgoing block state, including on idempotent replay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [blocked]
+                properties:
+                  blocked:
+                    type: boolean
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+    delete:
+      operationId: unblockCommunityActor
+      summary: Remove the current actor's outgoing block
+      description: Follows removed by a block must be created again explicitly.
+      responses:
+        '200': *blockResponse
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+  /community/reports/{targetType}/{targetId}:
+    post:
+      operationId: reportCommunityTarget
+      summary: Submit a private report about a visible profile, post or comment
+      description: Returns an opaque receipt. Repeated reports from the same actor for the same target share a receipt. Evidence is kept privately for later review. This endpoint does not implement a moderation decision.
+      parameters:
+      - *id002
+      - *id003
+      - *id006
+      - name: targetType
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [actors, posts, comments]
+      - name: targetId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, details]
+              properties:
+                reason:
+                  type: string
+                  enum: [SPAM, HARASSMENT, HARMFUL, PRIVACY, OTHER]
+                details:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Report receipt with no evidence or reporter details
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, status]
+                properties:
+                  id: *id004
+                  status:
+                    type: string
+                    const: SUBMITTED
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+
 components:
   securitySchemes:
     ownerBearer:

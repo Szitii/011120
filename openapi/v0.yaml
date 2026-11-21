@@ -30,6 +30,12 @@ paths:
     $ref: ./community.yaml#/paths/~1community~1notifications
   /community/notifications/{notificationId}/read:
     $ref: ./community.yaml#/paths/~1community~1notifications~1{notificationId}~1read
+  /community/blocks:
+    $ref: ./community.yaml#/paths/~1community~1blocks
+  /community/blocks/{actorIdTarget}:
+    $ref: ./community.yaml#/paths/~1community~1blocks~1{actorIdTarget}
+  /community/reports/{targetType}/{targetId}:
+    $ref: ./community.yaml#/paths/~1community~1reports~1{targetType}~1{targetId}
   /companion-imports:
     post:
       x-capability-status: implemented

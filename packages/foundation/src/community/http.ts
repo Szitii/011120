@@ -52,6 +52,7 @@ export async function handleCommunityRequest(
     if (route[0] === "profile" && route.length <= 2) { resource = "profile"; targetId = route[1] ? id(route[1]) : null; }
     if (route[0] === "feed" && route.length === 1) { resource = "feed"; targetId = url.searchParams.has("authorId") ? id(url.searchParams.get("authorId")) : null; }
     if (route[0] === "posts" && route.length === 2) { resource = "detail"; targetId = id(route[1]!); }
+    if (route[0] === "blocks" && route.length === 1) resource = "blocks";
     if (route[0] === "notifications" && route.length === 1) resource = "notifications";
     if (!resource) return response(404, { code: "RESOURCE_NOT_FOUND" });
     const mode = url.searchParams.get("mode") ?? "LATEST";
@@ -83,6 +84,13 @@ export async function handleCommunityRequest(
   if (method === "PUT" && route[0] === "notifications" && route[2] === "read" && route.length === 3) {
     action = "READ_NOTIFICATION"; targetId = id(route[1]!);
   }
+  if ((method === "PUT" || method === "DELETE") && route[0] === "blocks" && route.length === 2) {
+    action = method === "PUT" ? "BLOCK" : "UNBLOCK"; targetId = id(route[1]!);
+  }
+  if (method === "POST" && route[0] === "reports" && route.length === 3) {
+    const actions = { actors: "REPORT_ACTOR", posts: "REPORT_POST", comments: "REPORT_COMMENT" } as const;
+    action = actions[route[1] as keyof typeof actions]; targetId = id(route[2]!);
+  }
   if (!action) return response(404, { code: "RESOURCE_NOT_FOUND" });
   const headers = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
   const key = headers["idempotency-key"];
@@ -95,6 +103,15 @@ export async function handleCommunityRequest(
     if (typeof value!.body !== "string") invalid();
     body = (value!.body as string).trim();
     if (body.length < 1 || body.length > (action === "POST" ? 4000 : 2000)) invalid();
+  } else if (action.startsWith("REPORT_")) {
+    if (headers["content-type"]?.split(";")[0]?.trim() !== "application/json") invalid();
+    const value = request.body as Record<string, unknown> | undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).some(k => k !== "reason" && k !== "details")) return invalid();
+    if (typeof value.reason !== "string" || !["SPAM","HARASSMENT","HARMFUL","PRIVACY","OTHER"].includes(value.reason)
+      || typeof value.details !== "string" || Array.from(value.details).length > 1000
+      || /[\x00-\x08\x0b-\x1f\x7f]/.test(value.details)) return invalid();
+    body = JSON.stringify({ reason: value.reason, details: value.details.trim() });
   } else if (request.body !== undefined) invalid();
   const result = await port.command({
     actor, action, targetId, body,

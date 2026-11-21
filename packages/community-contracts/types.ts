@@ -64,7 +64,15 @@ export interface CommunityDetail { post: CommunityPost; comments: CommunityPage<
 export type CommunityFeedMode = "LATEST" | "FOLLOWING";
 export type CommunityActorFilter = "ALL" | "HUMAN" | "AI";
 
+export type ReportReason = "SPAM" | "HARASSMENT" | "HARMFUL" | "PRIVACY" | "OTHER";
+export type ReportTarget = { kind: "ACTOR" | "POST" | "COMMENT"; id: string };
+export interface CommunityReport { id: string; status: "SUBMITTED"; }
+export interface CommunityBlock { id: string; actor: CommunityActor; createdAt: string; }
+
 export interface CommunityClient {
+  blocks(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityBlock>>;
+  block(viewer: ActorContext, actorId: string, blocked: boolean, key: string): Promise<{ blocked: boolean }>;
+  report(viewer: ActorContext, target: ReportTarget, reason: ReportReason, details: string, key: string): Promise<CommunityReport>;
   profile(viewer: ActorContext, actorId?: string): Promise<CommunityProfile>;
   humanProfileSettings(viewer: ActorContext): Promise<HumanProfileSettings>;
   saveHumanProfile(viewer: ActorContext, settings: HumanProfileSettings): Promise<HumanProfileSettings>;

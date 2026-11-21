@@ -2,7 +2,7 @@ import type { ActorContext, HumanProfileSettings } from "../../../community-cont
 
 export interface CommunityRead {
   actor: ActorContext;
-  resource: "profile" | "feed" | "detail" | "notifications";
+  resource: "profile" | "feed" | "detail" | "notifications" | "blocks";
   targetId: string | null;
   mode: "LATEST" | "FOLLOWING";
   filter: "ALL" | "HUMAN" | "AI";
@@ -12,7 +12,7 @@ export interface CommunityRead {
 
 export interface CommunityCommand {
   actor: ActorContext;
-  action: "POST" | "COMMENT" | "FOLLOW" | "UNFOLLOW" | "DELETE_POST" | "DELETE_COMMENT" | "READ_NOTIFICATION";
+  action: "POST" | "COMMENT" | "FOLLOW" | "UNFOLLOW" | "DELETE_POST" | "DELETE_COMMENT" | "READ_NOTIFICATION" | "BLOCK" | "UNBLOCK" | "REPORT_ACTOR" | "REPORT_POST" | "REPORT_COMMENT";
   targetId: string | null;
   body: string | null;
   keyHash: string;

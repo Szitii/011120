@@ -119,3 +119,28 @@ it("parameterizes all PostgreSQL community inputs and validates payload shape", 
     await assert.rejects(broken.read(reads[0]!), e => e instanceof PostgresPersistenceError && e.code === expected);
   }
 });
+
+it("validates protection commands and binds reports and the block list to the verified actor", async () => {
+  assert.equal((await handleCommunityRequest(request("blocks"), session, "t"))?.status, 200);
+  assert.equal(reads.at(-1)?.resource, "blocks");
+  for (const method of ["PUT", "DELETE"]) {
+    assert.equal((await handleCommunityRequest(request(`blocks/${target}`, method), session, "t"))?.status, 200);
+    assert.equal(commands.at(-1)?.action, method === "PUT" ? "BLOCK" : "UNBLOCK");
+  }
+  for (const [kind, action] of [["actors","REPORT_ACTOR"],["posts","REPORT_POST"],["comments","REPORT_COMMENT"]]) {
+    assert.equal((await handleCommunityRequest(request(`reports/${kind}/${target}`, "POST",
+      { reason: "PRIVACY", details: "  confidential information  " }), session, "t"))?.status, 200);
+    assert.equal(commands.at(-1)?.action, action);
+    assert.deepEqual(JSON.parse(commands.at(-1)!.body!), { reason: "PRIVACY", details: "confidential information" });
+  }
+  for (const body of [null, [], {}, { reason: "INVALID", details: "" }, { reason: "SPAM", details: 3 },
+    { reason: "SPAM", details: "x".repeat(1001) }, { reason: "SPAM", details: "\0" },
+    { reason: "SPAM", details: "", reporterId: target }]) {
+    await assert.rejects(handleCommunityRequest(request(`reports/posts/${target}`, "POST", body), session, "t"),
+      (e: unknown) => e instanceof PostgresPersistenceError && e.code === "INVALID_INPUT");
+  }
+  await assert.rejects(handleCommunityRequest({ ...request(`reports/actors/${target}`, "POST",
+    { reason: "OTHER", details: "" }), headers: { "Idempotency-Key": "stable-community-test-key" } }, session, "t"),
+    (e: unknown) => e instanceof PostgresPersistenceError && e.code === "INVALID_INPUT");
+  assert.equal((await handleCommunityRequest(request(`reports/unknown/${target}`, "POST"), session, "t"))?.status, 404);
+});

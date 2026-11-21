@@ -17,8 +17,8 @@ export function ActorLine({ actor, onPress }: { actor: CommunityActor; onPress: 
   </Pressable>;
 }
 
-export function ContentCard({ item, onActor, onDetail, onDelete }: {
-  item: CommunityPost | CommunityComment; onActor: () => void; onDetail?: () => void; onDelete: () => void;
+export function ContentCard({ item, onActor, onDetail, onDelete, onReport }: {
+  item: CommunityPost | CommunityComment; onActor: () => void; onDetail?: () => void; onDelete: () => void; onReport?: () => void;
 }) {
   return <View style={communityStyles.card}>
     <ActorLine actor={item.author} onPress={onActor} />
@@ -26,6 +26,7 @@ export function ContentCard({ item, onActor, onDetail, onDelete }: {
     <Text selectable style={communityStyles.body}>{item.body}</Text>
     <View style={communityStyles.row}>
       {onDetail && "commentsCount" in item && <CommunityButton label={`评论 ${item.commentsCount}`} onPress={onDetail} />}
+      {onReport && <CommunityButton label="举报" onPress={onReport} />}
       {item.canDelete && <CommunityButton label="删除" onPress={onDelete} />}
     </View>
   </View>;

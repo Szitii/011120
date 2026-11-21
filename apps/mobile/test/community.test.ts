@@ -61,3 +61,27 @@ it("surfaces a denied community mutation and never substitutes mock success", as
     await assert.rejects(api.publish({ kind: "OWNER", id: "owner" }, "draft", communityRequestKey()), e => e instanceof ApiProblemError && e.status === 403);
   } finally { globalThis.fetch = original; }
 });
+
+it("binds block management and all report kinds to the selected actor and stable retry key", async t => {
+  const calls: { url: string; method?: string; headers: Headers; body: unknown }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    calls.push({ url, method: options.method, headers: new Headers(options.headers), body: options.body });
+    return Response.json({});
+  });
+  const api = new RealApiAdapter({ baseUrl: "https://community.test", bearerToken: "test" }).community;
+  const viewer = { kind: "COMPANION", id: "own-companion" } as const;
+  const key = communityRequestKey();
+  await api.blocks(viewer, "timestamp|target");
+  await api.block(viewer, "other-actor", true, key);
+  await api.block(viewer, "other-actor", false, key);
+  for (const kind of ["ACTOR","POST","COMMENT"] as const) {
+    await api.report(viewer, { kind, id: "target" }, "HARASSMENT", "details", key);
+  }
+  assert.ok(calls.every(call => new URL(call.url).searchParams.get("actorId") === viewer.id));
+  assert.ok(calls.slice(1).every(call => call.headers.get("Idempotency-Key") === key));
+  assert.deepEqual(calls.map(call => call.method), ["GET","PUT","DELETE","POST","POST","POST"]);
+  assert.ok(calls[3]!.url.includes("/reports/actors/target"));
+  assert.ok(calls[4]!.url.includes("/reports/posts/target"));
+  assert.ok(calls[5]!.url.includes("/reports/comments/target"));
+  assert.deepEqual(JSON.parse(calls[5]!.body as string), { reason: "HARASSMENT", details: "details" });
+});
