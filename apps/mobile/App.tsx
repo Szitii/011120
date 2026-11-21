@@ -91,6 +91,7 @@ export default function App() {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const worldScrollRef = useRef<ScrollView>(null);
+  const identityEpochRef = useRef(0);
 
   const route = nav.stack[nav.stack.length - 1] ?? {
     type: "root" as const,
@@ -113,7 +114,7 @@ export default function App() {
   useEffect(() => {
     if ("error" in bootstrap || identity.kind !== "success") return;
     if (route.type === "root" && route.tab === "world") void loadWorld();
-    if (route.type === "life-archive") void loadLife();
+    if (route.type === "life-archive" || (route.type === "root" && route.tab === "home")) void loadLife();
     if (
       route.type === "root" &&
       route.tab === "my" &&
@@ -170,14 +171,16 @@ export default function App() {
 
   async function loadWorld() {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setWorld({ kind: "loading" });
     try {
       const cached = cache.get<WorldCollection>("world");
       if (cached) {
-        setWorld(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
+        if (epoch === identityEpochRef.current) setWorld(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
       const value = await bootstrap.value.api.worldItems();
+      if (epoch !== identityEpochRef.current) return;
       cache.set("world", value);
       setWorld(value.items.length ? { kind: "success", value } : { kind: "empty" });
       requestAnimationFrame(() => {
@@ -185,6 +188,7 @@ export default function App() {
         worldScrollRef.current?.scrollTo({ y, animated: !reducedMotion });
       });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setWorld({ kind: "error", ...safe });
     }
@@ -192,6 +196,7 @@ export default function App() {
 
   async function loadLife() {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setLife({ kind: "loading" });
     try {
       const viewer =
@@ -202,13 +207,15 @@ export default function App() {
       const key = `life-continuity:${viewerKey}`;
       const cached = cache.get<LifeContinuityCollection>(key);
       if (cached) {
-        setLife(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
+        if (epoch === identityEpochRef.current) setLife(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
       const value = await bootstrap.value.api.lifeContinuity(viewer);
+      if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setLife(value.items.length ? { kind: "success", value } : { kind: "empty" });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setLife({ kind: "error", ...safe });
     }
@@ -216,14 +223,17 @@ export default function App() {
 
   async function loadEncounter(id: string) {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setEncounter({ kind: "loading" });
     try {
       const key = `encounter:${id}`;
       const value =
         cache.get<EncounterDetail>(key) ?? (await bootstrap.value.api.encounterDetail(id));
+      if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setEncounter({ kind: "success", value });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setEncounter({ kind: "error", ...safe });
     }
@@ -231,6 +241,7 @@ export default function App() {
 
   async function loadProfile(id: string) {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setProfile({ kind: "loading" });
     try {
       const viewer =
@@ -241,9 +252,11 @@ export default function App() {
       const key = `profile:${viewerKey}:${id}`;
       const value =
         cache.get<CompanionProfile>(key) ?? (await bootstrap.value.api.companionProfile(id, viewer));
+      if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setProfile({ kind: "success", value });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setProfile({ kind: "error", ...safe });
     }
@@ -258,9 +271,11 @@ export default function App() {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
+    identityEpochRef.current += 1;
     setIdentitySwitchPending(true);
     setIdentity({ kind: "loading" });
     setWorld({ kind: "idle" });
+    setLife({ kind: "idle" });
     setEncounter({ kind: "idle" });
     setProfile({ kind: "idle" });
     cache.purgeViewerSensitive();
@@ -350,9 +365,11 @@ export default function App() {
     const previousIdentity = identityValue;
     const previousName = companionDisplayName;
 
+    identityEpochRef.current += 1;
     setIdentitySwitchPending(true);
     setIdentity({ kind: "loading" });
     setWorld({ kind: "idle" });
+    setLife({ kind: "idle" });
     setEncounter({ kind: "idle" });
     setProfile({ kind: "idle" });
     cache.purgeViewerSensitive();
@@ -447,7 +464,20 @@ export default function App() {
 
       {route.type === "root" && route.tab === "home" && (
         <PrivateHomeScreen
+          state={life}
+          isCompanion={isSampleCompanion}
+          companionId={identityValue?.activeSubject.kind === "COMPANION" ? identityValue.activeSubject.id : undefined}
           onOpenTimeline={() => setNav((current) => pushRoute(current, { type: "life-archive" }))}
+          onOpenEncounter={(item) => {
+            if (item.kind !== "ENCOUNTER" || item.viewerCapabilities.openDetail !== true) return;
+            setNav((current) => pushRoute(current, {
+              type: "encounter",
+              encounterId: item.linkedObject.id,
+              sourceTab: "home",
+              sourceScrollY: 0,
+              ...(item.counterpart?.companionId ? { companionId: item.counterpart.companionId } : {}),
+            }));
+          }}
         />
       )}
 
@@ -1061,12 +1091,28 @@ function ProfileScreen({
   );
 }
 
-function PrivateHomeScreen({ onOpenTimeline }: { onOpenTimeline: () => void }) {
+function PrivateHomeScreen({
+  state,
+  isCompanion,
+  companionId,
+  onOpenTimeline,
+  onOpenEncounter,
+}: {
+  state: LoadState<LifeContinuityCollection>;
+  isCompanion: boolean;
+  companionId?: string;
+  onOpenTimeline: () => void;
+  onOpenEncounter: (item: LifeContinuityItem) => void;
+}) {
+  const recentItems = state.kind === "success"
+    ? state.value.items.filter((item) => !isCompanion || item.companion.companionId === companionId).slice(0, 3)
+    : [];
+
   return (
     <ScrollView style={styles.content} contentContainerStyle={styles.privateHomePage}>
       <Text style={styles.privateHomeEyebrow}>PRIVATE HOME</Text>
       <Text style={styles.privateHomeTitle}>私人小家</Text>
-      <Text style={styles.privateHomeSubtitle}>这里将是你和家机共同生活的空间。</Text>
+      <Text style={styles.privateHomeSubtitle}>一个留给你们共同生活的地方。房间还在建设中，已经发生的记录可以先从这里查看。</Text>
 
       <View style={styles.privateHomeRoom} accessible accessibilityLabel="私人小家静态空间概念预览">
         <View style={styles.privateHomeWindow}>
@@ -1075,23 +1121,56 @@ function PrivateHomeScreen({ onOpenTimeline }: { onOpenTimeline: () => void }) {
         <View style={styles.privateHomeShelf} />
         <View style={styles.privateHomeSofa} />
         <View style={styles.privateHomeFloor} />
-        <Text style={styles.privateHomeRoomLabel}>空间概念预览 · 尚未开放布置</Text>
+        <Text style={styles.privateHomeRoomLabel}>空间概念预览 · 暂未开放装扮</Text>
       </View>
 
-      <Text style={styles.privateHomeSectionTitle}>共同生活</Text>
-      <Text style={styles.privateHomeBody}>房间装扮、共同相册、纪念日、便签与礼物将逐步加入。目前小家尚未接入独立的数据和交互能力。</Text>
-      <Pressable style={styles.privateHomeRecordRow} onPress={onOpenTimeline} accessibilityRole="button">
-        <View style={styles.privateHomeRecordText}>
-          <Text style={styles.privateHomeRecordTitle}>已有生活记录</Text>
-          <Text style={styles.privateHomeRecordCaption}>查看服务端真实记录的相遇与事件</Text>
+      <Text style={styles.privateHomeSectionTitle}>最近的生活记录</Text>
+      {state.kind === "loading" || state.kind === "idle" ? (
+        <View style={styles.privateHomeEmpty}><ActivityIndicator size="small" /><Text style={styles.privateHomeRecordCaption}>正在查看已授权的记录…</Text></View>
+      ) : state.kind === "error" ? (
+        <View style={styles.privateHomeEmpty}><Text style={styles.privateHomeRecordCaption}>记录暂时无法加载，请在记录页重试。</Text></View>
+      ) : recentItems.length === 0 ? (
+        <View style={styles.privateHomeEmpty}><Text style={styles.privateHomeRecordCaption}>这里暂时没有可显示的记录。</Text></View>
+      ) : (
+        <View style={styles.privateHomeRecordList}>
+          {recentItems.map((item) => {
+            const canOpen = item.kind === "ENCOUNTER" && item.viewerCapabilities.openDetail === true;
+            const statusLabel = item.status === "DELIVERED" ? "已记录"
+              : item.status === "BLOCKED" ? "受限／未展示"
+              : item.status === "FAILED" ? "执行失败"
+              : item.status === "REDACTED" ? "已隐藏"
+              : item.status;
+            const content = (
+              <>
+                <View style={styles.privateHomeRecordText}>
+                  <Text style={styles.privateHomeRecordTitle} numberOfLines={2}>{item.companion.displayName} · {item.title}</Text>
+                  <Text style={styles.privateHomeRecordCaption} numberOfLines={2}>{formatDate(item.occurredAt)} · {statusLabel}</Text>
+                  {item.summary ? <Text style={styles.privateHomeRecordCaption} numberOfLines={2}>{item.summary}</Text> : null}
+                </View>
+                {canOpen && <Text style={styles.accountArrow}>›</Text>}
+              </>
+            );
+            return canOpen ? (
+              <Pressable key={item.id} style={styles.privateHomeRecordRow} accessibilityRole="button" onPress={() => onOpenEncounter(item)}>
+                {content}
+              </Pressable>
+            ) : (
+              <View key={item.id} style={styles.privateHomeRecordRow}>{content}</View>
+            );
+          })}
         </View>
+      )}
+      <Pressable style={styles.privateHomeArchiveButton} accessibilityRole="button" onPress={onOpenTimeline}>
+        <Text style={styles.privateHomeArchiveText}>查看全部已授权记录</Text>
         <Text style={styles.accountArrow}>›</Text>
       </Pressable>
-      <Text style={styles.privateHomeNote}>没有发生的事件不会补写；所有自主生活能力都需单独授权后才能启用。</Text>
+
+      <Text style={styles.privateHomeSectionTitle}>共同生活</Text>
+      <Text style={styles.privateHomeBody}>共同相册、纪念日、便签、礼物和可撤销的家具布置会分阶段加入。未开发的功能不会伪装成可用按钮。</Text>
+      <Text style={styles.privateHomeNote}>没有发生的事件不会补写；自主活动需要单独授权。私人资料默认不向公共社区分享。</Text>
     </ScrollView>
   );
 }
-
 function LifeScreen({
   state,
   isCompanion,
@@ -1520,7 +1599,11 @@ const styles = StyleSheet.create({
   privateHomeRoomLabel: { zIndex: 1, marginBottom: 12, fontSize: 11, color: "#65534C" },
   privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
   privateHomeBody: { marginTop: 9, fontSize: 13, lineHeight: 22, color: colors.muted },
-  privateHomeRecordRow: { marginTop: 22, minHeight: 76, paddingHorizontal: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 18, flexDirection: "row", alignItems: "center" },
+  privateHomeRecordList: { marginTop: 12, gap: 9 },
+  privateHomeEmpty: { minHeight: 78, marginTop: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 18, alignItems: "center", justifyContent: "center", gap: 10 },
+  privateHomeRecordRow: { minHeight: 76, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 18, flexDirection: "row", alignItems: "center" },
+  privateHomeArchiveButton: { marginTop: 14, minHeight: 44, paddingHorizontal: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  privateHomeArchiveText: { fontSize: 13, fontWeight: "600", color: colors.roseDark },
   privateHomeRecordText: { flex: 1 },
   privateHomeRecordTitle: { fontSize: 14, fontWeight: "600", color: colors.text },
   privateHomeRecordCaption: { marginTop: 5, fontSize: 11, color: colors.muted },
