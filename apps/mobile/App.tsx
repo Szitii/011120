@@ -12,8 +12,11 @@ import {
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { createClientBootstrap } from "./src/adapters";
-import { safeClientMessage } from "./src/adapters/real-api";
+import { createClientBootstrap, type ClientBootstrap } from "./src/adapters";
+import { RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
+import { AccountGate } from "./src/auth/AccountGate";
+import type { AccountBinding } from "./src/auth/account-session";
+import { colors } from "./src/theme";
 import { CommunityScreen } from "./src/community/CommunityScreen";
 import { HumanProfileEditor } from "./src/community/HumanProfileEditor";
 import type {
@@ -50,8 +53,6 @@ type LoadState<T> =
   | { kind: "empty" }
   | { kind: "error"; title: string; retry: boolean };
 
-const cache = new ViewerSensitiveCache();
-
 function actionAllowed(capabilities: Record<string, boolean>, ...keys: string[]): boolean {
   return keys.some((key) => capabilities[key] === true);
 }
@@ -80,6 +81,32 @@ export default function App() {
     }
   }, []);
 
+  if ("error" in bootstrap) {
+    return <Centered title="Client configuration required" body={bootstrap.error} />;
+  }
+  const config = bootstrap.value;
+  if (config.dataMode !== "real") return <WorldApp client={config} />;
+
+  return <AccountGate config={config}>
+    {(account, onSignOut) => <SignedInWorld key={account.generation}
+      baseUrl={config.baseUrl} account={account} onSignOut={onSignOut} />}
+  </AccountGate>;
+}
+
+function SignedInWorld({ baseUrl, account, onSignOut }: {
+  baseUrl: string;
+  account: AccountBinding;
+  onSignOut: () => void;
+}) {
+  const client = useMemo(() => ({ api: new RealApiAdapter({ baseUrl, session: account.tokens }) }), [baseUrl, account]);
+  return <WorldApp client={client} account={{ email: account.email, signOut: onSignOut }} />;
+}
+
+function WorldApp({ client, account }: {
+  client: ClientBootstrap;
+  account?: { email?: string; signOut: () => void };
+}) {
+  const [cache] = useState(() => new ViewerSensitiveCache());
   const [nav, setNav] = useState<NavigationState>(initialNavigationState);
   const [identity, setIdentity] = useState<LoadState<ActiveIdentityContext>>({ kind: "loading" });
   const [world, setWorld] = useState<LoadState<WorldCollection>>({ kind: "idle" });
@@ -109,12 +136,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if ("error" in bootstrap) return;
     void loadIdentityOwner();
-  }, [bootstrap]);
+    return () => {
+      identityEpochRef.current += 1;
+      cache.purgeViewerSensitive();
+    };
+  }, [client]);
 
   useEffect(() => {
-    if ("error" in bootstrap || identity.kind !== "success") return;
+    if (identity.kind !== "success") return;
     if (route.type === "root" && route.tab === "world") void loadWorld();
     if (route.type === "life-archive" || (route.type === "root" && route.tab === "home")) void loadLife();
     if (
@@ -137,16 +167,15 @@ export default function App() {
   ]);
 
   async function loadIdentityOwner() {
-    if ("error" in bootstrap) return;
     setIdentity({ kind: "loading" });
     try {
-      const value = await bootstrap.value.api.identityContext();
+      const value = await client.api.identityContext();
       setIdentity({ kind: "success", value });
       void loadOwnerCompanions();
-      if (bootstrap.value.sample_companionCompanionId) {
+      if (client.sample_companionCompanionId) {
         try {
-          const ownCompanion = await bootstrap.value.api.companionProfile(
-            bootstrap.value.sample_companionCompanionId,
+          const ownCompanion = await client.api.companionProfile(
+            client.sample_companionCompanionId,
           );
           setCompanionDisplayName(ownCompanion.displayName);
         } catch {
@@ -160,10 +189,9 @@ export default function App() {
   }
 
   async function loadOwnerCompanions() {
-    if ("error" in bootstrap) return;
     setOwnerCompanions({ kind: "loading" });
     try {
-      const value = await bootstrap.value.api.ownerCompanions();
+      const value = await client.api.ownerCompanions();
       setOwnerCompanions(value.items.length ? { kind: "success", value } : { kind: "empty" });
     } catch (error) {
       const safe = safeClientMessage(error);
@@ -172,7 +200,6 @@ export default function App() {
   }
 
   async function loadWorld() {
-    if ("error" in bootstrap) return;
     const epoch = identityEpochRef.current;
     setWorld({ kind: "loading" });
     try {
@@ -181,7 +208,7 @@ export default function App() {
         if (epoch === identityEpochRef.current) setWorld(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
-      const value = await bootstrap.value.api.worldItems();
+      const value = await client.api.worldItems();
       if (epoch !== identityEpochRef.current) return;
       cache.set("world", value);
       setWorld(value.items.length ? { kind: "success", value } : { kind: "empty" });
@@ -197,7 +224,6 @@ export default function App() {
   }
 
   async function loadLife() {
-    if ("error" in bootstrap) return;
     const epoch = identityEpochRef.current;
     setLife({ kind: "loading" });
     try {
@@ -212,7 +238,7 @@ export default function App() {
         if (epoch === identityEpochRef.current) setLife(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
-      const value = await bootstrap.value.api.lifeContinuity(viewer);
+      const value = await client.api.lifeContinuity(viewer);
       if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setLife(value.items.length ? { kind: "success", value } : { kind: "empty" });
@@ -224,13 +250,12 @@ export default function App() {
   }
 
   async function loadEncounter(id: string) {
-    if ("error" in bootstrap) return;
     const epoch = identityEpochRef.current;
     setEncounter({ kind: "loading" });
     try {
       const key = `encounter:${id}`;
       const value =
-        cache.get<EncounterDetail>(key) ?? (await bootstrap.value.api.encounterDetail(id));
+        cache.get<EncounterDetail>(key) ?? (await client.api.encounterDetail(id));
       if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setEncounter({ kind: "success", value });
@@ -242,7 +267,6 @@ export default function App() {
   }
 
   async function loadProfile(id: string) {
-    if ("error" in bootstrap) return;
     const epoch = identityEpochRef.current;
     setProfile({ kind: "loading" });
     try {
@@ -253,7 +277,7 @@ export default function App() {
       const viewerKey = viewer ? `${viewer.kind}:${viewer.id}` : "OWNER";
       const key = `profile:${viewerKey}:${id}`;
       const value =
-        cache.get<CompanionProfile>(key) ?? (await bootstrap.value.api.companionProfile(id, viewer));
+        cache.get<CompanionProfile>(key) ?? (await client.api.companionProfile(id, viewer));
       if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setProfile({ kind: "success", value });
@@ -268,7 +292,6 @@ export default function App() {
     | { kind: "OWNER" }
     | { kind: "COMPANION"; id: string; displayName: string }
   ) {
-    if ("error" in bootstrap) return;
     const previousIdentity = identityValue;
     const previousName = companionDisplayName;
 
@@ -285,8 +308,8 @@ export default function App() {
     try {
       const value =
         target.kind === "OWNER"
-          ? await bootstrap.value.api.identityContext()
-          : await bootstrap.value.api.identityContext({
+          ? await client.api.identityContext()
+          : await client.api.identityContext({
               kind: "COMPANION",
               id: target.id,
             });
@@ -299,8 +322,8 @@ export default function App() {
         try {
           const restored =
             previousIdentity.activeSubject.kind === "OWNER"
-              ? await bootstrap.value.api.identityContext()
-              : await bootstrap.value.api.identityContext({
+              ? await client.api.identityContext()
+              : await client.api.identityContext({
                   kind: previousIdentity.activeSubject.kind,
                   id: previousIdentity.activeSubject.id,
                 });
@@ -318,7 +341,7 @@ export default function App() {
   }
 
   async function switchCompanionFromUi(item: OwnerCompanionSummary) {
-    if (!item.socialReady || "error" in bootstrap) return;
+    if (!item.socialReady) return;
     if (route.type === "encounter") {
       await switchToCompanionContext(item);
       return;
@@ -361,7 +384,7 @@ export default function App() {
   }
 
   async function switchToCompanionContext(item: OwnerCompanionSummary) {
-    if ("error" in bootstrap || route.type !== "encounter" || !item.socialReady) {
+    if (route.type !== "encounter" || !item.socialReady) {
       return;
     }
     const previousIdentity = identityValue;
@@ -377,7 +400,7 @@ export default function App() {
     cache.purgeViewerSensitive();
 
     try {
-      const value = await bootstrap.value.api.identityContext({
+      const value = await client.api.identityContext({
         kind: "COMPANION",
         id: item.companionId,
       });
@@ -396,8 +419,8 @@ export default function App() {
         try {
           const restored =
             previousIdentity.activeSubject.kind === "OWNER"
-              ? await bootstrap.value.api.identityContext()
-              : await bootstrap.value.api.identityContext({
+              ? await client.api.identityContext()
+              : await client.api.identityContext({
                   kind: previousIdentity.activeSubject.kind,
                   id: previousIdentity.activeSubject.id,
                 });
@@ -426,10 +449,6 @@ export default function App() {
     }
   }
 
-  if ("error" in bootstrap) {
-    return <Centered title="Client configuration required" body={bootstrap.error} />;
-  }
-
   const isMoment = route.type === "encounter" && momentMode && encounter.kind === "success";
   const currentKind = identityValue?.activeSubject.kind ?? "OWNER";
   const isSampleCompanion = currentKind !== "OWNER";
@@ -450,9 +469,9 @@ export default function App() {
       )}
 
       {route.type === "root" && route.tab === "world" && (
-        identityValue && !("error" in bootstrap) && bootstrap.value.api.community ? <CommunityScreen
+        identityValue && client.api.community ? <CommunityScreen
           key={`${identityValue.activeSubject.kind}:${identityId}`}
-          client={bootstrap.value.api.community}
+          client={client.api.community}
           viewer={{ kind: identityValue.activeSubject.kind, id: identityId }}
           initialScrollY={nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0}
           onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))}
@@ -526,6 +545,7 @@ export default function App() {
           companionName={companionDisplayName}
           companions={ownerCompanions}
           selfProfile={profile}
+          account={account}
           onOpenCompanionProfile={(item) => openProfile(item.companionId, "OWNER_ROSTER")}
           onControls={(item) => {
             setCompanionDisplayName(item.displayName);
@@ -544,13 +564,13 @@ export default function App() {
             }));
           }}
           onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
-          onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && bootstrap.value.api.community
+          onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && client.api.community
             ? () => setNav(current => pushRoute(current, { type: "edit-human-profile" })) : undefined}
         />
       )}
 
-      {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && bootstrap.value.api.community && (
-        <HumanProfileEditor key={identityId} client={bootstrap.value.api.community}
+      {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && client.api.community && (
+        <HumanProfileEditor key={identityId} client={client.api.community}
           viewer={{ kind: "OWNER", id: identityId }} onClose={goBack} />
       )}
 
@@ -580,7 +600,7 @@ export default function App() {
 
       {route.type === "bring-companion" && (
         <BringCompanionScreen
-          api={bootstrap.value.api}
+          api={client.api}
           onApproved={() => void loadOwnerCompanions()}
           onResidencyChanged={() => void loadOwnerCompanions()}
           onOpenCompanion={(identity) => {
@@ -591,7 +611,7 @@ export default function App() {
 
       {route.type === "social-activation" && (
         <SocialActivationScreen
-          api={bootstrap.value.api}
+          api={client.api}
           companion={{
             companionId: route.companionId,
             identityId: route.identityId,
@@ -607,7 +627,7 @@ export default function App() {
 
       {route.type === "controls" && (
         <ControlsScreen
-          api={bootstrap.value.api}
+          api={client.api}
           companionId={route.companionId}
           companionName={companionDisplayName}
         />
@@ -665,7 +685,7 @@ function AppHeader({
   return (
     <View style={styles.topBar}>
       {routeIsRoot ? (
-        <Pressable style={styles.identityTrigger} onPress={onIdentity} accessibilityRole="button" accessibilityLabel="切换当前账号">
+        <Pressable style={styles.identityTrigger} onPress={onIdentity} accessibilityRole="button" accessibilityLabel="切换当前身份">
           {avatar ? (
             <Image source={{ uri: avatar }} style={styles.miniAvatarImage} />
           ) : (
@@ -1287,6 +1307,7 @@ function MyScreen({
   companionName,
   companions,
   selfProfile,
+  account,
   onOpenCompanionProfile,
   onControls,
   onResumeCompanion,
@@ -1298,6 +1319,7 @@ function MyScreen({
   companionName: string;
   companions: LoadState<OwnerCompanionCollection>;
   selfProfile: LoadState<CompanionProfile>;
+  account?: { email?: string; signOut: () => void };
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
   onControls: (item: OwnerCompanionSummary) => void;
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
@@ -1405,6 +1427,16 @@ function MyScreen({
           </View>
         </View>
       )}
+
+      {account && <View style={styles.settingsGroup}>
+        {account.email && <View style={styles.settingsRowStatic}>
+          <Text style={styles.tinyMuted}>{account.email}</Text>
+        </View>}
+        <Pressable accessibilityRole="button" style={styles.settingsRow} onPress={account.signOut}>
+          <Text style={styles.settingsText}>退出登录或切换账号</Text>
+          <Text style={styles.accountArrow}>›</Text>
+        </Pressable>
+      </View>}
     </ScrollView>
   );
 }
@@ -1564,20 +1596,6 @@ function ErrorState({
     </View>
   );
 }
-
-const colors = {
-  canvas: "#FFFFFF",
-  paper: "#FAF9FE",
-  ink: "#000000",
-  text: "#1A1B1F",
-  muted: "#666666",
-  tertiary: "#8E8E93",
-  line: "#EFEFF4",
-  soft: "#F4F3F8",
-  rose: "#D9777F",
-  roseDark: "#C8656F",
-  roseWash: "#FBEFF0",
-};
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },

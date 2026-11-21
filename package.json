@@ -16,7 +16,8 @@
     "dev:mobile:db:init": "node --experimental-strip-types scripts/init-mobile-dev-db.ts",
     "dev:mobile:api": "node --experimental-strip-types packages/foundation/src/dev/mobile-http-server.ts",
     "test:mobile:residency": "node --experimental-strip-types scripts/smoke-companion-residency.ts",
-    "decisionbench": "node --experimental-strip-types spikes/decisionbench/run.ts"
+    "decisionbench": "node --experimental-strip-types spikes/decisionbench/run.ts",
+    "start:mobile:api": "node --experimental-strip-types packages/foundation/src/http/supabase-mobile-server.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.2",

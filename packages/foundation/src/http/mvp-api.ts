@@ -7,6 +7,7 @@ import type { PersistentEncounterOrchestrator } from "../encounter/persistent-or
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import {
   ApiAuthenticationError,
+  OwnerSessionError,
   type ApiProblem,
   type AuthenticatedOwnerSession,
   type EncounterCommandPort,
@@ -185,6 +186,11 @@ const mapError = (error: unknown, traceId: string): MvpHttpResponse => {
   if (error instanceof RequestProblem) return problem(error.status, error.code, error.title, traceId);
   if (error instanceof ApiAuthenticationError) {
     return problem(401, error.code, "Authentication is required.", traceId);
+  }
+  if (error instanceof OwnerSessionError) {
+    return error.code === "FORBIDDEN"
+      ? problem(403, error.code, "This account has no active Owner access.", traceId)
+      : problem(503, error.code, "Authentication is temporarily unavailable.", traceId);
   }
   if (error instanceof ImportPolicyError) {
     return problem(400, error.code, "The Companion import is invalid.", traceId);

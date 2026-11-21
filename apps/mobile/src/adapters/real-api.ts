@@ -1,3 +1,4 @@
+import type { SessionTokenSource } from "../auth/account-session.ts";
 import type {
   ActiveIdentityContext,
   ClientApi,
@@ -36,7 +37,7 @@ export class ApiProblemError extends Error {
   }
 }
 
-interface RealApiConfig { baseUrl: string; bearerToken: string; }
+type RealApiConfig = { baseUrl: string } & ({ bearerToken: string } | { session: SessionTokenSource });
 
 export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
@@ -118,50 +119,63 @@ export class RealApiAdapter implements ClientApi {
     return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
   }
 
-  private async get<T>(path: string): Promise<T> {
-    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
-      headers: { Authorization: `Bearer ${this.config.bearerToken}`, Accept: "application/json" },
-    });
-    const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
-    if (!response.ok) {
-      throw new ApiProblemError(
-        response.status,
-        String(body?.code ?? "HTTP_ERROR"),
-        String(body?.messageClass ?? "INTERNAL"),
-        String(body?.retryHint ?? "DO_NOT_RETRY"),
-        String(body?.traceId ?? "unknown"),
-      );
-    }
-    return body as T;
+  private get<T>(path: string): Promise<T> {
+    return this.request("GET", path);
   }
 
-  private async send<T>(
+  private send<T>(
     method: "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
     extraHeaders: Record<string, string> = {},
   ): Promise<T> {
-    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.config.bearerToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...extraHeaders,
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    const parsed = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
-    if (!response.ok) {
+    return this.request(method, path, body, extraHeaders);
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
+    const session = "session" in this.config ? this.config.session : undefined;
+    const signal = session?.signal;
+    const ensureCurrent = () => {
+      if (signal?.aborted) throw new Error("Account session changed.");
+    };
+
+    const send = async (token: string) => {
+      ensureCurrent();
+      const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
+        method,
+        signal,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          ...(method === "GET" ? {} : { "Content-Type": "application/json" }),
+          ...extraHeaders,
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+      ensureCurrent();
+      return { response, payload };
+    };
+
+    let token = "bearerToken" in this.config ? this.config.bearerToken : await this.config.session.getToken();
+    let result = await send(token);
+    const rejected = () => result.response.status === 401 && result.payload?.code === "INVALID_TOKEN";
+    if (session && rejected()) {
+      // Authentication is checked before command dispatch. Retrying keeps the original idempotency key.
+      token = await session.refreshToken(token);
+      result = await send(token);
+      if (rejected()) session.rejectToken(token);
+    }
+    if (!result.response.ok) {
       throw new ApiProblemError(
-        response.status,
-        String(parsed?.code ?? "HTTP_ERROR"),
-        String(parsed?.messageClass ?? "INTERNAL"),
-        String(parsed?.retryHint ?? "DO_NOT_RETRY"),
-        String(parsed?.traceId ?? "unknown"),
+        result.response.status,
+        String(result.payload?.code ?? "HTTP_ERROR"),
+        String(result.payload?.messageClass ?? "INTERNAL"),
+        String(result.payload?.retryHint ?? "DO_NOT_RETRY"),
+        String(result.payload?.traceId ?? "unknown"),
       );
     }
-    return parsed as T;
+    return result.payload as T;
   }
 }
 

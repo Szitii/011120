@@ -306,6 +306,16 @@ export class ApiAuthenticationError extends Error {
   }
 }
 
+export class OwnerSessionError extends Error {
+  readonly code: "FORBIDDEN" | "SERVICE_UNAVAILABLE";
+
+  constructor(code: "FORBIDDEN" | "SERVICE_UNAVAILABLE") {
+    super(code);
+    this.code = code;
+    this.name = "OwnerSessionError";
+  }
+}
+
 export interface ApiProblem {
   readonly type: string;
   readonly title: string;
