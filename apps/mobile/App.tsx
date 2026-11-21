@@ -690,9 +690,10 @@ function WorldScreen({
   onOpenEncounter: (item: WorldItem) => void;
   onRetry: () => void;
 }) {
+  const [actorFilter, setActorFilter] = useState<"ALL" | "OWNER" | "SOCIAL_TWIN">("ALL");
   if (state.kind === "loading" || state.kind === "idle") return <Loading />;
   if (state.kind === "empty") {
-    return <Centered title="这里暂时没什么事。" body="暂时没有新东西。" />;
+    return <Centered title="公共社区还没有可见内容" body="这里会展示真实发布或授权公开的社区记录。" />;
   }
   if (state.kind === "error") {
     return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
@@ -709,9 +710,31 @@ function WorldScreen({
     >
       <View style={styles.feedHeading}>
         <Text style={styles.feedTitle}>公共社区</Text>
+        <Text style={styles.feedDisclaimer}>当前展示已授权的社区记录；发帖、评论与关注等功能仍在开发中。</Text>
+        <View style={styles.feedFilterRow} accessibilityLabel="按作者身份筛选当前记录">
+          {([
+            { key: "ALL" as const, label: "全部" },
+            { key: "OWNER" as const, label: "人类" },
+            { key: "SOCIAL_TWIN" as const, label: "家机" },
+          ]).map((filter) => (
+            <Pressable
+              key={filter.key}
+              onPress={() => setActorFilter(filter.key)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: actorFilter === filter.key }}
+              style={[styles.feedFilterPill, actorFilter === filter.key && styles.feedFilterPillActive]}
+            >
+              <Text style={[styles.feedFilterText, actorFilter === filter.key && styles.feedFilterTextActive]}>{filter.label}</Text>
+            </Pressable>
+          ))}
+        </View>
       </View>
 
-      {state.value.items.map((item) => (
+      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).length === 0 && (
+        <View style={styles.feedEnd}><Text style={styles.tinyMuted}>当前加载的记录里没有这一类内容。</Text></View>
+      )}
+
+      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).map((item) => (
         <FeedItem
           key={item.id}
           item={item}
@@ -751,7 +774,8 @@ function FeedItem({
         </View>
         <View style={styles.feedAuthorText}>
           <View style={styles.feedAuthorLine}>
-            <Text style={styles.feedAuthorName}>{item.author.displayName}</Text>
+            <Text style={styles.feedAuthorName} numberOfLines={1}>{item.author.displayName}</Text>
+            <Text style={styles.feedActorTag}>{item.author.subjectKind === "OWNER" ? "人类" : "AI 家机"}</Text>
             {item.author.handle && <Text style={styles.feedAuthorHandle}>@{item.author.handle}</Text>}
           </View>
           <Text style={styles.feedMeta}>{formatDate(item.publishedAt)}</Text>
@@ -792,10 +816,12 @@ function FeedItem({
           })}
         </View>
       ) : (
-        <View style={styles.noMedia}>
-          <Text style={styles.noMediaGlyph}>⌁</Text>
-          <Text style={styles.noMediaText}>没图。也没视频。</Text>
-        </View>
+        item.body ? null : (
+          <View style={styles.noMedia}>
+            <Text style={styles.noMediaGlyph}>⌁</Text>
+            <Text style={styles.noMediaText}>这条记录没有媒体内容</Text>
+          </View>
+        )
       )}
 
       <View style={styles.feedActions}>
@@ -869,9 +895,9 @@ function EncounterScreen({
             <Text>{displayName.slice(0, 1).toUpperCase()}</Text>
           </View>
         )}
-        <Text style={styles.participantName}>{displayName}</Text>
+        <Text style={styles.participantName} numberOfLines={2} ellipsizeMode="tail">{displayName}</Text>
         {participant?.presentationAvailable === true && participant.handle && (
-          <Text style={styles.tinyMuted}>@{participant.handle}</Text>
+          <Text style={styles.participantHandle} numberOfLines={2} ellipsizeMode="tail">@{participant.handle}</Text>
         )}
       </Pressable>
     );
@@ -1257,10 +1283,11 @@ function MyScreen({
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
   onBringCompanion: () => void;
 }) {
+  const ownerName = identity.kind === "success" ? identity.value.activeSubject.presentation.displayName : "我的账号";
   return (
     <ScrollView style={styles.content} contentContainerStyle={styles.myPage}>
       <Text style={styles.myTitle}>我的</Text>
-      <Text style={styles.mySub}>{isSampleCompanion ? companionName : "你"}</Text>
+      <Text style={styles.mySub}>{isSampleCompanion ? "家机主页" : "人类主页"}</Text>
 
       {isSampleCompanion ? (
         <View style={styles.accountCard}>
@@ -1284,15 +1311,11 @@ function MyScreen({
       ) : (
         <View style={styles.accountCard}>
           <View style={[styles.accountAvatar, isSampleCompanion && styles.accountAvatarSampleCompanion]}>
-            <Text style={styles.accountAvatarText}>
-              {isSampleCompanion ? companionName.slice(0, 1).toUpperCase() : "你"}
-            </Text>
+            <Text style={styles.accountAvatarText}>{ownerName.slice(0, 1).toUpperCase()}</Text>
           </View>
           <View style={styles.accountCardText}>
-            <Text style={styles.accountName}>{isSampleCompanion ? companionName : "你"}</Text>
-            <Text style={styles.accountHandle}>
-              {identity.kind === "success" ? (isSampleCompanion ? `现在是 ${companionName}` : "现在是你") : "稍等。"}
-            </Text>
+            <Text style={styles.accountName}>{ownerName}</Text>
+            <Text style={styles.accountHandle}>人类账号 · 当前身份</Text>
           </View>
         </View>
   
@@ -1612,6 +1635,13 @@ const styles = StyleSheet.create({
   feed: { paddingBottom: 26 },
   feedHeading: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
   feedTitle: { fontSize: 26, lineHeight: 32, fontWeight: "700", color: colors.ink, letterSpacing: -0.6 },
+  feedDisclaimer: { marginTop: 9, fontSize: 12, lineHeight: 18, color: colors.tertiary },
+  feedFilterRow: { marginTop: 15, flexDirection: "row", alignItems: "center", gap: 8 },
+  feedFilterPill: { borderRadius: 15, paddingVertical: 7, paddingHorizontal: 14, backgroundColor: colors.soft },
+  feedFilterPillActive: { backgroundColor: colors.roseWash },
+  feedFilterText: { fontSize: 12, color: colors.muted },
+  feedFilterTextActive: { fontWeight: "700", color: colors.roseDark },
+  feedActorTag: { color: colors.roseDark, backgroundColor: colors.roseWash, paddingVertical: 2, paddingHorizontal: 6, fontSize: 10, borderRadius: 6, overflow: "hidden" },
   feedSwitcher: {
     alignSelf: "flex-start",
     marginTop: 12,
@@ -1683,7 +1713,7 @@ const styles = StyleSheet.create({
   encounterTitle: { marginTop: 8, fontSize: 24, lineHeight: 30, fontWeight: "700", color: colors.ink },
   encounterMeta: { marginTop: 6, fontSize: 12, color: colors.tertiary },
   participantRail: { marginTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "center" },
-  participant: { width: 68, alignItems: "center" },
+  participant: { flex: 1, minWidth: 0, alignItems: "center" },
   participantAvatar: {
     width: 44,
     height: 44,
@@ -1694,8 +1724,9 @@ const styles = StyleSheet.create({
   },
   participantAvatarImage: { width: 44, height: 44, borderRadius: 22 },
   participantAvatarAlt: { backgroundColor: "#E9EFF0" },
-  participantName: { marginTop: 6, fontSize: 11, color: colors.muted },
-  connectionLine: { width: 38, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
+  participantName: { marginTop: 6, fontSize: 11, lineHeight: 15, textAlign: "center", color: colors.muted },
+  participantHandle: { marginTop: 3, fontSize: 10, lineHeight: 14, textAlign: "center", color: colors.tertiary },
+  connectionLine: { width: 18, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
   encounterBadge: {
     paddingHorizontal: 9,
     paddingVertical: 5,
