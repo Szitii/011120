@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { createSupabaseMobileHttpServer } from "../../packages/foundation/src/http/supabase-mobile-server.ts";
 import { createPgPool } from "../../packages/foundation/src/persistence/postgres/index.ts";
 import type {
@@ -34,7 +35,7 @@ function required(name: string) {
   return value;
 }
 
-type Login = { access_token: string; refresh_token: string };
+type Login = { access_token: string; refresh_token: string; expires_in: number };
 const publishableKey = realAuth ? required("SUPABASE_PUBLISHABLE_KEY") : "test-only-public-key";
 const stubUsers = new Map([
   ["token-a", "00000000-0000-0000-0000-0000000000a1"],
@@ -179,6 +180,25 @@ try {
     assert.equal((await auth("logout?scope=local", undefined, tokenB)).status, 204);
     assert.equal((await call(tokenB, "identity-context")).status, 401);
     console.log("Account integration 5: actual Auth password grant, refresh rotation, local logout and revoked-session rejection");
+
+    if (process.env.AUTH_TEST_VERIFY_TOKEN_EXPIRY === "1") {
+      const expiring = await login("A");
+      assert.ok(Number.isInteger(expiring.expires_in) && expiring.expires_in >= 5 && expiring.expires_in <= 30,
+        "Use a disposable Auth instance with a JWT lifetime of 5–30 seconds for this check.");
+      assert.equal((await call(expiring.access_token, "identity-context")).status, 200);
+      await delay((expiring.expires_in + 1) * 1_000);
+      assert.equal((await call(expiring.access_token, "identity-context")).status, 401);
+
+      const response = await auth("token?grant_type=refresh_token", { refresh_token: expiring.refresh_token });
+      assert.equal(response.status, 200);
+      const renewed = await response.json() as Login;
+      const identity = await call<ActiveIdentityContext>(renewed.access_token, "identity-context");
+      assert.equal(identity.status, 200);
+      assert.equal(identity.data.activeSubject.id, A.id);
+      assert.equal((await call(expiring.access_token, "identity-context")).status, 401);
+      assert.equal((await auth("logout?scope=local", undefined, renewed.access_token)).status, 204);
+      console.log("Account integration 6: natural JWT expiry, rejection of the old token and refresh of the same Owner");
+    }
   }
   console.log(`Account PostgreSQL/HTTP integration passed (${realAuth ? "real Supabase Auth" : "Auth HTTP test double"}).`);
 } finally {

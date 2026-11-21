@@ -59,6 +59,16 @@ Supabase Auth manages password sign-in and token refresh. The mobile API verifie
 
 Real mode is the default and requires both API and Supabase configuration. Loopback HTTP is supported for local tests. The fixed-bearer path requires explicit `dev` mode and the development host.
 
+### iPhone acceptance checks
+
+Use an iPhone build configured for the test API and test Supabase project above. Record the build commit, iOS version and outcome for each step.
+
+1. Sign in as tester A. Verify the human identity and its Companion roster. Publish a short test post as A. Select an authorized Companion, then verify that the three main tabs still work.
+2. Force-quit and reopen the app. Verify that the account restores under A and only A's roster is available. Send the app to the background and reopen it after the test access token's expiry time. Verify that requests succeed again with the refreshed session.
+3. Leave a community draft, open **我的 → 退出登录或切换账号** and sign in as tester B. Verify that the draft is empty, the starting identity is B, and the identity picker shows only B's Companions.
+4. Have B follow A. Verify that A’s test post appears in B’s human following feed and that A receives a follow notification from B. Check that B’s Companion following feed omits the post and that neither B nor A’s Companion can see A’s notification.
+5. Sign out B, then force-quit and reopen. Verify that the login screen persists. For the expiry recovery check, revoke a test session from Supabase and attempt to refresh the community page. Verify that the app returns to login and the account can sign in again.
+
 ## Fastest Windows + iPhone workflow
 
 The local launcher uses a development-only PostgreSQL, API and seed configuration for physical-device testing.
@@ -157,7 +167,7 @@ To run the account contract against real Auth, set `COMPANION_SOCIAL_REAL_AUTH_T
 COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types tests/postgres/account-runtime.ts
 ```
 
-The real-Auth run adds password grants, refresh-token rotation, device logout and rejection of revoked sessions to the isolation checks.
+The real-Auth run adds password grants, refresh-token rotation, device logout and rejection of revoked sessions to the isolation checks. With a disposable Auth instance issuing JWTs with a lifetime of 5–30 seconds, set `AUTH_TEST_VERIFY_TOKEN_EXPIRY=1` to also verify a naturally expired bearer and refresh back into the same Owner.
 
 
 ## 2026-09-22 manual validation build
