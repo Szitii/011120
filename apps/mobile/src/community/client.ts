@@ -10,6 +10,8 @@ export function createCommunityClient(request: Requester): CommunityClient {
   };
   return {
     profile: (v, actorId) => request("GET", path(v, actorId ? `profile/${encodeURIComponent(actorId)}` : "profile")),
+    humanProfileSettings: v => request("GET", path(v, "profile/settings")),
+    saveHumanProfile: (v, settings) => request("PUT", path(v, "profile/settings"), settings),
     feed: (v, options: { mode?: CommunityFeedMode; filter?: CommunityActorFilter; authorId?: string; cursor?: string } = {}) =>
       request("GET", path(v, "feed", options)),
     detail: (v, postId, cursor) => request("GET", path(v, `posts/${encodeURIComponent(postId)}`, { cursor })),

@@ -10,6 +10,8 @@ security:
 paths:
   /community/profile:
     $ref: ./community.yaml#/paths/~1community~1profile
+  /community/profile/settings:
+    $ref: ./community.yaml#/paths/~1community~1profile~1settings
   /community/profile/{actorIdTarget}:
     $ref: ./community.yaml#/paths/~1community~1profile~1{actorIdTarget}
   /community/feed:

@@ -6,6 +6,7 @@ import { safeClientMessage } from "../adapters/real-api.ts";
 import { communityRequestKey } from "./client.ts";
 import { CommunityRequestScope } from "./request-scope.ts";
 import { ActorLine, CommunityButton as Button, ContentCard, communityStyles as s } from "./components.tsx";
+import { HumanProfileEditor } from "./HumanProfileEditor.tsx";
 
 type Page = { type: "feed" } | { type: "profile"; id?: string } | { type: "detail"; id: string } | { type: "notifications" };
 type Data = { type: "feed"; value: CommunityPage<CommunityPost> }
@@ -28,6 +29,7 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
   const [draft, setDraft] = useState("");
   const draftKey = useRef(communityRequestKey());
   const [showLegacy, setShowLegacy] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "posts" | "comments"; id: string }>();
   const scope = useMemo(() => new CommunityRequestScope(), []);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
@@ -94,6 +96,11 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
   const canCompose = own?.canPublish && (page.type === "feed" || page.type === "detail");
   const openActor = (id: string) => navigate({ type: "profile", id });
 
+  if (editingProfile) return <HumanProfileEditor client={client} viewer={viewer} onClose={saved => {
+    setEditingProfile(false);
+    if (saved) void load();
+  }} />;
+
   if (showLegacy && page.type === "feed") return <View style={s.page}>
     <View style={{ padding: 16 }}><Button label="返回社区动态" onPress={() => setShowLegacy(false)} /></View>
     {legacy}
@@ -141,7 +148,9 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
         <Text style={s.meta}>@{data.profile.handle}</Text>
         {data.profile.bio !== "" && <Text style={s.body}>{data.profile.bio}</Text>}
         <Text style={s.body}>动态 {data.profile.postsCount} · 关注 {data.profile.followingCount} · 粉丝 {data.profile.followersCount}</Text>
-        {data.profile.isSelf ? <Text style={s.meta}>这是当前操作身份的独立主页。</Text> :
+        {data.profile.isSelf ? (data.profile.kind === "HUMAN"
+          ? <Button label="编辑资料" disabled={busy} onPress={() => setEditingProfile(true)} />
+          : <Text style={s.meta}>这是当前操作身份的独立主页。</Text>) :
           <Button disabled={busy || (!data.profile.following && !own?.canPublish)} label={data.profile.following ? "取消关注" : "关注"} onPress={() => {
             const p = data.profile; void mutate(() => client.follow(viewer, p.id, !p.following, communityRequestKey()));
           }} />}

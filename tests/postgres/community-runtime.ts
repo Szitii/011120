@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../../packages/foundation/src/dev/mobile-http-server.ts";
 import { createPgPool } from "../../packages/foundation/src/persistence/postgres/index.ts";
-import type { ActorContext, CommunityProfile, CommunityPost, CommunityComment, CommunityPage, CommunityNotification, CommunityDetail } from "../../packages/community-contracts/types.ts";
+import type { ActorContext, CommunityProfile, CommunityPost, CommunityComment, CommunityPage, CommunityNotification, CommunityDetail, HumanProfileSettings } from "../../packages/community-contracts/types.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");
@@ -51,6 +51,37 @@ try {
   assert.equal((await call(0,humanA,`posts/${proxy.data.id}`,"DELETE")).status,404);
   const serialized = JSON.stringify(proxy.data); assert.doesNotMatch(serialized,/ownerId|owner_id|identity_document|memory|auth_user/);
   passed("persistent publish, concurrent retry deduplication, provenance and same-Owner actor isolation");
+
+  const settings = await call<HumanProfileSettings>(0, humanA, "profile/settings");
+  assert.equal(settings.status, 200);
+  assert.deepEqual(settings.data, { displayName: ha.displayName, bio: "", revision: 1 });
+  const changes = { displayName: "社区昵称 🐾", bio: "个人简介", revision: settings.data.revision };
+  assert.equal((await call(0, aiA, "profile/settings")).status, 403);
+  assert.equal((await call(0, aiA, "profile/settings", "PUT", changes)).status, 403);
+  assert.equal((await call(1, humanA, "profile/settings", "PUT", changes)).status, 404);
+  const competingUpdate = { ...changes, displayName: "另一个设备的昵称" };
+  const saves = await Promise.all([changes, competingUpdate].map(change =>
+    call<HumanProfileSettings>(0, humanA, "profile/settings", "PUT", change)));
+  assert.deepEqual(saves.map(r => r.status).sort(), [200, 409]);
+  const winner = saves.find(r => r.status === 200)!.data;
+  assert.equal(winner.revision, 2);
+  const replay = await call<HumanProfileSettings>(0, humanA, "profile/settings", "PUT", { ...winner, revision: 1 });
+  assert.equal(replay.status, 200);
+  assert.deepEqual(replay.data, winner);
+  const publicView = await call<CommunityProfile>(1, humanB, `profile/${ha.id}`);
+  assert.equal(publicView.data.displayName, winner.displayName);
+  assert.equal(publicView.data.bio, changes.bio);
+  assert.equal(publicView.data.handle, ha.handle);
+  assert.ok(!("revision" in publicView.data));
+  assert.equal((await call<CommunityDetail>(1, humanB, `posts/${post.data.id}`)).data.post.author.displayName, winner.displayName);
+  assert.equal((await profile(0, aiA)).displayName, ca.displayName);
+  assert.equal((await pool.query("select display_name from public.owners where id = $1", [A.owner])).rows[0]!.display_name, ha.displayName);
+  const audit = await pool.query("select count(*) from public.audit_events where action = 'COMMUNITY_UPDATE_PROFILE' and actor_id = $1", [ha.id]);
+  assert.equal(audit.rows[0]!.count, "1");
+  const cleared = await call<HumanProfileSettings>(0, humanA, "profile/settings", "PUT", { ...winner, bio: "" });
+  assert.equal(cleared.status, 200);
+  assert.equal((await call<CommunityProfile>(1, humanB, `profile/${ha.id}`)).data.bio, "");
+  passed("human profile authorization, concurrent edits, replay, public display and AI isolation");
 
   assert.equal((await call(1,humanB,`following/${ha.id}`,"PUT")).status,200);
   const duplicateFollow = await call(1,humanB,`following/${ha.id}`,"PUT"); assert.equal(duplicateFollow.status,200);

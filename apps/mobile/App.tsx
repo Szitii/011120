@@ -15,6 +15,7 @@ import { StatusBar } from "expo-status-bar";
 import { createClientBootstrap } from "./src/adapters";
 import { safeClientMessage } from "./src/adapters/real-api";
 import { CommunityScreen } from "./src/community/CommunityScreen";
+import { HumanProfileEditor } from "./src/community/HumanProfileEditor";
 import type {
   ActiveIdentityContext,
   CompanionProfile,
@@ -543,7 +544,14 @@ export default function App() {
             }));
           }}
           onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
+          onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && bootstrap.value.api.community
+            ? () => setNav(current => pushRoute(current, { type: "edit-human-profile" })) : undefined}
         />
+      )}
+
+      {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && bootstrap.value.api.community && (
+        <HumanProfileEditor key={identityId} client={bootstrap.value.api.community}
+          viewer={{ kind: "OWNER", id: identityId }} onClose={goBack} />
       )}
 
       {route.type === "encounter" && (
@@ -1283,6 +1291,7 @@ function MyScreen({
   onControls,
   onResumeCompanion,
   onBringCompanion,
+  onEditHumanProfile,
 }: {
   identity: LoadState<ActiveIdentityContext>;
   isSampleCompanion: boolean;
@@ -1293,6 +1302,7 @@ function MyScreen({
   onControls: (item: OwnerCompanionSummary) => void;
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
   onBringCompanion: () => void;
+  onEditHumanProfile?: () => void;
 }) {
   const ownerName = identity.kind === "success" ? identity.value.activeSubject.presentation.displayName : "我的账号";
   return (
@@ -1328,9 +1338,10 @@ function MyScreen({
             <Text style={styles.accountName}>{ownerName}</Text>
             <Text style={styles.accountHandle}>人类账号 · 当前身份</Text>
           </View>
+          {onEditHumanProfile && <Pressable accessibilityRole="button" onPress={onEditHumanProfile} style={styles.editProfileButton}>
+            <Text style={styles.settingsText}>编辑社区资料</Text>
+          </Pressable>}
         </View>
-  
-  
       )}
 
       {!isSampleCompanion && (
@@ -1906,6 +1917,7 @@ const styles = StyleSheet.create({
   accountAvatarImage: { width: 38, height: 38, borderRadius: 19, backgroundColor: "#ECE9E6" },
   accountAvatarText: { fontSize: 15, fontWeight: "700", color: colors.roseDark },
   accountCardText: { flex: 1, marginLeft: 12 },
+  editProfileButton: { minHeight: 44, paddingHorizontal: 8, flexDirection: "row", alignItems: "center" },
   accountName: { fontSize: 15, fontWeight: "700", color: colors.text },
   accountHandle: { marginTop: 3, fontSize: 11, color: colors.tertiary },
   accountArrow: { fontSize: 22, color: "#C7C7CC", fontWeight: "300" },

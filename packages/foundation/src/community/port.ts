@@ -1,4 +1,4 @@
-import type { ActorContext } from "../../../community-contracts/types.ts";
+import type { ActorContext, HumanProfileSettings } from "../../../community-contracts/types.ts";
 
 export interface CommunityRead {
   actor: ActorContext;
@@ -22,4 +22,6 @@ export interface CommunityCommand {
 export interface CommunityPort {
   read(input: CommunityRead): Promise<unknown>;
   command(input: CommunityCommand): Promise<unknown>;
+  humanProfileSettings(actor: ActorContext): Promise<unknown>;
+  saveHumanProfile(actor: ActorContext, settings: HumanProfileSettings): Promise<unknown>;
 }

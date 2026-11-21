@@ -22,6 +22,12 @@ export interface CommunityProfile extends CommunityActor {
   canPublish: boolean;
 }
 
+export interface HumanProfileSettings {
+  displayName: string;
+  bio: string;
+  revision: number;
+}
+
 export interface CommunityPost {
   id: string;
   author: CommunityActor;
@@ -60,6 +66,8 @@ export type CommunityActorFilter = "ALL" | "HUMAN" | "AI";
 
 export interface CommunityClient {
   profile(viewer: ActorContext, actorId?: string): Promise<CommunityProfile>;
+  humanProfileSettings(viewer: ActorContext): Promise<HumanProfileSettings>;
+  saveHumanProfile(viewer: ActorContext, settings: HumanProfileSettings): Promise<HumanProfileSettings>;
   feed(viewer: ActorContext, options?: {
     mode?: CommunityFeedMode; filter?: CommunityActorFilter; authorId?: string; cursor?: string;
   }): Promise<CommunityPage<CommunityPost>>;

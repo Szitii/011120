@@ -2,11 +2,28 @@ import { createHash } from "node:crypto";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { CommunityCommand, CommunityRead } from "./port.ts";
+import type { HumanProfileSettings } from "../../../community-contracts/types.ts";
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid community request."); };
 const id = (value: string | null): string => value !== null && uuid.test(value) ? value : invalid();
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+function profileSettings(request: MvpHttpRequest): HumanProfileSettings {
+  const contentType = Object.entries(request.headers ?? {}).find(([key]) => key.toLowerCase() === "content-type")?.[1];
+  if (contentType?.split(";")[0]?.trim().toLowerCase() !== "application/json") return invalid();
+  const input = request.body;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return invalid();
+  if (Object.keys(input).some(key => !["displayName", "bio", "revision"].includes(key))) return invalid();
+  const { displayName, bio, revision } = input as Record<string, unknown>;
+  if (typeof displayName !== "string" || typeof bio !== "string" || typeof revision !== "number"
+    || !Number.isInteger(revision) || revision < 1 || revision > 2147483647) return invalid();
+  const name = displayName.trim();
+  const description = bio.replaceAll("\r\n", "\n").trim();
+  if (name.length === 0 || Array.from(name).length > 80 || Array.from(description).length > 500
+    || /[\x00-\x1f\x7f]/.test(name) || /[\x00-\x08\x0b-\x1f\x7f]/.test(description)) return invalid();
+  return { displayName: name, bio: description, revision };
+}
 
 /** Authentication runs in MvpApiBoundary before this router; no user-supplied Owner id is trusted. */
 export async function handleCommunityRequest(
@@ -25,6 +42,10 @@ export async function handleCommunityRequest(
   const actor = { kind, id: id(url.searchParams.get("actorId")) } as CommunityRead["actor"];
   const route = url.pathname.slice("/v0/community/".length).split("/");
   const method = request.method.toUpperCase();
+  if (route[0] === "profile" && route[1] === "settings" && route.length === 2) {
+    if (method === "GET") return response(200, await port.humanProfileSettings(actor));
+    if (method === "PUT") return response(200, await port.saveHumanProfile(actor, profileSettings(request)));
+  }
   let resource: CommunityRead["resource"] | undefined;
   let targetId: string | null = null;
   if (method === "GET") {

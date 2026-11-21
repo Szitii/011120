@@ -14,6 +14,8 @@ const reads: CommunityRead[] = []; const commands: CommunityCommand[] = [];
 const community: CommunityPort = {
   read: async input => { reads.push(input); return { items: [], nextCursor: null }; },
   command: async input => { commands.push(input); return { id: target }; },
+  humanProfileSettings: async () => ({ displayName: "Sample", bio: "", revision: 1 }),
+  saveHumanProfile: async (_actor, settings) => settings,
 };
 const session: AuthenticatedOwnerSession = { ownerId, owner: {} as OwnerApiPort, community };
 const request = (path: string, method = "GET", body?: unknown): MvpHttpRequest => ({
@@ -69,10 +71,34 @@ it("runs community routing after authentication and uses the existing safe error
   assert.equal((await api.handle({ method: "GET", url: "/v0/community/feed" })).status, 401);
   assert.equal((await api.handle(request("feed"))).status, 200);
   const denied = new MvpApiBoundary({ sessions: { resolve: async () => ({ ...session, community: {
+    ...community,
     read: async () => { throw new PostgresPersistenceError("NOT_FOUND", "secret database text"); }, command: community.command,
   } }) }, encounters: { run: async () => { throw Error("unused"); } } });
   const result = await denied.handle(request("notifications"));
   assert.equal(result.status, 404); assert.ok(!JSON.stringify(result.body).includes("secret database text"));
+});
+
+it("accepts only profile fields and revision, trims display text, and supports Unicode", async () => {
+  const get = await handleCommunityRequest(request("profile/settings"), session, "trace");
+  assert.equal(get?.status, 200);
+  const legal = { displayName: " 新昵称 🐾 ", bio: " 第一行\r\n第二行 ", revision: 1 };
+  const saved = await handleCommunityRequest(request("profile/settings", "PUT", legal), session, "trace");
+  assert.equal(saved?.status, 200);
+  assert.equal(saved?.headers["cache-control"], "no-store");
+  assert.deepEqual(saved?.body, { displayName: "新昵称 🐾", bio: "第一行\n第二行", revision: 1 });
+  const malformed = [
+    { ...legal, actorId: target }, { ...legal, handle: "someone" }, { ...legal, displayName: " " },
+    { ...legal, displayName: "first\nsecond" }, { ...legal, displayName: "x".repeat(81) },
+    { ...legal, bio: "invalid\0bio" }, { ...legal, bio: "界".repeat(501) },
+    { ...legal, revision: 0 }, { ...legal, revision: 1.5 }, { ...legal, revision: "1" },
+    { ...legal, revision: 2147483648 }, null, [],
+  ];
+  for (const body of malformed) {
+    await assert.rejects(handleCommunityRequest(request("profile/settings", "PUT", body), session, "trace"),
+      error => error instanceof PostgresPersistenceError && error.code === "INVALID_INPUT");
+  }
+  await assert.rejects(handleCommunityRequest({ ...request("profile/settings", "PUT", legal), headers: {} }, session, "trace"),
+    error => error instanceof PostgresPersistenceError && error.code === "INVALID_INPUT");
 });
 
 it("parameterizes all PostgreSQL community inputs and validates payload shape", async () => {

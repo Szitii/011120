@@ -1,5 +1,6 @@
 import { PostgresPersistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
 import type { CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
+import type { ActorContext, HumanProfileSettings } from "../../../community-contracts/types.ts";
 
 /** Uses the same authenticated transaction executor as the existing Owner API. */
 export class PostgresCommunityAdapter implements CommunityPort {
@@ -17,6 +18,16 @@ export class PostgresCommunityAdapter implements CommunityPort {
     return this.#query("select public.community_command($1,$2,$3,$4,$5,$6,$7) as payload", [
       input.actor.kind, input.actor.id, input.action, input.targetId,
       input.body, input.keyHash, input.requestHash,
+    ]);
+  }
+
+  humanProfileSettings(actor: ActorContext): Promise<unknown> {
+    return this.#query("select public.community_get_human_profile($1,$2) as payload", [actor.kind, actor.id]);
+  }
+
+  saveHumanProfile(actor: ActorContext, settings: HumanProfileSettings): Promise<unknown> {
+    return this.#query("select public.community_update_human_profile($1,$2,$3,$4,$5) as payload", [
+      actor.kind, actor.id, settings.displayName, settings.bio, settings.revision,
     ]);
   }
 
