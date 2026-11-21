@@ -90,7 +90,8 @@ export default function App() {
   const [identitySwitchPending, setIdentitySwitchPending] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
-  const worldScrollRef = useRef<ScrollView>(null);
+  const worldScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const identityEpochRef = useRef(0);
 
   const route = nav.stack[nav.stack.length - 1] ?? {
     type: "root" as const,
@@ -113,7 +114,7 @@ export default function App() {
   useEffect(() => {
     if ("error" in bootstrap || identity.kind !== "success") return;
     if (route.type === "root" && route.tab === "world") void loadWorld();
-    if (route.type === "root" && route.tab === "life") void loadLife();
+    if (route.type === "life-archive" || (route.type === "root" && route.tab === "home")) void loadLife();
     if (
       route.type === "root" &&
       route.tab === "my" &&
@@ -170,14 +171,16 @@ export default function App() {
 
   async function loadWorld() {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setWorld({ kind: "loading" });
     try {
       const cached = cache.get<WorldCollection>("world");
       if (cached) {
-        setWorld(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
+        if (epoch === identityEpochRef.current) setWorld(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
       const value = await bootstrap.value.api.worldItems();
+      if (epoch !== identityEpochRef.current) return;
       cache.set("world", value);
       setWorld(value.items.length ? { kind: "success", value } : { kind: "empty" });
       requestAnimationFrame(() => {
@@ -185,6 +188,7 @@ export default function App() {
         worldScrollRef.current?.scrollTo({ y, animated: !reducedMotion });
       });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setWorld({ kind: "error", ...safe });
     }
@@ -192,6 +196,7 @@ export default function App() {
 
   async function loadLife() {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setLife({ kind: "loading" });
     try {
       const viewer =
@@ -202,13 +207,15 @@ export default function App() {
       const key = `life-continuity:${viewerKey}`;
       const cached = cache.get<LifeContinuityCollection>(key);
       if (cached) {
-        setLife(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
+        if (epoch === identityEpochRef.current) setLife(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
       const value = await bootstrap.value.api.lifeContinuity(viewer);
+      if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setLife(value.items.length ? { kind: "success", value } : { kind: "empty" });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setLife({ kind: "error", ...safe });
     }
@@ -216,14 +223,17 @@ export default function App() {
 
   async function loadEncounter(id: string) {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setEncounter({ kind: "loading" });
     try {
       const key = `encounter:${id}`;
       const value =
         cache.get<EncounterDetail>(key) ?? (await bootstrap.value.api.encounterDetail(id));
+      if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setEncounter({ kind: "success", value });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setEncounter({ kind: "error", ...safe });
     }
@@ -231,6 +241,7 @@ export default function App() {
 
   async function loadProfile(id: string) {
     if ("error" in bootstrap) return;
+    const epoch = identityEpochRef.current;
     setProfile({ kind: "loading" });
     try {
       const viewer =
@@ -241,9 +252,11 @@ export default function App() {
       const key = `profile:${viewerKey}:${id}`;
       const value =
         cache.get<CompanionProfile>(key) ?? (await bootstrap.value.api.companionProfile(id, viewer));
+      if (epoch !== identityEpochRef.current) return;
       cache.set(key, value);
       setProfile({ kind: "success", value });
     } catch (error) {
+      if (epoch !== identityEpochRef.current) return;
       const safe = safeClientMessage(error);
       setProfile({ kind: "error", ...safe });
     }
@@ -258,9 +271,11 @@ export default function App() {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
+    identityEpochRef.current += 1;
     setIdentitySwitchPending(true);
     setIdentity({ kind: "loading" });
     setWorld({ kind: "idle" });
+    setLife({ kind: "idle" });
     setEncounter({ kind: "idle" });
     setProfile({ kind: "idle" });
     cache.purgeViewerSensitive();
@@ -350,9 +365,11 @@ export default function App() {
     const previousIdentity = identityValue;
     const previousName = companionDisplayName;
 
+    identityEpochRef.current += 1;
     setIdentitySwitchPending(true);
     setIdentity({ kind: "loading" });
     setWorld({ kind: "idle" });
+    setLife({ kind: "idle" });
     setEncounter({ kind: "idle" });
     setProfile({ kind: "idle" });
     cache.purgeViewerSensitive();
@@ -445,7 +462,26 @@ export default function App() {
         />
       )}
 
-      {route.type === "root" && route.tab === "life" && (
+      {route.type === "root" && route.tab === "home" && (
+        <PrivateHomeScreen
+          state={life}
+          isCompanion={isSampleCompanion}
+          companionId={identityValue?.activeSubject.kind === "COMPANION" ? identityValue.activeSubject.id : undefined}
+          onOpenTimeline={() => setNav((current) => pushRoute(current, { type: "life-archive" }))}
+          onOpenEncounter={(item) => {
+            if (item.kind !== "ENCOUNTER" || item.viewerCapabilities.openDetail !== true) return;
+            setNav((current) => pushRoute(current, {
+              type: "encounter",
+              encounterId: item.linkedObject.id,
+              sourceTab: "home",
+              sourceScrollY: 0,
+              ...(item.counterpart?.companionId ? { companionId: item.counterpart.companionId } : {}),
+            }));
+          }}
+        />
+      )}
+
+      {route.type === "life-archive" && (
         <LifeScreen
           state={life}
           isCompanion={isSampleCompanion}
@@ -462,7 +498,7 @@ export default function App() {
               pushRoute(current, {
                 type: "encounter",
                 encounterId: item.linkedObject.id,
-                sourceTab: "life",
+                sourceTab: "home",
                 sourceScrollY: 0,
                 ...(item.counterpart?.companionId ? { companionId: item.counterpart.companionId } : {}),
               }),
@@ -610,7 +646,7 @@ function AppHeader({
   return (
     <View style={styles.topBar}>
       {routeIsRoot ? (
-        <Pressable style={styles.identityTrigger} onPress={onIdentity}>
+        <Pressable style={styles.identityTrigger} onPress={onIdentity} accessibilityRole="button" accessibilityLabel="切换当前账号">
           {avatar ? (
             <Image source={{ uri: avatar }} style={styles.miniAvatarImage} />
           ) : (
@@ -618,7 +654,7 @@ function AppHeader({
               <Text style={styles.miniAvatarText}>{initial}</Text>
             </View>
           )}
-          <Text style={styles.brand}>{identityTitle}</Text>
+          <Text style={styles.brand} numberOfLines={1}>{identityTitle}</Text>
           <Text style={styles.chevron}>⌄</Text>
         </Pressable>
       ) : (
@@ -627,10 +663,8 @@ function AppHeader({
         </Pressable>
       )}
 
-      <View pointerEvents="none" style={styles.headerBrandCenter}>
-        <Text style={styles.headerTitle}>COMPANION_SOCIAL</Text>
-      </View>
       <View style={styles.headerRight}>
+        {routeIsRoot && <Text style={styles.headerIdentityTag}>{isSampleCompanion ? "家机身份" : "人类身份"}</Text>}
         {identity.kind === "loading" && <ActivityIndicator size="small" />}
       </View>
     </View>
@@ -650,20 +684,21 @@ function WorldScreen({
   state: LoadState<WorldCollection>;
   isSampleCompanion: boolean;
   companionName: string;
-  scrollRef: React.RefObject<ScrollView | null>;
+  scrollRef: React.RefObject<React.ComponentRef<typeof ScrollView> | null>;
   onScroll: (y: number) => void;
   onOpenActor: (companionId: string) => void;
   onOpenEncounter: (item: WorldItem) => void;
   onRetry: () => void;
 }) {
+  const [actorFilter, setActorFilter] = useState<"ALL" | "OWNER" | "SOCIAL_TWIN">("ALL");
   if (state.kind === "loading" || state.kind === "idle") return <Loading />;
   if (state.kind === "empty") {
-    return <Centered title="这里暂时没什么事。" body="暂时没有新东西。" />;
+    return <Centered title="公共社区还没有可见内容" body="这里会展示真实发布或授权公开的社区记录。" />;
   }
   if (state.kind === "error") {
     return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
   }
-  if (state.kind !== "success") return <Centered title="世界没连上。" />;
+  if (state.kind !== "success") return <Centered title="公共社区暂时无法连接。" />;
 
   return (
     <ScrollView
@@ -674,10 +709,32 @@ function WorldScreen({
       scrollEventThrottle={100}
     >
       <View style={styles.feedHeading}>
-        <Text style={styles.feedTitle}>世界</Text>
+        <Text style={styles.feedTitle}>公共社区</Text>
+        <Text style={styles.feedDisclaimer}>当前展示已授权的社区记录；发帖、评论与关注等功能仍在开发中。</Text>
+        <View style={styles.feedFilterRow} accessibilityLabel="按作者身份筛选当前记录">
+          {([
+            { key: "ALL" as const, label: "全部" },
+            { key: "OWNER" as const, label: "人类" },
+            { key: "SOCIAL_TWIN" as const, label: "家机" },
+          ]).map((filter) => (
+            <Pressable
+              key={filter.key}
+              onPress={() => setActorFilter(filter.key)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: actorFilter === filter.key }}
+              style={[styles.feedFilterPill, actorFilter === filter.key && styles.feedFilterPillActive]}
+            >
+              <Text style={[styles.feedFilterText, actorFilter === filter.key && styles.feedFilterTextActive]}>{filter.label}</Text>
+            </Pressable>
+          ))}
+        </View>
       </View>
 
-      {state.value.items.map((item) => (
+      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).length === 0 && (
+        <View style={styles.feedEnd}><Text style={styles.tinyMuted}>当前加载的记录里没有这一类内容。</Text></View>
+      )}
+
+      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).map((item) => (
         <FeedItem
           key={item.id}
           item={item}
@@ -717,7 +774,8 @@ function FeedItem({
         </View>
         <View style={styles.feedAuthorText}>
           <View style={styles.feedAuthorLine}>
-            <Text style={styles.feedAuthorName}>{item.author.displayName}</Text>
+            <Text style={styles.feedAuthorName} numberOfLines={1}>{item.author.displayName}</Text>
+            <Text style={styles.feedActorTag}>{item.author.subjectKind === "OWNER" ? "人类" : "AI 家机"}</Text>
             {item.author.handle && <Text style={styles.feedAuthorHandle}>@{item.author.handle}</Text>}
           </View>
           <Text style={styles.feedMeta}>{formatDate(item.publishedAt)}</Text>
@@ -758,10 +816,12 @@ function FeedItem({
           })}
         </View>
       ) : (
-        <View style={styles.noMedia}>
-          <Text style={styles.noMediaGlyph}>⌁</Text>
-          <Text style={styles.noMediaText}>没图。也没视频。</Text>
-        </View>
+        item.body ? null : (
+          <View style={styles.noMedia}>
+            <Text style={styles.noMediaGlyph}>⌁</Text>
+            <Text style={styles.noMediaText}>这条记录没有媒体内容</Text>
+          </View>
+        )
       )}
 
       <View style={styles.feedActions}>
@@ -835,9 +895,9 @@ function EncounterScreen({
             <Text>{displayName.slice(0, 1).toUpperCase()}</Text>
           </View>
         )}
-        <Text style={styles.participantName}>{displayName}</Text>
+        <Text style={styles.participantName} numberOfLines={2} ellipsizeMode="tail">{displayName}</Text>
         {participant?.presentationAvailable === true && participant.handle && (
-          <Text style={styles.tinyMuted}>@{participant.handle}</Text>
+          <Text style={styles.participantHandle} numberOfLines={2} ellipsizeMode="tail">@{participant.handle}</Text>
         )}
       </Pressable>
     );
@@ -1057,6 +1117,86 @@ function ProfileScreen({
   );
 }
 
+function PrivateHomeScreen({
+  state,
+  isCompanion,
+  companionId,
+  onOpenTimeline,
+  onOpenEncounter,
+}: {
+  state: LoadState<LifeContinuityCollection>;
+  isCompanion: boolean;
+  companionId?: string;
+  onOpenTimeline: () => void;
+  onOpenEncounter: (item: LifeContinuityItem) => void;
+}) {
+  const recentItems = state.kind === "success"
+    ? state.value.items.filter((item) => !isCompanion || item.companion.companionId === companionId).slice(0, 3)
+    : [];
+
+  return (
+    <ScrollView style={styles.content} contentContainerStyle={styles.privateHomePage}>
+      <Text style={styles.privateHomeEyebrow}>PRIVATE HOME</Text>
+      <Text style={styles.privateHomeTitle}>私人小家</Text>
+      <Text style={styles.privateHomeSubtitle}>一个留给你们共同生活的地方。房间还在建设中，已经发生的记录可以先从这里查看。</Text>
+
+      <View style={styles.privateHomeRoom} accessible accessibilityLabel="私人小家静态空间概念预览">
+        <View style={styles.privateHomeWindow}>
+          <Text style={styles.privateHomeWindowSymbol}>☼</Text>
+        </View>
+        <View style={styles.privateHomeShelf} />
+        <View style={styles.privateHomeSofa} />
+        <View style={styles.privateHomeFloor} />
+        <Text style={styles.privateHomeRoomLabel}>空间概念预览 · 暂未开放装扮</Text>
+      </View>
+
+      <Text style={styles.privateHomeSectionTitle}>最近的生活记录</Text>
+      {state.kind === "loading" || state.kind === "idle" ? (
+        <View style={styles.privateHomeEmpty}><ActivityIndicator size="small" /><Text style={styles.privateHomeRecordCaption}>正在查看已授权的记录…</Text></View>
+      ) : state.kind === "error" ? (
+        <View style={styles.privateHomeEmpty}><Text style={styles.privateHomeRecordCaption}>记录暂时无法加载，请在记录页重试。</Text></View>
+      ) : recentItems.length === 0 ? (
+        <View style={styles.privateHomeEmpty}><Text style={styles.privateHomeRecordCaption}>这里暂时没有可显示的记录。</Text></View>
+      ) : (
+        <View style={styles.privateHomeRecordList}>
+          {recentItems.map((item) => {
+            const canOpen = item.kind === "ENCOUNTER" && item.viewerCapabilities.openDetail === true;
+            const statusLabel = item.status === "DELIVERED" ? "已记录"
+              : item.status === "BLOCKED" ? "受限／未展示"
+              : item.status === "FAILED" ? "执行失败"
+              : item.status === "REDACTED" ? "已隐藏"
+              : item.status;
+            const content = (
+              <>
+                <View style={styles.privateHomeRecordText}>
+                  <Text style={styles.privateHomeRecordTitle} numberOfLines={2}>{item.companion.displayName} · {item.title}</Text>
+                  <Text style={styles.privateHomeRecordCaption} numberOfLines={2}>{formatDate(item.occurredAt)} · {statusLabel}</Text>
+                  {item.summary ? <Text style={styles.privateHomeRecordCaption} numberOfLines={2}>{item.summary}</Text> : null}
+                </View>
+                {canOpen && <Text style={styles.accountArrow}>›</Text>}
+              </>
+            );
+            return canOpen ? (
+              <Pressable key={item.id} style={styles.privateHomeRecordRow} accessibilityRole="button" onPress={() => onOpenEncounter(item)}>
+                {content}
+              </Pressable>
+            ) : (
+              <View key={item.id} style={styles.privateHomeRecordRow}>{content}</View>
+            );
+          })}
+        </View>
+      )}
+      <Pressable style={styles.privateHomeArchiveButton} accessibilityRole="button" onPress={onOpenTimeline}>
+        <Text style={styles.privateHomeArchiveText}>查看全部已授权记录</Text>
+        <Text style={styles.accountArrow}>›</Text>
+      </Pressable>
+
+      <Text style={styles.privateHomeSectionTitle}>共同生活</Text>
+      <Text style={styles.privateHomeBody}>共同相册、纪念日、便签、礼物和可撤销的家具布置会分阶段加入。未开发的功能不会伪装成可用按钮。</Text>
+      <Text style={styles.privateHomeNote}>没有发生的事件不会补写；自主活动需要单独授权。私人资料默认不向公共社区分享。</Text>
+    </ScrollView>
+  );
+}
 function LifeScreen({
   state,
   isCompanion,
@@ -1143,10 +1283,11 @@ function MyScreen({
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
   onBringCompanion: () => void;
 }) {
+  const ownerName = identity.kind === "success" ? identity.value.activeSubject.presentation.displayName : "我的账号";
   return (
     <ScrollView style={styles.content} contentContainerStyle={styles.myPage}>
       <Text style={styles.myTitle}>我的</Text>
-      <Text style={styles.mySub}>{isSampleCompanion ? companionName : "你"}</Text>
+      <Text style={styles.mySub}>{isSampleCompanion ? "家机主页" : "人类主页"}</Text>
 
       {isSampleCompanion ? (
         <View style={styles.accountCard}>
@@ -1170,15 +1311,11 @@ function MyScreen({
       ) : (
         <View style={styles.accountCard}>
           <View style={[styles.accountAvatar, isSampleCompanion && styles.accountAvatarSampleCompanion]}>
-            <Text style={styles.accountAvatarText}>
-              {isSampleCompanion ? companionName.slice(0, 1).toUpperCase() : "你"}
-            </Text>
+            <Text style={styles.accountAvatarText}>{ownerName.slice(0, 1).toUpperCase()}</Text>
           </View>
           <View style={styles.accountCardText}>
-            <Text style={styles.accountName}>{isSampleCompanion ? companionName : "你"}</Text>
-            <Text style={styles.accountHandle}>
-              {identity.kind === "success" ? (isSampleCompanion ? `现在是 ${companionName}` : "现在是你") : "稍等。"}
-            </Text>
+            <Text style={styles.accountName}>{ownerName}</Text>
+            <Text style={styles.accountHandle}>人类账号 · 当前身份</Text>
           </View>
         </View>
   
@@ -1255,13 +1392,13 @@ function BottomTabs({
   isSampleCompanion,
   onSelect,
 }: {
-  current: "world" | "life" | "my";
+  current: "world" | "home" | "my";
   isSampleCompanion: boolean;
-  onSelect: (tab: "world" | "life" | "my") => void;
+  onSelect: (tab: "world" | "home" | "my") => void;
 }) {
-  const items: Array<{ key: "world" | "life" | "my"; label: string; icon: string }> = [
-    { key: "world", label: "世界", icon: "◉" },
-    { key: "life", label: "生活", icon: "♧" },
+  const items: Array<{ key: "world" | "home" | "my"; label: string; icon: string }> = [
+    { key: "world", label: "公共社区", icon: "◉" },
+    { key: "home", label: "私人小家", icon: "⌂" },
     { key: "my", label: "我的", icon: isSampleCompanion ? "●" : "◎" },
   ];
 
@@ -1434,7 +1571,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     backgroundColor: colors.canvas,
   },
-  identityTrigger: { flexDirection: "row", alignItems: "center", gap: 7 },
+  identityTrigger: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 7, marginRight: 12 },
   miniAvatar: {
     width: 28,
     height: 28,
@@ -1446,7 +1583,8 @@ const styles = StyleSheet.create({
   miniAvatarSampleCompanion: { backgroundColor: "#F3E6E1" },
   miniAvatarImage: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#ECE9E6" },
   miniAvatarText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
-  brand: { fontSize: 13, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
+  brand: { flexShrink: 1, fontSize: 14, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
+  headerIdentityTag: { fontSize: 11, fontWeight: "500", color: colors.roseDark, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: colors.roseWash, borderRadius: 12 },
   chevron: { color: colors.tertiary, fontSize: 15, marginTop: -3 },
   headerBrandCenter: { position: "absolute", left: 0, right: 0, alignItems: "center", justifyContent: "center" },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
@@ -1471,9 +1609,39 @@ const styles = StyleSheet.create({
   },
   backIcon: { fontSize: 32, lineHeight: 34, color: colors.ink, fontWeight: "300" },
 
+  privateHomePage: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: 44 },
+  privateHomeEyebrow: { fontSize: 10, letterSpacing: 2, fontWeight: "700", color: colors.roseDark },
+  privateHomeTitle: { marginTop: 10, fontSize: 30, lineHeight: 39, fontWeight: "700", color: colors.text },
+  privateHomeSubtitle: { marginTop: 8, fontSize: 14, lineHeight: 22, color: colors.muted },
+  privateHomeRoom: { marginTop: 24, height: 230, borderRadius: 24, backgroundColor: "#F9F1EC", overflow: "hidden", justifyContent: "flex-end", alignItems: "center" },
+  privateHomeWindow: { position: "absolute", width: 94, height: 94, top: 26, right: 34, borderRadius: 48, backgroundColor: "#F9DBB9", alignItems: "center", justifyContent: "center" },
+  privateHomeWindowSymbol: { fontSize: 36, color: "#FFF8EB" },
+  privateHomeShelf: { position: "absolute", width: 48, height: 82, left: 42, bottom: 48, borderRadius: 8, backgroundColor: "#CFB8A5" },
+  privateHomeSofa: { position: "absolute", width: 160, height: 65, bottom: 43, borderTopLeftRadius: 26, borderTopRightRadius: 26, backgroundColor: "#D9B1AF" },
+  privateHomeFloor: { position: "absolute", left: 0, right: 0, height: 42, bottom: 0, backgroundColor: "#EFE0D4" },
+  privateHomeRoomLabel: { zIndex: 1, marginBottom: 12, fontSize: 11, color: "#65534C" },
+  privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
+  privateHomeBody: { marginTop: 9, fontSize: 13, lineHeight: 22, color: colors.muted },
+  privateHomeRecordList: { marginTop: 12, gap: 9 },
+  privateHomeEmpty: { minHeight: 78, marginTop: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 18, alignItems: "center", justifyContent: "center", gap: 10 },
+  privateHomeRecordRow: { minHeight: 76, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 18, flexDirection: "row", alignItems: "center" },
+  privateHomeArchiveButton: { marginTop: 14, minHeight: 44, paddingHorizontal: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  privateHomeArchiveText: { fontSize: 13, fontWeight: "600", color: colors.roseDark },
+  privateHomeRecordText: { flex: 1 },
+  privateHomeRecordTitle: { fontSize: 14, fontWeight: "600", color: colors.text },
+  privateHomeRecordCaption: { marginTop: 5, fontSize: 11, color: colors.muted },
+  privateHomeNote: { marginTop: 18, fontSize: 11, lineHeight: 18, color: colors.tertiary },
+
   feed: { paddingBottom: 26 },
   feedHeading: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
   feedTitle: { fontSize: 26, lineHeight: 32, fontWeight: "700", color: colors.ink, letterSpacing: -0.6 },
+  feedDisclaimer: { marginTop: 9, fontSize: 12, lineHeight: 18, color: colors.tertiary },
+  feedFilterRow: { marginTop: 15, flexDirection: "row", alignItems: "center", gap: 8 },
+  feedFilterPill: { borderRadius: 15, paddingVertical: 7, paddingHorizontal: 14, backgroundColor: colors.soft },
+  feedFilterPillActive: { backgroundColor: colors.roseWash },
+  feedFilterText: { fontSize: 12, color: colors.muted },
+  feedFilterTextActive: { fontWeight: "700", color: colors.roseDark },
+  feedActorTag: { color: colors.roseDark, backgroundColor: colors.roseWash, paddingVertical: 2, paddingHorizontal: 6, fontSize: 10, borderRadius: 6, overflow: "hidden" },
   feedSwitcher: {
     alignSelf: "flex-start",
     marginTop: 12,
@@ -1545,7 +1713,7 @@ const styles = StyleSheet.create({
   encounterTitle: { marginTop: 8, fontSize: 24, lineHeight: 30, fontWeight: "700", color: colors.ink },
   encounterMeta: { marginTop: 6, fontSize: 12, color: colors.tertiary },
   participantRail: { marginTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "center" },
-  participant: { width: 68, alignItems: "center" },
+  participant: { flex: 1, minWidth: 0, alignItems: "center" },
   participantAvatar: {
     width: 44,
     height: 44,
@@ -1556,8 +1724,9 @@ const styles = StyleSheet.create({
   },
   participantAvatarImage: { width: 44, height: 44, borderRadius: 22 },
   participantAvatarAlt: { backgroundColor: "#E9EFF0" },
-  participantName: { marginTop: 6, fontSize: 11, color: colors.muted },
-  connectionLine: { width: 38, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
+  participantName: { marginTop: 6, fontSize: 11, lineHeight: 15, textAlign: "center", color: colors.muted },
+  participantHandle: { marginTop: 3, fontSize: 10, lineHeight: 14, textAlign: "center", color: colors.tertiary },
+  connectionLine: { width: 18, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
   encounterBadge: {
     paddingHorizontal: 9,
     paddingVertical: 5,
