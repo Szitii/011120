@@ -1,2 +1,4 @@
 
 .expo/
+dist-ci/
+dist-web-ci/

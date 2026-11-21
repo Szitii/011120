@@ -16,6 +16,7 @@ import type {
   ProjectionSelection,
   WorldCollection,
 } from "../contracts.ts";
+import { createCommunityClient } from "../community/client.ts";
 
 export class ApiProblemError extends Error {
   readonly status: number;
@@ -39,9 +40,13 @@ interface RealApiConfig { baseUrl: string; bearerToken: string; }
 
 export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
+  readonly community: import("../../../../packages/community-contracts/types.ts").CommunityClient;
 
   constructor(config: RealApiConfig) {
     this.config = config;
+    this.community = createCommunityClient((method, path, body, key) => method === "GET"
+      ? this.get(path)
+      : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}));
   }
 
   async identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext> {
@@ -131,7 +136,7 @@ export class RealApiAdapter implements ClientApi {
   }
 
   private async send<T>(
-    method: "POST" | "PUT" | "PATCH",
+    method: "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
     extraHeaders: Record<string, string> = {},

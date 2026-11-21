@@ -96,7 +96,7 @@ describe("Foundation persistence and API contracts", () => {
     assert.match(migration, /foreign key \(identity_id, owner_id\) references public\.companion_identities\(id, owner_id\)/);
   });
 
-  it("exposes only the bounded import, approval, and passport API surface", () => {
+  it("preserves bounded foundation APIs while namespacing the P1 community surface", () => {
     for (const path of [
       "/companion-imports:",
       "/companion-imports/{importId}:",
@@ -111,7 +111,8 @@ describe("Foundation persistence and API contracts", () => {
     ]) {
       assert.ok(openapi.includes(path));
     }
-    assert.ok(!openapi.includes("/feed"));
+    assert.doesNotMatch(openapi, /^  \/feed:/m);
+    assert.ok(openapi.includes("/community/feed:"));
     assert.ok(!openapi.includes("/dm"));
     assert.match(openapi, /privateMemoryIncluded: \{ const: false \}/);
     assert.match(openapi, /socialRuntimeAuthority: \{ const: false \}/);

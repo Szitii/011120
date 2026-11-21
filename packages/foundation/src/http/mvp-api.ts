@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { handleCommunityRequest } from "../community/http.ts";
 import { canonicalJson, sha256 } from "../companion-import/canonical.ts";
 import { parseCharacterCard, parserMetadata } from "../companion-import/parser.ts";
 import { AuthorizationError, ConflictError, ImportPolicyError } from "../companion-import/errors.ts";
@@ -274,6 +275,8 @@ export class MvpApiBoundary {
       const pathname = url.pathname.replace(/\/$/, "") || "/";
       const method = request.method.toUpperCase();
       const session = await authenticate(request, this.#sessions);
+      const community = await handleCommunityRequest(request, session, fallbackTraceId);
+      if (community) return community;
 
       if (method === "POST" && pathname === "/v0/encounters") {
         const idempotencyKey = requireIdempotency(request);

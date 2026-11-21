@@ -10,6 +10,7 @@ import {
   type OwnerSessionResolver,
 } from "../http/types.ts";
 import { MvpApiBoundary } from "../http/mvp-api.ts";
+import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import {
   createPgPool,
   PostgresOwnerAdapter,
@@ -59,6 +60,7 @@ class DevOwnerSessionResolver implements OwnerSessionResolver {
   readonly #token: string;
   readonly #ownerId: string;
   readonly #owner: PostgresOwnerAdapter;
+  readonly #community: PostgresCommunityAdapter;
 
   constructor(input: {
     readonly pool: pg.Pool;
@@ -68,16 +70,16 @@ class DevOwnerSessionResolver implements OwnerSessionResolver {
   }) {
     this.#token = input.bearerToken;
     this.#ownerId = input.ownerId;
-    this.#owner = new PostgresOwnerAdapter(
-      new TransactionalOwnerExecutor(input.pool, input.ownerSubject),
-    );
+    const executor = new TransactionalOwnerExecutor(input.pool, input.ownerSubject);
+    this.#owner = new PostgresOwnerAdapter(executor);
+    this.#community = new PostgresCommunityAdapter(executor);
   }
 
   async resolve(bearerToken: string): Promise<AuthenticatedOwnerSession> {
     if (bearerToken !== this.#token) {
       throw new ApiAuthenticationError("INVALID_TOKEN");
     }
-    return { ownerId: this.#ownerId, owner: this.#owner };
+    return { ownerId: this.#ownerId, owner: this.#owner, community: this.#community };
   }
 }
 
@@ -136,7 +138,7 @@ const writeJson = (
   response.setHeader("cache-control", "no-store");
   response.setHeader("access-control-allow-origin", "*");
   response.setHeader("access-control-allow-headers", "authorization, content-type, idempotency-key, if-match");
-  response.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
+  response.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   for (const [name, value] of Object.entries(headers)) {
     response.setHeader(name, value);
   }
@@ -185,7 +187,7 @@ export const createMobileDevHttpServer = (input: {
       response.statusCode = 204;
       response.setHeader("access-control-allow-origin", "*");
       response.setHeader("access-control-allow-headers", "authorization, content-type, idempotency-key, if-match");
-      response.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
+      response.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       response.end();
       return;
     }

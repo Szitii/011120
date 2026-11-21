@@ -8,7 +8,13 @@ export interface ClientBootstrap {
   dataMode: "real" | "mock";
 }
 
-export function createClientBootstrap(env: NodeJS.ProcessEnv = process.env): ClientBootstrap {
+export function createClientBootstrap(env: NodeJS.ProcessEnv = {
+  // Expo statically substitutes direct public env access in exported bundles.
+  EXPO_PUBLIC_DATA_MODE: process.env.EXPO_PUBLIC_DATA_MODE,
+  EXPO_PUBLIC_API_BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL,
+  EXPO_PUBLIC_OWNER_BEARER_TOKEN: process.env.EXPO_PUBLIC_OWNER_BEARER_TOKEN,
+  EXPO_PUBLIC_SAMPLE_COMPANION_COMPANION_ID: process.env.EXPO_PUBLIC_SAMPLE_COMPANION_COMPANION_ID,
+}): ClientBootstrap {
   const mode = env.EXPO_PUBLIC_DATA_MODE === "mock" ? "mock" : "real";
   if (mode === "mock") return { api: new MockApiAdapter(), dataMode: "mock" };
 

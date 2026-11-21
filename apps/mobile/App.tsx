@@ -14,6 +14,7 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { createClientBootstrap } from "./src/adapters";
 import { safeClientMessage } from "./src/adapters/real-api";
+import { CommunityScreen } from "./src/community/CommunityScreen";
 import type {
   ActiveIdentityContext,
   CompanionProfile,
@@ -448,6 +449,16 @@ export default function App() {
       )}
 
       {route.type === "root" && route.tab === "world" && (
+        identityValue && !("error" in bootstrap) && bootstrap.value.api.community ? <CommunityScreen
+          key={`${identityValue.activeSubject.kind}:${identityId}`}
+          client={bootstrap.value.api.community}
+          viewer={{ kind: identityValue.activeSubject.kind, id: identityId }}
+          initialScrollY={nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0}
+          onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))}
+          legacy={<WorldScreen state={world} isSampleCompanion={isSampleCompanion} companionName={companionDisplayName}
+            scrollRef={worldScrollRef} onScroll={() => undefined}
+            onOpenActor={id => openProfile(id, "WORLD_ACTOR")} onOpenEncounter={openEncounter} onRetry={() => void loadWorld()} />}
+        /> : identitySwitchPending ? <ActivityIndicator accessibilityLabel="正在切换身份" /> :
         <WorldScreen
           state={world}
           isSampleCompanion={isSampleCompanion}

@@ -277,6 +277,7 @@ export interface OwnerApiPort {
 export interface AuthenticatedOwnerSession {
   readonly ownerId: string;
   readonly owner: OwnerApiPort;
+  readonly community?: import("../community/port.ts").CommunityPort;
 }
 
 export interface OwnerSessionResolver {
