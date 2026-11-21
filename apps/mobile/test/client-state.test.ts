@@ -61,8 +61,8 @@ describe("real client binding state architecture", () => {
 
   it("keeps root labels client-side and independent from API resources", () => {
     let state = initialNavigationState();
-    state = selectTab(state, "life");
-    assert.equal(state.rootTab, "life");
+    state = selectTab(state, "home");
+    assert.equal(state.rootTab, "home");
     state = selectTab(state, "my");
     assert.equal(state.rootTab, "my");
     assert.equal(state.stack[0]?.type, "root");
