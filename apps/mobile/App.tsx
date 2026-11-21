@@ -90,7 +90,7 @@ export default function App() {
   const [identitySwitchPending, setIdentitySwitchPending] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
-  const worldScrollRef = useRef<ScrollView>(null);
+  const worldScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const identityEpochRef = useRef(0);
 
   const route = nav.stack[nav.stack.length - 1] ?? {
@@ -684,7 +684,7 @@ function WorldScreen({
   state: LoadState<WorldCollection>;
   isSampleCompanion: boolean;
   companionName: string;
-  scrollRef: React.RefObject<ScrollView | null>;
+  scrollRef: React.RefObject<React.ComponentRef<typeof ScrollView> | null>;
   onScroll: (y: number) => void;
   onOpenActor: (companionId: string) => void;
   onOpenEncounter: (item: WorldItem) => void;
