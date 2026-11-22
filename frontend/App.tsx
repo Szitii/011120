@@ -60,6 +60,7 @@ import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
 import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
 import { InteractiveFullRoom } from "./src/components/InteractiveFullRoom";
+import { PearlInteractiveRoom } from "./src/components/PearlInteractiveRoom";
 import { BottomSheet } from "./src/components/BottomSheet";
 import { GlassChatBubble } from "./src/components/GlassChatBubble";
 
@@ -69,8 +70,6 @@ type LoadState<T> =
   | { kind: "empty" }
   | { kind: "error"; title: string; retry: boolean };
 
-// Switch this asset to ./assets/room-pearl.webp when the new room art is supplied.
-const PRIVATE_HOME_ROOM_IMAGE = require("./assets/room-iso-25d.jpg");
 
 const LOCAL_PREVIEW_IMAGES: Record<string, number> = {
   "rainy-cafe": require("./assets/post-rainy-cafe.jpg"),
@@ -939,13 +938,7 @@ function EncounterScreen({
           if (canOpen && participant?.companionId) onProfile(participant.companionId);
         }}
       >
-        {avatar ? (
-          <Image source={{ uri: avatar }} style={styles.participantAvatarImage} />
-        ) : (
-          <View style={styles.participantAvatar}>
-            <Text>{displayName.slice(0, 1).toUpperCase()}</Text>
-          </View>
-        )}
+        <PixelAvatar name={displayName} role="companion" uri={avatar} size={46} />
         <Text style={styles.participantName} numberOfLines={2} ellipsizeMode="tail">{displayName}</Text>
         {participant?.presentationAvailable === true && participant.handle && (
           <Text style={styles.participantHandle} numberOfLines={2} ellipsizeMode="tail">@{participant.handle}</Text>
@@ -1138,24 +1131,37 @@ function PrivateHomeScreen({
   }
 
   return (
-    <ScrollView style={styles.rootContent} contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance }]}>
-      <Text style={[styles.privateHomeEyebrow, { color: accent }]}>PRIVATE HOME</Text>
-      <Text style={[styles.privateHomeTitle, { color: ink }]}>私人小家</Text>
-      <Text style={[styles.privateHomeSubtitle, { color: muted }]}>一个留给你们共同生活的地方。房间还在建设中，已经发生的记录可以先从这里查看。</Text>
+    <ScrollView
+      style={styles.rootContent}
+      contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance }]}
+    >
+      <PearlInteractiveRoom
+        userName={userName}
+        companionName={companionName}
+        isCompanionView={isCompanion}
+      />
 
-      <View style={styles.privateHomeRoom}>
-        <Image source={PRIVATE_HOME_ROOM_IMAGE} resizeMode="cover"
-          style={styles.privateHomeImage} accessibilityLabel="私人小家空间概念预览" />
+      <View style={styles.privateHomeSectionHeader}>
+        <Text style={[styles.privateHomeSectionTitle, { color: ink, marginTop: 0 }]}>最近的生活记录</Text>
+        <Pressable accessibilityRole="button" onPress={onOpenTimeline} style={styles.privateHomeMoreBtn}>
+          <Text style={[styles.privateHomeArchiveText, { color: accent }]}>全部记录</Text>
+          <Ionicons name="chevron-forward" size={14} color={accent} />
+        </Pressable>
       </View>
-      <Text style={[styles.privateHomeRoomLabel, { color: muted }]}>空间概念预览 · 暂未开放装扮</Text>
 
-      <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近的生活记录</Text>
       {state.kind === "loading" || state.kind === "idle" ? (
-        <View style={styles.privateHomeEmpty}><ActivityIndicator size="small" /><Text style={[styles.privateHomeRecordCaption, { color: muted }]}>正在查看已授权的记录…</Text></View>
+        <View style={styles.privateHomeEmpty}>
+          <ActivityIndicator size="small" color={PEARL_UI.accent} />
+          <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>正在查看已授权的记录…</Text>
+        </View>
       ) : state.kind === "error" ? (
-        <View style={styles.privateHomeEmpty}><Text style={[styles.privateHomeRecordCaption, { color: muted }]}>记录暂时无法加载，请在记录页重试。</Text></View>
+        <View style={styles.privateHomeEmpty}>
+          <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>记录暂时无法加载，请在全部记录页重试。</Text>
+        </View>
       ) : recentItems.length === 0 ? (
-        <View style={styles.privateHomeEmpty}><Text style={[styles.privateHomeRecordCaption, { color: muted }]}>这里暂时没有可显示的记录。</Text></View>
+        <View style={styles.privateHomeEmpty}>
+          <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>这里暂时没有可显示的记录。</Text>
+        </View>
       ) : (
         <View style={styles.privateHomeRecordList}>
           {recentItems.map((item) => {
@@ -1168,15 +1174,28 @@ function PrivateHomeScreen({
             const content = (
               <>
                 <View style={styles.privateHomeRecordText}>
-                  <Text style={[styles.privateHomeRecordTitle, { color: ink }]} numberOfLines={2}>{item.companion.displayName} · {item.title}</Text>
-                  <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>{formatDate(item.occurredAt)} · {statusLabel}</Text>
-                  {item.summary ? <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>{item.summary}</Text> : null}
+                  <Text style={[styles.privateHomeRecordTitle, { color: ink }]} numberOfLines={2}>
+                    {item.companion.displayName} · {item.title}
+                  </Text>
+                  <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>
+                    {formatDate(item.occurredAt)} · {statusLabel}
+                  </Text>
+                  {item.summary ? (
+                    <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>
+                      {item.summary}
+                    </Text>
+                  ) : null}
                 </View>
-                {canOpen && <Text style={styles.accountArrow}>›</Text>}
+                {canOpen && <Ionicons name="chevron-forward" size={16} color={muted} />}
               </>
             );
             return canOpen ? (
-              <Pressable key={item.id} style={styles.privateHomeRecordRow} accessibilityRole="button" onPress={() => onOpenEncounter(item)}>
+              <Pressable
+                key={item.id}
+                style={({ pressed }) => [styles.privateHomeRecordRow, pressed && { transform: [{ scale: 0.98 }] }]}
+                accessibilityRole="button"
+                onPress={() => onOpenEncounter(item)}
+              >
                 {content}
               </Pressable>
             ) : (
@@ -1185,14 +1204,6 @@ function PrivateHomeScreen({
           })}
         </View>
       )}
-      <Pressable style={styles.privateHomeArchiveButton} accessibilityRole="button" onPress={onOpenTimeline}>
-        <Text style={[styles.privateHomeArchiveText, { color: accent }]}>查看全部已授权记录</Text>
-        <Text style={styles.accountArrow}>›</Text>
-      </Pressable>
-
-      <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>共同生活</Text>
-      <Text style={[styles.privateHomeBody, { color: muted }]}>共同相册、纪念日、便签、礼物和可撤销的家具布置会分阶段加入。未开发的功能不会伪装成可用按钮。</Text>
-      <Text style={[styles.privateHomeNote, { color: muted }]}>没有发生的事件不会补写；自主活动需要单独授权。私人资料默认不向公共社区分享。</Text>
     </ScrollView>
   );
 }
@@ -1348,7 +1359,7 @@ function MyScreen({
         {bio ? <Text style={[styles.heroBio, { color: muted }]}>{bio}</Text> : null}
         {isSampleCompanion && selfProfile.kind === "success" && <Text style={[styles.heroBio, { color: muted }]}>@{selfProfile.value.handle} · {selfProfile.value.profileVisibility}</Text>}
 
-        {/* 3-Column Stats Row (Real mode shows "-" until backend stats API arrives; mock shows preview) */}
+        {/* 3-Column Stats Row */}
         <View style={styles.statsRow}>
           <View style={styles.statCol}>
             <Text style={[styles.statNum, { color: ink }]}>{ownProfile?.postsCount ?? "—"}</Text>
@@ -1363,10 +1374,18 @@ function MyScreen({
                 <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>{label}</Text>
               </Pressable>
             ))}
-          {onEditHumanProfile && <Pressable accessibilityRole="button" onPress={onEditHumanProfile} style={styles.editProfileButton}>
-            <Text style={styles.settingsText}>编辑社区资料</Text>
-          </Pressable>}
         </View>
+        {onEditHumanProfile && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={onEditHumanProfile}
+            style={({ pressed }) => [styles.editProfilePill, pressed && { transform: [{ scale: 0.95 }] }]}
+          >
+            <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
+            <Ionicons name="create-outline" size={14} color={PEARL_UI.accentInk} />
+            <Text style={styles.editProfilePillText}>编辑社区资料</Text>
+          </Pressable>
+        )}
       </View>
 
       {/* Bidirectional Companion Relation Pill */}
@@ -1402,11 +1421,23 @@ function MyScreen({
       <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近动态</Text>
       {communityData.kind === "loading" ? <ActivityIndicator /> : null}
       {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: muted }]}>{communityData.title}</Text> : null}
-      {communityData.kind === "success" && communityData.value.slice(0, 3).map(post => (
-        <Text key={post.id} style={[styles.feedBody, { color: ink }]}>{post.body}</Text>
-      ))}
-      {(communityData.kind === "idle" || (communityData.kind === "success" && communityData.value.length === 0)) &&
-        <Text style={[styles.heroBio, { color: muted }]}>暂无动态</Text>}
+      {communityData.kind === "success" && communityData.value.length > 0 && (
+        <View style={styles.privateHomeRecordList}>
+          {communityData.value.slice(0, 3).map((post) => (
+            <View key={post.id} style={styles.privateHomeRecordRow}>
+              <View style={styles.privateHomeRecordText}>
+                <Text style={[styles.privateHomeRecordTitle, { color: ink }]} numberOfLines={3}>{post.body}</Text>
+                <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>{formatDate(post.createdAt)}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+      {(communityData.kind === "idle" || (communityData.kind === "success" && communityData.value.length === 0)) && (
+        <View style={styles.privateHomeEmpty}>
+          <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>暂无动态</Text>
+        </View>
+      )}
 
       {followDirection && community && actorKind && actorId && (
         <CommunityFollowList client={community} viewer={{ kind: actorKind, id: actorId }} direction={followDirection}
@@ -1541,13 +1572,7 @@ function IdentitySwitcher({
           <Text style={styles.sheetLabel}>现在是</Text>
 
           <Pressable style={styles.switchAccountRow} onPress={onOwner} disabled={pending}>
-            {ownerPresentation?.avatar ? (
-              <Image source={{ uri: ownerPresentation.avatar }} style={styles.accountAvatarImage} />
-            ) : (
-              <View style={styles.accountAvatar}>
-                <Text style={styles.accountAvatarText}>{ownerName.slice(0, 1).toUpperCase()}</Text>
-              </View>
-            )}
+            <PixelAvatar name={ownerName} role="owner" uri={ownerPresentation?.avatar} size={42} />
             <View style={styles.switchAccountText}>
               <Text style={styles.switchAccountName}>{ownerName}</Text>
               <Text style={styles.accountHandle}>本人</Text>
@@ -1570,9 +1595,7 @@ function IdentitySwitcher({
                 onPress={() => onCompanion(item)}
                 disabled={!item.socialReady || pending}
               >
-                <View style={[styles.accountAvatar, styles.accountAvatarSampleCompanion]}>
-                  <Text style={styles.accountAvatarText}>{item.displayName.slice(0, 1).toUpperCase()}</Text>
-                </View>
+                <PixelAvatar name={item.displayName} role="companion" size={42} />
                 <View style={styles.switchAccountText}>
                   <Text style={styles.switchAccountName}>{item.displayName}</Text>
                   <Text style={styles.accountHandle}>
@@ -1664,7 +1687,7 @@ const styles = StyleSheet.create({
   },
   backIcon: { fontSize: 32, lineHeight: 34, color: colors.ink, fontWeight: "300" },
 
-  privateHomePage: { paddingHorizontal: CHROME.screenInset, paddingTop: 28, paddingBottom: 44 },
+  privateHomePage: { paddingHorizontal: CHROME.screenInset, paddingTop: 10, paddingBottom: 44 },
   privateHomeEyebrow: { fontSize: 10, letterSpacing: 2, fontWeight: "700", color: colors.roseDark },
   privateHomeTitle: { marginTop: 10, fontSize: 30, lineHeight: 39, fontWeight: "700", color: colors.text },
   privateHomeSubtitle: { marginTop: 8, fontSize: 14, lineHeight: 22, color: colors.muted },
@@ -1682,8 +1705,8 @@ const styles = StyleSheet.create({
   privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
   privateHomeBody: { marginTop: 9, fontSize: 13, lineHeight: 22, color: colors.muted },
   privateHomeRecordList: { marginTop: 12, gap: 9 },
-  privateHomeEmpty: { minHeight: 78, marginTop: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: colors.line, borderRadius: 18, alignItems: "center", justifyContent: "center", gap: 10 },
-  privateHomeRecordRow: { minHeight: 76, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 18, flexDirection: "row", alignItems: "center" },
+  privateHomeEmpty: { minHeight: 74, marginTop: 10, paddingHorizontal: 16, backgroundColor: "rgba(255,255,255,0.72)", borderWidth: 1, borderColor: PEARL_UI.highlight, borderRadius: 20, alignItems: "center", justifyContent: "center", gap: 8 },
+  privateHomeRecordRow: { minHeight: 70, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: PEARL_UI.white, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 20, flexDirection: "row", alignItems: "center", shadowColor: "#8A857C", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 10, elevation: 1 },
   privateHomeArchiveButton: { marginTop: 14, minHeight: 44, paddingHorizontal: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   privateHomeArchiveText: { fontSize: 13, fontWeight: "600", color: colors.roseDark },
   privateHomeRecordText: { flex: 1 },
@@ -2060,6 +2083,34 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
+  },
+  privateHomeSectionHeader: {
+    marginTop: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  privateHomeMoreBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+  },
+  editProfilePill: {
+    marginTop: 14,
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  editProfilePillText: {
+    fontSize: 12.5,
+    fontWeight: "600",
+    color: PEARL_UI.accentInk,
   },
   relControlText: {
     fontSize: 12,

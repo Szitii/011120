@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
@@ -16,6 +17,18 @@ export function FloatingGlassTabs({
   onSelect: (tab: RootTab) => void;
 }) {
   const { skin } = useSkin();
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    pulse.setValue(0.94);
+    Animated.spring(pulse, {
+      toValue: 1,
+      speed: 24,
+      bounciness: 8,
+      useNativeDriver: true,
+    }).start();
+  }, [current, pulse]);
+
   const items: Array<{
     key: RootTab;
     label: string;
@@ -67,10 +80,12 @@ export function FloatingGlassTabs({
                   pressed && { transform: [{ scale: 0.94 }] },
                 ]}
               >
-                <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
-                <Text style={[styles.label, { color, fontWeight: active ? "600" : "500" }]}>
-                  {item.label}
-                </Text>
+                <Animated.View style={[styles.tabInner, active && { transform: [{ scale: pulse }] }]}>
+                  <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
+                  <Text style={[styles.label, { color, fontWeight: active ? "600" : "500" }]}>
+                    {item.label}
+                  </Text>
+                </Animated.View>
               </Pressable>
             );
           })}
@@ -87,6 +102,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 48,
     borderRadius: RADIUS.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabInner: {
     alignItems: "center",
     justifyContent: "center",
   },
