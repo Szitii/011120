@@ -60,10 +60,12 @@ export function ControlsScreen({
   api,
   companionId,
   companionName,
+  onVisibilitySaved,
 }: {
   api: ClientApi;
   companionId: string;
   companionName: string;
+  onVisibilitySaved: () => void;
 }) {
   const [state, setState] = useState<AsyncState<ControlsResource>>({ kind: "loading" });
   const [pending, setPending] = useState(false);
@@ -89,12 +91,14 @@ export function ControlsScreen({
     try {
       const value = await api.updateControls(companionId, state.value.revision, next);
       setState({ kind: "success", value });
+      if (next.socialTwinVisibility !== undefined) onVisibilitySaved();
     } catch (error) {
       const safe = safeClientMessage(error);
       if (safe.retry) {
         try {
           const refreshed = await api.controls(companionId);
           setState({ kind: "success", value: refreshed });
+          if (refreshed.settings.socialTwinVisibility !== state.value.settings.socialTwinVisibility) onVisibilitySaved();
         } catch {
           setState({ kind: "error", ...safe });
         }

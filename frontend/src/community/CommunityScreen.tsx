@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, Modal, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityDetail, CommunityProfile, CommunityPost,
   CommunityBlock, ReportTarget, CommunityPage, CommunityNotification, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
-import { safeClientMessage } from "../adapters/real-api.ts";
+import { communityWriteMessage, safeClientMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
 import { CommunityFollowList, type FollowDirection } from "./CommunityFollowList.tsx";
 import { communityRequestKey, type CommunityClient } from "./client.ts";
 import { CommunityRequestScope } from "./request-scope.ts";
@@ -88,7 +88,7 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
 
   useEffect(() => { setData(undefined); void load(); return () => scope.invalidate(); }, [load, scope]);
 
-  async function mutate(action: () => Promise<unknown>, success?: () => void) {
+  async function mutate(action: () => Promise<unknown>, success?: () => void, write?: CommunityWriteAction) {
     if (busyRef.current) return false;
     busyRef.current = true; setBusy(true); setError("");
     try {
@@ -96,7 +96,7 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
       if (!active.current) return false;
       success?.(); await load();
       return true;
-    } catch (e) { if (active.current) setError(safeClientMessage(e).title); return false; }
+    } catch (e) { if (active.current) setError(communityWriteMessage(e, viewer.kind, write)); return false; }
     finally { busyRef.current = false; if (active.current) setBusy(false); }
   }
 
@@ -176,7 +176,8 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
           ? <Button label="编辑资料" disabled={busy} onPress={() => setEditingProfile(true)} />
           : <Text style={s.meta}>这是当前操作身份的独立主页。</Text>) :
           <Button disabled={busy || (!data.profile.following && !own?.canPublish)} label={data.profile.following ? "取消关注" : "关注"} onPress={() => {
-            const p = data.profile; void mutate(() => client.follow(viewer, p.id, !p.following, communityRequestKey()));
+            const p = data.profile; void mutate(() => client.follow(viewer, p.id, !p.following, communityRequestKey()),
+              undefined, p.following ? "取关" : "关注");
           }} />}
       </View>}
       {data?.type === "profile" && !data.profile.isSelf && <View style={s.row}>
@@ -196,7 +197,8 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
           onChangeText={text => { setDraft(text); draftKey.current = communityRequestKey(); }} />
         <Button disabled={busy || loading || !draft.trim()} label={busy ? "正在提交…" : page.type === "detail" ? "发表评论" : "发布动态"}
           onPress={() => void mutate(() => page.type === "detail" ? client.comment(viewer, page.id, draft, draftKey.current)
-            : client.publish(viewer, draft, draftKey.current), () => { setDraft(""); draftKey.current = communityRequestKey(); })} />
+            : client.publish(viewer, draft, draftKey.current), () => { setDraft(""); draftKey.current = communityRequestKey(); },
+            page.type === "detail" ? "评论" : "发帖")} />
       </View>}
       {own && !own.canPublish && page.type === "feed" && <Text style={s.meta}>当前家机尚未开放公开发布。请在授权设置中检查社交身份的状态与可见性。</Text>}
       {posts.map(post => <ContentCard key={post.id} item={post} onActor={() => openActor(post.author.id)}

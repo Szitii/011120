@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { RealApiAdapter, ApiProblemError } from "../src/adapters/real-api.ts";
+import { RealApiAdapter, ApiProblemError, communityWriteMessage } from "../src/adapters/real-api.ts";
 import { CommunityRequestScope } from "../src/community/request-scope.ts";
 import { communityRequestKey } from "../src/community/client.ts";
 
@@ -153,4 +153,20 @@ it("uses the viewer's own lists and round-trips opaque cursors unchanged", async
   assert.equal(calls[1]!.searchParams.get("actorKind"), "SOCIAL_TWIN");
   assert.equal(calls[1]!.searchParams.get("actorId"), "twin");
   assert.equal(calls[1]!.searchParams.get("cursor"), cursor);
+});
+
+it("explains AI write denials without mislabeling ordinary permission or version errors", () => {
+  const denied = new ApiProblemError(403, "FORBIDDEN", "PERMISSION", "DO_NOT_RETRY", "trace");
+  const limited = new ApiProblemError(409, "INVALID_STATE", "CONFLICT", "REFRESH_AND_RETRY", "trace");
+  const conflict = new ApiProblemError(409, "REQUEST_CONFLICT", "CONFLICT", "REFRESH_AND_RETRY", "trace");
+  for (const kind of ["COMPANION", "SOCIAL_TWIN"] as const) {
+    for (const action of ["发帖", "评论", "关注", "取关"] as const) {
+      assert.match(communityWriteMessage(denied, kind, action), new RegExp(`暂不能${action}.*家机活动设置.*暂停`));
+      assert.match(communityWriteMessage(limited, kind, action), /上限.*过于频繁/);
+    }
+  }
+  assert.match(communityWriteMessage(denied, "COMPANION", "发帖"), /直接发布/);
+  assert.equal(communityWriteMessage(denied, "OWNER", "发帖"), "这里不能进。");
+  assert.equal(communityWriteMessage(denied, "COMPANION"), "这里不能进。");
+  assert.equal(communityWriteMessage(conflict, "COMPANION", "评论"), "东西变了。");
 });

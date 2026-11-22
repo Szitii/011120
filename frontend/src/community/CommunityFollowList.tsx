@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, SafeAreaView, ScrollView, Text, View } from "react-native";
 import type { ActorContext, CommunityFollow, CommunityPage } from "../../../contracts/community.ts";
-import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
-import { communityRequestKey, isAgentViewer, type CommunityClient } from "./client.ts";
+import { ApiProblemError, communityWriteMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
+import { communityRequestKey, type CommunityClient } from "./client.ts";
 import { CommunityButton as Button, communityStyles as s } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
 
@@ -25,7 +25,7 @@ export function CommunityFollowList({ client, viewer, direction, canFollow, onCl
   const fetchPage = useCallback((cursor?: string) => client[direction](viewer, cursor),
     [client, direction, viewer.kind, viewer.id]);
 
-  const run = useCallback(async (work: (current: () => boolean) => Promise<void>) => {
+  const run = useCallback(async (work: (current: () => boolean) => Promise<void>, write?: CommunityWriteAction) => {
     if (pending.current) return;
     pending.current = true;
     const current = scope.begin();
@@ -35,8 +35,7 @@ export function CommunityFollowList({ client, viewer, direction, canFollow, onCl
       await work(current);
     } catch (error) {
       if (current()) {
-        setError(isAgentViewer(viewer) && error instanceof ApiProblemError && error.status === 403
-          ? "当前家机暂不能进行此操作。请检查家机活动设置和公开身份。" : safeClientMessage(error).title);
+        setError(communityWriteMessage(error, viewer.kind, write));
       }
     } finally {
       if (current()) {
@@ -94,7 +93,7 @@ export function CommunityFollowList({ client, viewer, direction, canFollow, onCl
       setPage(latest);
       if (unavailable) setError("对方主页已不可用，列表已刷新。");
     }
-  });
+  }, following ? "关注" : "取关");
 
   function close() {
     if (!pending.current) onClose(changed.current);

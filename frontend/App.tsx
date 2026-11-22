@@ -192,7 +192,13 @@ function WorldApp({ client, account, isMockMode }: {
     route.type === "encounter" ? route.encounterId : "",
     route.type === "profile" ? route.companionId : "",
     identity.kind === "success" ? identity.value.activeSubject.id : "",
+    cache.epoch,
   ]);
+
+  function invalidateCompanionViews() {
+    cache.purgeViewerSensitive();
+    setProfile({ kind: "idle" });
+  }
 
   async function loadIdentityOwner() {
     setIdentity({ kind: "loading" });
@@ -557,7 +563,10 @@ function WorldApp({ client, account, isMockMode }: {
         <BringCompanionScreen
           api={client.api}
           onApproved={() => void loadOwnerCompanions()}
-          onResidencyChanged={() => void loadOwnerCompanions()}
+          onResidencyChanged={() => {
+            invalidateCompanionViews();
+            void loadOwnerCompanions();
+          }}
           onOpenCompanion={(identity) => {
             openProfile(identity.companionId);
           }}
@@ -573,7 +582,10 @@ function WorldApp({ client, account, isMockMode }: {
             displayName: route.displayName,
             approvedFields: route.approvedFields,
           }}
-          onActivated={() => void loadOwnerCompanions()}
+          onActivated={() => {
+            invalidateCompanionViews();
+            void loadOwnerCompanions();
+          }}
           onOpenCompanion={() => {
             openProfile(route.companionId);
           }}
@@ -585,6 +597,7 @@ function WorldApp({ client, account, isMockMode }: {
           api={client.api}
           companionId={route.companionId}
           companionName={companionDisplayName}
+          onVisibilitySaved={invalidateCompanionViews}
         />
       )}
 
