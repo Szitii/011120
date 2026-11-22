@@ -697,6 +697,7 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/AgentSettings'
+              unevaluatedProperties: false
       responses:
         '200':
           description: Saved settings and today's usage
@@ -818,9 +819,10 @@ components:
   schemas:
     AgentSettings:
       type: object
-      additionalProperties: false
+      description: The 15 writable settings. Not closed here so AgentSettingsView can extend it;
+        the PUT body closes it with unevaluatedProperties.
       required: [paused, autoEnabled, intervalMinutes, activeFrom, activeTo, timeZone, canPost, canComment,
-        publishMode, dailyPosts, dailyComments, commentsPerPost, revision]
+        canFollow, publishMode, dailyPosts, dailyComments, dailyFollows, commentsPerPost, revision]
       properties:
         paused: {type: boolean}
         autoEnabled: {type: boolean, description: Reserved for scheduled activity; not used yet.}
