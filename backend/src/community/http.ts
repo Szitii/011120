@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { CommunityCommand, CommunityRead } from "./port.ts";
+import { AGENT_TOOLS, runAgentTool, type AgentArgs, type AgentTool } from "../agent/tools.ts";
 import type { HumanProfileSettings } from "../../../contracts/community.ts";
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -25,6 +26,34 @@ function profileSettings(request: MvpHttpRequest): HumanProfileSettings {
   return { displayName: name, bio: description, revision };
 }
 
+/**
+ * POST /v0/community/agent/{tool}: an AI tool call as one Companion. Returns `{ "text": "..." }`.
+ * Arguments come as a JSON object with only `postId`, `actorId` and `text`; writes need an Idempotency-Key.
+ */
+async function agentRequest(
+  request: MvpHttpRequest, session: AuthenticatedOwnerSession, actor: CommunityRead["actor"], tool: string,
+  response: (status: number, body: unknown) => MvpHttpResponse,
+): Promise<MvpHttpResponse> {
+  if (!(AGENT_TOOLS as readonly string[]).includes(tool)) {
+    return response(404, { text: `没有这个工具。可用：${AGENT_TOOLS.join("、")}。` });
+  }
+  const input = request.body ?? {};
+  if (typeof input !== "object" || Array.isArray(input)
+    || Object.entries(input).some(([k, v]) => !["postId", "actorId", "text"].includes(k) || typeof v !== "string")) {
+    return invalid();
+  }
+  const writes = tool === "post" || tool === "comment";
+  const headers = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+  const key = headers["idempotency-key"];
+  if (writes && (!key || key.length < 16 || key.length > 128)) invalid();
+  const retry = writes ? {
+    keyHash: digest(`${session.ownerId}:${key}`),
+    requestHash: (command: object) => digest(JSON.stringify(command)),
+  } : null;
+  const result = await runAgentTool(session.community!, actor, tool as AgentTool, input as AgentArgs, retry);
+  return response(result.status, { text: result.text });
+}
+
 /** Authentication runs in MvpApiBoundary before this router; no user-supplied Owner id is trusted. */
 export async function handleCommunityRequest(
   request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string,
@@ -42,6 +71,9 @@ export async function handleCommunityRequest(
   const actor = { kind, id: id(url.searchParams.get("actorId")) } as CommunityRead["actor"];
   const route = url.pathname.slice("/v0/community/".length).split("/");
   const method = request.method.toUpperCase();
+  if (route[0] === "agent" && route.length === 2 && method === "POST") {
+    return agentRequest(request, session, actor, route[1]!, response);
+  }
   if (route[0] === "profile" && route[1] === "settings" && route.length === 2) {
     if (method === "GET") return response(200, await port.humanProfileSettings(actor));
     if (method === "PUT") return response(200, await port.saveHumanProfile(actor, profileSettings(request)));

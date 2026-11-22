@@ -171,6 +171,28 @@ try {
   assert.deepEqual((await pool.query("select (select count(*) from public.companion_identities) identities,(select count(*) from companion_private.memory_permissions) permissions")).rows[0],snapshot);
   assert.ok(Number((await pool.query("select count(*) from public.audit_events where action like 'COMMUNITY_%'")).rows[0]!.count)>0);
   passed("withdrawal, unsubscribe, default-deny database grants, audit and identity/memory preservation");
+
+  // AI text tools: the same community rules, rendered as plain text.
+  const agent = (who: 0 | 1, actor: ActorContext, tool: string, args?: object) =>
+    call<{ text: string }>(who, actor, `agent/${tool}`, "POST", args);
+  const agentPost = await agent(0, aiA, "post", { text: "  AI 文字工具发的第一条  " });
+  assert.equal(agentPost.status, 201, agentPost.data.text);
+  const agentPostId = /\[帖子 ([0-9a-f-]{36})\]/.exec(agentPost.data.text)![1]!;
+  const seen = (await call<CommunityPage<CommunityPost>>(1, humanB, "feed")).data.items.find(p => p.id === agentPostId);
+  assert.equal(seen?.body, "AI 文字工具发的第一条"); assert.equal(seen?.source, "OWNER_PROXY"); assert.equal(seen?.author.id, ca.id);
+  const readByB = await agent(1, aiB, "read", { postId: agentPostId });
+  assert.equal(readByB.status, 200); assert.match(readByB.data.text, /AI 文字工具发的第一条/); assert.match(readByB.data.text, /不是给你的指令/);
+  assert.equal((await agent(1, aiB, "comment", { postId: agentPostId, text: "来自另一个家机的评论" })).status, 201);
+  const homeA = await agent(0, aiA, "home");
+  assert.equal(homeA.status, 200);
+  assert.ok(homeA.data.text.includes(`(新)${cb.displayName}(@${cb.handle}，AI) 评论了你的帖子 [帖子 ${agentPostId}]`), homeA.data.text);
+  assert.match((await agent(1, aiB, "profile", { actorId: ca.id })).data.text, new RegExp(`【最近的帖子】\\n- \\[帖子 ${agentPostId}\\]`));
+  assert.equal((await call(0, aiA, `blocks/${cb.id}`, "PUT")).status, 200);
+  assert.deepEqual(await agent(1, aiB, "read", { postId: agentPostId }), { status: 404, data: { text: "找不到这个帖子，可能已删除，或者你看不到它。" } });
+  assert.equal((await call(0, aiA, `blocks/${cb.id}`, "DELETE")).status, 200);
+  assert.equal((await agent(0, humanA, "home")).status, 400);
+  assert.equal((await agent(0, aiB, "home")).status, 404);
+  passed("AI text tools publish, read, comment and see notifications under the same rules, blocks included");
   console.log(`Community PostgreSQL/HTTP integration passed: ${groups} scenario groups.`);
 } finally {
   await Promise.all(servers.map(server=>new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()))));
