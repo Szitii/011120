@@ -102,7 +102,9 @@ export async function handleCommunityRequest(
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => k !== "body")) invalid();
     if (typeof value!.body !== "string") invalid();
     body = (value!.body as string).trim();
-    if (body.length < 1 || body.length > (action === "POST" ? 4000 : 2000)) invalid();
+    // Count characters the way the database does (code points), so an emoji counts as one, not two.
+    const characters = Array.from(body).length;
+    if (characters < 1 || characters > (action === "POST" ? 4000 : 2000)) invalid();
   } else if (action.startsWith("REPORT_")) {
     if (headers["content-type"]?.split(";")[0]?.trim() !== "application/json") invalid();
     const value = request.body as Record<string, unknown> | undefined;

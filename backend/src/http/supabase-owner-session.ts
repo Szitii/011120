@@ -26,9 +26,10 @@ export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
   async resolve(bearerToken: string): Promise<AuthenticatedOwnerSession> {
     const subject = await this.#verifySubject(bearerToken);
     const executor = new PgOwnerExecutor(this.#pool, subject);
-    const result = await executor.query<{ id: string }>(
-      "select id from public.owners where auth_user_id = $1 and status = 'ACTIVE'",
-      [subject],
+    // Creates the Owner on first sign-in; null means the account exists but is not ACTIVE.
+    const result = await executor.query<{ id: string | null }>(
+      "select public.claim_owner() as id",
+      [],
     ).catch(() => { throw new OwnerSessionError("SERVICE_UNAVAILABLE"); });
     const ownerId = result.rows[0]?.id;
     if (!ownerId) throw new OwnerSessionError("FORBIDDEN");
