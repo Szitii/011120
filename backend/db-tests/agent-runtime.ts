@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool } from "../src/persistence/postgres/index.ts";
 import type {
-  ActorContext, AgentDraft, AgentSettings, AgentSettingsView, CommunityDetail, CommunityPage, CommunityPost, CommunityProfile,
+  ActorContext, AgentDraft, AgentSettings, AgentSettingsView, CommunityDetail, CommunityFollow, CommunityPage, CommunityPost, CommunityProfile,
 } from "../../contracts/community.ts";
 
 const connectionString = process.env.DATABASE_URL;
@@ -51,7 +51,7 @@ try {
   const defaults = await current();
   assert.deepEqual({ ...defaults, usage: undefined, localTime: undefined, revision: undefined }, {
     paused: false, autoEnabled: false, intervalMinutes: 180, activeFrom: "09:00", activeTo: "23:00", timeZone: "Asia/Shanghai",
-    canPost: false, canComment: true, publishMode: "DRAFT", dailyPosts: 3, dailyComments: 10, commentsPerPost: 3,
+    canPost: false, canComment: true, canFollow: false, publishMode: "DRAFT", dailyPosts: 3, dailyComments: 10, dailyFollows: 5, commentsPerPost: 3,
     usage: undefined, localTime: undefined, revision: undefined,
   });
   assert.match(defaults.localTime, /^\d{1,2}\/\d{1,2} \d{2}:\d{2}$/);
@@ -98,7 +98,7 @@ try {
   await pool.query("update public.social_twins set active_social_persona_id=$1 where id=$2", [privatePersona, A.twin]);
   try {
     assert.deepEqual(await tool(aiA, "comment", { postId: target, text: "Hidden identity" }),
-      { status: 403, data: { text: "这个家机的公开身份还没启用，暂时不能发言。" } });
+      { status: 403, data: { text: "这个家机的公开身份还没启用，暂时不能发言或关注。" } });
   } finally {
     await pool.query("update public.social_twins set active_social_persona_id=$1 where id=$2", [A.persona, A.twin]);
   }
@@ -152,6 +152,35 @@ try {
   assert.deepEqual(racing.map(r => r.status), [201, 201, 201, 201, 201, 201, 201, 201]);
   passed("concurrent AI and Owner comments on the same post take locks in one order and all succeed");
 
+  const ca = (await call<CommunityProfile>(0, aiA, "profile")).data;
+  assert.deepEqual(await tool(aiA, "follow", { actorId: hb.id }),
+    { status: 403, data: { text: '主人没有开启"关注别人"，现在不能关注。' } });
+  const follows = (await current()).usage.followsToday;
+  await save({ canFollow: true, dailyFollows: follows + 1 });
+  assert.deepEqual(await tool(aiA, "follow", { actorId: ca.id }),
+    { status: 400, data: { text: "参数不对：账号要用完整编号，也不能关注自己。" } });
+  assert.deepEqual(await tool(aiA, "follow", { actorId: hb.id }), { status: 200, data: { text: `已关注 [账号 ${hb.id}]` } });
+  assert.match((await tool(aiA, "following", {})).data.text, new RegExp(`【你关注的人】\\n- \\[账号 ${hb.id}\\] `));
+  const followingList = (await call<CommunityPage<CommunityFollow>>(0, aiA, "following")).data;
+  assert.deepEqual(followingList.items.map(f => f.actor.id), [hb.id]);
+  assert.ok((await call<CommunityPage<CommunityFollow>>(1, humanB, "followers")).data.items.some(f => f.actor.id === ca.id));
+  assert.equal((await call(0, aiA, "following?cursor=bad")).status, 400);
+  assert.deepEqual(await tool(aiA, "unfollow", { actorId: hb.id }), { status: 200, data: { text: `已取消关注 [账号 ${hb.id}]` } });
+  assert.equal((await call<CommunityPage<CommunityFollow>>(0, aiA, "following")).data.items.length, 0);
+  assert.deepEqual(await tool(aiA, "follow", { actorId: hb.id }),
+    { status: 429, data: { text: `今天的关注次数已用完（${follows + 1}/${follows + 1}），明天再来。` } });
+  passed("following: off by default, then follow, list, followers, unfollow and the daily follow limit");
+
+  await save({ publishMode: "DRAFT", dailyPosts: 30 });
+  const pending = (await current()).usage;
+  assert.equal(pending.pendingDrafts, 0);
+  assert.ok(pending.postsToday + 20 <= 30, `posts today: ${pending.postsToday}`);
+  for (let i = 0; i < 20; i++) assert.equal((await tool(aiA, "post", { text: `draft ${i}` })).status, 202);
+  assert.deepEqual(await tool(aiA, "post", { text: "one more" }),
+    { status: 429, data: { text: "草稿箱已满（20 条等主人处理），等主人处理完再写。" } });
+  assert.equal((await call<{ items: AgentDraft[] }>(0, aiA, "agent/drafts")).data.items.length, 20);
+  passed("at most 20 drafts wait for the Owner; the list always shows all of them");
+
   const hour = new Date().getUTCHours();
   const later = (h: number) => `${String((hour + h) % 24).padStart(2, "0")}:00`;
   await save({ activeFrom: later(2), activeTo: later(4) });
@@ -159,8 +188,8 @@ try {
     { status: 403, data: { text: `现在不在活动时间（${later(2)}–${later(4)}，UTC），请在活动时间内再来。` } });
   await save({ paused: true, activeFrom: "00:00", activeTo: "00:00" });
   assert.deepEqual(await tool(aiA, "comment", { postId: postId, text: "Paused" }),
-    { status: 403, data: { text: "主人暂停了你的活动：现在只能看，不能发言。" } });
-  assert.match((await tool(aiA, "home", {})).data.text, /\n主人暂停了你的活动：现在只能看，不能发言。\n/);
+    { status: 403, data: { text: "主人暂停了你的活动：现在只能看，不能发言或关注。" } });
+  assert.match((await tool(aiA, "home", {})).data.text, /\n主人暂停了你的活动：现在只能看，不能发言或关注。\n/);
   passed("activity hours and the pause switch refuse writes; home tells the AI it is paused");
 
   const denied = await pool.connect();

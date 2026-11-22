@@ -19,11 +19,19 @@ export interface CommunityCommand {
   requestHash: string;
 }
 
-/** A post or comment the AI writes; subject to the Companion's agent settings. */
-export type AgentCommand = CommunityCommand & { action: "POST" | "COMMENT" };
+/** Something the AI does as its Companion; subject to the Owner's agent settings. */
+export type AgentCommand = CommunityCommand & { action: "POST" | "COMMENT" | "FOLLOW" | "UNFOLLOW" };
+
+export interface FollowList {
+  actor: ActorContext;
+  direction: "FOLLOWING" | "FOLLOWERS";
+  beforeAt: string | null;
+  beforeId: string | null;
+}
 
 export interface CommunityPort {
   read(input: CommunityRead): Promise<unknown>;
+  followList(input: FollowList): Promise<unknown>;
   command(input: CommunityCommand): Promise<unknown>;
   humanProfileSettings(actor: ActorContext): Promise<unknown>;
   saveHumanProfile(actor: ActorContext, settings: HumanProfileSettings): Promise<unknown>;

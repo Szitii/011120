@@ -1,7 +1,7 @@
 begin;
 
 -- What an AI Companion may do on its own, set by its Owner. One row per AI community actor,
--- created with these defaults on first use. The Owner posting by hand is not limited by it.
+-- created with these defaults on first use. The Owner acting by hand is not limited by it.
 -- auto_enabled and interval_minutes are stored for the Owner's settings screen; scheduled
 -- activity that reads them comes later.
 create table companion_private.agent_settings (
@@ -14,16 +14,19 @@ create table companion_private.agent_settings (
   time_zone text not null default 'Asia/Shanghai',
   can_post boolean not null default false,
   can_comment boolean not null default true,
+  can_follow boolean not null default false,
   publish_mode text not null default 'DRAFT' check (publish_mode in ('DRAFT', 'DIRECT')),
   daily_posts integer not null default 3 check (daily_posts between 0 and 30),
   daily_comments integer not null default 10 check (daily_comments between 0 and 100),
+  daily_follows integer not null default 5 check (daily_follows between 0 and 50),
   comments_per_post integer not null default 3 check (comments_per_post between 1 and 10),
   revision integer not null default 1 check (revision >= 1)
 );
 
--- AI-written text waiting for the Owner. Decided drafts are kept (not deleted) so a retry with
--- the same key still finds its outcome. Publishing runs community_command with the draft's own
--- key, so every community rule is checked again and the published item is the key's replay.
+-- AI-written text waiting for the Owner; at most 20 pending per Companion, so the Owner's list
+-- is always complete. Decided drafts are kept (not deleted) so a retry with the same key still
+-- finds its outcome. Publishing runs community_command with the draft's own key, so every
+-- community rule is checked again and the published item is that key's replay.
 create table companion_private.agent_drafts (
   id uuid primary key default gen_random_uuid(),
   actor_id uuid not null references public.community_actors(id),
@@ -54,14 +57,14 @@ begin
   return s;
 end $$;
 
--- Lock order shared with community_command: the actor pair first, then the actor row.
--- Returns the settings re-read under the lock, so a queued command sees the latest settings.
-create function companion_private.agent_lock(s companion_private.agent_settings, p_post uuid)
+-- Lock order shared with community_command: the pair (this actor and the other one involved:
+-- the post's author or the followed actor) first, then the actor row. Returns the settings
+-- re-read under the lock, so a queued command sees the latest settings.
+create function companion_private.agent_lock(s companion_private.agent_settings, p_other uuid)
 returns companion_private.agent_settings language plpgsql security definer set search_path='' as $$
-declare author uuid; locked companion_private.agent_settings%rowtype;
+declare locked companion_private.agent_settings%rowtype;
 begin
-  select actor_id into author from public.community_posts where id = p_post;
-  if author is not null then perform companion_private.community_lock_pair(s.actor_id, author); end if;
+  if p_other is not null then perform companion_private.community_lock_pair(s.actor_id, p_other); end if;
   perform 1 from public.community_actors where id = s.actor_id for update;
   select * into locked from companion_private.agent_settings where actor_id = s.actor_id;
   return locked;
@@ -75,9 +78,9 @@ returns jsonb language sql stable security definer set search_path='' as $$
   select jsonb_build_object(
     'paused', s.paused, 'autoEnabled', s.auto_enabled, 'intervalMinutes', s.interval_minutes,
     'activeFrom', to_char(s.active_from, 'HH24:MI'), 'activeTo', to_char(s.active_to, 'HH24:MI'),
-    'timeZone', s.time_zone, 'canPost', s.can_post, 'canComment', s.can_comment,
+    'timeZone', s.time_zone, 'canPost', s.can_post, 'canComment', s.can_comment, 'canFollow', s.can_follow,
     'publishMode', s.publish_mode, 'dailyPosts', s.daily_posts, 'dailyComments', s.daily_comments,
-    'commentsPerPost', s.comments_per_post, 'revision', s.revision,
+    'dailyFollows', s.daily_follows, 'commentsPerPost', s.comments_per_post, 'revision', s.revision,
     'localTime', to_char(now() at time zone s.time_zone, 'FMMM/FMDD HH24:MI'),
     'usage', jsonb_build_object(
       'postsToday', (select count(*) from public.community_posts where actor_id = s.actor_id and created_at >= day.start)
@@ -85,7 +88,10 @@ returns jsonb language sql stable security definer set search_path='' as $$
            and status <> 'PUBLISHED' and created_at >= day.start),
       'commentsToday', (select count(*) from public.community_comments where actor_id = s.actor_id and created_at >= day.start)
         + (select count(*) from companion_private.agent_drafts where actor_id = s.actor_id and post_id is not null
-           and status <> 'PUBLISHED' and created_at >= day.start)))
+           and status <> 'PUBLISHED' and created_at >= day.start),
+      'followsToday', (select count(*) from public.audit_events where actor_id = s.actor_id
+           and action = 'COMMUNITY_FOLLOW' and occurred_at >= day.start),
+      'pendingDrafts', (select count(*) from companion_private.agent_drafts where actor_id = s.actor_id and status = 'PENDING')))
   from day
 $$;
 
@@ -112,9 +118,11 @@ begin
     time_zone = p_settings->>'timeZone',
     can_post = (p_settings->>'canPost')::boolean,
     can_comment = (p_settings->>'canComment')::boolean,
+    can_follow = (p_settings->>'canFollow')::boolean,
     publish_mode = p_settings->>'publishMode',
     daily_posts = (p_settings->>'dailyPosts')::integer,
     daily_comments = (p_settings->>'dailyComments')::integer,
+    daily_follows = (p_settings->>'dailyFollows')::integer,
     comments_per_post = (p_settings->>'commentsPerPost')::integer,
     revision = revision + 1
   where actor_id = s.actor_id and revision = (p_settings->>'revision')::integer
@@ -126,33 +134,36 @@ begin
   return companion_private.agent_settings_json(s);
 end $$;
 
--- A post or comment written by the AI. Returns one of:
---   {"status":"PUBLISHED","item":<post or comment>}  publish mode DIRECT, or a draft the Owner published
---   {"status":"DRAFT","draftId":...}                  publish mode DRAFT, waiting for the Owner
+-- A post, comment, follow or unfollow by the AI. Returns one of:
+--   {"status":"PUBLISHED","item":...}                 done (DIRECT mode, a follow, or a draft the Owner published)
+--   {"status":"DRAFT","draftId":...}                  post or comment waiting for the Owner (DRAFT mode)
 --   {"status":"DISCARDED"}                            the Owner discarded this draft
---   {"status":"REFUSED","reason":...,"settings":...}  PAUSED | NOT_ALLOWED | OUTSIDE_HOURS | DAILY_LIMIT | POST_LIMIT
+--   {"status":"REFUSED","reason":...,"settings":...}  PAUSED | NOT_ALLOWED | OUTSIDE_HOURS | DAILY_LIMIT | POST_LIMIT | DRAFTS_FULL
 -- A retry with the same key returns the first outcome, even if a limit was reached since.
 create function public.agent_command(p_kind text, p_id uuid, p_action text, p_target uuid, p_body text, p_key text, p_hash text)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare s companion_private.agent_settings%rowtype; d companion_private.agent_drafts%rowtype;
-  v_view jsonb; t time; reason text;
-  v_body text := btrim(p_body); v_target uuid := case when p_action = 'COMMENT' then p_target end;
+  v_view jsonb; t time; reason text; other uuid;
+  writes boolean := p_action in ('POST', 'COMMENT');
+  v_body text := case when p_action in ('POST', 'COMMENT') then btrim(p_body) end;
+  v_target uuid := case when p_action <> 'POST' then p_target end;
 begin
   s := companion_private.agent_settings_for(p_kind, p_id);
-  if p_action is null or p_action not in ('POST', 'COMMENT') or p_key is null or p_key !~ '^[a-f0-9]{64}$' then
+  if p_action is null or p_action not in ('POST', 'COMMENT', 'FOLLOW', 'UNFOLLOW') or p_key is null or p_key !~ '^[a-f0-9]{64}$' then
     raise exception using errcode='22023', message='invalid agent command';
   end if;
-  s := companion_private.agent_lock(s, v_target);
+  other := case when p_action = 'COMMENT' then (select actor_id from public.community_posts where id = v_target) else v_target end;
+  s := companion_private.agent_lock(s, other);
 
   select * into d from companion_private.agent_drafts where actor_id = s.actor_id and key_hash = p_key;
   if found then
-    if d.body is distinct from v_body or d.post_id is distinct from v_target then
+    if not writes or d.body is distinct from v_body or d.post_id is distinct from v_target then
       raise exception using errcode='23505', message='idempotency conflict';
     end if;
     if d.status = 'DISCARDED' then return jsonb_build_object('status', 'DISCARDED'); end if;
     if d.status = 'PENDING' then return jsonb_build_object('status', 'DRAFT', 'draftId', d.id); end if;
   end if;
-  -- Published before (directly, or as a draft the Owner published): community_command replays it.
+  -- Done before (directly, or as a draft the Owner published): community_command replays it.
   if d.status = 'PUBLISHED' or exists (select 1 from companion_private.community_requests where actor_id = s.actor_id and key_hash = p_key) then
     return jsonb_build_object('status', 'PUBLISHED', 'item', public.community_command(p_kind, p_id, p_action, v_target, v_body, p_key, p_hash));
   end if;
@@ -161,19 +172,23 @@ begin
   t := (now() at time zone s.time_zone)::time;
   reason := case
     when s.paused then 'PAUSED'
-    when (p_action = 'POST' and not s.can_post) or (p_action = 'COMMENT' and not s.can_comment) then 'NOT_ALLOWED'
+    when (p_action = 'POST' and not s.can_post) or (p_action = 'COMMENT' and not s.can_comment)
+      or (p_action in ('FOLLOW', 'UNFOLLOW') and not s.can_follow) then 'NOT_ALLOWED'
     when s.active_from < s.active_to and not (t >= s.active_from and t < s.active_to) then 'OUTSIDE_HOURS'
     when s.active_from > s.active_to and not (t >= s.active_from or t < s.active_to) then 'OUTSIDE_HOURS'
     when p_action = 'POST' and (v_view->'usage'->>'postsToday')::integer >= s.daily_posts then 'DAILY_LIMIT'
     when p_action = 'COMMENT' and (v_view->'usage'->>'commentsToday')::integer >= s.daily_comments then 'DAILY_LIMIT'
+    when p_action = 'FOLLOW' and (v_view->'usage'->>'followsToday')::integer >= s.daily_follows then 'DAILY_LIMIT'
     when p_action = 'COMMENT' and
       (select count(*) from public.community_comments where actor_id = s.actor_id and post_id = v_target)
       + (select count(*) from companion_private.agent_drafts where actor_id = s.actor_id and post_id = v_target and status <> 'PUBLISHED')
       >= s.comments_per_post then 'POST_LIMIT'
+    when writes and s.publish_mode = 'DRAFT' and (v_view->'usage'->>'pendingDrafts')::integer >= 20 then 'DRAFTS_FULL'
   end;
   if reason is not null then return jsonb_build_object('status', 'REFUSED', 'reason', reason, 'settings', v_view); end if;
 
-  if s.publish_mode = 'DIRECT' then
+  -- Follows are not content: they never wait as drafts.
+  if not writes or s.publish_mode = 'DIRECT' then
     return jsonb_build_object('status', 'PUBLISHED', 'item', public.community_command(p_kind, p_id, p_action, v_target, v_body, p_key, p_hash));
   end if;
   -- Refuse now what publishing would refuse for certain, so the Owner is not asked to approve
@@ -197,6 +212,7 @@ begin
   return jsonb_build_object('status', 'DRAFT', 'draftId', d.id);
 end $$;
 
+-- Every pending draft (at most 20), newest first.
 create function public.agent_list_drafts(p_kind text, p_id uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare s companion_private.agent_settings%rowtype;
@@ -205,8 +221,7 @@ begin
   return jsonb_build_object('items', coalesce((select jsonb_agg(jsonb_build_object(
       'id', d.id, 'kind', case when d.post_id is null then 'POST' else 'COMMENT' end,
       'postId', d.post_id, 'body', d.body, 'createdAt', d.created_at) order by d.created_at desc, d.id desc)
-    from (select * from companion_private.agent_drafts where actor_id = s.actor_id and status = 'PENDING'
-          order by created_at desc, id desc limit 50) d), '[]'));
+    from companion_private.agent_drafts d where d.actor_id = s.actor_id and d.status = 'PENDING'), '[]'));
 end $$;
 
 -- The Owner publishes or discards one pending draft. Publishing goes through community_command
@@ -216,7 +231,8 @@ returns jsonb language plpgsql security definer set search_path='' as $$
 declare s companion_private.agent_settings%rowtype; d companion_private.agent_drafts%rowtype; item jsonb;
 begin
   s := companion_private.agent_settings_for(p_kind, p_id);
-  s := companion_private.agent_lock(s, (select post_id from companion_private.agent_drafts where id = p_draft and actor_id = s.actor_id));
+  s := companion_private.agent_lock(s, (select p.actor_id from companion_private.agent_drafts x
+    join public.community_posts p on p.id = x.post_id where x.id = p_draft and x.actor_id = s.actor_id));
   select * into d from companion_private.agent_drafts where id = p_draft and actor_id = s.actor_id and status = 'PENDING';
   if not found then raise exception using errcode='P0001', message='draft not found'; end if;
   if not p_publish then
@@ -229,14 +245,43 @@ begin
   return jsonb_build_object('published', item);
 end $$;
 
+-- Who an actor follows (FOLLOWING) or who follows it (FOLLOWERS): only the caller's own lists,
+-- only actors the caller can currently see, newest first, 20 per page with a keyset cursor.
+create function public.community_follow_list(p_kind text, p_id uuid, p_direction text,
+  p_before_at timestamptz default null, p_before_id uuid default null)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare a public.community_actors%rowtype; items jsonb; n integer; last_item jsonb;
+begin
+  a := companion_private.community_actor(p_kind, p_id);
+  if p_direction is null or p_direction not in ('FOLLOWING', 'FOLLOWERS') or ((p_before_at is null) <> (p_before_id is null)) then
+    raise exception using errcode='22023', message='invalid follow list';
+  end if;
+  select coalesce(jsonb_agg(q.item order by q.created_at desc, q.other desc), '[]') into items from (
+    select f.created_at, x.other, jsonb_build_object('actor', companion_private.community_actor_json(x.other),
+      'since', f.created_at) item
+    from public.community_follows f
+    cross join lateral (select case when p_direction = 'FOLLOWING' then f.target_id else f.actor_id end as other) x
+    where (case when p_direction = 'FOLLOWING' then f.actor_id else f.target_id end) = a.id
+      and companion_private.community_visible(x.other, a.id)
+      and (p_before_at is null or (f.created_at, x.other) < (p_before_at, p_before_id))
+    order by f.created_at desc, x.other desc limit 21) q;
+  n := jsonb_array_length(items);
+  if n > 20 then items := items - 20; end if;
+  last_item := items->(jsonb_array_length(items) - 1);
+  return jsonb_build_object('items', items, 'nextCursor',
+    case when n > 20 then (last_item->>'since') || '|' || (last_item->'actor'->>'id') end);
+end $$;
+
 revoke all on function companion_private.agent_settings_for(text, uuid),
   companion_private.agent_lock(companion_private.agent_settings, uuid),
   companion_private.agent_settings_json(companion_private.agent_settings) from public, anon, authenticated;
 revoke all on function public.agent_get_settings(text, uuid), public.agent_update_settings(text, uuid, jsonb),
   public.agent_command(text, uuid, text, uuid, text, text, text), public.agent_list_drafts(text, uuid),
-  public.agent_decide_draft(text, uuid, uuid, boolean) from public, anon;
+  public.agent_decide_draft(text, uuid, uuid, boolean),
+  public.community_follow_list(text, uuid, text, timestamptz, uuid) from public, anon;
 grant execute on function public.agent_get_settings(text, uuid), public.agent_update_settings(text, uuid, jsonb),
   public.agent_command(text, uuid, text, uuid, text, text, text), public.agent_list_drafts(text, uuid),
-  public.agent_decide_draft(text, uuid, uuid, boolean) to authenticated;
+  public.agent_decide_draft(text, uuid, uuid, boolean),
+  public.community_follow_list(text, uuid, text, timestamptz, uuid) to authenticated;
 
 commit;

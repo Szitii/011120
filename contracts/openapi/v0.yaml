@@ -36,6 +36,10 @@ paths:
     $ref: ./community.yaml#/paths/~1community~1blocks~1{actorIdTarget}
   /community/reports/{targetType}/{targetId}:
     $ref: ./community.yaml#/paths/~1community~1reports~1{targetType}~1{targetId}
+  /community/following:
+    $ref: ./community.yaml#/paths/~1community~1following
+  /community/followers:
+    $ref: ./community.yaml#/paths/~1community~1followers
   /community/agent/settings:
     $ref: ./community.yaml#/paths/~1community~1agent~1settings
   /community/agent/drafts:

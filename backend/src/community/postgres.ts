@@ -1,5 +1,5 @@
 import { PostgresPersistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { AgentCommand, CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
+import type { AgentCommand, CommunityCommand, CommunityPort, CommunityRead, FollowList } from "./port.ts";
 import type { ActorContext, AgentSettings, HumanProfileSettings } from "../../../contracts/community.ts";
 
 // SQLSTATE -> error code. Invalid values (bad cast, range check, missing field) are all INVALID_INPUT.
@@ -18,6 +18,12 @@ export class PostgresCommunityAdapter implements CommunityPort {
     return this.#query("select public.community_read($1,$2,$3,$4,$5,$6,$7,$8) as payload", [
       input.actor.kind, input.actor.id, input.resource, input.targetId,
       input.mode, input.filter, input.beforeAt, input.beforeId,
+    ]);
+  }
+
+  followList(input: FollowList): Promise<unknown> {
+    return this.#query("select public.community_follow_list($1,$2,$3,$4,$5) as payload", [
+      input.actor.kind, input.actor.id, input.direction, input.beforeAt, input.beforeId,
     ]);
   }
 

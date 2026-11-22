@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
-import { AGENT_TOOLS, runAgentTool, type AgentArgs, type AgentTool } from "../agent/tools.ts";
+import { AGENT_TOOLS, WRITE_TOOLS, runAgentTool, type AgentArgs, type AgentTool } from "../agent/tools.ts";
 import type { AgentSettings, HumanProfileSettings } from "../../../contracts/community.ts";
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -14,6 +14,15 @@ const header = (request: MvpHttpRequest, name: string): string | undefined =>
 const isJson = (request: MvpHttpRequest): boolean =>
   header(request, "content-type")?.split(";")[0]?.trim().toLowerCase() === "application/json";
 type Respond = (status: number, body: unknown) => MvpHttpResponse;
+
+/** Keyset cursor "createdAt|id" from `?cursor=`, as [beforeAt, beforeId]; both null without one. */
+function cursorOf(url: URL): [string | null, string | null] {
+  const cursor = url.searchParams.get("cursor");
+  if (cursor === null) return [null, null];
+  const parts = cursor.split("|");
+  if (parts.length !== 2 || !parts[0] || !Number.isFinite(Date.parse(parts[0]))) invalid();
+  return [parts[0]!, id(parts[1]!)];
+}
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share replay storage. */
 function retryKey(request: MvpHttpRequest, ownerId: string): string {
@@ -39,8 +48,8 @@ function profileSettings(request: MvpHttpRequest): HumanProfileSettings {
 // Shape of PUT agent/settings: every field is required. Value ranges are checked by the database.
 const SETTING_TYPES = {
   paused: "boolean", autoEnabled: "boolean", intervalMinutes: "integer", activeFrom: "time", activeTo: "time",
-  timeZone: "zone", canPost: "boolean", canComment: "boolean", publishMode: "mode",
-  dailyPosts: "integer", dailyComments: "integer", commentsPerPost: "integer", revision: "integer",
+  timeZone: "zone", canPost: "boolean", canComment: "boolean", canFollow: "boolean", publishMode: "mode",
+  dailyPosts: "integer", dailyComments: "integer", dailyFollows: "integer", commentsPerPost: "integer", revision: "integer",
 } as const;
 
 function agentSettings(request: MvpHttpRequest): AgentSettings {
@@ -63,7 +72,7 @@ function agentSettings(request: MvpHttpRequest): AgentSettings {
  * /v0/community/agent/...: the Owner's settings and drafts for one Companion, and the AI text tools.
  *   GET|PUT settings · GET drafts · POST drafts/{id}/publish|discard · POST {tool} -> { "text": "..." }
  * Tool arguments are a JSON object with only string `postId`, `actorId`, `text` (checked by the database);
- * post and comment need an Idempotency-Key.
+ * the write tools (post, comment, follow, unfollow) need an Idempotency-Key.
  */
 async function agentRoute(
   request: MvpHttpRequest, session: AuthenticatedOwnerSession, port: CommunityPort,
@@ -89,7 +98,7 @@ async function agentRoute(
     || Object.entries(args).some(([k, v]) => !["postId", "actorId", "text"].includes(k) || typeof v !== "string")) {
     return invalid();
   }
-  const keyHash = name === "post" || name === "comment" ? retryKey(request, session.ownerId) : null;
+  const keyHash = WRITE_TOOLS.includes(name as AgentTool) ? retryKey(request, session.ownerId) : null;
   const result = await runAgentTool(port, actor, name as AgentTool, args as AgentArgs, keyHash);
   return response(result.status, { text: result.text });
 }
@@ -116,6 +125,12 @@ export async function handleCommunityRequest(
     if (method === "GET") return response(200, await port.humanProfileSettings(actor));
     if (method === "PUT") return response(200, await port.saveHumanProfile(actor, profileSettings(request)));
   }
+  if (method === "GET" && (route[0] === "following" || route[0] === "followers") && route.length === 1) {
+    const [beforeAt, beforeId] = cursorOf(url);
+    return response(200, await port.followList({
+      actor, direction: route[0] === "following" ? "FOLLOWING" : "FOLLOWERS", beforeAt, beforeId,
+    }));
+  }
   let resource: CommunityRead["resource"] | undefined;
   let targetId: string | null = null;
   if (method === "GET") {
@@ -129,14 +144,7 @@ export async function handleCommunityRequest(
     const filter = url.searchParams.get("filter") ?? "ALL";
     if (mode !== "LATEST" && mode !== "FOLLOWING") invalid();
     if (filter !== "ALL" && filter !== "HUMAN" && filter !== "AI") invalid();
-    let beforeAt: string | null = null;
-    let beforeId: string | null = null;
-    const cursor = url.searchParams.get("cursor");
-    if (cursor !== null) {
-      const parts = cursor.split("|");
-      if (parts.length !== 2 || !parts[0] || !Number.isFinite(Date.parse(parts[0]))) invalid();
-      beforeAt = parts[0]!; beforeId = id(parts[1]!);
-    }
+    const [beforeAt, beforeId] = cursorOf(url);
     return response(200, await port.read({ actor, resource, targetId, mode, filter, beforeAt, beforeId } as CommunityRead));
   }
 

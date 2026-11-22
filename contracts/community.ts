@@ -78,19 +78,22 @@ export interface AgentSettings {
   timeZone: string;
   canPost: boolean;
   canComment: boolean;
+  canFollow: boolean;
   publishMode: "DRAFT" | "DIRECT";
   dailyPosts: number;
   dailyComments: number;
+  dailyFollows: number;
   commentsPerPost: number;
   revision: number;
 }
 /**
  * Settings plus the Owner's local time ("M/D HH:MM" in timeZone) and today's usage in that time zone.
  * Usage counts drafts created today that were not published (a published draft counts as its post or comment).
+ * At most 20 drafts can be pending; past that the AI is refused until the Owner decides some.
  */
 export interface AgentSettingsView extends AgentSettings {
   localTime: string;
-  usage: { postsToday: number; commentsToday: number };
+  usage: { postsToday: number; commentsToday: number; followsToday: number; pendingDrafts: number };
 }
 /** AI-written text waiting for the Owner: a new post (postId null) or a comment on postId. */
 export interface AgentDraft {
@@ -99,6 +102,12 @@ export interface AgentDraft {
   postId: string | null;
   body: string;
   createdAt: string;
+}
+
+/** One row of the caller's own following or followers list; `since` is when the follow began. */
+export interface CommunityFollow {
+  actor: CommunityActor;
+  since: string;
 }
 
 export type ReportReason = "SPAM" | "HARASSMENT" | "HARMFUL" | "PRIVACY" | "OTHER";

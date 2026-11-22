@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { handleCommunityRequest } from "../src/community/http.ts";
 import { PostgresCommunityAdapter } from "../src/community/postgres.ts";
-import type { CommunityCommand, CommunityRead, CommunityPort } from "../src/community/port.ts";
+import type { CommunityCommand, CommunityRead, CommunityPort, FollowList } from "../src/community/port.ts";
 import type { AuthenticatedOwnerSession, OwnerApiPort, MvpHttpRequest } from "../src/http/types.ts";
 import { PostgresPersistenceError, type SqlExecutor } from "../src/persistence/postgres/types.ts";
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
@@ -10,12 +10,13 @@ import { MvpApiBoundary } from "../src/http/mvp-api.ts";
 const ownerId = "00000000-0000-0000-0000-0000000001a1";
 const target = "00000000-0000-0000-0000-0000000005a1";
 const query = `actorKind=OWNER&actorId=${ownerId}`;
-const reads: CommunityRead[] = []; const commands: CommunityCommand[] = [];
+const reads: CommunityRead[] = []; const commands: CommunityCommand[] = []; const follows: FollowList[] = [];
 const community: CommunityPort = {
   read: async input => { reads.push(input); return { items: [], nextCursor: null }; },
   command: async input => { commands.push(input); return { id: target }; },
   humanProfileSettings: async () => ({ displayName: "Sample", bio: "", revision: 1 }),
   saveHumanProfile: async (_actor, settings) => settings,
+  followList: async input => { follows.push(input); return { items: [], nextCursor: null }; },
   agentSettings: async () => ({}),
   saveAgentSettings: async () => ({}),
   agentCommand: async () => ({}),
@@ -154,4 +155,14 @@ it("validates protection commands and binds reports and the block list to the ve
     { reason: "OTHER", details: "" }), headers: { "Idempotency-Key": "stable-community-test-key" } }, session, "t"),
     (e: unknown) => e instanceof PostgresPersistenceError && e.code === "INVALID_INPUT");
   assert.equal((await handleCommunityRequest(request(`reports/unknown/${target}`, "POST"), session, "t"))?.status, 404);
+});
+
+it("lists the caller's own following and followers with the shared keyset cursor", async () => {
+  assert.equal((await handleCommunityRequest(request("following"), session, "t"))?.status, 200);
+  assert.equal((await handleCommunityRequest(request(`followers?cursor=2026-11-21T12:00:00Z|${target}`), session, "t"))?.status, 200);
+  assert.deepEqual(follows.map(f => [f.direction, f.beforeAt, f.beforeId]), [
+    ["FOLLOWING", null, null], ["FOLLOWERS", "2026-11-21T12:00:00Z", target],
+  ]);
+  await assert.rejects(handleCommunityRequest(request("following?cursor=bad"), session, "t"));
+  assert.equal((await handleCommunityRequest(request("following/extra"), session, "t"))?.status, 404);
 });
