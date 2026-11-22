@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, CommunityDetail, CommunityProfile, CommunityPost,
   CommunityBlock, ReportTarget, CommunityPage, CommunityNotification, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
 import { safeClientMessage } from "../adapters/real-api.ts";
@@ -8,6 +8,8 @@ import { CommunityRequestScope } from "./request-scope.ts";
 import { ActorLine, CommunityButton as Button, ContentCard, communityStyles as s } from "./components.tsx";
 import { ReportForm } from "./ReportForm.tsx";
 import { HumanProfileEditor } from "./HumanProfileEditor.tsx";
+import { BottomSheet } from "../components/BottomSheet.tsx";
+import { useSkin } from "../theme/SkinProvider";
 
 type Page = { type: "feed" } | { type: "profile"; id?: string } | { type: "detail"; id: string } | { type: "notifications" } | { type: "blocks" };
 type Data = { type: "feed"; value: CommunityPage<CommunityPost> }
@@ -19,6 +21,7 @@ type Data = { type: "feed"; value: CommunityPage<CommunityPost> }
 export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, onScroll }: {
   client: CommunityClient; viewer: ActorContext; legacy: React.ReactNode; initialScrollY?: number; onScroll: (y: number) => void;
 }) {
+  const { skin } = useSkin();
   const [reportTarget, setReportTarget] = useState<ReportTarget>();
   const [blockTarget, setBlockTarget] = useState<CommunityProfile>();
   const [page, setPage] = useState<Page>({ type: "feed" });
@@ -26,6 +29,7 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
   const [filter, setFilter] = useState<CommunityActorFilter>("ALL");
   const [data, setData] = useState<Data>();
   const [own, setOwn] = useState<CommunityProfile>();
+  const [ownUnavailable, setOwnUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -45,18 +49,27 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
   const load = useCallback(async (cursor?: string) => {
     const current = scope.begin();
     setLoading(true); setError("");
+    const ownProfile = client.profile(viewer).then(
+      profile => {
+        if (current()) { setOwn(profile); setOwnUnavailable(false); }
+        return profile;
+      },
+      () => {
+        if (current()) { setOwn(undefined); setOwnUnavailable(true); }
+        return undefined;
+      },
+    );
     try {
-      const mine = await client.profile(viewer);
       let next: Data;
       if (page.type === "profile") {
-        const profile = page.id ? await client.profile(viewer, page.id) : mine;
+        const profile = page.id ? await client.profile(viewer, page.id) : await ownProfile;
+        if (!profile || !current()) return;
         next = { type: "profile", profile, value: await client.feed(viewer, { authorId: profile.id, ...(cursor ? { cursor } : {}) }) };
       } else if (page.type === "detail") next = { type: "detail", value: await client.detail(viewer, page.id, cursor) };
       else if (page.type === "blocks") next = { type: "blocks", value: await client.blocks(viewer, cursor) };
       else if (page.type === "notifications") next = { type: "notifications", value: await client.notifications(viewer, cursor) };
       else next = { type: "feed", value: await client.feed(viewer, { mode, filter, ...(cursor ? { cursor } : {}) }) };
       if (!current()) return;
-      setOwn(mine);
       setData(previous => {
         if (!cursor || !previous || previous.type !== next.type) return next;
         if (next.type === "detail" && previous.type === "detail") return { ...next, value: { ...next.value,
@@ -102,8 +115,16 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
   const canCompose = own?.canPublish && (page.type === "feed" || page.type === "detail");
   const openActor = (id: string) => navigate({ type: "profile", id });
 
-  if (reportTarget) return <ReportForm client={client} viewer={viewer} target={reportTarget}
-    onClose={() => setReportTarget(undefined)} />;
+  function closeConfirmation() {
+    if (busyRef.current) return;
+    setBlockTarget(undefined);
+    setDeleteTarget(undefined);
+    setError("");
+  }
+
+  function closeReport() {
+    setReportTarget(undefined);
+  }
 
   if (editingProfile) return <HumanProfileEditor client={client} viewer={viewer} onClose={saved => {
     setEditingProfile(false);
@@ -137,33 +158,8 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
         <Text style={s.meta}>最新动态按发布时间排序。家机手动操作会标记为 Owner 代发。</Text>
         <Button label="相遇与生活记录" onPress={() => setShowLegacy(true)} />
       </>}
-      {error !== "" && <Text accessibilityRole="alert" style={s.error}>{error} 可刷新后重试；发布失败时草稿会保留。</Text>}
-      {blockTarget && <View style={s.card}>
-        <Text style={s.body}>屏蔽 {blockTarget.displayName}？双方将看不到彼此的社区内容，也不能关注和评论。已有双向关注会解除。</Text>
-        <View style={s.row}>
-          <Button label="取消" disabled={busy} onPress={() => setBlockTarget(undefined)} />
-          <Button label="确认屏蔽" disabled={busy} onPress={() => {
-            const target = blockTarget;
-            void mutate(() => client.block(viewer, target.id, true, communityRequestKey())).then(ok => {
-              if (ok && active.current) navigate({ type: "blocks" });
-            });
-          }} />
-        </View>
-      </View>}
-      {deleteTarget && <View style={s.card}>
-        <Text style={s.body}>删除这条内容？删除后将从社区和相关通知中隐藏。</Text>
-        <View style={s.row}>
-          <Button label="取消" disabled={busy} onPress={() => setDeleteTarget(undefined)} />
-          <Button label="确认删除" disabled={busy} onPress={() => {
-            const target = deleteTarget;
-            void mutate(() => client.remove(viewer, target.kind, target.id, communityRequestKey())).then(ok => {
-              if (!ok || !active.current) return;
-              setDeleteTarget(undefined);
-              if (target.kind === "posts" && page.type === "detail") navigate({ type: "feed" });
-            });
-          }} />
-        </View>
-      </View>}
+      {error !== "" && !blockTarget && !deleteTarget && <Text accessibilityRole="alert" style={s.error}>{error} 可刷新后重试；发布失败时草稿会保留。</Text>}
+      {ownUnavailable && <Text accessibilityRole="alert" style={s.error}>当前身份资料暂时无法加载，部分操作不可用。可刷新后重试。</Text>}
       {loading && <ActivityIndicator accessibilityLabel="正在加载社区" color="#9C6D79" />}
       {data?.type === "profile" && <View style={s.card}>
         <ActorLine actor={data.profile} onPress={() => undefined} />
@@ -199,14 +195,14 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
       {own && !own.canPublish && page.type === "feed" && <Text style={s.meta}>当前家机尚未开放公开发布。请在授权设置中检查社交身份的状态与可见性。</Text>}
       {posts.map(post => <ContentCard key={post.id} item={post} onActor={() => openActor(post.author.id)}
         onDetail={() => navigate({ type: "detail", id: post.id })} onDelete={() => remove("posts", post.id)}
-        onReport={post.author.id !== own?.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined} />)}
+        onReport={own && post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined} />)}
       {data?.type === "detail" && <>
         <ContentCard item={data.value.post} onActor={() => openActor(data.value.post.author.id)} onDelete={() => remove("posts", data.value.post.id)}
-          onReport={data.value.post.author.id !== own?.id ? () => setReportTarget({ kind: "POST", id: data.value.post.id }) : undefined} />
+          onReport={own && data.value.post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: data.value.post.id }) : undefined} />
         <Text style={s.author}>评论（最新在前）</Text>
         {data.value.comments.items.map(comment => <ContentCard key={comment.id} item={comment}
           onActor={() => openActor(comment.author.id)} onDelete={() => remove("comments", comment.id)}
-          onReport={comment.author.id !== own?.id ? () => setReportTarget({ kind: "COMMENT", id: comment.id }) : undefined} />)}
+          onReport={own && comment.author.id !== own.id ? () => setReportTarget({ kind: "COMMENT", id: comment.id }) : undefined} />)}
         {data.value.comments.items.length === 0 && <Text style={s.meta}>还没有评论。</Text>}
       </>}
       {data?.type === "notifications" && data.value.items.map(note => <View key={note.id} style={s.card}>
@@ -221,5 +217,39 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
       {!loading && data?.type !== "detail" && data?.value.items.length === 0 && <Text style={s.meta}>{page.type === "blocks" ? "当前身份没有屏蔽其他居民。" : page.type === "notifications" ? "当前身份暂时没有通知。" : mode === "FOLLOWING" && page.type === "feed" ? "关注一些居民后，他们的动态会出现在这里。" : "还没有动态，写下第一条吧。"}</Text>}
       {nextCursor && <Button disabled={loading || busy} label="加载更多" onPress={() => void load(nextCursor)} />}
     </ScrollView>
+    <BottomSheet visible={Boolean(blockTarget || deleteTarget)} title={blockTarget ? "屏蔽身份" : "删除内容"} onClose={closeConfirmation}>
+      {blockTarget && <>
+        <Text style={[s.body, { color: skin.colors.ink }]}>屏蔽 {blockTarget.displayName}？双方将看不到彼此的社区内容，也不能关注和评论。已有双向关注会解除。</Text>
+        <View style={s.row}>
+          <Button label="取消" disabled={busy} onPress={closeConfirmation} />
+          <Button label="确认屏蔽" disabled={busy} onPress={() => {
+            const target = blockTarget;
+            void mutate(() => client.block(viewer, target.id, true, communityRequestKey())).then(ok => {
+              if (ok && active.current) navigate({ type: "blocks" });
+            });
+          }} />
+        </View>
+      </>}
+      {deleteTarget && <>
+        <Text style={[s.body, { color: skin.colors.ink }]}>删除这条内容？删除后将从社区和相关通知中隐藏。</Text>
+        <View style={s.row}>
+          <Button label="取消" disabled={busy} onPress={closeConfirmation} />
+          <Button label="确认删除" disabled={busy} onPress={() => {
+            const target = deleteTarget;
+            void mutate(() => client.remove(viewer, target.kind, target.id, communityRequestKey())).then(ok => {
+              if (!ok || !active.current) return;
+              setDeleteTarget(undefined);
+              if (target.kind === "posts" && page.type === "detail") navigate({ type: "feed" });
+            });
+          }} />
+        </View>
+      </>}
+      {error !== "" && <Text accessibilityRole="alert" style={[s.body, { color: skin.colors.ink }]}>{error} 请重试。</Text>}
+    </BottomSheet>
+    {reportTarget && <Modal animationType="slide" onRequestClose={closeReport}>
+      <SafeAreaView style={s.page}>
+        <ReportForm client={client} viewer={viewer} target={reportTarget} onClose={closeReport} />
+      </SafeAreaView>
+    </Modal>}
   </View>;
 }
