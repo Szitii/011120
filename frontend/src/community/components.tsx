@@ -1,12 +1,21 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { CommunityActor, CommunityComment, CommunityPost } from "../../../contracts/community.ts";
+import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
+import { CHROME, RADIUS } from "../theme/layoutTokens";
+import { PEARL_UI } from "../theme/skinTokens";
 
-export function CommunityButton({ label, onPress, disabled = false, selected = false }: {
-  label: string; onPress: () => void; disabled?: boolean; selected?: boolean;
+export function CommunityButton({ label, onPress, disabled = false, selected = false, glass = false }: {
+  label: string; onPress: () => void; disabled?: boolean; selected?: boolean; glass?: boolean;
 }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled}
-    onPress={onPress} style={[communityStyles.button, selected && communityStyles.selected, disabled && { opacity: 0.45 }]}>
-    <Text style={communityStyles.buttonText}>{label}</Text>
+    onPress={onPress} style={[
+      communityStyles.button,
+      glass && communityStyles.glassFilter,
+      selected && !glass && communityStyles.selected,
+      disabled && { opacity: 0.45 },
+    ]}>
+    {glass && <LiquidGlassSurface glass tint="light" style={[StyleSheet.absoluteFill, selected && communityStyles.selectedFilter]} />}
+    <Text style={[communityStyles.buttonText, selected && communityStyles.selectedText]}>{label}</Text>
   </Pressable>;
 }
 
@@ -32,17 +41,34 @@ export function ContentCard({ item, onActor, onDetail, onDelete, onReport }: {
 }
 
 export const communityStyles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: "#F6F3EE" },
-  content: { padding: 20, paddingBottom: 48, gap: 14 },
-  title: { fontSize: 26, fontWeight: "600", color: "#3F3837" },
+  page: { flex: 1, backgroundColor: PEARL_UI.background[0] },
+  communityPage: { flex: 1 },
+  content: { padding: CHROME.screenInset, paddingBottom: 48, gap: 14 },
+  feedContent: { paddingBottom: CHROME.scrollBottomClearance },
+  title: { fontSize: 26, fontWeight: "600", color: PEARL_UI.ink },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" },
-  button: { paddingHorizontal: 14, paddingVertical: 11, borderRadius: 22, backgroundColor: "#EBE5DF", minHeight: 44 },
-  selected: { backgroundColor: "#DEC6CB" },
-  buttonText: { color: "#59474C", fontSize: 14 },
-  card: { backgroundColor: "#FFFDFA", padding: 18, borderRadius: 20, gap: 10 },
-  author: { fontSize: 17, color: "#423737", fontWeight: "600" },
-  meta: { fontSize: 12, color: "#817672", lineHeight: 19 },
-  body: { fontSize: 16, lineHeight: 25, color: "#443C3B" },
-  input: { minHeight: 100, textAlignVertical: "top", backgroundColor: "#FFFDFA", borderWidth: 1, borderColor: "#DFD4D0", borderRadius: 16, padding: 14, fontSize: 16, color: "#443C3B" },
+  button: { paddingHorizontal: 14, paddingVertical: 11, borderRadius: RADIUS.pill, backgroundColor: PEARL_UI.background[1], minHeight: 44, justifyContent: "center" },
+  glassFilter: { backgroundColor: "transparent" },
+  selected: { backgroundColor: PEARL_UI.accentWash },
+  selectedFilter: { backgroundColor: PEARL_UI.accent },
+  buttonText: { color: PEARL_UI.accentInk, fontSize: 14 },
+  selectedText: { fontWeight: "700" },
+  card: {
+    backgroundColor: PEARL_UI.white,
+    padding: 18,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: PEARL_UI.line,
+    gap: 10,
+    shadowColor: PEARL_UI.shadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  author: { fontSize: 17, color: PEARL_UI.ink, fontWeight: "600" },
+  meta: { fontSize: 12, color: PEARL_UI.muted, lineHeight: 19 },
+  body: { fontSize: 16, lineHeight: 25, color: PEARL_UI.ink },
+  input: { minHeight: 100, textAlignVertical: "top", backgroundColor: PEARL_UI.white, borderWidth: 1, borderColor: PEARL_UI.line, borderRadius: 16, padding: 14, fontSize: 16, color: PEARL_UI.ink },
   error: { color: "#984C59", lineHeight: 22 },
 });

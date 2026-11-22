@@ -2,6 +2,7 @@ import { Platform, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
+import { PEARL_UI } from "../theme/skinTokens";
 
 export function GlassChatBubble({
   senderRole,
@@ -27,9 +28,10 @@ export function GlassChatBubble({
         ]}
       >
         <BlurView
-          intensity={skin.isDark ? 48 : 60}
+          intensity={skin.isDark ? 48 : 36}
           tint={skin.isDark ? "dark" : "light"}
           experimentalBlurMethod={Platform.OS === "android" ? "dimezisBlurView" : undefined}
+          pointerEvents="none"
           style={StyleSheet.absoluteFill}
         />
         <View
@@ -67,18 +69,18 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.bubble,
     borderWidth: 1,
     overflow: "hidden",
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.10,
-    shadowRadius: 16,
-    elevation: 4,
+    shadowColor: PEARL_UI.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 1,
   },
   topGleam: {
     position: "absolute",
     top: 0,
     left: 10,
     right: 10,
-    height: 1.5,
+    height: 1,
   },
   text: {
     fontSize: 13.5,

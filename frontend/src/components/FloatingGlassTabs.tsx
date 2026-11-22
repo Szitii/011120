@@ -3,6 +3,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
+import { PEARL_UI } from "../theme/skinTokens";
 import type { RootTab } from "../state/navigation";
 
 export function FloatingGlassTabs({
@@ -37,17 +38,19 @@ export function FloatingGlassTabs({
       style={[
         styles.wrapper,
         {
-          left: 24,
-          right: 24,
+          left: CHROME.screenInset,
+          right: CHROME.screenInset,
           bottom: CHROME.floatingDockBottom,
         },
       ]}
     >
-      <LiquidGlassSurface>
+      <LiquidGlassSurface glass>
         <View style={styles.row}>
           {items.map((item) => {
             const active = current === item.key;
-            const color = active ? skin.colors.tabActive : skin.colors.tabInactive;
+            const color = skin.id === "default"
+              ? (active ? PEARL_UI.accentInk : PEARL_UI.muted)
+              : (active ? skin.colors.tabActive : skin.colors.tabInactive);
             return (
               <Pressable
                 key={item.key}
@@ -82,7 +85,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", padding: 4, gap: 4 },
   tab: {
     flex: 1,
-    height: 46,
+    minHeight: 48,
     borderRadius: RADIUS.pill,
     alignItems: "center",
     justifyContent: "center",

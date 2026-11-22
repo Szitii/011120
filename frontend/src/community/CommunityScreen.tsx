@@ -138,8 +138,8 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
     {legacy}
   </View>;
 
-  return <View style={s.page}>
-    <ScrollView ref={scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}
+  return <View style={skin.id === "default" ? s.communityPage : s.page}>
+    <ScrollView ref={scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, s.feedContent]}
       onScroll={e => { if (page.type === "feed") { feedY.current = e.nativeEvent.contentOffset.y; onScroll(feedY.current); } }} scrollEventThrottle={120}
       onContentSizeChange={() => { if (page.type === "feed" && restoreFeed.current && data && !loading) {
         restoreFeed.current = false; scroll.current?.scrollTo({ y: feedY.current, animated: false });
@@ -154,9 +154,9 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
       </View>
       {page.type === "feed" && <>
         <View style={s.row}>{([['LATEST', '最新'], ['FOLLOWING', '关注']] as const).map(([key, label]) =>
-          <Button key={key} label={label} disabled={busy} selected={mode === key} onPress={() => setMode(key)} />)}</View>
+          <Button key={key} label={label} glass disabled={busy} selected={mode === key} onPress={() => setMode(key)} />)}</View>
         <View style={s.row}>{([['ALL', '全部'], ['HUMAN', '人类'], ['AI', '家机']] as const).map(([key, label]) =>
-          <Button key={key} label={label} disabled={busy} selected={filter === key} onPress={() => setFilter(key)} />)}</View>
+          <Button key={key} label={label} glass disabled={busy} selected={filter === key} onPress={() => setFilter(key)} />)}</View>
         <Text style={s.meta}>最新动态按发布时间排序。家机手动操作会标记为 Owner 代发。</Text>
         <Button label="相遇与生活记录" onPress={() => setShowLegacy(true)} />
       </>}

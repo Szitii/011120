@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { LinearGradient } from "expo-linear-gradient";
 import { createClientBootstrap, type ClientBootstrap } from "./src/adapters";
 import { RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
 import { AccountGate } from "./src/auth/AccountGate";
@@ -53,7 +54,10 @@ import {
   type NavigationState,
 } from "./src/state/navigation";
 import { SkinProvider, useSkin } from "./src/theme/SkinProvider";
-import { CHROME } from "./src/theme/layoutTokens";
+import { CHROME, RADIUS } from "./src/theme/layoutTokens";
+import { PEARL_UI } from "./src/theme/skinTokens";
+import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
+import { PixelAvatar } from "./src/components/PixelAvatar";
 import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
 import { InteractiveFullRoom } from "./src/components/InteractiveFullRoom";
 import { BottomSheet } from "./src/components/BottomSheet";
@@ -64,6 +68,9 @@ type LoadState<T> =
   | { kind: "success"; value: T }
   | { kind: "empty" }
   | { kind: "error"; title: string; retry: boolean };
+
+// Switch this asset to ./assets/room-pearl.webp when the new room art is supplied.
+const PRIVATE_HOME_ROOM_IMAGE = require("./assets/room-iso-25d.jpg");
 
 const LOCAL_PREVIEW_IMAGES: Record<string, number> = {
   "rainy-cafe": require("./assets/post-rainy-cafe.jpg"),
@@ -415,6 +422,9 @@ function WorldApp({ client, account, isMockMode }: {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: skin.colors.canvas }]}>
       <StatusBar style={skin.isDark ? "light" : "dark"} />
+      {skin.id === "default" && route.type === "root" && (
+        <LinearGradient pointerEvents="none" colors={PEARL_UI.background} style={StyleSheet.absoluteFill} />
+      )}
 
       {!isMoment && (
         <AppHeader
@@ -645,11 +655,12 @@ function AppHeader({
 }) {
   const { skin } = useSkin();
   const avatar = identity.kind === "success" ? identity.value.activeSubject.presentation.avatar : undefined;
-  const initial = identityTitle.slice(0, 1).toUpperCase();
+  const defaultSkin = skin.id === "default";
+  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
 
   return (
-    <View style={{ backgroundColor: skin.colors.canvas }}>
-      <View style={[styles.topBar, { backgroundColor: skin.colors.canvas, borderBottomColor: skin.colors.border }]}>
+    <View style={!routeIsRoot && { backgroundColor: skin.colors.canvas }}>
+      <View style={styles.topBar}>
         {routeIsRoot ? (
           <Pressable
             style={({ pressed }) => [styles.identityTrigger, pressed && { opacity: 0.75 }]}
@@ -657,27 +668,13 @@ function AppHeader({
             accessibilityRole="button"
             accessibilityLabel="切换当前身份"
           >
+            <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
             {rootTab !== "my" && (
-              avatar ? (
-                <Image source={{ uri: avatar }} style={[styles.miniAvatarImage, { borderColor: skin.identityBadges.avatarRing, borderWidth: 2 }]} />
-              ) : (
-                <View
-                  style={[
-                    styles.miniAvatar,
-                    {
-                      backgroundColor: isSampleCompanion ? "#3B82F6" : skin.colors.ink,
-                      borderColor: skin.identityBadges.avatarRing,
-                      borderWidth: 2,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.miniAvatarText, { color: "#FFFFFF" }]}>{initial}</Text>
-                </View>
-              )
+              <PixelAvatar name={identityTitle} role={isSampleCompanion ? "companion" : "owner"} uri={avatar} size={28} />
             )}
-            <Text style={[styles.brand, { color: skin.colors.ink }]} numberOfLines={1}>{identityTitle}</Text>
-            <View style={[styles.headerRoleChip, { backgroundColor: skin.colors.accentSoft }]}>
-              <Text style={[styles.headerRoleChipText, { color: skin.colors.accentSoftFg }]}>
+            <Text style={[styles.brand, { color: ink }]} numberOfLines={1}>{identityTitle}</Text>
+            <View style={[styles.headerRoleChip, { backgroundColor: defaultSkin ? PEARL_UI.accentWash : skin.colors.accentSoft }]}>
+              <Text style={[styles.headerRoleChipText, { color: defaultSkin ? PEARL_UI.accentInk : skin.colors.accentSoftFg }]}>
                 {isSampleCompanion ? "AI" : "本人"}
               </Text>
             </View>
@@ -693,11 +690,12 @@ function AppHeader({
           {routeIsRoot && rootTab === "my" && (
             <Pressable
               onPress={onOpenSettings}
-              style={({ pressed }) => [styles.headerIconBtn, { backgroundColor: skin.colors.surface }, pressed && { transform: [{ scale: 0.92 }] }]}
+              style={({ pressed }) => [styles.headerIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
               accessibilityRole="button"
               accessibilityLabel="打开设置"
             >
-              <Ionicons name="settings-outline" size={19} color={skin.colors.ink} />
+              <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
+              <Ionicons name="settings-outline" size={19} color={ink} />
             </Pressable>
           )}
           {identity.kind === "loading" && <ActivityIndicator size="small" />}
@@ -1130,28 +1128,34 @@ function PrivateHomeScreen({
     : [];
 
   const { skin } = useSkin();
+  const defaultSkin = skin.id === "default";
+  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
+  const muted = defaultSkin ? PEARL_UI.muted : skin.colors.inkSub;
+  const accent = defaultSkin ? PEARL_UI.accentInk : skin.colors.accent;
   if (isMockMode) {
     return <InteractiveFullRoom userName={userName} companionName={companionName}
       recordCount={recentItems.length} onOpenTimeline={onOpenTimeline} />;
   }
 
   return (
-    <ScrollView style={[styles.content, { backgroundColor: skin.colors.canvas }]} contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance }]}>
-      <Text style={[styles.privateHomeEyebrow, { color: skin.colors.accent }]}>PRIVATE HOME</Text>
-      <Text style={[styles.privateHomeTitle, { color: skin.colors.ink }]}>私人小家</Text>
-      <Text style={[styles.privateHomeSubtitle, { color: skin.colors.inkSub }]}>一个留给你们共同生活的地方。房间还在建设中，已经发生的记录可以先从这里查看。</Text>
+    <ScrollView style={styles.rootContent} contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance }]}>
+      <Text style={[styles.privateHomeEyebrow, { color: accent }]}>PRIVATE HOME</Text>
+      <Text style={[styles.privateHomeTitle, { color: ink }]}>私人小家</Text>
+      <Text style={[styles.privateHomeSubtitle, { color: muted }]}>一个留给你们共同生活的地方。房间还在建设中，已经发生的记录可以先从这里查看。</Text>
 
-      <Image source={require("./assets/room-iso-25d.jpg")} resizeMode="cover"
-        style={styles.privateHomeRoom} accessibilityLabel="私人小家空间概念预览" />
-      <Text style={[styles.privateHomeRoomLabel, { color: skin.colors.inkSub }]}>空间概念预览 · 暂未开放装扮</Text>
+      <View style={styles.privateHomeRoom}>
+        <Image source={PRIVATE_HOME_ROOM_IMAGE} resizeMode="cover"
+          style={styles.privateHomeImage} accessibilityLabel="私人小家空间概念预览" />
+      </View>
+      <Text style={[styles.privateHomeRoomLabel, { color: muted }]}>空间概念预览 · 暂未开放装扮</Text>
 
-      <Text style={[styles.privateHomeSectionTitle, { color: skin.colors.ink }]}>最近的生活记录</Text>
+      <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近的生活记录</Text>
       {state.kind === "loading" || state.kind === "idle" ? (
-        <View style={styles.privateHomeEmpty}><ActivityIndicator size="small" /><Text style={[styles.privateHomeRecordCaption, { color: skin.colors.inkSub }]}>正在查看已授权的记录…</Text></View>
+        <View style={styles.privateHomeEmpty}><ActivityIndicator size="small" /><Text style={[styles.privateHomeRecordCaption, { color: muted }]}>正在查看已授权的记录…</Text></View>
       ) : state.kind === "error" ? (
-        <View style={styles.privateHomeEmpty}><Text style={[styles.privateHomeRecordCaption, { color: skin.colors.inkSub }]}>记录暂时无法加载，请在记录页重试。</Text></View>
+        <View style={styles.privateHomeEmpty}><Text style={[styles.privateHomeRecordCaption, { color: muted }]}>记录暂时无法加载，请在记录页重试。</Text></View>
       ) : recentItems.length === 0 ? (
-        <View style={styles.privateHomeEmpty}><Text style={[styles.privateHomeRecordCaption, { color: skin.colors.inkSub }]}>这里暂时没有可显示的记录。</Text></View>
+        <View style={styles.privateHomeEmpty}><Text style={[styles.privateHomeRecordCaption, { color: muted }]}>这里暂时没有可显示的记录。</Text></View>
       ) : (
         <View style={styles.privateHomeRecordList}>
           {recentItems.map((item) => {
@@ -1164,9 +1168,9 @@ function PrivateHomeScreen({
             const content = (
               <>
                 <View style={styles.privateHomeRecordText}>
-                  <Text style={[styles.privateHomeRecordTitle, { color: skin.colors.ink }]} numberOfLines={2}>{item.companion.displayName} · {item.title}</Text>
-                  <Text style={[styles.privateHomeRecordCaption, { color: skin.colors.inkSub }]} numberOfLines={2}>{formatDate(item.occurredAt)} · {statusLabel}</Text>
-                  {item.summary ? <Text style={[styles.privateHomeRecordCaption, { color: skin.colors.inkSub }]} numberOfLines={2}>{item.summary}</Text> : null}
+                  <Text style={[styles.privateHomeRecordTitle, { color: ink }]} numberOfLines={2}>{item.companion.displayName} · {item.title}</Text>
+                  <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>{formatDate(item.occurredAt)} · {statusLabel}</Text>
+                  {item.summary ? <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>{item.summary}</Text> : null}
                 </View>
                 {canOpen && <Text style={styles.accountArrow}>›</Text>}
               </>
@@ -1182,13 +1186,13 @@ function PrivateHomeScreen({
         </View>
       )}
       <Pressable style={styles.privateHomeArchiveButton} accessibilityRole="button" onPress={onOpenTimeline}>
-        <Text style={[styles.privateHomeArchiveText, { color: skin.colors.accent }]}>查看全部已授权记录</Text>
+        <Text style={[styles.privateHomeArchiveText, { color: accent }]}>查看全部已授权记录</Text>
         <Text style={styles.accountArrow}>›</Text>
       </Pressable>
 
-      <Text style={[styles.privateHomeSectionTitle, { color: skin.colors.ink }]}>共同生活</Text>
-      <Text style={[styles.privateHomeBody, { color: skin.colors.inkSub }]}>共同相册、纪念日、便签、礼物和可撤销的家具布置会分阶段加入。未开发的功能不会伪装成可用按钮。</Text>
-      <Text style={[styles.privateHomeNote, { color: skin.colors.inkSub }]}>没有发生的事件不会补写；自主活动需要单独授权。私人资料默认不向公共社区分享。</Text>
+      <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>共同生活</Text>
+      <Text style={[styles.privateHomeBody, { color: muted }]}>共同相册、纪念日、便签、礼物和可撤销的家具布置会分阶段加入。未开发的功能不会伪装成可用按钮。</Text>
+      <Text style={[styles.privateHomeNote, { color: muted }]}>没有发生的事件不会补写；自主活动需要单独授权。私人资料默认不向公共社区分享。</Text>
     </ScrollView>
   );
 }
@@ -1321,37 +1325,33 @@ function MyScreen({
   const displayName = ownProfile?.displayName ?? subject?.presentation.displayName
     ?? (isSampleCompanion ? companionName : "我的账号");
   const bio = ownProfile?.bio;
+  const defaultSkin = skin.id === "default";
+  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
+  const muted = defaultSkin ? PEARL_UI.muted : skin.colors.inkSub;
 
   return (
     <ScrollView
-      style={[styles.content, { backgroundColor: skin.colors.canvas }]}
+      style={styles.rootContent}
       contentContainerStyle={[styles.mySocialPage, { paddingBottom: CHROME.scrollBottomClearance }]}
     >
       {/* Centered Modern Social Profile Header */}
       <View style={styles.profileHero}>
-        <View
-          style={[
-            styles.heroAvatar,
-            {
-              backgroundColor: isSampleCompanion ? "#3B82F6" : "#18181B",
-              borderColor: skin.identityBadges.avatarRing,
-            },
-          ]}
-        >
-          <Text style={styles.heroAvatarText}>{displayName.slice(0, 1).toUpperCase()}</Text>
+        <View>
+          <PixelAvatar name={displayName} role={isSampleCompanion ? "companion" : "owner"}
+            uri={ownProfile?.avatar ?? subject?.presentation.avatar} size={78} />
           <View style={[styles.heroBadgeDot, { backgroundColor: isSampleCompanion ? "#2563EB" : "#10B981" }]}>
             <Ionicons name={isSampleCompanion ? "sparkles" : "checkmark"} size={11} color="#FFFFFF" />
           </View>
         </View>
 
-        <Text style={[styles.heroName, { color: skin.colors.ink }]}>{displayName}</Text>
-        {bio ? <Text style={[styles.heroBio, { color: skin.colors.inkSub }]}>{bio}</Text> : null}
-        {isSampleCompanion && selfProfile.kind === "success" && <Text style={[styles.heroBio, { color: skin.colors.inkSub }]}>@{selfProfile.value.handle} · {selfProfile.value.profileVisibility}</Text>}
+        <Text style={[styles.heroName, { color: ink }]}>{displayName}</Text>
+        {bio ? <Text style={[styles.heroBio, { color: muted }]}>{bio}</Text> : null}
+        {isSampleCompanion && selfProfile.kind === "success" && <Text style={[styles.heroBio, { color: muted }]}>@{selfProfile.value.handle} · {selfProfile.value.profileVisibility}</Text>}
 
         {/* 3-Column Stats Row (Real mode shows "-" until backend stats API arrives; mock shows preview) */}
         <View style={styles.statsRow}>
           <View style={styles.statCol}>
-            <Text style={[styles.statNum, { color: skin.colors.ink }]}>{ownProfile?.postsCount ?? "—"}</Text>
+            <Text style={[styles.statNum, { color: ink }]}>{ownProfile?.postsCount ?? "—"}</Text>
             <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>动态</Text>
           </View>
           {([["followers", "粉丝", ownProfile?.followersCount], ["following", "关注", ownProfile?.followingCount]] as const)
@@ -1359,7 +1359,7 @@ function MyScreen({
               <Pressable key={direction} style={styles.statCol} accessibilityRole="button"
                 accessibilityLabel={`${label} ${count ?? "未加载"}`} disabled={!ownProfile}
                 onPress={() => setFollowDirection(direction)}>
-                <Text style={[styles.statNum, { color: skin.colors.ink }]}>{count ?? "—"}</Text>
+                <Text style={[styles.statNum, { color: ink }]}>{count ?? "—"}</Text>
                 <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>{label}</Text>
               </Pressable>
             ))}
@@ -1373,18 +1373,16 @@ function MyScreen({
       {!isSampleCompanion && companions.kind === "success" && companions.value.items.map((item: OwnerCompanionSummary) => (
         <View
           key={item.companionId}
-          style={[styles.relationPillCard, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}
+          style={[styles.relationPillCard, { backgroundColor: defaultSkin ? PEARL_UI.white : skin.colors.surface, borderColor: skin.colors.border }]}
         >
           <Pressable
             style={styles.relationMain}
             onPress={item.socialReady ? () => onOpenCompanionProfile(item) : () => onResumeCompanion(item)}
           >
-            <View style={[styles.relAvatar, { backgroundColor: "#3B82F6" }]}>
-              <Text style={styles.relAvatarText}>{item.displayName.slice(0, 1).toUpperCase()}</Text>
-            </View>
+            <PixelAvatar name={item.displayName} role="companion" size={38} />
             <View style={{ flex: 1 }}>
-              <Text style={[styles.relTitle, { color: skin.colors.ink }]}>我的家机 · {item.displayName}</Text>
-              <Text style={[styles.relSub, { color: skin.colors.inkSub }]}>
+              <Text style={[styles.relTitle, { color: ink }]}>我的家机 · {item.displayName}</Text>
+              <Text style={[styles.relSub, { color: muted }]}>
                 {item.socialReady ? "查看 TA 的主页" : "待完成激活"}
               </Text>
             </View>
@@ -1394,21 +1392,21 @@ function MyScreen({
               onPress={() => onControls(item)}
               style={[styles.relControlBtn, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border }]}
             >
-              <Text style={[styles.relControlText, { color: skin.colors.ink }]}>权限</Text>
+              <Text style={[styles.relControlText, { color: ink }]}>权限</Text>
             </Pressable>
           )}
         </View>
       ))}
 
-      {isMockMode ? <Text style={[styles.heroBio, { color: skin.colors.inkSub }]}>演示模式</Text> : null}
-      <Text style={[styles.privateHomeSectionTitle, { color: skin.colors.ink }]}>最近动态</Text>
+      {isMockMode ? <Text style={[styles.heroBio, { color: muted }]}>演示模式</Text> : null}
+      <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近动态</Text>
       {communityData.kind === "loading" ? <ActivityIndicator /> : null}
-      {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: skin.colors.inkSub }]}>{communityData.title}</Text> : null}
+      {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: muted }]}>{communityData.title}</Text> : null}
       {communityData.kind === "success" && communityData.value.slice(0, 3).map(post => (
-        <Text key={post.id} style={[styles.feedBody, { color: skin.colors.ink }]}>{post.body}</Text>
+        <Text key={post.id} style={[styles.feedBody, { color: ink }]}>{post.body}</Text>
       ))}
       {(communityData.kind === "idle" || (communityData.kind === "success" && communityData.value.length === 0)) &&
-        <Text style={[styles.heroBio, { color: skin.colors.inkSub }]}>暂无动态</Text>}
+        <Text style={[styles.heroBio, { color: muted }]}>暂无动态</Text>}
 
       {followDirection && community && actorKind && actorId && (
         <CommunityFollowList client={community} viewer={{ kind: actorKind, id: actorId }} direction={followDirection}
@@ -1426,7 +1424,7 @@ function MyScreen({
             onCloseSettings();
             onAgentSettings();
           }}>
-            <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>家机活动设置</Text>
+            <Text style={[styles.cleanRowTitle, { color: ink }]}>家机活动设置</Text>
             <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
           </Pressable>
         )}
@@ -1440,7 +1438,7 @@ function MyScreen({
           >
             <View style={styles.cleanRowLeft}>
               <Ionicons name="add-circle-outline" size={20} color={skin.colors.ink} />
-              <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>添加家机</Text>
+              <Text style={[styles.cleanRowTitle, { color: ink }]}>添加家机</Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
           </Pressable>
@@ -1455,10 +1453,10 @@ function MyScreen({
         >
           <View style={styles.cleanRowLeft}>
             <Ionicons name="color-palette-outline" size={20} color={skin.glass.iconTint} />
-            <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>基础外观配色</Text>
+            <Text style={[styles.cleanRowTitle, { color: ink }]}>基础外观配色</Text>
           </View>
           <View style={styles.cleanRowRight}>
-            <Text style={[styles.cleanRowValue, { color: skin.colors.inkSub }]}>{skin.name}</Text>
+            <Text style={[styles.cleanRowValue, { color: muted }]}>{skin.name}</Text>
             <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
           </View>
         </Pressable>
@@ -1466,8 +1464,8 @@ function MyScreen({
         {account && (
           <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={account.signOut}>
             <View style={styles.cleanRowLeft}>
-              <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>退出登录或切换账号</Text>
-              {account.email ? <Text style={[styles.cleanRowValue, { color: skin.colors.inkSub }]}>{account.email}</Text> : null}
+              <Text style={[styles.cleanRowTitle, { color: ink }]}>退出登录或切换账号</Text>
+              {account.email ? <Text style={[styles.cleanRowValue, { color: muted }]}>{account.email}</Text> : null}
             </View>
           </Pressable>
         )}
@@ -1476,7 +1474,7 @@ function MyScreen({
 
       {/* Base Color Appearance Modal */}
       <BottomSheet visible={colorModalOpen} title="基础外观配色" onClose={() => setColorModalOpen(false)}>
-        <Text style={[styles.heroBio, { color: skin.colors.inkSub }]}>聊天样式预览</Text>
+        <Text style={[styles.heroBio, { color: muted }]}>聊天样式预览</Text>
         <View style={[styles.skinPreviewBox, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
           <GlassChatBubble senderRole="ai" text="看你昨晚说肩颈酸，把靠枕换软了。" />
           <GlassChatBubble senderRole="human" text="收到啦，今晚早点回来。" />
@@ -1636,27 +1634,24 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   content: { flex: 1, backgroundColor: colors.canvas },
 
+  rootContent: { flex: 1 },
   topBar: {
-    minHeight: 52,
-    paddingHorizontal: 14,
+    minHeight: 58,
+    paddingHorizontal: CHROME.screenInset,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-    backgroundColor: colors.canvas,
   },
-  identityTrigger: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 7, marginRight: 12 },
-  miniAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  identityTrigger: {
+    minWidth: 0,
+    minHeight: 44,
+    flexShrink: 1,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#111111",
+    gap: 7,
+    marginRight: 12,
+    paddingHorizontal: 9,
   },
-  miniAvatarImage: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#ECE9E6" },
-  miniAvatarText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
   brand: { flexShrink: 1, fontSize: 14, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
   chevron: { color: colors.tertiary, fontSize: 15, marginTop: -3 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
@@ -1669,11 +1664,20 @@ const styles = StyleSheet.create({
   },
   backIcon: { fontSize: 32, lineHeight: 34, color: colors.ink, fontWeight: "300" },
 
-  privateHomePage: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: 44 },
+  privateHomePage: { paddingHorizontal: CHROME.screenInset, paddingTop: 28, paddingBottom: 44 },
   privateHomeEyebrow: { fontSize: 10, letterSpacing: 2, fontWeight: "700", color: colors.roseDark },
   privateHomeTitle: { marginTop: 10, fontSize: 30, lineHeight: 39, fontWeight: "700", color: colors.text },
   privateHomeSubtitle: { marginTop: 8, fontSize: 14, lineHeight: 22, color: colors.muted },
-  privateHomeRoom: { marginTop: 24, height: 230, borderRadius: 24, backgroundColor: "#F9F1EC", overflow: "hidden", justifyContent: "flex-end", alignItems: "center" },
+  privateHomeRoom: {
+    marginTop: 24,
+    aspectRatio: 1.25,
+    borderRadius: RADIUS.roomFrame,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: PEARL_UI.highlight,
+    backgroundColor: PEARL_UI.background[1],
+    overflow: "hidden",
+  },
+  privateHomeImage: { width: "100%", height: "100%" },
   privateHomeRoomLabel: { zIndex: 1, marginBottom: 12, fontSize: 11, color: "#65534C" },
   privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
   privateHomeBody: { marginTop: 9, fontSize: 13, lineHeight: 22, color: colors.muted },
@@ -1973,33 +1977,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   headerIconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
   },
   mySocialPage: {
-    paddingHorizontal: 16,
+    paddingHorizontal: CHROME.screenInset,
     paddingTop: 18,
   },
   profileHero: {
     alignItems: "center",
+    paddingVertical: 20,
     marginBottom: 18,
-  },
-  heroAvatar: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
-    borderWidth: 2.5,
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
-  },
-  heroAvatarText: {
-    color: "#FFFFFF",
-    fontSize: 28,
-    fontWeight: "700",
   },
   heroBadgeDot: {
     position: "absolute",
@@ -2055,18 +2046,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-  },
-  relAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  relAvatarText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
   },
   relTitle: {
     fontSize: 14,
