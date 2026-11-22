@@ -15,8 +15,9 @@ export class PgPoolExecutor implements SqlExecutor {
 }
 
 /**
- * Runs every statement as PostgreSQL role `authenticated` with `request.jwt.claim.sub` bound to one
- * Owner auth subject, inside its own transaction. This is the only Owner-scoping path to the database.
+ * Runs every statement as PostgreSQL role `companion_api` (everything `authenticated` has, plus the
+ * RPCs that trust this server's own checks) with `request.jwt.claim.sub` bound to one Owner auth
+ * subject, inside its own transaction. This is the only Owner-scoping path to the database.
  */
 export class PgOwnerExecutor implements SqlExecutor {
   readonly #pool: pg.Pool;
@@ -33,7 +34,7 @@ export class PgOwnerExecutor implements SqlExecutor {
     let broken = false;
     try {
       await client.query("begin");
-      await client.query("set local role authenticated");
+      await client.query("set local role companion_api");
       await client.query("select set_config('request.jwt.claim.sub',$1,true)", [this.#subject]);
       const result = await client.query<Row>(text, [...values]);
       await client.query("commit");

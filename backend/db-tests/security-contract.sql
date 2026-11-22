@@ -1806,4 +1806,65 @@ do $cross_owner$ begin
 end $cross_owner$;
 reset role;
 
+-- Controls visibility takes effect: PRIVATE hides Owner B's Companion from Owner C at once.
+select coalesce((select revision from public.companion_controls where companion_id = '00000000-0000-0000-0000-0000000002b1'), 1) as b_rev \gset
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c1', false);
+select public.test_assert((select count(*) = 1 from public.get_companion_profile('00000000-0000-0000-0000-0000000002b1', 'OWNER', null)),
+  'a PUBLIC Companion profile is visible to another Owner');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000b1', false);
+select public.update_companion_controls('00000000-0000-0000-0000-0000000002b1', :b_rev,
+  '{"socialTwinVisibility":"PRIVATE"}'::jsonb, repeat('71', 32), repeat('72', 32));
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c1', false);
+select public.test_assert((select count(*) = 0 from public.get_companion_profile('00000000-0000-0000-0000-0000000002b1', 'OWNER', null)),
+  'Controls PRIVATE must hide the Companion profile from other Owners');
+reset role;
+select public.test_assert((select p.profile_visibility = 'PRIVATE' and p.supersedes_social_persona_id = '00000000-0000-0000-0000-0000000004b1'
+  from public.social_twins t join public.social_personas p on p.id = t.active_social_persona_id
+  where t.id = '00000000-0000-0000-0000-0000000005b1'), 'Controls visibility activates a superseding persona copy');
+
+-- Re-projecting cannot lift an operator's suspension.
+update public.social_twins set status = 'SUSPENDED' where id = '00000000-0000-0000-0000-0000000005b1';
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000b1', false);
+select public.project_and_activate_social_twin('00000000-0000-0000-0000-0000000002b1', '00000000-0000-0000-0000-0000000003b1',
+  'companion_b', 'PUBLIC', 'QUIET', '[{"sourceField":"displayName","targetField":"displayName"}]'::jsonb, repeat('73', 32), repeat('74', 32));
+reset role;
+select public.test_assert((select status = 'SUSPENDED' from public.social_twins where id = '00000000-0000-0000-0000-0000000005b1'),
+  'an Owner re-projecting must not lift SUSPENDED');
+-- Later contract runs use Owner B's original persona.
+update public.social_twins set status = 'ACTIVE', active_social_persona_id = '00000000-0000-0000-0000-0000000004b1'
+where id = '00000000-0000-0000-0000-0000000005b1';
+update public.companion_controls set social_twin_visibility = 'PUBLIC' where companion_id = '00000000-0000-0000-0000-0000000002b1';
+
+-- RPCs that trust the API server's own checks are not callable through Supabase's REST API roles.
+select public.test_assert(
+  not has_function_privilege('authenticated', 'public.create_companion_import(text,text,integer,text,text,text,jsonb,jsonb,text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.claim_owner()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.claim_owner()'::regprocedure, 'EXECUTE'),
+  'Import Firewall output and first sign-in must only come through the API server'
+);
+select public.test_assert(
+  has_function_privilege('companion_api', 'public.create_companion_import(text,text,integer,text,text,text,jsonb,jsonb,text,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.claim_owner()'::regprocedure, 'EXECUTE')
+  and pg_has_role('companion_api', 'authenticated', 'USAGE'),
+  'the API server role keeps everything authenticated has plus the server-trusted RPCs'
+);
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c1', false);
+do $direct_rpc$ begin
+  begin
+    perform public.create_companion_import('{}', encode(public.digest('{}', 'sha256'), 'hex'), 2, 'forged', 'forged',
+      'CHARACTER_CARD_JSON_V2', '{"candidates":[]}'::jsonb, '[]'::jsonb, repeat('e', 64), repeat('f', 64));
+    raise exception 'direct client import unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    perform public.claim_owner();
+    raise exception 'direct client first sign-in unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+end $direct_rpc$;
+reset role;
+
 drop function public.test_assert(boolean, text);
