@@ -126,7 +126,7 @@ it("parameterizes all PostgreSQL community inputs and validates payload shape", 
     const bad = new PostgresCommunityAdapter({ query: async () => ({ rows: [{ payload }], rowCount: 1 }) } as SqlExecutor);
     await assert.rejects(bad.read(reads[0]!), e => e instanceof PostgresPersistenceError && e.code === "DATABASE_ERROR");
   }
-  for (const [state, expected] of [["P0001","NOT_FOUND"],["22023","INVALID_INPUT"],["22P02","INVALID_INPUT"],["23514","INVALID_INPUT"],["23505","CONFLICT"],["42501","FORBIDDEN"],["55000","INVALID_STATE"],["08006","DATABASE_UNAVAILABLE"],["other","DATABASE_ERROR"],[undefined,"DATABASE_ERROR"]]) {
+  for (const [state, expected] of [["P0001","NOT_FOUND"],["22023","INVALID_INPUT"],["22P02","INVALID_INPUT"],["23514","INVALID_INPUT"],["23505","CONFLICT"],["42501","FORBIDDEN"],["55000","INVALID_STATE"],["08006","DATABASE_UNAVAILABLE"],["53300","DATABASE_UNAVAILABLE"],["57P01","DATABASE_UNAVAILABLE"],["XX000","DATABASE_ERROR"],["ECONNREFUSED","DATABASE_UNAVAILABLE"],[undefined,"DATABASE_UNAVAILABLE"]]) {
     const broken = new PostgresCommunityAdapter({ query: async () => { throw { code: state }; } });
     await assert.rejects(broken.read(reads[0]!), e => e instanceof PostgresPersistenceError && e.code === expected);
   }

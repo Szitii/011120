@@ -18,6 +18,7 @@ import type {
 } from "../../http/types.ts";
 import {
   PostgresPersistenceError,
+  persistenceError,
   type AssembleEncounterContextInput,
   type AssembledEncounterContext,
   type ClaimEncounterInput,
@@ -92,27 +93,12 @@ const record = (value: unknown, name: string): Row =>
 const json = <T>(row: Row, key: "payload" | "item"): T => record(row[key], key) as unknown as T;
 const absent = (row: Row, key: string): boolean => row[key] === null || row[key] === undefined;
 
-function translate(error: unknown): never {
-  const e = error as { code?: unknown; message?: unknown };
-  const state = typeof e.code === "string" ? e.code : undefined;
-  const code =
-    state === "P0001" ? "NOT_FOUND" :
-    state === "22023" ? "INVALID_INPUT" :
-    state === "23505" ? "CONFLICT" :
-    state === "42501" ? "FORBIDDEN" :
-    state === "55000" ? "INVALID_STATE" :
-    state?.startsWith("08") ? "DATABASE_UNAVAILABLE" : "DATABASE_ERROR";
-  const message = typeof e.message === "string" ? e.message : "PostgreSQL command failed.";
-  throw new PostgresPersistenceError(code, message, state);
-}
-
 // The only place that touches the executor: one fixed, parameterized statement per call.
 async function rows(executor: SqlExecutor, sql: string, values: readonly unknown[]): Promise<readonly Row[]> {
   try {
     return (await executor.query<Row>(sql, values)).rows;
   } catch (error) {
-    if (error instanceof PostgresPersistenceError) throw error;
-    return translate(error);
+    throw persistenceError(error);
   }
 }
 const first = async (executor: SqlExecutor, sql: string, values: readonly unknown[]): Promise<Row | undefined> =>

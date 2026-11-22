@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { contentHash } from "../companion-import/canonical.ts";
+import { randomUUID } from "node:crypto";
+import { contentHash, sha256 } from "../companion-import/canonical.ts";
 import type { PostgresServerAdapter } from "../persistence/postgres/adapter.ts";
 import type {
   AssembleEncounterContextInput,
@@ -21,8 +21,7 @@ const DEFAULT_MAX_MEMORIES = 5;
 const PREFLIGHT_FAILED = "ENCOUNTER_PREFLIGHT_FAILED";
 
 // Idempotency and request hashes are persisted: the key order of every hashed object is part of the contract.
-const hash = (value: unknown): string =>
-  createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
+const hash = (value: unknown): string => sha256(typeof value === "string" ? value : JSON.stringify(value));
 
 type TerminalStatus = "BLOCKED" | "FAILED" | "DELIVERED" | "REDACTED";
 type InputScan = ReturnType<EncounterSafetyPipeline["scanInput"]>;

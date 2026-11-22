@@ -1,11 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { MAX_IMPORT_BYTES } from "../companion-import/policy.ts";
 import { MvpApiBoundary } from "./mvp-api.ts";
 import type { MvpHttpRequest, OwnerSessionResolver } from "./types.ts";
 
-const MAX_BODY_BYTES = 32_768;
+// The largest body any route takes is a Companion import; every other route caps its own fields.
+const MAX_BODY_BYTES = MAX_IMPORT_BYTES;
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "authorization, content-type, idempotency-key, if-match",
+  "access-control-allow-headers": "authorization, content-type, idempotency-key, if-match, x-trace-id",
   "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 };
 // status and title per transport failure; anything else is a 500 TRANSPORT_ERROR.

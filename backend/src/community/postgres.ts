@@ -1,13 +1,6 @@
-import { PostgresPersistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
+import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
 import type { AgentCommand, CommunityCommand, CommunityPort, CommunityRead, FollowList } from "./port.ts";
 import type { ActorContext, AgentSettings, HumanProfileSettings } from "../../../contracts/community.ts";
-
-// SQLSTATE -> error code. Invalid values (bad cast, range check, missing field) are all INVALID_INPUT.
-const ERRORS: Readonly<Record<string, PostgresPersistenceError["code"]>> = {
-  P0001: "NOT_FOUND", "23505": "CONFLICT", "42501": "FORBIDDEN", "55000": "INVALID_STATE",
-  "22023": "INVALID_INPUT", "22P02": "INVALID_INPUT", "22007": "INVALID_INPUT", "22008": "INVALID_INPUT",
-  "23502": "INVALID_INPUT", "23514": "INVALID_INPUT",
-};
 
 /** Uses the same authenticated transaction executor as the existing Owner API. */
 export class PostgresCommunityAdapter implements CommunityPort {
@@ -68,18 +61,11 @@ export class PostgresCommunityAdapter implements CommunityPort {
   }
 
   async #query(sql: string, values: readonly unknown[]): Promise<unknown> {
-    try {
-      const result = await this.#executor.query(sql, values);
-      const payload = result.rows[0]?.payload;
-      if (result.rows.length !== 1 || payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-        throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid community response.");
-      }
-      return payload;
-    } catch (error) {
-      if (error instanceof PostgresPersistenceError) throw error;
-      const state = (error as { code?: string }).code;
-      const code = (state === undefined ? undefined : ERRORS[state]) ?? (state?.startsWith("08") ? "DATABASE_UNAVAILABLE" : "DATABASE_ERROR");
-      throw new PostgresPersistenceError(code, "Community database request failed.", state);
+    const result = await this.#executor.query(sql, values).catch((error: unknown) => { throw persistenceError(error); });
+    const payload = result.rows[0]?.payload;
+    if (result.rows.length !== 1 || payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid community response.");
     }
+    return payload;
   }
 }
