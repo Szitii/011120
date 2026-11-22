@@ -1,4 +1,3 @@
-import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { CommunityActor, CommunityComment, CommunityPost } from "../../../../packages/community-contracts/types.ts";
 

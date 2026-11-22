@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, CommunityReport, ReportReason, ReportTarget } from "../../../../packages/community-contracts/types.ts";
 import { safeClientMessage } from "../adapters/real-api.ts";

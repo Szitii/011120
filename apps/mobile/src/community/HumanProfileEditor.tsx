@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../../packages/community-contracts/types.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";

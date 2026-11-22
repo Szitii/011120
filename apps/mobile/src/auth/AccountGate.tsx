@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { colors } from "../theme";
