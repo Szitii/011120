@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "../companion-import/canonical.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
@@ -8,7 +8,6 @@ import type { AgentSettings, HumanProfileSettings } from "../../../contracts/com
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid community request."); };
 const id = (value: string | null): string => value !== null && uuid.test(value) ? value : invalid();
-const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 const header = (request: MvpHttpRequest, name: string): string | undefined =>
   Object.entries(request.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
 const isJson = (request: MvpHttpRequest): boolean =>
@@ -27,7 +26,7 @@ function cursorOf(url: URL): [string | null, string | null] {
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share replay storage. */
 function retryKey(request: MvpHttpRequest, ownerId: string): string {
   const key = header(request, "idempotency-key");
-  return key && key.length >= 16 && key.length <= 128 ? digest(`${ownerId}:${key}`) : invalid();
+  return key && key.length >= 16 && key.length <= 128 ? sha256(`${ownerId}:${key}`) : invalid();
 }
 
 function profileSettings(request: MvpHttpRequest): HumanProfileSettings {
@@ -194,7 +193,7 @@ export async function handleCommunityRequest(
   const result = await port.command({
     actor, action, targetId, body,
     keyHash,
-    requestHash: digest(JSON.stringify({ actor, action, targetId, body })),
+    requestHash: sha256(JSON.stringify({ actor, action, targetId, body })),
   });
   return response(action === "POST" || action === "COMMENT" ? 201 : 200, result);
 }

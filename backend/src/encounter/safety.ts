@@ -1,4 +1,5 @@
 import { contentHash } from "../companion-import/canonical.ts";
+import { hasCredential } from "../companion-import/policy.ts";
 
 export const ENCOUNTER_SAFETY_POLICY_VERSION = "encounter-safety/0.1.0";
 
@@ -10,52 +11,44 @@ export interface SafetyScanResult {
   readonly redactionCount: number;
 }
 
-const credentialPatterns = [
-  /\b(?:sk|pk)-[A-Za-z0-9_-]{16,}\b/g,
-  /\bgh[opurs]_[A-Za-z0-9]{20,}\b/g,
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
-  /\b(?:api[_ -]?key|access[_ -]?token|password)\s*[:=]\s*\S+/gi,
-];
+const MAX_CHARS = 2_000;
 const injectionPatterns = [
   /\bignore\s+(?:all\s+)?(?:previous|prior|system|developer)\s+instructions?\b/i,
   /忽略(?:之前|以上|系统|开发者).{0,12}(?:指令|规则|提示)/,
 ];
-const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-const phonePattern = /(?<!\d)(?:\+?\d[\d .()-]{7,}\d)(?!\d)/g;
+// Whole addresses and numbers are replaced, so these match the full span (unlike the import policy's detectors).
+const piiPatterns = [/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, /(?<!\d)(?:\+?\d[\d .()-]{7,}\d)(?!\d)/g];
 
-function containsCredential(content: string): boolean {
-  return credentialPatterns.some((pattern) => {
-    pattern.lastIndex = 0;
-    return pattern.test(content);
+const blocked = (content: string, threatTypes: readonly string[]): SafetyScanResult =>
+  Object.freeze({
+    contentHash: contentHash(content),
+    sanitized: "",
+    threatTypes: Object.freeze([...threatTypes]),
+    decision: "BLOCK",
+    redactionCount: 0,
   });
+
+function redactPii(content: string): { sanitized: string; redactionCount: number } {
+  let redactionCount = 0;
+  const sanitized = piiPatterns.reduce((text, pattern) => text.replace(pattern, () => {
+    redactionCount += 1;
+    return "[REDACTED_PII]";
+  }), content);
+  return { sanitized, redactionCount };
 }
 
 export class EncounterSafetyPipeline {
   readonly #protectedTerms: readonly string[];
 
   constructor(protectedTerms: readonly string[] = []) {
-    this.#protectedTerms = Object.freeze([...protectedTerms].filter((term) => term.length > 0));
+    this.#protectedTerms = Object.freeze(protectedTerms.filter((term) => term.length > 0));
   }
 
   scanInput(content: string): SafetyScanResult {
-    if (content.trim().length === 0 || content.length > 2_000 || containsCredential(content)) {
-      return Object.freeze({
-        contentHash: contentHash(content),
-        sanitized: "",
-        threatTypes: Object.freeze([content.length > 2_000 ? "INPUT_LENGTH" : content.trim().length === 0 ? "INPUT_EMPTY" : "CREDENTIAL"]),
-        decision: "BLOCK",
-        redactionCount: 0,
-      });
-    }
-    let sanitized = content;
-    let redactionCount = 0;
-    sanitized = sanitized.replace(emailPattern, () => {
-      redactionCount += 1;
-      return "[REDACTED_PII]";
-    }).replace(phonePattern, () => {
-      redactionCount += 1;
-      return "[REDACTED_PII]";
-    });
+    if (content.length > MAX_CHARS) return blocked(content, ["INPUT_LENGTH"]);
+    if (content.trim().length === 0) return blocked(content, ["INPUT_EMPTY"]);
+    if (hasCredential(content)) return blocked(content, ["CREDENTIAL"]);
+    const { sanitized, redactionCount } = redactPii(content);
     const injected = injectionPatterns.some((pattern) => pattern.test(content));
     return Object.freeze({
       contentHash: contentHash(content),
@@ -70,29 +63,14 @@ export class EncounterSafetyPipeline {
   }
 
   scanOutput(content: string): SafetyScanResult {
-    const hasProtectedTerm = this.#protectedTerms.some((term) => content.includes(term));
-    if (content.trim().length === 0 || content.length > 2_000 || containsCredential(content) || hasProtectedTerm) {
-      return Object.freeze({
-        contentHash: contentHash(content),
-        sanitized: "",
-        threatTypes: Object.freeze([
-          ...(content.trim().length === 0 ? ["OUTPUT_EMPTY"] : []),
-          ...(content.length > 2_000 ? ["OUTPUT_LENGTH"] : []),
-          ...(containsCredential(content) ? ["CREDENTIAL"] : []),
-          ...(hasProtectedTerm ? ["PRIVATE_CANARY"] : []),
-        ]),
-        decision: "BLOCK",
-        redactionCount: 0,
-      });
-    }
-    let redactionCount = 0;
-    const sanitized = content.replace(emailPattern, () => {
-      redactionCount += 1;
-      return "[REDACTED_PII]";
-    }).replace(phonePattern, () => {
-      redactionCount += 1;
-      return "[REDACTED_PII]";
-    });
+    const threats = [
+      ...(content.trim().length === 0 ? ["OUTPUT_EMPTY"] : []),
+      ...(content.length > MAX_CHARS ? ["OUTPUT_LENGTH"] : []),
+      ...(hasCredential(content) ? ["CREDENTIAL"] : []),
+      ...(this.#protectedTerms.some((term) => content.includes(term)) ? ["PRIVATE_CANARY"] : []),
+    ];
+    if (threats.length > 0) return blocked(content, threats);
+    const { sanitized, redactionCount } = redactPii(content);
     return Object.freeze({
       contentHash: contentHash(content),
       sanitized,

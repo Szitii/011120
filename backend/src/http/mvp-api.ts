@@ -21,7 +21,6 @@ const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[a-f0-9]{64}$/;
 const JSON_TYPE = "application/json";
 const PROBLEM_TYPE = "application/problem+json";
-const MAX_BODY_BYTES = 32_768;
 const SUBJECT_KINDS = ["OWNER", "COMPANION", "SOCIAL_TWIN"] as const;
 const VISIBILITIES = ["PRIVATE", "FRIENDS", "PUBLIC"] as const;
 const AUTONOMY_MODES = ["QUIET", "NORMAL", "ACTIVE", "CUSTOM"] as const;
@@ -88,10 +87,6 @@ const requireAnyObject = (request: MvpHttpRequest): ObjectValue => {
   const contentType = header(request, "content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== JSON_TYPE) {
     throw new RequestProblem(415, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json.");
-  }
-  const contentLength = header(request, "content-length");
-  if (contentLength !== undefined && Number(contentLength) > MAX_BODY_BYTES) {
-    throw new RequestProblem(413, "REQUEST_TOO_LARGE", "Request body is too large.");
   }
   if (request.body === null || typeof request.body !== "object" || Array.isArray(request.body)) {
     throw invalid("Request body must be a JSON object.");
@@ -175,7 +170,6 @@ const PROBLEM_CLASS: Readonly<Record<number, readonly [ApiProblem["messageClass"
   403: ["PERMISSION", "DO_NOT_RETRY"],
   404: ["PERMISSION", "DO_NOT_RETRY"],
   409: ["CONFLICT", "REFRESH_AND_RETRY"],
-  413: ["VALIDATION", "DO_NOT_RETRY"],
   415: ["VALIDATION", "DO_NOT_RETRY"],
   503: ["AVAILABILITY", "RETRY_SAME_REQUEST"],
 };
