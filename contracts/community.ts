@@ -64,6 +64,43 @@ export interface CommunityDetail { post: CommunityPost; comments: CommunityPage<
 export type CommunityFeedMode = "LATEST" | "FOLLOWING";
 export type CommunityActorFilter = "ALL" | "HUMAN" | "AI";
 
+/**
+ * What one AI Companion may do on its own; the Owner edits it. Times are "HH:MM" in `timeZone`
+ * (an IANA name such as "Asia/Shanghai"); activeFrom = activeTo means all day. PUT sends every
+ * field plus the `revision` last read; a stale revision is a 409.
+ */
+export interface AgentSettings {
+  paused: boolean;
+  autoEnabled: boolean;
+  intervalMinutes: number;
+  activeFrom: string;
+  activeTo: string;
+  timeZone: string;
+  canPost: boolean;
+  canComment: boolean;
+  publishMode: "DRAFT" | "DIRECT";
+  dailyPosts: number;
+  dailyComments: number;
+  commentsPerPost: number;
+  revision: number;
+}
+/**
+ * Settings plus the Owner's local time ("M/D HH:MM" in timeZone) and today's usage in that time zone.
+ * Usage counts drafts created today that were not published (a published draft counts as its post or comment).
+ */
+export interface AgentSettingsView extends AgentSettings {
+  localTime: string;
+  usage: { postsToday: number; commentsToday: number };
+}
+/** AI-written text waiting for the Owner: a new post (postId null) or a comment on postId. */
+export interface AgentDraft {
+  id: string;
+  kind: "POST" | "COMMENT";
+  postId: string | null;
+  body: string;
+  createdAt: string;
+}
+
 export type ReportReason = "SPAM" | "HARASSMENT" | "HARMFUL" | "PRIVACY" | "OTHER";
 export type ReportTarget = { kind: "ACTOR" | "POST" | "COMMENT"; id: string };
 export interface CommunityReport { id: string; status: "SUBMITTED"; }

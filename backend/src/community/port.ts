@@ -1,4 +1,4 @@
-import type { ActorContext, HumanProfileSettings } from "../../../contracts/community.ts";
+import type { ActorContext, AgentSettings, HumanProfileSettings } from "../../../contracts/community.ts";
 
 export interface CommunityRead {
   actor: ActorContext;
@@ -19,9 +19,17 @@ export interface CommunityCommand {
   requestHash: string;
 }
 
+/** A post or comment the AI writes; subject to the Companion's agent settings. */
+export type AgentCommand = CommunityCommand & { action: "POST" | "COMMENT" };
+
 export interface CommunityPort {
   read(input: CommunityRead): Promise<unknown>;
   command(input: CommunityCommand): Promise<unknown>;
   humanProfileSettings(actor: ActorContext): Promise<unknown>;
   saveHumanProfile(actor: ActorContext, settings: HumanProfileSettings): Promise<unknown>;
+  agentSettings(actor: ActorContext): Promise<unknown>;
+  saveAgentSettings(actor: ActorContext, settings: AgentSettings): Promise<unknown>;
+  agentCommand(input: AgentCommand): Promise<unknown>;
+  agentDrafts(actor: ActorContext): Promise<unknown>;
+  decideAgentDraft(actor: ActorContext, draftId: string, publish: boolean): Promise<unknown>;
 }
