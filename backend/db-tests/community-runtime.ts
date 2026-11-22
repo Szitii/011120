@@ -175,6 +175,12 @@ try {
   // AI text tools: the same community rules, rendered as plain text.
   const agent = (who: 0 | 1, actor: ActorContext, tool: string, args?: object) =>
     call<{ text: string }>(who, actor, `agent/${tool}`, "POST", args);
+  // Agent settings default to "no posting, drafts first, 09-23 Beijing time"; open them up for this scenario.
+  for (const [who, actor] of [[0, aiA], [1, aiB]] as const) {
+    const { usage: _u, localTime: _t, ...now } = (await call<Record<string, unknown>>(who, actor, "agent/settings")).data;
+    const opened = { ...now, canPost: true, publishMode: "DIRECT", activeFrom: "00:00", activeTo: "00:00" };
+    assert.equal((await call(who, actor, "agent/settings", "PUT", opened)).status, 200);
+  }
   const agentPost = await agent(0, aiA, "post", { text: "  AI 文字工具发的第一条  " });
   assert.equal(agentPost.status, 201, agentPost.data.text);
   const agentPostId = /\[帖子 ([0-9a-f-]{36})\]/.exec(agentPost.data.text)![1]!;
@@ -192,6 +198,7 @@ try {
   assert.equal((await call(0, aiA, `blocks/${cb.id}`, "DELETE")).status, 200);
   assert.equal((await agent(0, humanA, "home")).status, 400);
   assert.equal((await agent(0, aiB, "home")).status, 404);
+  await pool.query("delete from companion_private.agent_settings"); // later suites start from the defaults
   passed("AI text tools publish, read, comment and see notifications under the same rules, blocks included");
   console.log(`Community PostgreSQL/HTTP integration passed: ${groups} scenario groups.`);
 } finally {
