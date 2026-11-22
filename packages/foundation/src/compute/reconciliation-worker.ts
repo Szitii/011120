@@ -1,8 +1,14 @@
-import type { PostgresPersistenceError, ReconcileStartedResult, StaleStartedCandidate, StaleStartedCursor } from "../persistence/postgres/types.ts";
+import type {
+  PostgresPersistenceError,
+  ReconcileStartedInput,
+  ReconcileStartedResult,
+  StaleStartedCandidate,
+  StaleStartedCursor,
+} from "../persistence/postgres/types.ts";
 
 export interface StartedReconciliationPort {
   listStaleStarted(cutoff: string, limit: number, after?: StaleStartedCursor): Promise<readonly StaleStartedCandidate[]>;
-  reconcileStarted(input: { readonly actorOwnerId: string; readonly executionClaimId: string; readonly reasonCode: string; readonly evidenceSource: "PROVIDER_RECORD_UNAVAILABLE" | "PROVIDER_QUERY_TIMEOUT" | "OPERATOR_CONFIRMED_UNKNOWN"; readonly providerRequestIdHash?: string }): Promise<ReconcileStartedResult>;
+  reconcileStarted(input: ReconcileStartedInput): Promise<ReconcileStartedResult>;
 }
 
 export interface ReconciliationWorkerOptions {
@@ -10,35 +16,81 @@ export interface ReconciliationWorkerOptions {
   readonly batchSize: number;
   readonly maxItems: number;
   readonly reasonCode: string;
-  readonly evidenceSource: "PROVIDER_RECORD_UNAVAILABLE" | "PROVIDER_QUERY_TIMEOUT" | "OPERATOR_CONFIRMED_UNKNOWN";
+  readonly evidenceSource: ReconcileStartedInput["evidenceSource"];
   readonly providerRequestIdHash?: string;
 }
 
-export interface ReconciliationItemResult { readonly executionClaimId: string; readonly outcome: "reconciled" | "replayed" | "skipped" | "failed"; readonly errorCode?: string; }
-export interface ReconciliationRunSummary { readonly cutoff: string; readonly scanned: number; readonly reconciled: number; readonly replayed: number; readonly skipped: number; readonly failed: number; readonly items: readonly ReconciliationItemResult[]; }
+export interface ReconciliationItemResult {
+  readonly executionClaimId: string;
+  readonly outcome: "reconciled" | "replayed" | "skipped" | "failed";
+  readonly errorCode?: string;
+}
 
-const validTime=(value:string)=>!Number.isNaN(Date.parse(value));
+export interface ReconciliationRunSummary {
+  readonly cutoff: string;
+  readonly scanned: number;
+  readonly reconciled: number;
+  readonly replayed: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly items: readonly ReconciliationItemResult[];
+}
 
-export async function runStaleStartedReconciliation(port:StartedReconciliationPort,options:ReconciliationWorkerOptions):Promise<ReconciliationRunSummary>{
-  if(!validTime(options.cutoff)||!Number.isInteger(options.batchSize)||options.batchSize<1||options.batchSize>100||!Number.isInteger(options.maxItems)||options.maxItems<0||!options.reasonCode.match(/^[A-Z][A-Z0-9_]{2,63}$/))throw new TypeError("Invalid reconciliation worker options.");
-  const items:ReconciliationItemResult[]=[];let cursor:StaleStartedCursor|undefined;
-  while(items.length<options.maxItems){
-    const requestedLimit=Math.min(options.batchSize,options.maxItems-items.length);
-    const page=await port.listStaleStarted(new Date(options.cutoff).toISOString(),requestedLimit,cursor);
-    if(page.length===0)break;
-    for(const candidate of page){
-      try{
-        const result=await port.reconcileStarted({actorOwnerId:candidate.actorOwnerId,executionClaimId:candidate.executionClaimId,reasonCode:options.reasonCode,evidenceSource:options.evidenceSource,...(options.providerRequestIdHash===undefined?{}:{providerRequestIdHash:options.providerRequestIdHash})});
-        items.push({executionClaimId:candidate.executionClaimId,outcome:result.replayed?"replayed":"reconciled"});
-      }catch(error){
-        const errorCode=(error as Partial<PostgresPersistenceError>).code;
-        const code=typeof errorCode==="string"?errorCode:"UNEXPECTED";
-        items.push({executionClaimId:candidate.executionClaimId,outcome:code==="INVALID_STATE"||code==="NOT_FOUND"||code==="CONFLICT"?"skipped":"failed",errorCode:code});
+// A concurrent settlement or reconciliation already decided these claims: skipped, not failed.
+const SKIPPED_CODES = ["INVALID_STATE", "NOT_FOUND", "CONFLICT"];
+
+const validOptions = (options: ReconciliationWorkerOptions): boolean =>
+  !Number.isNaN(Date.parse(options.cutoff)) &&
+  Number.isInteger(options.batchSize) && options.batchSize >= 1 && options.batchSize <= 100 &&
+  Number.isInteger(options.maxItems) && options.maxItems >= 0 &&
+  /^[A-Z][A-Z0-9_]{2,63}$/.test(options.reasonCode);
+
+export async function runStaleStartedReconciliation(
+  port: StartedReconciliationPort,
+  options: ReconciliationWorkerOptions,
+): Promise<ReconciliationRunSummary> {
+  if (!validOptions(options)) throw new TypeError("Invalid reconciliation worker options.");
+  const cutoff = new Date(options.cutoff).toISOString();
+  const items: ReconciliationItemResult[] = [];
+  let cursor: StaleStartedCursor | undefined;
+
+  while (items.length < options.maxItems) {
+    const requestedLimit = Math.min(options.batchSize, options.maxItems - items.length);
+    const page = await port.listStaleStarted(cutoff, requestedLimit, cursor);
+    if (page.length === 0) break;
+    for (const candidate of page) {
+      const { executionClaimId } = candidate;
+      try {
+        const result = await port.reconcileStarted({
+          actorOwnerId: candidate.actorOwnerId,
+          executionClaimId,
+          reasonCode: options.reasonCode,
+          evidenceSource: options.evidenceSource,
+          ...(options.providerRequestIdHash === undefined
+            ? {}
+            : { providerRequestIdHash: options.providerRequestIdHash }),
+        });
+        items.push({ executionClaimId, outcome: result.replayed ? "replayed" : "reconciled" });
+      } catch (error) {
+        const code = (error as Partial<PostgresPersistenceError>).code;
+        const errorCode = typeof code === "string" ? code : "UNEXPECTED";
+        items.push({ executionClaimId, outcome: SKIPPED_CODES.includes(errorCode) ? "skipped" : "failed", errorCode });
       }
-      cursor={staleAt:candidate.staleAt,executionClaimId:candidate.executionClaimId};
-      if(items.length===options.maxItems)break;
+      cursor = { staleAt: candidate.staleAt, executionClaimId };
+      if (items.length === options.maxItems) break;
     }
-    if(page.length<requestedLimit)break;
+    if (page.length < requestedLimit) break;
   }
-  return {cutoff:new Date(options.cutoff).toISOString(),scanned:items.length,reconciled:items.filter(x=>x.outcome==="reconciled").length,replayed:items.filter(x=>x.outcome==="replayed").length,skipped:items.filter(x=>x.outcome==="skipped").length,failed:items.filter(x=>x.outcome==="failed").length,items};
+
+  const count = (outcome: ReconciliationItemResult["outcome"]): number =>
+    items.filter((item) => item.outcome === outcome).length;
+  return {
+    cutoff,
+    scanned: items.length,
+    reconciled: count("reconciled"),
+    replayed: count("replayed"),
+    skipped: count("skipped"),
+    failed: count("failed"),
+    items,
+  };
 }

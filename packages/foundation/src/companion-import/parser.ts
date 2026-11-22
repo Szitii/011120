@@ -19,15 +19,15 @@ import {
   safePreview,
 } from "./policy.ts";
 import type {
-  CompanionImportRecord,
   IdentityCandidate,
   IdentityField,
   ImportFinding,
+  ImportSourceFormat,
   NormalizedIdentityDraft,
 } from "./types.ts";
 
 interface ParseResult {
-  readonly sourceFormat: CompanionImportRecord["sourceFormat"];
+  readonly sourceFormat: ImportSourceFormat;
   readonly draft: NormalizedIdentityDraft;
   readonly findings: readonly ImportFinding[];
 }
@@ -50,8 +50,11 @@ function inspectShape(value: unknown, depth: number, budget: ScanBudget): void {
   }
 
   if (typeof value === "string") {
-    if (value.includes("\u0000")) {
-      throw new ImportPolicyError("IMPORT_INVALID_TEXT", "Import text contains a prohibited null character.");
+    if (value.includes("\u0000") || !value.isWellFormed()) {
+      throw new ImportPolicyError(
+        "IMPORT_INVALID_TEXT",
+        "Import text contains a prohibited null character or an unpaired surrogate.",
+      );
     }
     if (value.length > MAX_STRING_LENGTH) {
       throw new ImportPolicyError("IMPORT_STRING_TOO_LONG", "An import string exceeds the parser limit.");

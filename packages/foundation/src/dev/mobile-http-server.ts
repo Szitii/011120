@@ -7,17 +7,12 @@ import {
   type OwnerSessionResolver,
 } from "../http/types.ts";
 import { createMobileHttpServer } from "../http/mobile-server.ts";
-import { TransactionalOwnerExecutor } from "../persistence/postgres/owner-executor.ts";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import {
   createPgPool,
+  PgOwnerExecutor,
   PostgresOwnerAdapter,
 } from "../persistence/postgres/index.ts";
-
-const DEFAULT_HOST = "0.0.0.0";
-const DEFAULT_PORT = 8787;
-const DEFAULT_DEV_TOKEN = "companion-social-stage1-owner";
-const DEFAULT_OWNER_SUBJECT = "00000000-0000-0000-0000-0000000000a1";
 
 class DevOwnerSessionResolver implements OwnerSessionResolver {
   readonly #token: string;
@@ -33,7 +28,7 @@ class DevOwnerSessionResolver implements OwnerSessionResolver {
   }) {
     this.#token = input.bearerToken;
     this.#ownerId = input.ownerId;
-    const executor = new TransactionalOwnerExecutor(input.pool, input.ownerSubject);
+    const executor = new PgOwnerExecutor(input.pool, input.ownerSubject);
     this.#owner = new PostgresOwnerAdapter(executor);
     this.#community = new PostgresCommunityAdapter(executor);
   }
@@ -64,35 +59,27 @@ const main = async (): Promise<void> => {
     );
   }
 
-  const host = process.env.MOBILE_DEV_HOST ?? DEFAULT_HOST;
-  const port = Number(process.env.MOBILE_DEV_PORT ?? DEFAULT_PORT);
+  const host = process.env.MOBILE_DEV_HOST ?? "0.0.0.0";
+  const port = Number(process.env.MOBILE_DEV_PORT ?? 8787);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
     throw new Error("MOBILE_DEV_PORT must be a valid TCP port.");
   }
-
-  const bearerToken = process.env.MOBILE_DEV_OWNER_TOKEN ?? DEFAULT_DEV_TOKEN;
-  const ownerSubject = process.env.MOBILE_DEV_OWNER_SUBJECT ?? DEFAULT_OWNER_SUBJECT;
-  const ownerId = process.env.MOBILE_DEV_OWNER_ID ?? "00000000-0000-0000-0000-0000000001a1";
+  const bearerToken = process.env.MOBILE_DEV_OWNER_TOKEN ?? "companion-social-stage1-owner";
 
   const pool = createPgPool(connectionString);
   const server = createMobileDevHttpServer({
     pool,
     bearerToken,
-    ownerSubject,
-    ownerId,
+    ownerSubject: process.env.MOBILE_DEV_OWNER_SUBJECT ?? "00000000-0000-0000-0000-0000000000a1",
+    ownerId: process.env.MOBILE_DEV_OWNER_ID ?? "00000000-0000-0000-0000-0000000001a1",
   });
 
-  const shutdown = async (): Promise<void> => {
+  const shutdown = (): void => {
     server.close();
-    await pool.end();
+    void pool.end();
   };
-
-  process.once("SIGINT", () => {
-    void shutdown();
-  });
-  process.once("SIGTERM", () => {
-    void shutdown();
-  });
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -111,14 +98,9 @@ const main = async (): Promise<void> => {
 };
 
 const argvPath = process.argv[1];
-const isMain =
-  argvPath !== undefined &&
-  path.resolve(argvPath) === path.resolve(fileURLToPath(import.meta.url));
-
-if (isMain) {
+if (argvPath !== undefined && path.resolve(argvPath) === path.resolve(fileURLToPath(import.meta.url))) {
   void main().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`${message}\n`);
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   });
 }

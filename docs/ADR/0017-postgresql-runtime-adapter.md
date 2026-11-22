@@ -5,7 +5,7 @@
 
 ## Decision
 
-Use `pg` (MIT) behind a narrow `SqlExecutor` and two explicit entry points: `PostgresServerAdapter` for service-role commands and `PostgresOwnerReader` for owner-scoped reads. The adapter issues only fixed parameterized calls to database functions; PostgreSQL retains transactions, locking, authorization binding, budgets, idempotency, and terminal-state authority.
+Use `pg` (MIT) behind a narrow `SqlExecutor` and two explicit entry points: `PostgresServerAdapter` for service-role commands and `PostgresOwnerAdapter` for owner-scoped reads and commands (the original read-only `PostgresOwnerReader` was merged into it). The adapter issues only fixed parameterized calls to database functions; PostgreSQL retains transactions, locking, authorization binding, budgets, idempotency, and terminal-state authority.
 
 | Domain operation | Database command | Typed result | Stable errors |
 |---|---|---|---|

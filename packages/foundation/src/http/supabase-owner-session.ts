@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import { PostgresOwnerAdapter } from "../persistence/postgres/adapter.ts";
-import { TransactionalOwnerExecutor } from "../persistence/postgres/owner-executor.ts";
+import { PgOwnerExecutor } from "../persistence/postgres/client.ts";
 import { ApiAuthenticationError, OwnerSessionError, type AuthenticatedOwnerSession, type OwnerSessionResolver } from "./types.ts";
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -25,7 +25,7 @@ export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
 
   async resolve(bearerToken: string): Promise<AuthenticatedOwnerSession> {
     const subject = await this.#verifySubject(bearerToken);
-    const executor = new TransactionalOwnerExecutor(this.#pool, subject);
+    const executor = new PgOwnerExecutor(this.#pool, subject);
     const result = await executor.query<{ id: string }>(
       "select id from public.owners where auth_user_id = $1 and status = 'ACTIVE'",
       [subject],

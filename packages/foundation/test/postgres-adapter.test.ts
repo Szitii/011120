@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PostgresOwnerAdapter, PostgresOwnerReader, PostgresPersistenceError, PostgresServerAdapter, type SqlExecutor } from "../src/persistence/postgres/index.ts";
+import { PostgresOwnerAdapter, PostgresPersistenceError, PostgresServerAdapter, type SqlExecutor } from "../src/persistence/postgres/index.ts";
 
 const id=(n:string)=>`00000000-0000-4000-8000-${n.padStart(12,"0")}`;
 class FakeExecutor implements SqlExecutor {
   readonly calls:{text:string;values:readonly unknown[]}[]=[];
   readonly #result:Record<string,unknown>|Error; constructor(result:Record<string,unknown>|Error){this.#result=result;}
-  async query<Row extends Record<string,unknown>>(text:string,values:readonly unknown[]){this.calls.push({text,values});if(this.#result instanceof Error)throw this.#result;return {rows:[this.#result as Row],rowCount:1};}
+  async query<Row extends Record<string,unknown>>(text:string,values:readonly unknown[]){this.calls.push({text,values});if(this.#result instanceof Error)throw this.#result;return {rows:[this.#result as Row]};}
 }
 
 describe("PostgreSQL persistence adapter",()=>{
@@ -16,7 +16,7 @@ describe("PostgreSQL persistence adapter",()=>{
   it("strictly maps claim-bound preparation and server-assembled context",async()=>{const preparationDb=new FakeExecutor({initiator_owner_id:id("1"),initiator_twin_id:id("2"),responder_owner_id:id("3"),responder_companion_id:id("4"),responder_twin_id:id("5"),responder_social_persona_version:2,responder_identity_version:3});const preparation=await new PostgresServerAdapter(preparationDb).getEncounterPreparation(id("1"),id("6"));assert.equal(preparation.responderIdentityVersion,3);assert.deepEqual(preparationDb.calls[0]?.values,[id("1"),id("6")]);const contextDb=new FakeExecutor({snapshot_id:id("7"),encounter_id:id("8"),generation_transaction_id:id("9"),initiator_twin_id:id("2"),responder_owner_id:id("3"),responder_companion_id:id("4"),responder_twin_id:id("5"),responder_social_persona_version:2,responder_identity_version:3,responder_persona:{socialTwinId:id("5"),socialPersonaId:id("10"),socialPersonaVersion:2,handle:"b",displayName:"B",publicDocument:{publicTraits:["kind"],publicVoice:{tone:"calm"},publicInterests:[],publicBoundaries:[]}},authorized_memories:[{id:id("11"),representation:"minimal summary",disclosure:"SUMMARY",sourceTrust:"PLATFORM_EVENT"}],manifest:{executionClaimId:id("12")},manifest_hash:"a".repeat(64),replayed:false});const context=await new PostgresServerAdapter(contextDb).assembleEncounterContext({actorOwnerId:id("1"),executionClaimId:id("12"),idempotencyKeyHash:"b".repeat(64),requestHash:"c".repeat(64),providerRequestHash:"d".repeat(64),maxMemories:5});assert.equal(context.responderPersona.publicVoice.tone,"calm");assert.equal(context.authorizedMemories[0]?.representation,"minimal summary");assert.equal(context.manifestHash,"a".repeat(64));assert.ok(!contextDb.calls[0]!.text.includes("minimal summary"));});
   it("maps bounded candidate scans and keyset cursors",async()=>{const db=new FakeExecutor({execution_claim_id:id("1"),actor_owner_id:id("2"),encounter_id:id("3"),started_at:new Date("2026-09-16T00:00:00Z"),stale_at:new Date("2026-09-16T00:15:00Z")});const adapter=new PostgresServerAdapter(db);const result=await adapter.listStaleStarted("2026-09-16T01:00:00Z",25,{staleAt:"2026-09-16T00:10:00Z",executionClaimId:id("9")});assert.equal(result[0]?.staleAt,"2026-09-16T00:15:00.000Z");assert.deepEqual(db.calls[0]?.values,["2026-09-16T01:00:00Z","2026-09-16T00:10:00Z",id("9"),25]);});
   it("translates stable PostgreSQL states and never fabricates success",async()=>{const error=Object.assign(new Error("cross-owner"),{code:"42501"});const adapter=new PostgresServerAdapter(new FakeExecutor(error));await assert.rejects(()=>adapter.startCompute(id("1"),id("2")),(e:unknown)=>e instanceof PostgresPersistenceError&&e.code==="FORBIDDEN");const unavailable=Object.assign(new Error("connection lost"),{code:"08006"});await assert.rejects(()=>new PostgresServerAdapter(new FakeExecutor(unavailable)).startCompute(id("1"),id("2")),(e:unknown)=>e instanceof PostgresPersistenceError&&e.code==="DATABASE_UNAVAILABLE");});
-  it("keeps owner receipt reads separate and fails closed on no row",async()=>{const empty:SqlExecutor={query:async()=>({rows:[],rowCount:0})};assert.equal(await new PostgresOwnerReader(empty).getComputeReceipt(id("1")),undefined);});
+  it("keeps owner receipt reads separate and fails closed on no row",async()=>{const empty:SqlExecutor={query:async()=>({rows:[]})};assert.equal(await new PostgresOwnerAdapter(empty).getComputeReceipt(id("1")),undefined);});
   it("maps Owner-authenticated invitation commands without identity parameters",async()=>{const db=new FakeExecutor({invitation_id:id("1"),status:"PENDING",initiator_owner_id:id("2"),responder_owner_id:id("3"),expires_at:new Date("2026-09-17T00:00:00Z"),created_at:new Date("2026-09-16T00:00:00Z"),replayed:false});const owner=new PostgresOwnerAdapter(db);const result=await owner.issueInvitation({initiatorTwinId:id("4"),responderTwinId:id("5"),initiatorSocialPersonaId:id("6"),responderSocialPersonaId:id("7"),initiatorIdentityVersionId:id("8"),responderIdentityVersionId:id("9"),purpose:"bounded",scope:"ONE_SHOT_ENCOUNTER",contextHash:"a".repeat(64),expiresAt:"2026-09-17T00:00:00Z",idempotencyKeyHash:"b".repeat(64),requestHash:"c".repeat(64)});assert.equal(result.status,"PENDING");assert.equal(db.calls[0]?.values.length,12);assert.ok(!db.calls[0]?.text.includes(id("2")));});
   it("uses fixed approval SQL and maps Owner-scoped invitation reads",async()=>{const decisionDb=new FakeExecutor({invitation_id:id("1"),status:"APPROVED",decided_at:new Date("2026-09-16T00:00:00Z"),replayed:false});await new PostgresOwnerAdapter(decisionDb).approveInvitation(id("1"),"a".repeat(64),"b".repeat(64));assert.equal(decisionDb.calls[0]?.text,"select * from public.approve_encounter_invitation($1,$2,$3)");const listDb=new FakeExecutor({invitation_id:id("1"),status:"APPROVED",role:"RESPONDER",initiator_owner_id:id("2"),initiator_twin_id:id("3"),responder_owner_id:id("4"),responder_twin_id:id("5"),purpose:"bounded",scope:"ONE_SHOT_ENCOUNTER",context_hash:"c".repeat(64),expires_at:new Date("2026-09-17T00:00:00Z"),claimed_at:null,used_at:null,created_at:new Date("2026-09-16T00:00:00Z")});const rows=await new PostgresOwnerAdapter(listDb).listInvitations(20);assert.equal(rows[0]?.role,"RESPONDER");assert.deepEqual(listDb.calls[0]?.values,[20,null,null]);});
   it("maps authorized Stage 1 core read projections",async()=>{
@@ -138,5 +138,173 @@ describe("PostgreSQL persistence adapter",()=>{
     const approved=await new PostgresOwnerAdapter(approveDb).approveCompanionImport({importId:id("50"),approvedCandidateIds:["candidate-displayName"],idempotencyKeyHash:"e".repeat(64),requestHash:"f".repeat(64)});
     assert.equal(approved.companionId,id("52"));
     assert.deepEqual(approveDb.calls[0]?.values,[id("50"),["candidate-displayName"],null,"e".repeat(64),"f".repeat(64)]);
+  });
+});
+
+// These commands are composed only by the persistent Encounter orchestrator. The tests pin their
+// SQL, parameter order and result mapping without a database.
+describe("PostgreSQL adapter command mapping", () => {
+  const hash = (character: string) => character.repeat(64);
+  const occurredAt = "2026-09-16T00:00:00.000Z";
+  const ledgerRow = { ledger_entry_id: id("7"), ledger_sequence: "3", decision: "RELEASED", replayed: false };
+  const ledger = { ledgerEntryId: id("7"), ledgerSequence: 3, decision: "RELEASED", replayed: false };
+  type Adapters = { readonly server: PostgresServerAdapter; readonly owner: PostgresOwnerAdapter };
+  const call = async <T>(row: Record<string, unknown>, run: (adapters: Adapters) => Promise<T>) => {
+    const db = new FakeExecutor(row);
+    const result = await run({ server: new PostgresServerAdapter(db), owner: new PostgresOwnerAdapter(db) });
+    assert.equal(db.calls.length, 1);
+    return { result, text: db.calls[0]!.text, values: db.calls[0]!.values };
+  };
+
+  it("reserves Compute with 27 ordered parameters and null for every absent optional", async () => {
+    const minimal = {
+      ownerId: id("1"), companionId: id("2"), reasonCode: "SOCIAL_ENCOUNTER_RESPONSE" as const,
+      triggerEventType: "ENCOUNTER", triggerEventId: id("4"), providerId: "provider", canonicalModel: "canonical",
+      providerModel: "model", billingParty: "OWNER" as const, currency: "USD", pricingVersion: "pricing/1",
+      estimatedInputTokens: 10, maxOutputTokens: 20, reservedCostMinor: 5, promptTemplateVersion: "encounter/0.1.0",
+      identityVersion: 1, memoryPolicyVersion: "memory/1", safetyPolicyVersion: "safety/1", routerVersion: "router/1",
+      traceId: "trace", attemptNo: 1, idempotencyKeyHash: hash("a"), requestHash: hash("b"),
+    };
+    const rejected = await call(
+      { transaction_id: id("8"), budget_id: id("9"), decision: "REJECTED", outcome_code: "BUDGET_EXHAUSTED", replayed: true },
+      ({ server }) => server.reserveCompute(minimal),
+    );
+    assert.match(rejected.text, /^select \* from companion_private\.reserve_compute_transaction\(\$1,.*,\$27\)$/);
+    assert.deepEqual(rejected.values, [
+      id("1"), id("2"), null, "SOCIAL_ENCOUNTER_RESPONSE", "ENCOUNTER", id("4"), "provider", null, "canonical", "model",
+      "OWNER", "USD", "pricing/1", 10, 20, 5, "encounter/0.1.0", 1, null, "memory/1", "safety/1", "router/1",
+      "trace", 1, null, hash("a"), hash("b"),
+    ]);
+    assert.deepEqual(rejected.result, {
+      transactionId: id("8"), budgetId: id("9"), decision: "REJECTED", outcomeCode: "BUDGET_EXHAUSTED", replayed: true,
+    });
+
+    const reserved = await call(
+      { transaction_id: id("8"), budget_id: id("9"), decision: "RESERVED", outcome_code: null, replayed: false },
+      ({ server }) => server.reserveCompute({
+        ...minimal, socialTwinId: id("3"), credentialId: id("5"), socialPersonaVersion: 2, retryParentTransactionId: id("6"),
+      }),
+    );
+    assert.deepEqual(
+      [reserved.values[2], reserved.values[7], reserved.values[18], reserved.values[24]],
+      [id("3"), id("5"), 2, id("6")],
+    );
+    assert.deepEqual(reserved.result, { transactionId: id("8"), budgetId: id("9"), decision: "RESERVED", replayed: false });
+  });
+
+  it("reserves and releases publication capacity", async () => {
+    const reserved = await call(
+      { reservation_id: id("1"), budget_id: id("2"), decision: "RESERVED", outcome_code: null, replayed: false },
+      ({ server }) => server.reservePublication({
+        ownerId: id("1"), companionId: id("2"), relatedEventId: id("3"), idempotencyKeyHash: hash("a"), requestHash: hash("b"),
+      }),
+    );
+    assert.equal(reserved.text, "select * from companion_private.reserve_publication($1,$2,$3,$4,$5)");
+    assert.deepEqual(reserved.values, [id("1"), id("2"), id("3"), hash("a"), hash("b")]);
+    assert.deepEqual(reserved.result, { reservationId: id("1"), budgetId: id("2"), decision: "RESERVED", replayed: false });
+
+    const released = await call(
+      { reservation_id: id("1"), decision: "RELEASED", replayed: false },
+      ({ server }) => server.releasePublication(id("1"), id("2"), "ENCOUNTER_PREFLIGHT_FAILED"),
+    );
+    assert.equal(released.text, "select * from companion_private.complete_publication_reservation($1,$2,'RELEASED',$3)");
+    assert.deepEqual(released.values, [id("1"), id("2"), "ENCOUNTER_PREFLIGHT_FAILED"]);
+    assert.equal(released.result, undefined);
+  });
+
+  it("releases and settles Compute as ordered ledger facts", async () => {
+    const released = await call(ledgerRow, ({ server }) => server.releaseCompute(id("1"), id("2"), "ENCOUNTER_PREFLIGHT_FAILED"));
+    assert.equal(released.text, "select * from companion_private.release_compute_transaction($1,$2,$3)");
+    assert.deepEqual(released.values, [id("1"), id("2"), "ENCOUNTER_PREFLIGHT_FAILED"]);
+    assert.deepEqual(released.result, ledger);
+
+    const settled = await call(ledgerRow, ({ server }) => server.settleCompute({
+      ownerId: id("1"), transactionId: id("2"), inputTokens: 1, outputTokens: 2, actualCostMinor: 3, status: "FAILED",
+    }));
+    assert.equal(settled.text, "select * from companion_private.settle_compute_transaction($1,$2,$3,$4,$5,$6,$7,$8)");
+    assert.deepEqual(settled.values, [id("1"), id("2"), 1, 2, 3, "FAILED", null, null]);
+    assert.deepEqual(settled.result, ledger);
+  });
+
+  it("persists non-delivery and delivery through their atomic commands", async () => {
+    const blocked = await call(
+      { encounter_id: id("2"), result_status: "BLOCKED", outcome_code: "INPUT_SAFETY_BLOCK", invitation_consumed: true, publication_released: false, replayed: false },
+      ({ server }) => server.persistNonDelivery({
+        actorOwnerId: id("1"), idempotencyKeyHash: hash("a"), requestHash: hash("b"), encounterId: id("2"), invitationId: id("3"),
+        resultStatus: "BLOCKED", outcomeCode: "INPUT_SAFETY_BLOCK", safetyEventId: id("6"), occurredAt,
+      }),
+    );
+    assert.equal(blocked.text, "select * from companion_private.persist_encounter_non_delivery($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)");
+    assert.deepEqual(blocked.values, [
+      id("1"), hash("a"), hash("b"), id("2"), id("3"), "BLOCKED", "INPUT_SAFETY_BLOCK", null, null, id("6"), occurredAt,
+    ]);
+    assert.deepEqual(blocked.result, {
+      encounterId: id("2"), resultStatus: "BLOCKED", outcomeCode: "INPUT_SAFETY_BLOCK",
+      invitationConsumed: true, publicationReleased: false, replayed: false,
+    });
+
+    const delivered = await call(
+      { encounter_id: id("2"), artifact_id: id("7"), initiator_life_event_id: id("8"), responder_life_event_id: id("9"), result_status: "REDACTED", replayed: false },
+      ({ server }) => server.persistDelivery({
+        actorOwnerId: id("1"), idempotencyKeyHash: hash("a"), requestHash: hash("b"), encounterId: id("2"), invitationId: id("3"),
+        publicationReservationId: id("4"), body: "hello", bodyHash: hash("c"), artifactStatus: "REDACTED",
+        generationTransactionId: id("5"), outputSafetyEventId: id("6"), occurredAt,
+      }),
+    );
+    assert.equal(delivered.text, "select * from companion_private.persist_delivered_encounter($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)");
+    assert.deepEqual(delivered.values, [
+      id("1"), hash("a"), hash("b"), id("2"), id("3"), id("4"), "hello", hash("c"), "REDACTED", id("5"), id("6"), occurredAt,
+    ]);
+    assert.deepEqual(delivered.result, {
+      encounterId: id("2"), artifactId: id("7"), initiatorLifeEventId: id("8"), responderLifeEventId: id("9"),
+      resultStatus: "REDACTED", replayed: false,
+    });
+  });
+
+  it("maps an Owner rejection and a full Compute Receipt", async () => {
+    const rejected = await call(
+      { invitation_id: id("1"), status: "REJECTED", decided_at: "2026-09-16T00:00:00+02:00", replayed: true },
+      ({ owner }) => owner.rejectInvitation(id("1"), hash("a"), hash("b")),
+    );
+    assert.equal(rejected.text, "select * from public.reject_encounter_invitation($1,$2,$3)");
+    assert.deepEqual(rejected.values, [id("1"), hash("a"), hash("b")]);
+    assert.deepEqual(rejected.result, {
+      invitationId: id("1"), status: "REJECTED", occurredAt: "2026-09-15T22:00:00.000Z", replayed: true,
+    });
+
+    const receipt = await call(
+      {
+        transaction_id: id("1"), owner_id: id("2"), companion_id: id("3"), social_twin_id: id("4"),
+        reason_code: "SOCIAL_ENCOUNTER_RESPONSE", trigger_event_type: "ENCOUNTER", trigger_event_id: id("5"),
+        provider_id: "provider", canonical_model: "canonical", provider_model: "model", billing_party: "OWNER",
+        currency: "USD", input_tokens: "10", output_tokens: "0", reserved_cost_minor: "5", actual_cost_minor: "5",
+        outcome: "RECONCILED", prompt_template_version: "encounter/0.1.0", identity_version: 1, social_persona_version: 2,
+        memory_policy_version: "memory/1", safety_policy_version: "safety/1", router_version: "router/1", attempt_no: 1,
+      },
+      ({ owner }) => owner.getComputeReceipt(id("1")),
+    );
+    assert.deepEqual(receipt.values, [id("1")]);
+    assert.deepEqual(receipt.result, {
+      transactionId: id("1"), ownerId: id("2"), companionId: id("3"), socialTwinId: id("4"),
+      reasonCode: "SOCIAL_ENCOUNTER_RESPONSE", triggerEventType: "ENCOUNTER", triggerEventId: id("5"),
+      providerId: "provider", canonicalModel: "canonical", providerModel: "model", billingParty: "OWNER",
+      currency: "USD", inputTokens: 10, outputTokens: 0, reservedCostMinor: 5, actualCostMinor: 5,
+      outcome: "RECONCILED", promptTemplateVersion: "encounter/0.1.0", identityVersion: 1, socialPersonaVersion: 2,
+      memoryPolicyVersion: "memory/1", safetyPolicyVersion: "safety/1", routerVersion: "router/1", attemptNo: 1,
+    });
+  });
+
+  it("fails closed on a malformed row, a wrong row count, and an executor that already classified the error", async () => {
+    const malformed = new PostgresServerAdapter(new FakeExecutor({ ...ledgerRow, ledger_entry_id: "not-a-uuid" }));
+    await assert.rejects(malformed.startCompute(id("1"), id("2")), (error: unknown) =>
+      error instanceof PostgresPersistenceError && error.code === "DATABASE_ERROR" && /ledger_entry_id/.test(error.message));
+
+    const twoRows: SqlExecutor = { query: async () => ({ rows: [ledgerRow, ledgerRow] as never[] }) };
+    await assert.rejects(new PostgresServerAdapter(twoRows).startCompute(id("1"), id("2")), (error: unknown) =>
+      error instanceof PostgresPersistenceError && error.code === "DATABASE_ERROR" && /row count/.test(error.message));
+
+    const forbidden = new FakeExecutor(new PostgresPersistenceError("FORBIDDEN", "classified upstream"));
+    await assert.rejects(new PostgresOwnerAdapter(forbidden).getControls(id("1")), (error: unknown) =>
+      error instanceof PostgresPersistenceError && error.code === "FORBIDDEN");
   });
 });

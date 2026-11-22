@@ -20,3 +20,7 @@ Runtime code is asynchronous and failure-closed. Blocked/failed paths create no 
 ## Security and reversal
 
 New functions are service-only and inherit the existing future-function default deny. Evidence stores hashes and classifications, never prompt/completion bodies or credentials. Reversal is removal of the composition entry point while retaining durable ledger facts; migrations and history are not rewritten.
+
+## Follow-up (2026-11-22)
+
+The in-memory `EncounterService` and the other in-memory domain services (import, social projection, memory gate, compute) were removed. They duplicated rules whose only authoritative implementation is PostgreSQL and were exercised by unit tests alone. `PersistentEncounterOrchestrator` is the single Encounter composition; the parser, safety pipeline, HTTP boundary and adapter are tested directly.
