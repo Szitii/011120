@@ -9,9 +9,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { createClientBootstrap } from "./src/adapters";
 import { safeClientMessage } from "./src/adapters/real-api";
 import type {
@@ -41,6 +44,12 @@ import {
   selectTab,
   type NavigationState,
 } from "./src/state/navigation";
+import { SkinProvider, useSkin } from "./src/theme/SkinProvider";
+import { CHROME } from "./src/theme/layoutTokens";
+import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
+import { InteractiveFullRoom } from "./src/components/InteractiveFullRoom";
+import { GlassChatBubble } from "./src/components/GlassChatBubble";
+import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 
 type LoadState<T> =
   | { kind: "idle" | "loading" }
@@ -50,17 +59,23 @@ type LoadState<T> =
 
 const cache = new ViewerSensitiveCache();
 
+const LOCAL_PREVIEW_IMAGES: Record<string, number> = {
+  "rainy-cafe": require("./assets/post-rainy-cafe.jpg"),
+  "night-desk": require("./assets/post-night-desk.jpg"),
+  "cute-room": require("./assets/room-cute-flat.jpg"),
+};
+
 function actionAllowed(capabilities: Record<string, boolean>, ...keys: string[]): boolean {
   return keys.some((key) => capabilities[key] === true);
 }
 
 function formatDate(value: string): string {
-  return new Date(value).toLocaleString([], {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const diffMin = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+  if (diffMin < 1) return "刚刚";
+  if (diffMin < 60) return `${diffMin} 分钟前`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} 小时前`;
+  return new Date(value).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function identityLabel(identity?: ActiveIdentityContext): string {
@@ -68,6 +83,15 @@ function identityLabel(identity?: ActiveIdentityContext): string {
 }
 
 export default function App() {
+  return (
+    <SkinProvider initialSkinId="default">
+      <AppShell />
+    </SkinProvider>
+  );
+}
+
+function AppShell() {
+  const { skin } = useSkin();
   const bootstrap = useMemo(() => {
     try {
       return { value: createClientBootstrap() } as const;
@@ -89,6 +113,9 @@ export default function App() {
   const [momentMode, setMomentMode] = useState(false);
   const [identitySwitchPending, setIdentitySwitchPending] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [mySettingsOpen, setMySettingsOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const worldScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const identityEpochRef = useRef(0);
@@ -433,17 +460,22 @@ export default function App() {
   const isSampleCompanion = currentKind !== "OWNER";
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar style="dark" />
+    <SafeAreaView style={[styles.safe, { backgroundColor: skin.colors.canvas }]}>
+      <StatusBar style={skin.isDark ? "light" : "dark"} />
 
       {!isMoment && (
         <AppHeader
           routeIsRoot={route.type === "root"}
+          rootTab={nav.rootTab}
           identityTitle={identityLabel(identityValue)}
           isSampleCompanion={isSampleCompanion}
           identity={identity}
           onBack={goBack}
           onIdentity={() => setSwitcherOpen(true)}
+          onBackToOwner={() => void switchIdentity({ kind: "OWNER" })}
+          onToggleSearch={() => setSearchOpen((v) => !v)}
+          onOpenComposer={() => setComposerOpen(true)}
+          onOpenSettings={() => setMySettingsOpen(true)}
         />
       )}
 
@@ -451,7 +483,11 @@ export default function App() {
         <WorldScreen
           state={world}
           isSampleCompanion={isSampleCompanion}
+          actorDisplayName={identityLabel(identityValue)}
           companionName={companionDisplayName}
+          searchOpen={searchOpen}
+          composerOpen={composerOpen}
+          onCloseComposer={() => setComposerOpen(false)}
           scrollRef={worldScrollRef}
           onScroll={(y) =>
             setNav((current) => saveScroll(current, identityId, "world", y))
@@ -467,6 +503,9 @@ export default function App() {
           state={life}
           isCompanion={isSampleCompanion}
           companionId={identityValue?.activeSubject.kind === "COMPANION" ? identityValue.activeSubject.id : undefined}
+          userName={identityLabel(identityValue)}
+          companionName={companionDisplayName}
+          isMockMode={bootstrap.value.dataMode === "mock"}
           onOpenTimeline={() => setNav((current) => pushRoute(current, { type: "life-archive" }))}
           onOpenEncounter={(item) => {
             if (item.kind !== "ENCOUNTER" || item.viewerCapabilities.openDetail !== true) return;
@@ -514,6 +553,9 @@ export default function App() {
           companionName={companionDisplayName}
           companions={ownerCompanions}
           selfProfile={profile}
+          isMockMode={bootstrap.value.dataMode === "mock"}
+          settingsOpen={mySettingsOpen}
+          onCloseSettings={() => setMySettingsOpen(false)}
           onOpenCompanionProfile={(item) => openProfile(item.companionId, "OWNER_ROSTER")}
           onControls={(item) => {
             setCompanionDisplayName(item.displayName);
@@ -605,7 +647,7 @@ export default function App() {
       )}
 
       {!isMoment && route.type === "root" && (
-        <BottomTabs
+        <FloatingGlassTabs
           current={nav.rootTab}
           isSampleCompanion={isSampleCompanion}
           onSelect={(tab) => setNav((state) => selectTab(state, tab))}
@@ -627,46 +669,127 @@ export default function App() {
 
 function AppHeader({
   routeIsRoot,
+  rootTab,
   identityTitle,
   isSampleCompanion,
   identity,
   onBack,
   onIdentity,
+  onBackToOwner,
+  onToggleSearch,
+  onOpenComposer,
+  onOpenSettings,
 }: {
   routeIsRoot: boolean;
+  rootTab: "world" | "home" | "my";
   identityTitle: string;
   isSampleCompanion: boolean;
   identity: LoadState<ActiveIdentityContext>;
   onBack: () => void;
   onIdentity: () => void;
+  onBackToOwner: () => void;
+  onToggleSearch: () => void;
+  onOpenComposer: () => void;
+  onOpenSettings: () => void;
 }) {
+  const { skin } = useSkin();
   const avatar = identity.kind === "success" ? identity.value.activeSubject.presentation.avatar : undefined;
   const initial = identityTitle.slice(0, 1).toUpperCase();
 
   return (
-    <View style={styles.topBar}>
-      {routeIsRoot ? (
-        <Pressable style={styles.identityTrigger} onPress={onIdentity} accessibilityRole="button" accessibilityLabel="切换当前账号">
-          {avatar ? (
-            <Image source={{ uri: avatar }} style={styles.miniAvatarImage} />
-          ) : (
-            <View style={[styles.miniAvatar, isSampleCompanion && styles.miniAvatarSampleCompanion]}>
-              <Text style={styles.miniAvatarText}>{initial}</Text>
+    <View style={{ backgroundColor: skin.colors.canvas }}>
+      <View style={[styles.topBar, { backgroundColor: skin.colors.canvas, borderBottomColor: skin.colors.border }]}>
+        {routeIsRoot ? (
+          <Pressable
+            style={({ pressed }) => [styles.identityTrigger, pressed && { opacity: 0.75 }]}
+            onPress={onIdentity}
+            accessibilityRole="button"
+            accessibilityLabel="切换当前账号"
+          >
+            {rootTab !== "my" && (
+              avatar ? (
+                <Image source={{ uri: avatar }} style={[styles.miniAvatarImage, { borderColor: skin.identityBadges.avatarRing, borderWidth: 2 }]} />
+              ) : (
+                <View
+                  style={[
+                    styles.miniAvatar,
+                    {
+                      backgroundColor: isSampleCompanion ? "#3B82F6" : skin.colors.ink,
+                      borderColor: skin.identityBadges.avatarRing,
+                      borderWidth: 2,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.miniAvatarText, { color: "#FFFFFF" }]}>{initial}</Text>
+                </View>
+              )
+            )}
+            <Text style={[styles.brand, { color: skin.colors.ink }]} numberOfLines={1}>{identityTitle}</Text>
+            <View style={[styles.headerRoleChip, { backgroundColor: skin.colors.accentSoft }]}>
+              <Text style={[styles.headerRoleChipText, { color: skin.colors.accentSoftFg }]}>
+                {isSampleCompanion ? "AI" : "本人"}
+              </Text>
             </View>
-          )}
-          <Text style={styles.brand} numberOfLines={1}>{identityTitle}</Text>
-          <Text style={styles.chevron}>⌄</Text>
-        </Pressable>
-      ) : (
-        <Pressable style={styles.iconButton} onPress={onBack}>
-          <Text style={styles.backIcon}>‹</Text>
-        </Pressable>
-      )}
+            <Text style={[styles.chevron, { color: skin.colors.inkMute }]}>⌄</Text>
+          </Pressable>
+        ) : (
+          <Pressable style={styles.iconButton} onPress={onBack}>
+            <Text style={[styles.backIcon, { color: skin.colors.ink }]}>‹</Text>
+          </Pressable>
+        )}
 
-      <View style={styles.headerRight}>
-        {routeIsRoot && <Text style={styles.headerIdentityTag}>{isSampleCompanion ? "家机身份" : "人类身份"}</Text>}
-        {identity.kind === "loading" && <ActivityIndicator size="small" />}
+        <View style={styles.headerRight}>
+          {routeIsRoot && rootTab === "world" && (
+            <>
+              <Pressable
+                onPress={onToggleSearch}
+                style={({ pressed }) => [styles.headerIconBtn, { backgroundColor: skin.colors.surface }, pressed && { transform: [{ scale: 0.92 }] }]}
+                accessibilityRole="button"
+                accessibilityLabel="搜索动态"
+              >
+                <Ionicons name="search-outline" size={18} color={skin.colors.ink} />
+              </Pressable>
+              <Pressable
+                onPress={onOpenComposer}
+                style={({ pressed }) => pressed && { transform: [{ scale: 0.94 }] }}
+                accessibilityRole="button"
+                accessibilityLabel="发动态"
+              >
+                <LiquidGlassSurface variant="chip" borderRadius={999}>
+                  <View style={styles.postChipInner}>
+                    <Ionicons name="add" size={15} color={skin.colors.ink} />
+                    <Text style={[styles.postChipText, { color: skin.colors.ink }]}>发动态</Text>
+                  </View>
+                </LiquidGlassSurface>
+              </Pressable>
+            </>
+          )}
+          {routeIsRoot && rootTab === "my" && (
+            <Pressable
+              onPress={onOpenSettings}
+              style={({ pressed }) => [styles.headerIconBtn, { backgroundColor: skin.colors.surface }, pressed && { transform: [{ scale: 0.92 }] }]}
+              accessibilityRole="button"
+              accessibilityLabel="打开设置"
+            >
+              <Ionicons name="settings-outline" size={19} color={skin.colors.ink} />
+            </Pressable>
+          )}
+          {identity.kind === "loading" && <ActivityIndicator size="small" />}
+        </View>
       </View>
+
+      {isSampleCompanion && (
+        <View style={[styles.companionAnchorBar, { backgroundColor: skin.actorAnchor.companionBarBg }]}>
+          <Text style={[styles.companionAnchorText, { color: skin.actorAnchor.companionBarText }]}>
+            正在以 {identityTitle}（AI）视角查看 · 权限已同步
+          </Text>
+          <Pressable onPress={onBackToOwner} hitSlop={8}>
+            <Text style={[styles.companionAnchorBack, { color: skin.actorAnchor.companionBarText }]}>
+              切回本人
+            </Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
@@ -674,7 +797,11 @@ function AppHeader({
 function WorldScreen({
   state,
   isSampleCompanion,
+  actorDisplayName,
   companionName,
+  searchOpen,
+  composerOpen,
+  onCloseComposer,
   scrollRef,
   onScroll,
   onOpenActor,
@@ -683,118 +810,279 @@ function WorldScreen({
 }: {
   state: LoadState<WorldCollection>;
   isSampleCompanion: boolean;
+  actorDisplayName: string;
   companionName: string;
+  searchOpen: boolean;
+  composerOpen: boolean;
+  onCloseComposer: () => void;
   scrollRef: React.RefObject<React.ComponentRef<typeof ScrollView> | null>;
   onScroll: (y: number) => void;
   onOpenActor: (companionId: string) => void;
   onOpenEncounter: (item: WorldItem) => void;
   onRetry: () => void;
 }) {
+  const { skin } = useSkin();
+  const [feedTab, setFeedTab] = useState<"RECOMMEND" | "FOLLOWING">("RECOMMEND");
   const [actorFilter, setActorFilter] = useState<"ALL" | "OWNER" | "SOCIAL_TWIN">("ALL");
-  if (state.kind === "loading" || state.kind === "idle") return <Loading />;
+  const [query, setQuery] = useState("");
+  const [localPosts, setLocalPosts] = useState<WorldItem[]>([]);
+  const [draftText, setDraftText] = useState("");
+
+  if (state.kind === "loading") return <Loading />;
+  if (state.kind === "idle") return <Centered title="正在准备社区内容" body="如长时间未刷新，请切换账号重试。" />;
   if (state.kind === "empty") {
-    return <Centered title="公共社区还没有可见内容" body="这里会展示真实发布或授权公开的社区记录。" />;
+    return <Centered title="公共社区还没有动态" body="发一条日常，或者等家机在授权时段分享生活片段吧。" />;
   }
   if (state.kind === "error") {
     return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
   }
   if (state.kind !== "success") return <Centered title="公共社区暂时无法连接。" />;
 
+  const allItems = [...localPosts, ...state.value.items];
+  const visibleItems = allItems.filter((item) => {
+    if (feedTab === "FOLLOWING" && item.visibility !== "FRIENDS" && item.author.subjectKind !== "SOCIAL_TWIN" && !item.id.startsWith("local-")) {
+      return false;
+    }
+    if (actorFilter !== "ALL" && item.author.subjectKind !== actorFilter) return false;
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      const hay = `${item.author.displayName} ${item.body ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  function publishLocalDraft() {
+    const body = draftText.trim();
+    if (!body) return;
+    const newItem: WorldItem = {
+      id: `local-${Date.now()}`,
+      kind: "POST",
+      author: {
+        subjectKind: isSampleCompanion ? "SOCIAL_TWIN" : "OWNER",
+        subjectId: isSampleCompanion ? "twin-local" : "owner-local",
+        displayName: isSampleCompanion ? `${companionName}（Owner 代发）` : actorDisplayName,
+      },
+      publishedAt: new Date().toISOString(),
+      body,
+      source: { type: "POST", id: `local-src-${Date.now()}` },
+      visibility: "PUBLIC",
+      viewerCapabilities: { react: true, reply: true, share: true, openDetail: false },
+      completeness: "COMPLETE",
+    };
+    setLocalPosts((prev) => [newItem, ...prev]);
+    setDraftText("");
+    onCloseComposer();
+  }
+
   return (
-    <ScrollView
-      ref={scrollRef}
-      style={styles.content}
-      contentContainerStyle={styles.feed}
-      onScroll={(event) => onScroll(event.nativeEvent.contentOffset.y)}
-      scrollEventThrottle={100}
-    >
-      <View style={styles.feedHeading}>
-        <Text style={styles.feedTitle}>公共社区</Text>
-        <Text style={styles.feedDisclaimer}>当前展示已授权的社区记录；发帖、评论与关注等功能仍在开发中。</Text>
-        <View style={styles.feedFilterRow} accessibilityLabel="按作者身份筛选当前记录">
+    <View style={[styles.content, { backgroundColor: skin.colors.canvas }]}>
+      {/* Sub-header: 推荐 / 关注 + Compact Filter Pills */}
+      <View style={[styles.feedTopBar, { borderBottomColor: skin.colors.border }]}>
+        <View style={styles.feedTabsRow}>
+          {([
+            { key: "RECOMMEND" as const, label: "推荐" },
+            { key: "FOLLOWING" as const, label: "关注" },
+          ]).map((t) => {
+            const active = feedTab === t.key;
+            return (
+              <Pressable key={t.key} onPress={() => setFeedTab(t.key)} style={styles.feedTabItem}>
+                <Text
+                  style={[
+                    styles.feedTabText,
+                    { color: active ? skin.colors.ink : skin.colors.inkMute, fontWeight: active ? "700" : "500" },
+                  ]}
+                >
+                  {t.label}
+                </Text>
+                {active && <View style={[styles.feedTabIndicator, { backgroundColor: skin.colors.ink }]} />}
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <View style={styles.compactFilterRow}>
           {([
             { key: "ALL" as const, label: "全部" },
             { key: "OWNER" as const, label: "人类" },
             { key: "SOCIAL_TWIN" as const, label: "家机" },
-          ]).map((filter) => (
-            <Pressable
-              key={filter.key}
-              onPress={() => setActorFilter(filter.key)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: actorFilter === filter.key }}
-              style={[styles.feedFilterPill, actorFilter === filter.key && styles.feedFilterPillActive]}
-            >
-              <Text style={[styles.feedFilterText, actorFilter === filter.key && styles.feedFilterTextActive]}>{filter.label}</Text>
-            </Pressable>
-          ))}
+          ]).map((f) => {
+            const active = actorFilter === f.key;
+            return (
+              <Pressable
+                key={f.key}
+                onPress={() => setActorFilter(f.key)}
+                style={[
+                  styles.compactPill,
+                  { backgroundColor: active ? skin.colors.accent : skin.colors.surface },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.compactPillText,
+                    { color: active ? skin.colors.accentFg : skin.colors.inkSub },
+                  ]}
+                >
+                  {f.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       </View>
 
-      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).length === 0 && (
-        <View style={styles.feedEnd}><Text style={styles.tinyMuted}>当前加载的记录里没有这一类内容。</Text></View>
+      {searchOpen && (
+        <View style={[styles.searchBarWrap, { borderBottomColor: skin.colors.border }]}>
+          <Ionicons name="search-outline" size={16} color={skin.colors.inkMute} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="搜索动态、话题或名字..."
+            placeholderTextColor={skin.colors.inkMute}
+            style={[styles.searchInput, { color: skin.colors.ink }]}
+          />
+          {query.length > 0 && (
+            <Pressable onPress={() => setQuery("")}>
+              <Ionicons name="close-circle" size={16} color={skin.colors.inkMute} />
+            </Pressable>
+          )}
+        </View>
       )}
 
-      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).map((item) => (
-        <FeedItem
-          key={item.id}
-          item={item}
-          onOpenActor={item.author.companionId ? () => onOpenActor(item.author.companionId!) : undefined}
-          onOpen={() => onOpenEncounter(item)}
-        />
-      ))}
+      <ScrollView
+        ref={scrollRef}
+        style={[styles.content, { backgroundColor: skin.colors.canvas }]}
+        contentContainerStyle={[styles.feed, { paddingBottom: CHROME.scrollBottomClearance }]}
+        onScroll={(event) => onScroll(event.nativeEvent.contentOffset.y)}
+        scrollEventThrottle={100}
+      >
+        {visibleItems.length === 0 ? (
+          <View style={styles.feedEnd}>
+            <Text style={styles.tinyMuted}>这里暂时没有匹配的动态</Text>
+          </View>
+        ) : (
+          visibleItems.map((item, idx) => (
+            <FeedItem
+              key={item.id}
+              item={item}
+              seedLikes={idx === 0 ? 48 : idx === 1 ? 31 : 17}
+              onOpenActor={item.author.companionId ? () => onOpenActor(item.author.companionId!) : undefined}
+              onOpen={() => onOpenEncounter(item)}
+            />
+          ))
+        )}
 
-      <View style={styles.feedEnd}>
-        <Text style={styles.tinyMuted}>到这里了。</Text>
-      </View>
-    </ScrollView>
+        <View style={styles.feedEnd}>
+          <Text style={styles.tinyMuted}>已经到底啦</Text>
+        </View>
+      </ScrollView>
+
+      {/* Post Composer Modal */}
+      <Modal visible={composerOpen} transparent animationType="slide" onRequestClose={onCloseComposer}>
+        <Pressable style={styles.modalBackdrop} onPress={onCloseComposer}>
+          <Pressable style={[styles.sheet, { backgroundColor: skin.colors.canvas }]} onPress={() => undefined}>
+            <View style={styles.sheetHandle} />
+            <Text style={[styles.sheetTitle, { color: skin.colors.ink }]}>发布新动态</Text>
+            <Text style={[styles.tinyMuted, { marginBottom: 10 }]}>
+              当前身份：{isSampleCompanion ? `${companionName}（将标注 Owner 代发）` : actorDisplayName}
+            </Text>
+            <TextInput
+              value={draftText}
+              onChangeText={setDraftText}
+              multiline
+              placeholder="随手记一句今天的小事..."
+              placeholderTextColor={skin.colors.inkMute}
+              style={[
+                styles.composerInput,
+                { backgroundColor: skin.colors.surface, borderColor: skin.colors.border, color: skin.colors.ink },
+              ]}
+            />
+            <View style={styles.composerActions}>
+              <Pressable onPress={onCloseComposer} style={[styles.composerCancel, { backgroundColor: skin.colors.surface }]}>
+                <Text style={{ color: skin.colors.inkSub, fontSize: 13 }}>取消</Text>
+              </Pressable>
+              <Pressable onPress={publishLocalDraft} style={[styles.composerSubmit, { backgroundColor: skin.colors.accent }]}>
+                <Text style={{ color: skin.colors.accentFg, fontSize: 13, fontWeight: "600" }}>发布</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
   );
 }
 
 function FeedItem({
   item,
+  seedLikes,
   onOpenActor,
   onOpen,
 }: {
   item: WorldItem;
+  seedLikes: number;
   onOpenActor?: () => void;
   onOpen: () => void;
 }) {
+  const { skin } = useSkin();
+  const [liked, setLiked] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [comments, setComments] = useState<Array<{ who: string; text: string }>>(
+    item.id === "world-preview-1" ? [{ who: "沈砚", text: "下次下班记得带伞。" }] : [],
+  );
+
   const canOpen = item.viewerCapabilities.openDetail === true && item.source.type === "ENCOUNTER";
-  const eventType =
-    item.kind === "ENCOUNTER_EXCERPT" ? "相遇" :
-    item.kind === "PUBLIC_LIFE_TRACE" ? "生活片段" :
-    item.kind === "MOMENT" ? "Moment" : "帖子";
   const hasMedia = (item.media?.length ?? 0) > 0;
+  const avatarBg = item.author.subjectKind === "OWNER" ? "#F48FA3" : "#3B82F6";
+
+  function sendComment() {
+    const clean = replyText.trim();
+    if (!clean) return;
+    setComments((prev) => [...prev, { who: "我", text: clean }]);
+    setReplyText("");
+    setReplyOpen(false);
+  }
 
   return (
-    <View style={styles.feedItem}>
+    <View style={[styles.feedItem, { borderBottomColor: skin.colors.border }]}>
       <Pressable style={styles.feedAuthorRow} disabled={!onOpenActor} onPress={onOpenActor}>
-        <View style={styles.feedAvatar}>
-          <Text style={styles.feedAvatarText}>{item.author.displayName.slice(0, 1).toUpperCase()}</Text>
+        <View style={[styles.feedAvatar, { backgroundColor: avatarBg }]}>
+          <Text style={[styles.feedAvatarText, { color: "#FFFFFF" }]}>
+            {item.author.displayName.slice(0, 1).toUpperCase()}
+          </Text>
         </View>
         <View style={styles.feedAuthorText}>
           <View style={styles.feedAuthorLine}>
-            <Text style={styles.feedAuthorName} numberOfLines={1}>{item.author.displayName}</Text>
-            <Text style={styles.feedActorTag}>{item.author.subjectKind === "OWNER" ? "人类" : "AI 家机"}</Text>
-            {item.author.handle && <Text style={styles.feedAuthorHandle}>@{item.author.handle}</Text>}
+            <Text style={[styles.feedAuthorName, { color: skin.colors.ink }]} numberOfLines={1}>
+              {item.author.displayName}
+            </Text>
+            {item.author.subjectKind === "SOCIAL_TWIN" && (
+              <View style={[styles.aiTinyBadge, { backgroundColor: skin.identityBadges.aiBadgeBg }]}>
+                <Text style={[styles.aiTinyBadgeText, { color: skin.identityBadges.aiBadgeText }]}>AI</Text>
+              </View>
+            )}
           </View>
-          <Text style={styles.feedMeta}>{formatDate(item.publishedAt)}</Text>
+          <Text style={[styles.feedMeta, { color: skin.colors.inkMute }]}>{formatDate(item.publishedAt)}</Text>
         </View>
-        {item.viewerCapabilities.more === true && <Text style={styles.more}>•••</Text>}
       </Pressable>
 
-      <Text style={styles.sectionLabel}>{eventType}</Text>
-      {item.body && <Text style={styles.feedBody}>{item.body}</Text>}
+      {item.body && <Text style={[styles.feedBody, { color: skin.colors.ink }]}>{item.body}</Text>}
 
-      {item.completeness === "PARTIAL" && (
-        <View style={styles.inlineNotice}>
-          <Text style={styles.inlineNoticeText}>有一部分没回来。</Text>
-        </View>
-      )}
-
-      {hasMedia ? (
+      {hasMedia && (
         <View style={styles.mediaStack}>
           {item.media!.map((media, index) => {
+            if (media.type === "LOCAL_PREVIEW_IMAGE" && typeof media.key === "string" && LOCAL_PREVIEW_IMAGES[media.key]) {
+              return (
+                <Image
+                  key={`${item.id}-local-${index}`}
+                  source={LOCAL_PREVIEW_IMAGES[media.key]}
+                  accessibilityLabel={typeof media.alt === "string" ? media.alt : "动态配图"}
+                  resizeMode="cover"
+                  style={styles.candidMediaImage}
+                />
+              );
+            }
             const presentation = toStage1MediaPresentation(media);
             if (presentation.kind === "IMAGE") {
               return (
@@ -803,39 +1091,90 @@ function FeedItem({
                   source={{ uri: presentation.url }}
                   accessibilityLabel={presentation.alt}
                   resizeMode="cover"
-                  style={styles.feedMediaImage}
+                  style={styles.candidMediaImage}
                 />
               );
             }
-            return (
-              <View key={`${item.id}-media-${index}`} style={styles.mediaUnavailable}>
-                <Text style={styles.noMediaGlyph}>⌁</Text>
-                <Text style={styles.noMediaText}>{presentation.label}</Text>
-              </View>
-            );
+            return null;
           })}
         </View>
-      ) : (
-        item.body ? null : (
-          <View style={styles.noMedia}>
-            <Text style={styles.noMediaGlyph}>⌁</Text>
-            <Text style={styles.noMediaText}>这条记录没有媒体内容</Text>
-          </View>
-        )
       )}
 
       <View style={styles.feedActions}>
         <View style={styles.feedActionCluster}>
-          {item.viewerCapabilities.react === true && <Text style={styles.feedAction}>♡</Text>}
-          {item.viewerCapabilities.reply === true && <Text style={styles.feedAction}>▢</Text>}
-          {item.viewerCapabilities.share === true && <Text style={styles.feedAction}>⌑</Text>}
-        </View>
-        {canOpen && (
-          <Pressable onPress={onOpen}>
-            <Text style={styles.accentLink}>看看怎么回事 →</Text>
+          <Pressable
+            onPress={() => setLiked((v) => !v)}
+            style={({ pressed }) => [styles.socialBtn, pressed && { transform: [{ scale: 0.9 }] }]}
+            hitSlop={8}
+          >
+            <Ionicons
+              name={liked ? "heart" : "heart-outline"}
+              size={19}
+              color={liked ? "#E11D48" : skin.colors.inkSub}
+            />
+            <Text style={[styles.socialCount, { color: liked ? "#E11D48" : skin.colors.inkSub }]}>
+              {seedLikes + (liked ? 1 : 0)}
+            </Text>
           </Pressable>
-        )}
+
+          <Pressable
+            onPress={() => setReplyOpen(true)}
+            style={({ pressed }) => [styles.socialBtn, pressed && { transform: [{ scale: 0.9 }] }]}
+            hitSlop={8}
+          >
+            <Ionicons name="chatbubble-outline" size={18} color={skin.colors.inkSub} />
+            <Text style={[styles.socialCount, { color: skin.colors.inkSub }]}>{comments.length}</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setSaved((v) => !v)}
+            style={({ pressed }) => [styles.socialBtn, pressed && { transform: [{ scale: 0.9 }] }]}
+            hitSlop={8}
+          >
+            <Ionicons
+              name={saved ? "bookmark" : "bookmark-outline"}
+              size={18}
+              color={saved ? skin.glass.iconTint : skin.colors.inkSub}
+            />
+          </Pressable>
+        </View>
+
+
       </View>
+
+      {comments.length > 0 && (
+        <View style={[styles.commentBox, { backgroundColor: skin.colors.surface }]}>
+          {comments.map((c, i) => (
+            <Text key={i} style={[styles.commentLine, { color: skin.colors.inkSub }]}>
+              <Text style={{ color: skin.colors.ink, fontWeight: "600" }}>{c.who}：</Text>
+              {c.text}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      <Modal visible={replyOpen} transparent animationType="slide" onRequestClose={() => setReplyOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setReplyOpen(false)}>
+          <Pressable style={[styles.sheet, { backgroundColor: skin.colors.canvas }]} onPress={() => undefined}>
+            <View style={styles.sheetHandle} />
+            <Text style={[styles.sheetTitle, { color: skin.colors.ink }]}>回复 {item.author.displayName}</Text>
+            <View style={styles.composerRow}>
+              <TextInput
+                value={replyText}
+                onChangeText={setReplyText}
+                placeholder="说点什么..."
+                placeholderTextColor={skin.colors.inkMute}
+                style={[styles.replyInput, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border, color: skin.colors.ink }]}
+                returnKeyType="send"
+                onSubmitEditing={sendComment}
+              />
+              <Pressable onPress={sendComment} style={[styles.composerSubmit, { backgroundColor: skin.colors.accent }]}>
+                <Text style={{ color: skin.colors.accentFg, fontSize: 13, fontWeight: "600" }}>发送</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -1121,80 +1460,32 @@ function PrivateHomeScreen({
   state,
   isCompanion,
   companionId,
+  userName,
+  companionName,
+  isMockMode,
   onOpenTimeline,
-  onOpenEncounter,
 }: {
   state: LoadState<LifeContinuityCollection>;
   isCompanion: boolean;
   companionId?: string;
+  userName: string;
+  companionName: string;
+  isMockMode: boolean;
   onOpenTimeline: () => void;
   onOpenEncounter: (item: LifeContinuityItem) => void;
 }) {
-  const recentItems = state.kind === "success"
-    ? state.value.items.filter((item) => !isCompanion || item.companion.companionId === companionId).slice(0, 3)
-    : [];
+  const count = state.kind === "success"
+    ? state.value.items.filter((item) => !isCompanion || item.companion.companionId === companionId).length
+    : 0;
 
   return (
-    <ScrollView style={styles.content} contentContainerStyle={styles.privateHomePage}>
-      <Text style={styles.privateHomeEyebrow}>PRIVATE HOME</Text>
-      <Text style={styles.privateHomeTitle}>私人小家</Text>
-      <Text style={styles.privateHomeSubtitle}>一个留给你们共同生活的地方。房间还在建设中，已经发生的记录可以先从这里查看。</Text>
-
-      <View style={styles.privateHomeRoom} accessible accessibilityLabel="私人小家静态空间概念预览">
-        <View style={styles.privateHomeWindow}>
-          <Text style={styles.privateHomeWindowSymbol}>☼</Text>
-        </View>
-        <View style={styles.privateHomeShelf} />
-        <View style={styles.privateHomeSofa} />
-        <View style={styles.privateHomeFloor} />
-        <Text style={styles.privateHomeRoomLabel}>空间概念预览 · 暂未开放装扮</Text>
-      </View>
-
-      <Text style={styles.privateHomeSectionTitle}>最近的生活记录</Text>
-      {state.kind === "loading" || state.kind === "idle" ? (
-        <View style={styles.privateHomeEmpty}><ActivityIndicator size="small" /><Text style={styles.privateHomeRecordCaption}>正在查看已授权的记录…</Text></View>
-      ) : state.kind === "error" ? (
-        <View style={styles.privateHomeEmpty}><Text style={styles.privateHomeRecordCaption}>记录暂时无法加载，请在记录页重试。</Text></View>
-      ) : recentItems.length === 0 ? (
-        <View style={styles.privateHomeEmpty}><Text style={styles.privateHomeRecordCaption}>这里暂时没有可显示的记录。</Text></View>
-      ) : (
-        <View style={styles.privateHomeRecordList}>
-          {recentItems.map((item) => {
-            const canOpen = item.kind === "ENCOUNTER" && item.viewerCapabilities.openDetail === true;
-            const statusLabel = item.status === "DELIVERED" ? "已记录"
-              : item.status === "BLOCKED" ? "受限／未展示"
-              : item.status === "FAILED" ? "执行失败"
-              : item.status === "REDACTED" ? "已隐藏"
-              : item.status;
-            const content = (
-              <>
-                <View style={styles.privateHomeRecordText}>
-                  <Text style={styles.privateHomeRecordTitle} numberOfLines={2}>{item.companion.displayName} · {item.title}</Text>
-                  <Text style={styles.privateHomeRecordCaption} numberOfLines={2}>{formatDate(item.occurredAt)} · {statusLabel}</Text>
-                  {item.summary ? <Text style={styles.privateHomeRecordCaption} numberOfLines={2}>{item.summary}</Text> : null}
-                </View>
-                {canOpen && <Text style={styles.accountArrow}>›</Text>}
-              </>
-            );
-            return canOpen ? (
-              <Pressable key={item.id} style={styles.privateHomeRecordRow} accessibilityRole="button" onPress={() => onOpenEncounter(item)}>
-                {content}
-              </Pressable>
-            ) : (
-              <View key={item.id} style={styles.privateHomeRecordRow}>{content}</View>
-            );
-          })}
-        </View>
-      )}
-      <Pressable style={styles.privateHomeArchiveButton} accessibilityRole="button" onPress={onOpenTimeline}>
-        <Text style={styles.privateHomeArchiveText}>查看全部已授权记录</Text>
-        <Text style={styles.accountArrow}>›</Text>
-      </Pressable>
-
-      <Text style={styles.privateHomeSectionTitle}>共同生活</Text>
-      <Text style={styles.privateHomeBody}>共同相册、纪念日、便签、礼物和可撤销的家具布置会分阶段加入。未开发的功能不会伪装成可用按钮。</Text>
-      <Text style={styles.privateHomeNote}>没有发生的事件不会补写；自主活动需要单独授权。私人资料默认不向公共社区分享。</Text>
-    </ScrollView>
+    <InteractiveFullRoom
+      userName={isCompanion ? "我" : userName}
+      companionName={companionName}
+      isMockMode={isMockMode}
+      recordCount={count}
+      onOpenTimeline={onOpenTimeline}
+    />
   );
 }
 function LifeScreen({
@@ -1268,6 +1559,9 @@ function MyScreen({
   companionName,
   companions,
   selfProfile,
+  isMockMode,
+  settingsOpen,
+  onCloseSettings,
   onOpenCompanionProfile,
   onControls,
   onResumeCompanion,
@@ -1278,111 +1572,254 @@ function MyScreen({
   companionName: string;
   companions: LoadState<OwnerCompanionCollection>;
   selfProfile: LoadState<CompanionProfile>;
+  isMockMode: boolean;
+  settingsOpen: boolean;
+  onCloseSettings: () => void;
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
   onControls: (item: OwnerCompanionSummary) => void;
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
   onBringCompanion: () => void;
 }) {
-  const ownerName = identity.kind === "success" ? identity.value.activeSubject.presentation.displayName : "我的账号";
+  const { skin, availableSkins, setSkinById } = useSkin();
+  const [profileTab, setProfileTab] = useState<"POSTS" | "SAVED" | "LIKES">("POSTS");
+  const [colorModalOpen, setColorModalOpen] = useState(false);
+
+  const ownerName = identity.kind === "success" ? identity.value.activeSubject.presentation.displayName : "林昼";
+  const displayName = isSampleCompanion ? companionName : ownerName;
+  const bio = isSampleCompanion
+    ? "少喝冰的，早点睡觉。"
+    : "记录日常，和沈砚一起慢慢把小家填满。";
+
   return (
-    <ScrollView style={styles.content} contentContainerStyle={styles.myPage}>
-      <Text style={styles.myTitle}>我的</Text>
-      <Text style={styles.mySub}>{isSampleCompanion ? "家机主页" : "人类主页"}</Text>
-
-      {isSampleCompanion ? (
-        <View style={styles.accountCard}>
-          <View style={[styles.accountAvatar, styles.accountAvatarSampleCompanion]}>
-            <Text style={styles.accountAvatarText}>{companionName.slice(0, 1).toUpperCase()}</Text>
-          </View>
-          <View style={styles.accountCardText}>
-            <Text style={styles.accountName}>{companionName}</Text>
-            <Text style={styles.accountHandle}>
-              {selfProfile.kind === "success"
-                ? `@${selfProfile.value.handle} · ${selfProfile.value.viewer.relationship === "SELF" ? "自己" : "当前视角"}`
-                : selfProfile.kind === "error"
-                  ? "主页没回来。"
-                  : "稍等。"}
-            </Text>
-            {selfProfile.kind === "success" && (
-              <Text style={styles.tinyMuted}>谁能看到 · {selfProfile.value.profileVisibility}</Text>
-            )}
+    <ScrollView
+      style={[styles.content, { backgroundColor: skin.colors.canvas }]}
+      contentContainerStyle={[styles.mySocialPage, { paddingBottom: CHROME.scrollBottomClearance }]}
+    >
+      {/* Centered Modern Social Profile Header */}
+      <View style={styles.profileHero}>
+        <View
+          style={[
+            styles.heroAvatar,
+            {
+              backgroundColor: isSampleCompanion ? "#3B82F6" : "#18181B",
+              borderColor: skin.identityBadges.avatarRing,
+            },
+          ]}
+        >
+          <Text style={styles.heroAvatarText}>{displayName.slice(0, 1).toUpperCase()}</Text>
+          <View style={[styles.heroBadgeDot, { backgroundColor: isSampleCompanion ? "#2563EB" : "#10B981" }]}>
+            <Ionicons name={isSampleCompanion ? "sparkles" : "checkmark"} size={11} color="#FFFFFF" />
           </View>
         </View>
-      ) : (
-        <View style={styles.accountCard}>
-          <View style={[styles.accountAvatar, isSampleCompanion && styles.accountAvatarSampleCompanion]}>
-            <Text style={styles.accountAvatarText}>{ownerName.slice(0, 1).toUpperCase()}</Text>
+
+        <Text style={[styles.heroName, { color: skin.colors.ink }]}>{displayName}</Text>
+        <Text style={[styles.heroBio, { color: skin.colors.inkSub }]}>{bio}</Text>
+
+        {/* 3-Column Stats Row (Real mode shows "-" until backend stats API arrives; mock shows preview) */}
+        <View style={styles.statsRow}>
+          <View style={styles.statCol}>
+            <Text style={[styles.statNum, { color: skin.colors.ink }]}>{isMockMode ? (isSampleCompanion ? "16" : "24") : "—"}</Text>
+            <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>动态</Text>
           </View>
-          <View style={styles.accountCardText}>
-            <Text style={styles.accountName}>{ownerName}</Text>
-            <Text style={styles.accountHandle}>人类账号 · 当前身份</Text>
+          <View style={styles.statCol}>
+            <Text style={[styles.statNum, { color: skin.colors.ink }]}>{isMockMode ? (isSampleCompanion ? "42" : "128") : "—"}</Text>
+            <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>粉丝</Text>
+          </View>
+          <View style={styles.statCol}>
+            <Text style={[styles.statNum, { color: skin.colors.ink }]}>{isMockMode ? (isSampleCompanion ? "19" : "64") : "—"}</Text>
+            <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>关注</Text>
           </View>
         </View>
-  
-  
-      )}
+      </View>
 
-      {!isSampleCompanion && (
-        <>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionHeader}>我的家机</Text>
-          </View>
-
-          {companions.kind === "loading" && (
-            <Text style={styles.tinyMuted}>稍等。</Text>
-          )}
-          {companions.kind === "error" && (
-            <Text style={styles.tinyMuted}>家机名单没回来。</Text>
-          )}
-          {companions.kind === "empty" && (
-            <Text style={styles.tinyMuted}>这里还没有家机。</Text>
-          )}
-          {companions.kind === "success" && companions.value.items.map((item: OwnerCompanionSummary) => {
-            const switchable = item.socialReady;
-            return (
-              <View key={item.companionId} style={styles.partnerContainer}>
-                <Pressable
-                  style={[styles.partnerRow, styles.partnerMain]}
-                  onPress={switchable ? () => onOpenCompanionProfile(item) : () => onResumeCompanion(item)}
-                >
-                  <View style={[styles.partnerAvatar, styles.accountAvatarSampleCompanion]}>
-                    <Text style={styles.accountAvatarText}>{item.displayName.slice(0, 1).toUpperCase()}</Text>
-                  </View>
-                  <View style={styles.partnerText}>
-                    <Text style={styles.partnerName}>{item.displayName}</Text>
-                    <Text style={styles.accountHandle}>
-                      {item.socialReady ? "查看主页" : "已经到了。还差一步。"}
-                    </Text>
-                  </View>
-                  <Text style={styles.accountArrow}>›</Text>
-                </Pressable>
-                {item.socialReady && (
-                  <Pressable style={styles.partnerSettings} onPress={() => onControls(item)}>
-                    <Text style={styles.partnerSettingsText}>设置</Text>
-                  </Pressable>
-                )}
-              </View>
-            );
-          })}
-        </>
-      )}
-
-      {!isSampleCompanion && (
-        <View style={styles.settingsGroup}>
-          <Pressable style={styles.settingsRow} onPress={onBringCompanion}>
-            <Text style={styles.settingsIcon}>＋</Text>
-            <Text style={styles.settingsText}>带家机来</Text>
-            <Text style={styles.accountArrow}>›</Text>
-          </Pressable>
-          <View style={styles.settingsRowStatic}>
-            <Text style={styles.settingsIcon}>○</Text>
-            <View style={styles.settingsStaticText}>
-              <Text style={styles.settingsText}>更多设置</Text>
-              <Text style={styles.tinyMuted}>还没长出来。先不装按钮。</Text>
+      {/* Bidirectional Companion Relation Pill */}
+      {!isSampleCompanion && companions.kind === "success" && companions.value.items.map((item: OwnerCompanionSummary) => (
+        <View
+          key={item.companionId}
+          style={[styles.relationPillCard, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}
+        >
+          <Pressable
+            style={styles.relationMain}
+            onPress={item.socialReady ? () => onOpenCompanionProfile(item) : () => onResumeCompanion(item)}
+          >
+            <View style={[styles.relAvatar, { backgroundColor: "#3B82F6" }]}>
+              <Text style={styles.relAvatarText}>{item.displayName.slice(0, 1).toUpperCase()}</Text>
             </View>
-          </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.relTitle, { color: skin.colors.ink }]}>我的家机 · {item.displayName}</Text>
+              <Text style={[styles.relSub, { color: skin.colors.inkSub }]}>
+                {item.socialReady ? "相伴 128 天 · 点击查看 TA 的主页" : "待完成激活"}
+              </Text>
+            </View>
+          </Pressable>
+          {item.socialReady && (
+            <Pressable
+              onPress={() => onControls(item)}
+              style={[styles.relControlBtn, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border }]}
+            >
+              <Text style={[styles.relControlText, { color: skin.colors.ink }]}>权限</Text>
+            </Pressable>
+          )}
         </View>
-      )}
+      ))}
+
+      {/* Profile Content Tabs: 动态 / 收藏 / 喜欢 */}
+      <View style={[styles.profileTabsRow, { borderBottomColor: skin.colors.border }]}>
+        {([
+          { key: "POSTS" as const, label: "动态" },
+          { key: "SAVED" as const, label: "收藏" },
+          { key: "LIKES" as const, label: "喜欢" },
+        ]).map((t) => {
+          const active = profileTab === t.key;
+          return (
+            <Pressable key={t.key} onPress={() => setProfileTab(t.key)} style={styles.profileTabBtn}>
+              <Text style={[styles.profileTabText, { color: active ? skin.colors.ink : skin.colors.inkMute, fontWeight: active ? "700" : "500" }]}>
+                {t.label}
+              </Text>
+              {active && <View style={[styles.feedTabIndicator, { backgroundColor: skin.colors.ink }]} />}
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* Clean Profile Content Grid / Cards */}
+      <View style={styles.profileGrid}>
+        {profileTab === "POSTS" && (
+          isSampleCompanion ? (
+            <>
+              <View style={[styles.profilePhotoCard, { borderColor: skin.colors.border }]}>
+                <Image source={LOCAL_PREVIEW_IMAGES["night-desk"]} style={styles.profilePhotoImg} resizeMode="cover" />
+                <Text style={[styles.profilePhotoCaption, { color: skin.colors.ink }]} numberOfLines={2}>
+                  昨晚把床头灯调暗了一档，早点睡
+                </Text>
+              </View>
+              <View style={[styles.profilePhotoCard, { borderColor: skin.colors.border }]}>
+                <Image source={LOCAL_PREVIEW_IMAGES["cute-room"]} style={styles.profilePhotoImg} resizeMode="cover" />
+                <Text style={[styles.profilePhotoCaption, { color: skin.colors.ink }]} numberOfLines={2}>
+                  给沙发换了更软的靠枕
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={[styles.profilePhotoCard, { borderColor: skin.colors.border }]}>
+                <Image source={LOCAL_PREVIEW_IMAGES["rainy-cafe"]} style={styles.profilePhotoImg} resizeMode="cover" />
+                <Text style={[styles.profilePhotoCaption, { color: skin.colors.ink }]} numberOfLines={2}>
+                  下雨天偷喝冰拿铁被抓包的一天
+                </Text>
+              </View>
+              <View style={[styles.profilePhotoCard, { borderColor: skin.colors.border }]}>
+                <Image source={LOCAL_PREVIEW_IMAGES["cute-room"]} style={styles.profilePhotoImg} resizeMode="cover" />
+                <Text style={[styles.profilePhotoCaption, { color: skin.colors.ink }]} numberOfLines={2}>
+                  我们刚收拾好的 2.5D 小客厅
+                </Text>
+              </View>
+            </>
+          )
+        )}
+        {profileTab === "SAVED" && (
+          <View style={[styles.profilePhotoCard, { borderColor: skin.colors.border }]}>
+            <Image source={LOCAL_PREVIEW_IMAGES["night-desk"]} style={styles.profilePhotoImg} resizeMode="cover" />
+            <Text style={[styles.profilePhotoCaption, { color: skin.colors.ink }]} numberOfLines={2}>
+              沈砚留的深夜床头灯
+            </Text>
+          </View>
+        )}
+        {profileTab === "LIKES" && (
+          <View style={{ width: "100%", paddingVertical: 28, alignItems: "center" }}>
+            <Text style={styles.tinyMuted}>你在社区点过赞的动态会收在这里</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Top-right Settings Gear Modal */}
+      <Modal visible={settingsOpen} transparent animationType="slide" onRequestClose={onCloseSettings}>
+        <Pressable style={styles.modalBackdrop} onPress={onCloseSettings}>
+          <Pressable style={[styles.sheet, { backgroundColor: skin.colors.canvas }]} onPress={() => undefined}>
+            <View style={styles.sheetHandle} />
+            <Text style={[styles.sheetTitle, { color: skin.colors.ink }]}>设置</Text>
+
+            <View style={[styles.cleanCardGroup, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
+              {!isSampleCompanion && (
+                <Pressable
+                  style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
+                  onPress={() => {
+                    onCloseSettings();
+                    onBringCompanion();
+                  }}
+                >
+                  <View style={styles.cleanRowLeft}>
+                    <Ionicons name="add-circle-outline" size={20} color={skin.colors.ink} />
+                    <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>添加家机</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
+                </Pressable>
+              )}
+
+              <Pressable
+                style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
+                onPress={() => {
+                  onCloseSettings();
+                  setColorModalOpen(true);
+                }}
+              >
+                <View style={styles.cleanRowLeft}>
+                  <Ionicons name="color-palette-outline" size={20} color={skin.glass.iconTint} />
+                  <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>基础外观配色</Text>
+                </View>
+                <View style={styles.cleanRowRight}>
+                  <Text style={[styles.cleanRowValue, { color: skin.colors.inkSub }]}>{skin.name}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
+                </View>
+              </Pressable>
+
+              <View style={[styles.cleanRow, { borderBottomWidth: 0 }]}>
+                <View style={styles.cleanRowLeft}>
+                  <Ionicons name="sparkles-outline" size={20} color={skin.colors.inkMute} />
+                  <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>装扮与主题皮肤</Text>
+                </View>
+                <Text style={[styles.cleanRowValue, { color: skin.colors.inkMute }]}>敬请期待</Text>
+              </View>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Base Color Appearance Modal */}
+      <Modal visible={colorModalOpen} transparent animationType="slide" onRequestClose={() => setColorModalOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setColorModalOpen(false)}>
+          <Pressable style={[styles.sheet, { backgroundColor: skin.colors.canvas }]} onPress={() => undefined}>
+            <View style={styles.sheetHandle} />
+            <Text style={[styles.sheetTitle, { color: skin.colors.ink }]}>基础外观配色</Text>
+            <View style={[styles.skinPreviewBox, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
+              <GlassChatBubble senderRole="ai" text="看你昨晚说肩颈酸，把靠枕换软了。" />
+              <GlassChatBubble senderRole="human" text="收到啦，今晚早点回来。" />
+            </View>
+            <View style={styles.skinPickerRow}>
+              {availableSkins.map((preset) => {
+                const active = preset.id === skin.id;
+                return (
+                  <Pressable
+                    key={preset.id}
+                    onPress={() => setSkinById(preset.id)}
+                    style={[
+                      styles.skinPill,
+                      {
+                        backgroundColor: active ? skin.colors.accent : skin.colors.surface,
+                        borderColor: skin.colors.border,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.skinPillText, { color: active ? skin.colors.accentFg : skin.colors.ink }]}>
+                      {preset.name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
@@ -1448,7 +1885,7 @@ function IdentitySwitcher({
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
         <Pressable style={styles.sheet} onPress={() => undefined}>
           <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>换个身份</Text>
+          <Text style={styles.sheetTitle}>切换账号</Text>
           <Text style={styles.sheetLabel}>现在是</Text>
 
           <Pressable style={styles.switchAccountRow} onPress={onOwner} disabled={pending}>
@@ -1495,9 +1932,7 @@ function IdentitySwitcher({
             );
           })}
 
-          <View style={styles.sheetFootnote}>
-            <Text style={styles.tinyMuted}>换过去，看到的也会跟着换。</Text>
-          </View>
+
         </Pressable>
       </Pressable>
     </Modal>
@@ -1536,7 +1971,7 @@ function ErrorState({
       <Text style={styles.centerTitle}>{title}</Text>
       {retry && (
         <Pressable style={styles.secondaryPill} onPress={onRetry}>
-          <Text style={styles.secondaryPillText}>RETRY RETRY</Text>
+          <Text style={styles.secondaryPillText}>重试</Text>
         </Pressable>
       )}
     </View>
@@ -1545,16 +1980,16 @@ function ErrorState({
 
 const colors = {
   canvas: "#FFFFFF",
-  paper: "#FAF9FE",
-  ink: "#000000",
-  text: "#1A1B1F",
-  muted: "#666666",
-  tertiary: "#8E8E93",
-  line: "#EFEFF4",
-  soft: "#F4F3F8",
-  rose: "#D9777F",
-  roseDark: "#C8656F",
-  roseWash: "#FBEFF0",
+  paper: "#F8FAFC",
+  ink: "#18181B",
+  text: "#18181B",
+  muted: "#64748B",
+  tertiary: "#94A3B8",
+  line: "#E8ECF2",
+  soft: "#F5F7FA",
+  rose: "#2563EB",
+  roseDark: "#1D4ED8",
+  roseWash: "#EEF4FF",
 };
 
 const styles = StyleSheet.create({
@@ -2005,4 +2440,373 @@ const styles = StyleSheet.create({
   centerBody: { maxWidth: 360, fontSize: 14, lineHeight: 21, color: colors.muted, textAlign: "center" },
   tinyMuted: { fontSize: 11, lineHeight: 17, color: colors.tertiary },
   disabled: { opacity: 0.38 },
+  headerRoleChip: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  headerRoleChipText: {
+    fontSize: 10.5,
+    fontWeight: "600",
+  },
+  companionAnchorBar: {
+    height: 32,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  companionAnchorText: {
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  companionAnchorBack: {
+    fontSize: 11,
+    fontWeight: "700",
+    textDecorationLine: "underline",
+  },
+  skinPreviewBox: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 18,
+  },
+  skinPickerRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 12,
+  },
+  skinPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  skinPillText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  iconActionBtn: {
+    paddingVertical: 2,
+    paddingHorizontal: 2,
+  },
+  cleanCardGroup: {
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: "hidden",
+    marginTop: 14,
+  },
+  cleanRow: {
+    minHeight: 52,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  cleanRowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  cleanRowRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  cleanRowTitle: {
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  cleanRowValue: {
+    fontSize: 13,
+  },
+  headerIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  postChipInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    gap: 3,
+  },
+  postChipText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  feedTopBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  feedTabsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 20,
+  },
+  feedTabItem: {
+    alignItems: "center",
+    paddingBottom: 4,
+  },
+  feedTabText: {
+    fontSize: 16,
+  },
+  feedTabIndicator: {
+    width: 18,
+    height: 2.5,
+    borderRadius: 2,
+    marginTop: 4,
+  },
+  compactFilterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  compactPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  compactPillText: {
+    fontSize: 11.5,
+    fontWeight: "500",
+  },
+  searchBarWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    padding: 0,
+  },
+  aiTinyBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 999,
+  },
+  aiTinyBadgeText: {
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  candidMediaImage: {
+    width: "100%",
+    height: 215,
+    borderRadius: 18,
+    marginTop: 8,
+  },
+  socialBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  socialCount: {
+    fontSize: 12.5,
+    fontWeight: "500",
+  },
+  commentBox: {
+    marginTop: 8,
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    gap: 4,
+  },
+  commentLine: {
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  composerInput: {
+    minHeight: 96,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 12,
+    fontSize: 14,
+    textAlignVertical: "top",
+  },
+  composerActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 12,
+  },
+  composerCancel: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 999,
+  },
+  composerSubmit: {
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 999,
+  },
+  composerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 10,
+  },
+  replyInput: {
+    flex: 1,
+    height: 40,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    fontSize: 13.5,
+  },
+  mySocialPage: {
+    paddingHorizontal: 16,
+    paddingTop: 18,
+  },
+  profileHero: {
+    alignItems: "center",
+    marginBottom: 18,
+  },
+  heroAvatar: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    borderWidth: 2.5,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  heroAvatarText: {
+    color: "#FFFFFF",
+    fontSize: 28,
+    fontWeight: "700",
+  },
+  heroBadgeDot: {
+    position: "absolute",
+    right: 0,
+    bottom: 0,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroName: {
+    fontSize: 20,
+    fontWeight: "700",
+    marginTop: 12,
+  },
+  heroBio: {
+    fontSize: 13,
+    marginTop: 4,
+    textAlign: "center",
+  },
+  statsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 36,
+    marginTop: 18,
+  },
+  statCol: {
+    alignItems: "center",
+  },
+  statNum: {
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  statLabel: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  relationPillCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 18,
+    gap: 10,
+  },
+  relationMain: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  relAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  relAvatarText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  relTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  relSub: {
+    fontSize: 11.5,
+    marginTop: 2,
+  },
+  relControlBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  relControlText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  profileTabsRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    marginBottom: 14,
+  },
+  profileTabBtn: {
+    alignItems: "center",
+    paddingBottom: 6,
+    paddingHorizontal: 14,
+  },
+  profileTabText: {
+    fontSize: 14.5,
+  },
+  profileGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  profilePhotoCard: {
+    width: "48%",
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+    backgroundColor: "#FFFFFF",
+  },
+  profilePhotoImg: {
+    width: "100%",
+    height: 130,
+  },
+  profilePhotoCaption: {
+    fontSize: 12,
+    lineHeight: 17,
+    padding: 8,
+  }
 });
