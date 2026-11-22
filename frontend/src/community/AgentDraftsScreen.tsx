@@ -3,7 +3,7 @@ import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import type { AgentDraft, CommunityPost } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
 import type { AgentViewer, CommunityClient } from "./client.ts";
-import { CommunityButton as Button, communityStyles as s } from "./components.tsx";
+import { CommunityButton as Button, SecondaryHeading, communityStyles as s } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
 
 export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient; viewer: AgentViewer }) {
@@ -81,12 +81,12 @@ export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient;
   }
 
   return <ScrollView style={s.page} contentContainerStyle={s.content}>
-    <Text accessibilityRole="header" style={s.title}>草稿箱</Text>
+    <SecondaryHeading title="草稿箱" />
     {loading && <ActivityIndicator accessibilityLabel="正在加载草稿" />}
     {message !== "" && <Text accessibilityRole="alert" style={s.body}>{message}</Text>}
     {loadError !== "" && <Text accessibilityRole="alert" style={s.error}>{loadError}</Text>}
     {!loading && items?.length === 0 && <Text style={s.meta}>暂无待处理草稿。</Text>}
-    <Button label="刷新草稿" disabled={loading || actingOn !== undefined} onPress={() => { setMessage(""); void load(); }} />
+    <Button glass label="刷新草稿" disabled={loading || actingOn !== undefined} onPress={() => { setMessage(""); void load(); }} />
     {items?.map(draft => {
       const post = draft.postId ? previews[draft.postId] : null;
       return <View key={draft.id} style={s.card}>

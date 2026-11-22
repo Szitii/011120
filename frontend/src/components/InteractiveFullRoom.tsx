@@ -12,6 +12,7 @@ import {
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from "react-native";
+import { useTransientBubble } from "./useTransientBubble";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { BottomSheet } from "./BottomSheet";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
@@ -97,8 +98,8 @@ export function InteractiveFullRoom({
   const [userOutfit, setUserOutfit] = useState(USER_OUTFITS[0]);
   const [compOutfit, setCompOutfit] = useState(COMPANION_OUTFITS[0]);
   const [atmosphere, setAtmosphere] = useState<"day" | "warm" | "night">("day");
-  const [userBubble, setUserBubble] = useState<string | null>(null);
-  const [compBubble, setCompBubble] = useState<string | null>("回来了？");
+  const [userBubble, setUserBubble] = useTransientBubble();
+  const [compBubble, setCompBubble] = useTransientBubble();
   const [lineIdx, setLineIdx] = useState(0);
   const [sheet, setSheet] = useState<null | "memo" | "wardrobe" | "wishlist" | "chat">(null);
   const [chatInput, setChatInput] = useState("");
@@ -120,10 +121,7 @@ export function InteractiveFullRoom({
   function walkTo(tx: number, ty: number, bubble?: string) {
     const cx = Math.max(stage.w * 0.16, Math.min(stage.w * 0.80, tx));
     const cy = Math.max(stage.h * 0.38, Math.min(stage.h * 0.68, ty));
-    if (bubble) {
-      setUserBubble(bubble);
-      setTimeout(() => setUserBubble((cur) => (cur === bubble ? null : cur)), 2200);
-    }
+    if (bubble) setUserBubble(bubble);
     Animated.parallel([
       Animated.timing(userX, { toValue: cx, duration: 480, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       Animated.timing(userY, { toValue: cy, duration: 480, easing: Easing.out(Easing.cubic), useNativeDriver: true }),

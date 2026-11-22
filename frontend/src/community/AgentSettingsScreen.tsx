@@ -4,7 +4,7 @@ import type { AgentSettingsView } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
 import { agentLimits, settingsForm, settingsPayload, type SettingsForm } from "./agent-settings.ts";
 import type { AgentViewer, CommunityClient } from "./client.ts";
-import { CommunityButton as Button, communityStyles as s } from "./components.tsx";
+import { CommunityButton as Button, SecondaryHeading, communityStyles as s } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
 
 const inputStyle = { ...s.input, minHeight: 44 };
@@ -91,11 +91,11 @@ export function AgentSettingsScreen({ client, viewer, onOpenDrafts }: {
   }
 
   return <ScrollView style={s.page} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-    <Text accessibilityRole="header" style={s.title}>家机活动设置</Text>
+    <SecondaryHeading title="家机活动设置" />
     {loading && <ActivityIndicator accessibilityLabel="正在加载家机设置" />}
     {message !== "" && <Text accessibilityRole="alert" style={s.meta}>{message}</Text>}
     {view && form && <>
-      <Button label={`草稿 ${view.usage.pendingDrafts}/20`} disabled={locked || edited} onPress={onOpenDrafts} />
+      <Button glass label={`草稿 ${view.usage.pendingDrafts}/20`} disabled={locked || edited} onPress={onOpenDrafts} />
       {edited && <Text style={s.meta}>保存或取消修改后可打开草稿箱。</Text>}
       <View style={s.card}>
         <Text accessibilityRole="header" style={s.author}>什么时候动</Text>

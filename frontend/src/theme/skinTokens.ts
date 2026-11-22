@@ -35,10 +35,6 @@ export interface SkinTheme {
   identityBadges: {
     avatarRing: string;
   };
-  actorAnchor: {
-    companionBarBg: string;
-    companionBarText: string;
-  };
 }
 
 const LIGHT_BASE_COLORS = {
@@ -91,7 +87,6 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
       aiBorder: PEARL_UI.highlight,
     },
     identityBadges: { avatarRing: "#CBD5E1" },
-    actorAnchor: { companionBarBg: "#18181B", companionBarText: "#FFFFFF" },
   },
   glacier: {
     id: "glacier",
@@ -113,7 +108,6 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
       aiBorder: "rgba(255,255,255,0.96)",
     },
     identityBadges: { avatarRing: "#BAE6FD" },
-    actorAnchor: { companionBarBg: "#18181B", companionBarText: "#FFFFFF" },
   },
   pearl: {
     id: "pearl",
@@ -135,7 +129,6 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
       aiBorder: "rgba(255,255,255,0.96)",
     },
     identityBadges: { avatarRing: "#FECDD3" },
-    actorAnchor: { companionBarBg: "#18181B", companionBarText: "#FFFFFF" },
   },
   titanium: {
     id: "titanium",
@@ -170,6 +163,5 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
       aiBorder: "rgba(255,255,255,0.22)",
     },
     identityBadges: { avatarRing: "#525866" },
-    actorAnchor: { companionBarBg: "#E2E8F0", companionBarText: "#0F172A" },
   },
 };

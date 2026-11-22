@@ -53,13 +53,11 @@ type Data =
 export function CommunityScreen({
   client,
   viewer,
-  legacy,
   initialScrollY = 0,
   onScroll,
 }: {
   client: CommunityClient;
   viewer: ActorContext;
-  legacy: React.ReactNode;
   initialScrollY?: number;
   onScroll: (y: number) => void;
 }) {
@@ -80,7 +78,6 @@ export function CommunityScreen({
   const [draft, setDraft] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const draftKey = useRef(communityRequestKey());
-  const [showLegacy, setShowLegacy] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "posts" | "comments"; id: string }>();
   const scope = useMemo(() => new CommunityRequestScope(), []);
@@ -224,6 +221,9 @@ export function CommunityScreen({
 
   const posts = data?.type === "feed" || data?.type === "profile" ? data.value.items : [];
   const nextCursor = data?.type === "detail" ? data.value.comments.nextCursor : data?.value.nextCursor;
+  const draftLimit = page.type === "detail" ? 2000 : 4000;
+  const draftLength = Array.from(draft.trim()).length;
+  const canSubmit = draftLength > 0 && draftLength <= draftLimit;
   const canCompose = own?.canPublish === true;
   const openActor = (id: string) => navigate({ type: "profile", id });
 
@@ -248,27 +248,6 @@ export function CommunityScreen({
           if (saved) void load();
         }}
       />
-    );
-  }
-
-  if (showLegacy && page.type === "feed") {
-    return (
-      <View style={s.page}>
-        <View style={localStyles.subHeader}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setShowLegacy(false)}
-            style={({ pressed }) => [localStyles.backPill, pressed && { transform: [{ scale: 0.94 }] }]}
-          >
-            <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-            <Ionicons name="chevron-back" size={16} color={PEARL_UI.ink} />
-            <Text style={localStyles.backText}>返回社区</Text>
-          </Pressable>
-          <Text style={localStyles.subTitle}>相遇与生活记录</Text>
-          <View style={{ width: 64 }} />
-        </View>
-        {legacy}
-      </View>
     );
   }
 
@@ -380,7 +359,7 @@ export function CommunityScreen({
               </View>
             </View>
 
-            {/* Compact Filter Row + Subtle Encounter Archive Link */}
+            {/* Compact Filter Row */}
             <View style={localStyles.filterRow}>
               <View style={s.row}>
                 {(
@@ -400,14 +379,6 @@ export function CommunityScreen({
                   />
                 ))}
               </View>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setShowLegacy(true)}
-                style={({ pressed }) => [localStyles.legacyLink, pressed && { opacity: 0.65 }]}
-              >
-                <Text style={localStyles.legacyLinkText}>相遇记录</Text>
-                <Ionicons name="chevron-forward" size={13} color={PEARL_UI.accentInk} />
-              </Pressable>
             </View>
           </>
         ) : (
@@ -509,7 +480,7 @@ export function CommunityScreen({
                       );
                     }}
                   />
-                  <Button label="屏蔽此身份" disabled={busy} onPress={() => setBlockTarget(data.profile)} />
+                  <Button label="屏蔽对方" disabled={busy} onPress={() => setBlockTarget(data.profile)} />
                   <Button
                     label="举报"
                     disabled={busy}
@@ -541,7 +512,7 @@ export function CommunityScreen({
 
         {own && !own.canPublish && page.type === "feed" && (
           <View style={localStyles.noticePill}>
-            <Text style={s.meta}>当前家机尚未开放公开发布，可在右上角设置中调整权限。</Text>
+            <Text style={s.meta}>当前家机尚未开放公开发布，请前往「我的」页右上角的设置。</Text>
           </View>
         )}
 
@@ -579,7 +550,6 @@ export function CommunityScreen({
                   accessibilityLabel="评论内容"
                   multiline
                   editable={!busy}
-                  maxLength={2000}
                   placeholder="写下你的回应…"
                   placeholderTextColor="#9A968F"
                   value={draft}
@@ -589,10 +559,11 @@ export function CommunityScreen({
                     draftKey.current = communityRequestKey();
                   }}
                 />
+                <Text style={draftLength > draftLimit ? s.error : s.meta}>{draftLength} / {draftLimit}</Text>
                 <View style={{ alignItems: "flex-end" }}>
                   <Button
                     primary
-                    disabled={busy || loading || !draft.trim()}
+                    disabled={busy || loading || !canSubmit}
                     label={busy ? "正在提交…" : "发表评论"}
                     onPress={() =>
                       void mutate(
@@ -672,7 +643,7 @@ export function CommunityScreen({
                   ? "notifications-off-outline"
                   : page.type === "blocks"
                     ? "shield-checkmark-outline"
-                    : "sparkles-outline"
+                    : "chatbubbles-outline"
               }
               size={22}
               color={PEARL_UI.accent}
@@ -705,7 +676,6 @@ export function CommunityScreen({
           accessibilityLabel="动态内容"
           multiline
           editable={!busy}
-          maxLength={4000}
           placeholder="写下今天的小事或心情…"
           placeholderTextColor="#9A968F"
           value={draft}
@@ -715,6 +685,7 @@ export function CommunityScreen({
             draftKey.current = communityRequestKey();
           }}
         />
+        <Text style={draftLength > draftLimit ? s.error : s.meta}>{draftLength} / {draftLimit}</Text>
         {error !== "" && (
           <Text accessibilityRole="alert" style={[s.error, { marginBottom: 10 }]}>
             {error}（输入内容已保留）
@@ -724,7 +695,7 @@ export function CommunityScreen({
           <Button label="先收起" disabled={busy} onPress={() => setComposeOpen(false)} />
           <Button
             primary
-            disabled={busy || loading || !draft.trim()}
+            disabled={busy || loading || !canSubmit}
             label={busy ? "正在发布…" : "发布动态"}
             onPress={() =>
               void mutate(
@@ -744,13 +715,13 @@ export function CommunityScreen({
       {/* Block / Delete Confirmation Sheet */}
       <BottomSheet
         visible={Boolean(blockTarget || deleteTarget)}
-        title={blockTarget ? "屏蔽身份" : "删除内容"}
+        title={blockTarget ? "屏蔽对方" : "删除内容"}
         onClose={closeConfirmation}
       >
         {blockTarget && (
           <>
             <Text style={[s.body, { color: skin.colors.ink, marginBottom: 12 }]}>
-              屏蔽 {blockTarget.displayName}？双方将看不到彼此的社区内容，也不能关注和评论。已有双向关注会解除。
+              屏蔽 {blockTarget.displayName}？这会屏蔽对方的全部关联身份。当前身份将与对方互不可见，不能关注或评论，已有的双向关注也会解除。
             </Text>
             <View style={s.row}>
               <Button label="取消" disabled={busy} onPress={closeConfirmation} />
@@ -890,18 +861,6 @@ const localStyles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-  },
-  legacyLink: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    paddingVertical: 6,
-    paddingHorizontal: 6,
-  },
-  legacyLinkText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: PEARL_UI.accentInk,
   },
   subHeader: {
     flexDirection: "row",

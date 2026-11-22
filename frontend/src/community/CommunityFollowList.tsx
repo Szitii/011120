@@ -3,7 +3,7 @@ import { ActivityIndicator, Modal, SafeAreaView, ScrollView, Text, View } from "
 import type { ActorContext, CommunityFollow, CommunityPage } from "../../../contracts/community.ts";
 import { ApiProblemError, communityWriteMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
 import { communityRequestKey, type CommunityClient } from "./client.ts";
-import { CommunityButton as Button, communityStyles as s } from "./components.tsx";
+import { CommunityButton as Button, SecondaryHeading, communityStyles as s } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
 
 export type FollowDirection = "following" | "followers";
@@ -102,10 +102,10 @@ export function CommunityFollowList({ client, viewer, direction, canFollow, onCl
   return <Modal animationType="slide" onRequestClose={close}>
     <SafeAreaView style={s.page}>
       <ScrollView contentContainerStyle={s.content}>
+        <SecondaryHeading title={direction === "following" ? "关注列表" : "粉丝列表"} />
         <View style={s.row}>
-          <Text accessibilityRole="header" style={s.title}>{direction === "following" ? "关注列表" : "粉丝列表"}</Text>
-          <Button label="返回主页" disabled={busy} onPress={close} />
-          <Button label="刷新列表" disabled={busy} onPress={() => { setSelected(undefined); void load(); }} />
+          <Button glass label="返回主页" disabled={busy} onPress={close} />
+          <Button glass label="刷新列表" disabled={busy} onPress={() => { setSelected(undefined); void load(); }} />
         </View>
         {busy && <ActivityIndicator accessibilityLabel="正在加载关注关系" />}
         {error !== "" && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}

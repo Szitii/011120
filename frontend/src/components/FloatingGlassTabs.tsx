@@ -9,11 +9,9 @@ import type { RootTab } from "../state/navigation";
 
 export function FloatingGlassTabs({
   current,
-  isSampleCompanion,
   onSelect,
 }: {
   current: RootTab;
-  isSampleCompanion: boolean;
   onSelect: (tab: RootTab) => void;
 }) {
   const { skin } = useSkin();
@@ -40,8 +38,8 @@ export function FloatingGlassTabs({
     {
       key: "my",
       label: "我的",
-      icon: isSampleCompanion ? "sparkles-outline" : "person-outline",
-      activeIcon: isSampleCompanion ? "sparkles" : "person",
+      icon: "person-outline",
+      activeIcon: "person",
     },
   ];
 

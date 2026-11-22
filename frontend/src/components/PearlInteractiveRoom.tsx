@@ -10,6 +10,7 @@ import {
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from "react-native";
+import { useTransientBubble } from "./useTransientBubble";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { PEARL_UI } from "../theme/skinTokens";
@@ -47,8 +48,8 @@ export function PearlInteractiveRoom({
   const [nightMode, setNightMode] = useState(false);
   const [facingLeft, setFacingLeft] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
-  const [userBubble, setUserBubble] = useState<string | null>(null);
-  const [compBubble, setCompBubble] = useState<string | null>("今晚风大，回来喝杯热的。");
+  const [userBubble, setUserBubble] = useTransientBubble();
+  const [compBubble, setCompBubble] = useTransientBubble();
   const [whisperIndex, setWhisperIndex] = useState(0);
   const [hearts, setHearts] = useState<FloatingHeart[]>([]);
 
@@ -63,7 +64,7 @@ export function PearlInteractiveRoom({
   const [ripplePos, setRipplePos] = useState({ x: 0, y: 0 });
   const currentPosRef = useRef({ x: 204, y: 174 });
   const heartIdRef = useRef(0);
-  const bubbleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const walkAnimation = useRef<Animated.CompositeAnimation | null>(null);
 
   useEffect(() => {
     const loopA = Animated.loop(
@@ -103,7 +104,7 @@ export function PearlInteractiveRoom({
     return () => {
       loopA.stop();
       loopB.stop();
-      if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
+      walkAnimation.current?.stop();
     };
   }, [idleFloatA, idleFloatB]);
 
@@ -156,11 +157,7 @@ export function PearlInteractiveRoom({
     const next = (whisperIndex + 1) % COMPANION_WHISPERS.length;
     setWhisperIndex(next);
     setCompBubble(COMPANION_WHISPERS[next]);
-    if (customUserBubble) {
-      setUserBubble(customUserBubble);
-      if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
-      bubbleTimerRef.current = setTimeout(() => setUserBubble(null), 2400);
-    }
+    if (customUserBubble) setUserBubble(customUserBubble);
     Animated.sequence([
       Animated.spring(compPop, { toValue: 1.1, speed: 28, bounciness: 10, useNativeDriver: true }),
       Animated.spring(compPop, { toValue: 1, speed: 22, bounciness: 8, useNativeDriver: true }),
@@ -180,13 +177,10 @@ export function PearlInteractiveRoom({
     triggerRipple(clampedX, clampedY);
 
     const duration = Math.max(300, Math.min(680, Math.round(dist * 2.6)));
-    if (bubble) {
-      setUserBubble(bubble);
-      if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
-      bubbleTimerRef.current = setTimeout(() => setUserBubble(null), 2200);
-    }
+    if (bubble) setUserBubble(bubble);
 
-    Animated.parallel([
+    walkAnimation.current?.stop();
+    walkAnimation.current = Animated.parallel([
       Animated.timing(userX, {
         toValue: clampedX,
         duration,
@@ -205,10 +199,12 @@ export function PearlInteractiveRoom({
         Animated.timing(walkBounce, { toValue: -5, duration: Math.round(duration * 0.25), useNativeDriver: true }),
         Animated.timing(walkBounce, { toValue: 0, duration: Math.round(duration * 0.25), useNativeDriver: true }),
       ]),
-    ]).start(() => {
+    ]);
+    walkAnimation.current.start(({ finished }) => {
+      if (!finished) return;
       const compX = stage.w * 0.36;
       const compY = stage.h * 0.58;
-      if (Math.hypot(clampedX - compX, clampedY - compY) < 88) {
+      if (bubble || Math.hypot(clampedX - compX, clampedY - compY) < 88) {
         popCompanionWhisper();
       }
     });
@@ -216,7 +212,6 @@ export function PearlInteractiveRoom({
 
   function handleSnuggle() {
     walkTo(stage.w * 0.49, stage.h * 0.60, "贴贴～");
-    setTimeout(() => popCompanionWhisper(), 320);
   }
 
   const companionLeft = stage.w * 0.36 - 34;

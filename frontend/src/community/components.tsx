@@ -162,11 +162,20 @@ export function ContentCard({
   );
 }
 
+export function SecondaryHeading({ title }: { title: string }) {
+  return (
+    <LiquidGlassSurface glass tint="light" borderRadius={18} style={communityStyles.heading}>
+      <Text accessibilityRole="header" style={communityStyles.title}>{title}</Text>
+    </LiquidGlassSurface>
+  );
+}
+
 export const communityStyles = StyleSheet.create({
   page: { flex: 1, backgroundColor: PEARL_UI.background[0] },
   communityPage: { flex: 1 },
   content: { paddingHorizontal: CHROME.screenInset, paddingTop: 8, paddingBottom: 48, gap: 12 },
   feedContent: { paddingBottom: CHROME.scrollBottomClearance },
+  heading: { paddingHorizontal: 16, paddingVertical: 12 },
   title: { fontSize: 22, fontWeight: "700", color: PEARL_UI.ink, letterSpacing: -0.3 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" },
   button: {
@@ -232,7 +241,7 @@ export const communityStyles = StyleSheet.create({
   input: {
     minHeight: 110,
     textAlignVertical: "top",
-    backgroundColor: PEARL_UI.background[0],
+    backgroundColor: PEARL_UI.white,
     borderWidth: 1,
     borderColor: PEARL_UI.line,
     borderRadius: 16,

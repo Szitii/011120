@@ -114,6 +114,7 @@ describe("real API adapter boundary", () => {
       await api.worldItems();
       await api.lifeContinuity();
       await api.lifeContinuity({ kind: "COMPANION", id: "companion-id" });
+      await api.lifeContinuity({ kind: "SOCIAL_TWIN", id: "twin-id" });
       await api.encounterDetail("encounter-id");
       await api.companionProfile("companion-id");
       await api.companionProfile("companion-id", { kind: "COMPANION", id: "companion-id" });
@@ -137,6 +138,7 @@ describe("real API adapter boundary", () => {
       assert.ok(calls.some((call) => call.url.endsWith("/v0/world-items?limit=20")));
       assert.ok(calls.some((call) => call.url.endsWith("/v0/life-continuity?limit=30&activeSubjectKind=OWNER")));
       assert.ok(calls.some((call) => call.url.endsWith("/v0/life-continuity?limit=30&activeSubjectKind=COMPANION&activeSubjectId=companion-id")));
+      assert.ok(calls.some((call) => call.url.endsWith("/v0/life-continuity?limit=30&activeSubjectKind=SOCIAL_TWIN&activeSubjectId=twin-id")));
       assert.ok(calls.some((call) => call.url.endsWith("/v0/encounters/encounter-id")));
       assert.ok(calls.some((call) => call.url.endsWith("/v0/companions/companion-id/profile?activeSubjectKind=OWNER")));
       assert.ok(calls.some((call) => call.url.endsWith("/v0/companions/companion-id/profile?activeSubjectKind=COMPANION&activeSubjectId=companion-id")));
