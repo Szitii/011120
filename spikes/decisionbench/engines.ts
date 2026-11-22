@@ -91,7 +91,14 @@ export class SignalClassifierEngine extends OfflineEngine {
 
 export class UnavailableExternalEngine implements DecisionEngine {
   readonly available = false;
-  constructor(readonly id: string, readonly provider: string, readonly model: string) {}
+  readonly id: string;
+  readonly provider: string;
+  readonly model: string;
+  constructor(id: string, provider: string, model: string) {
+    this.id = id;
+    this.provider = provider;
+    this.model = model;
+  }
   async decide(fixture: DecisionFixture): Promise<DecisionResult> {
     const start = performance.now();
     return {
