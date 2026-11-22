@@ -534,11 +534,11 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   warmOverlay: {
-    position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(251, 191, 36, 0.12)",
   },
   nightOverlay: {
-    position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(15, 23, 42, 0.34)",
   },
   furnitureZone: {
