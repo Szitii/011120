@@ -49,6 +49,12 @@ it("routes all mutations, hashes retry keys and refuses client-selected provenan
   assert.equal((await handleCommunityRequest(request("unsupported", "PATCH"), session, "t"))?.status, 404);
 });
 
+it("counts post length in characters like the database, so emoji are not counted twice", async () => {
+  const emoji = "\u{1F600}"; // one character, two UTF-16 code units
+  assert.equal((await handleCommunityRequest(request("posts", "POST", { body: emoji.repeat(4000) }), session, "t"))?.status, 201);
+  await assert.rejects(handleCommunityRequest(request("posts", "POST", { body: emoji.repeat(4001) }), session, "t"));
+});
+
 it("rejects malformed contexts, cursors, bodies and missing retry keys before persistence", async () => {
   const bad = [
     { method: "GET", url: "/v0/community/feed" },

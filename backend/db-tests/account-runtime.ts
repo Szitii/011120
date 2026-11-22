@@ -166,6 +166,21 @@ try {
   }
   console.log("Account integration 4: verified Auth alone grants no access to an inactive Owner");
 
+  if (!realAuth) {
+    // A verified Supabase user with no Owner row yet: the first request creates exactly one Owner.
+    const subject = randomUUID();
+    await pool.query("insert into auth.users(id) values ($1)", [subject]);
+    stubUsers.set("token-new", subject);
+    const first = await call<ActiveIdentityContext>("token-new", "identity-context");
+    const second = await call<ActiveIdentityContext>("token-new", "identity-context");
+    assert.equal(first.status, 200);
+    assert.equal(first.data.activeSubject.kind, "OWNER");
+    assert.equal(second.data.activeSubject.id, first.data.activeSubject.id);
+    const owners = await pool.query("select id, status from public.owners where auth_user_id = $1", [subject]);
+    assert.deepEqual(owners.rows, [{ id: first.data.activeSubject.id, status: "ACTIVE" }]);
+    console.log("Account integration 4b: first sign-in creates one ACTIVE Owner and is idempotent");
+  }
+
   if (sessionA && sessionB) {
     const response = await auth("token?grant_type=refresh_token", { refresh_token: sessionA.refresh_token });
     assert.equal(response.status, 200);
