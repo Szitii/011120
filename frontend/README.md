@@ -45,7 +45,7 @@ For a dedicated test Supabase project:
 
 1. Apply all repository migrations in `backend/supabase/migrations`. Enable email/password Auth and disable public signup in the project settings, then invite testers by email through Supabase Auth. Disabling public signup is what keeps the beta invite-only.
 2. A tester's first signed-in request creates their Owner automatically (`public.claim_owner()`, migration `202611220033`). Only to attach a tester to existing seeded test data, set that Owner's `public.owners.auth_user_id` to their Supabase user UUID before they first sign in. Suspending an Owner (`status = 'SUSPENDED'`) blocks access; signing in again does not reactivate it.
-3. Start the authenticated API from the repository root with `npm run start:mobile:api`. Set `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY`. The backend database login needs permission to `SET ROLE authenticated`. The API listens on `127.0.0.1:8787` by default. Set `MOBILE_API_HOST` and `MOBILE_API_PORT` as needed. Use an HTTPS endpoint reachable from the iPhone or Web client.
+3. Start the authenticated API from the repository root with `npm run start:mobile:api`. Set `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY`. The backend database login must be a member of role `companion_api` (migration `202611220036` grants it to the role that runs migrations; run `grant companion_api to <login>;` if the API uses another login). The API listens on `127.0.0.1:8787` by default. Set `MOBILE_API_HOST` and `MOBILE_API_PORT` as needed. Use an HTTPS endpoint reachable from the iPhone or Web client.
 4. Start or export Expo with the following public environment variables. Use the publishable key or legacy anon key for the same test project.
 
    ```bash
