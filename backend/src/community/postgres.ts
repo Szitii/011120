@@ -1,6 +1,6 @@
 import { PostgresPersistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
 import type { CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
-import type { ActorContext, HumanProfileSettings } from "../../../community-contracts/types.ts";
+import type { ActorContext, HumanProfileSettings } from "../../../contracts/community.ts";
 
 /** Uses the same authenticated transaction executor as the existing Owner API. */
 export class PostgresCommunityAdapter implements CommunityPort {

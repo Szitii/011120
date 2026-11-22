@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { createMobileDevHttpServer } from "../../packages/foundation/src/dev/mobile-http-server.ts";
-import { createPgPool } from "../../packages/foundation/src/persistence/postgres/index.ts";
-import type { ActorContext, CommunityProfile, CommunityPost, CommunityComment, CommunityPage, CommunityNotification, CommunityDetail, HumanProfileSettings } from "../../packages/community-contracts/types.ts";
+import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
+import { createPgPool } from "../src/persistence/postgres/index.ts";
+import type { ActorContext, CommunityProfile, CommunityPost, CommunityComment, CommunityPage, CommunityNotification, CommunityDetail, HumanProfileSettings } from "../../contracts/community.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");

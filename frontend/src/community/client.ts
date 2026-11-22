@@ -1,4 +1,4 @@
-import type { ActorContext, CommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../../packages/community-contracts/types.ts";
+import type { ActorContext, CommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
 
 type Requester = <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown, key?: string) => Promise<T>;
 

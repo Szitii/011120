@@ -14,6 +14,21 @@
 
 当前产品决议参见 [docs/PRODUCT_DIRECTION_CURRENT.md](docs/PRODUCT_DIRECTION_CURRENT.md)。历史技术文档记录了早期工程不变量；若产品名称、界面结构和商业策略出现不同，以最新产品决议为准，安全边界不得自动降低。
 
+## 目录与分工
+
+| 目录 | 内容 | 负责 |
+|---|---|---|
+| `frontend/` | Expo / React Native 移动端和 Web 端，有自己的 `package.json` | 前端 |
+| `backend/src`、`backend/test` | TypeScript 服务端（HTTP 接口、数据库适配、导入、Encounter）和单元测试 | 后端 |
+| `backend/supabase/migrations` | 数据库迁移：表、权限、业务规则都在这里 | 后端 |
+| `backend/db-tests` | 需要真实 PostgreSQL 的契约与集成测试 | 后端 |
+| `backend/scripts` | 初始化开发库、跑数据库测试、冒烟测试 | 后端 |
+| `contracts/` | 前后端的交界：`openapi/` 接口说明和 `community.ts` 共用类型。改这里要两边都同意 | 共同 |
+| `scripts/` | CI 脚本和 Windows 一键启动脚本，前后端都会用到 | 共同 |
+| `docs/`、`spikes/` | 文档和实验代码 | 共同 |
+
+根目录的 `package.json` 是后端的依赖和命令（`npm run check`、`npm run test:postgres` 等）；前端命令在 `frontend/` 下运行，或用 `npm run <命令> --prefix frontend`。
+
 ## 已确认的工程基础
 
 - TypeScript Foundation：外部角色卡导入解析与防火墙、`/v0` HTTP 边界、PostgreSQL 适配器、Encounter 编排与输入输出安全扫描。
@@ -33,7 +48,7 @@ npm ci
 npm run check
 ```
 
-移动端开发与数据库验证参见 [apps/mobile/README.md](apps/mobile/README.md)。数据库集成测试需要独立的 PostgreSQL 17 测试库，切勿在生产数据库执行重置脚本。
+移动端开发与数据库验证参见 [frontend/README.md](frontend/README.md)。数据库集成测试需要独立的 PostgreSQL 17 测试库，切勿在生产数据库执行重置脚本。
 
 ## 迁移说明
 

@@ -41,7 +41,7 @@ type RealApiConfig = { baseUrl: string } & ({ bearerToken: string } | { session:
 
 export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
-  readonly community: import("../../../../packages/community-contracts/types.ts").CommunityClient;
+  readonly community: import("../../../contracts/community.ts").CommunityClient;
 
   constructor(config: RealApiConfig) {
     this.config = config;

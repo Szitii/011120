@@ -93,4 +93,4 @@ The repository includes a disposable PostgreSQL 17 CI job that applies all migra
 - Add streaming upload storage and isolated parsing before supporting binary cards or archives.
 - Define a cryptographic issuer/signature scheme before calling Identity Passport externally verifiable.
 - Add Unicode confusable normalization and multilingual detector benchmarks; deterministic detectors remain defense-in-depth and do not grant authority.
-- Add an HTTP adapter generated against `openapi/v0.yaml` after the persistence adapter exists.
+- Add an HTTP adapter generated against `contracts/openapi/v0.yaml` after the persistence adapter exists.

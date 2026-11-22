@@ -4,12 +4,12 @@ import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { createSupabaseMobileHttpServer } from "../../packages/foundation/src/http/supabase-mobile-server.ts";
-import { createPgPool } from "../../packages/foundation/src/persistence/postgres/index.ts";
+import { createSupabaseMobileHttpServer } from "../src/http/supabase-mobile-server.ts";
+import { createPgPool } from "../src/persistence/postgres/index.ts";
 import type {
   ActorContext, CommunityNotification, CommunityPage, CommunityPost, CommunityProfile,
-} from "../../packages/community-contracts/types.ts";
-import type { ActiveIdentityContext, OwnerCompanionCollection } from "../../apps/mobile/src/contracts.ts";
+} from "../../contracts/community.ts";
+import type { ActiveIdentityContext, OwnerCompanionCollection } from "../../frontend/src/contracts.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") {

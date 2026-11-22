@@ -150,7 +150,7 @@ From the repository root:
 npm run check
 ```
 
-From `apps/mobile`:
+From `frontend`:
 
 ```bash
 npm run check
@@ -164,7 +164,7 @@ To run the account contract against real Auth, set `COMPANION_SOCIAL_REAL_AUTH_T
 
 ```bash
 # Point DATABASE_URL at the disposable seeded database.
-COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types tests/postgres/account-runtime.ts
+COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types backend/db-tests/account-runtime.ts
 ```
 
 The real-Auth run adds password grants, refresh-token rotation, device logout and rejection of revoked sessions to the isolation checks. With a disposable Auth instance issuing JWTs with a lifetime of 5–30 seconds, set `AUTH_TEST_VERIFY_TOKEN_EXPIRY=1` to also verify a naturally expired bearer and refresh back into the same Owner.

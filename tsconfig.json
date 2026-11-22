@@ -17,5 +17,5 @@
     "types": ["node"],
     "verbatimModuleSyntax": true
   },
-  "include": ["packages/**/*.ts"]
+  "include": ["backend/src/**/*.ts", "backend/test/**/*.ts", "contracts/**/*.ts"]
 }

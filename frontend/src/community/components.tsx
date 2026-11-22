@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import type { CommunityActor, CommunityComment, CommunityPost } from "../../../../packages/community-contracts/types.ts";
+import type { CommunityActor, CommunityComment, CommunityPost } from "../../../contracts/community.ts";
 
 export function CommunityButton({ label, onPress, disabled = false, selected = false }: {
   label: string; onPress: () => void; disabled?: boolean; selected?: boolean;

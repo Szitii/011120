@@ -30,16 +30,16 @@
 
 | 文件/目录 | 职责 |
 | --- | --- |
-| `packages/community-contracts/types.ts` | 仅包含可公开的 DTO 与移动端接口，不包含身份档案或记忆 |
-| `packages/foundation/src/community/http.ts` | 社区路由、输入白名单、操作身份、重试键 |
-| `packages/foundation/src/community/port.ts` | 持久化端口 |
-| `packages/foundation/src/community/postgres.ts` | 参数化数据库调用、安全错误映射 |
-| `supabase/migrations/202611210030_p1_community.sql` | 身份映射、帖子、评论、关注、通知、审计和事务幂等 |
-| `apps/mobile/src/community/client.ts` | 独立社区客户端；所有读写显式携带身份 |
-| `apps/mobile/src/community/CommunityScreen.tsx` | Feed、详情、发布、主页、通知页面编排 |
-| `apps/mobile/src/community/components.tsx` | 公共内容卡、身份标记、按钮与样式 |
-| `apps/mobile/src/community/request-scope.ts` | 丢弃路由切换/身份切换后的迟到响应 |
-| `openapi/community.yaml` / `openapi/v0.yaml` | 12 个社区操作及完整 DTO 合约 |
+| `contracts/community.ts` | 仅包含可公开的 DTO 与移动端接口，不包含身份档案或记忆 |
+| `backend/src/community/http.ts` | 社区路由、输入白名单、操作身份、重试键 |
+| `backend/src/community/port.ts` | 持久化端口 |
+| `backend/src/community/postgres.ts` | 参数化数据库调用、安全错误映射 |
+| `backend/supabase/migrations/202611210030_p1_community.sql` | 身份映射、帖子、评论、关注、通知、审计和事务幂等 |
+| `frontend/src/community/client.ts` | 独立社区客户端；所有读写显式携带身份 |
+| `frontend/src/community/CommunityScreen.tsx` | Feed、详情、发布、主页、通知页面编排 |
+| `frontend/src/community/components.tsx` | 公共内容卡、身份标记、按钮与样式 |
+| `frontend/src/community/request-scope.ts` | 丢弃路由切换/身份切换后的迟到响应 |
+| `contracts/openapi/community.yaml` / `contracts/openapi/v0.yaml` | 12 个社区操作及完整 DTO 合约 |
 
 辅助修复：开发 HTTP Host 的 CORS 增加 PUT/DELETE；导出配置改为 Expo 可静态替换的直接环境变量访问；忽略本地导出产物。依赖、锁文件、原记忆模块均未改动。
 
@@ -73,17 +73,17 @@
 ```sh
 npm ci
 npm run check
-npm ci --prefix apps/mobile --ignore-scripts
-npm run check --prefix apps/mobile
-npm run export:ci --prefix apps/mobile
-npm run export:web:ci --prefix apps/mobile
+npm ci --prefix frontend --ignore-scripts
+npm run check --prefix frontend
+npm run export:ci --prefix frontend
+npm run export:web:ci --prefix frontend
 ```
 
 数据库测试使用全新的可丢弃数据库。原合约继续由 `npm run test:postgres` 验证。创建并初始化另一份开发测试库后：
 
 ```sh
 COMPANION_SOCIAL_DEV_DATABASE=1 npm run dev:mobile:db:init
-COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types tests/postgres/community-runtime.ts
+COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types backend/db-tests/community-runtime.ts
 ```
 
 `DATABASE_URL` 需要指向对应的可丢弃数据库。新增集成测试会写入、删除内容并短暂调整测试家机状态，因此只能在种子测试库运行；CI 已接入独立开发测试库。已有开发数据应追加迁移 0030，不要对已有库重复运行初始化脚本。

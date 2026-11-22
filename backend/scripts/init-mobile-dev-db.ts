@@ -30,7 +30,7 @@ try {
     );
   }
 
-  const bootstrap = (await read("tests/postgres/bootstrap.sql"))
+  const bootstrap = (await read("backend/db-tests/bootstrap.sql"))
     .replace(
       "create role anon nologin;",
       () => "do $$ begin create role anon nologin; exception when duplicate_object then null; end $$;",
@@ -45,16 +45,16 @@ try {
     );
   await pool.query(bootstrap);
 
-  const migrationDir = path.join(root, "supabase", "migrations");
+  const migrationDir = path.join(root, "backend", "supabase", "migrations");
   const migrations = (await readdir(migrationDir))
     .filter((name) => name.endsWith(".sql"))
     .sort();
 
   for (const migration of migrations) {
-    await pool.query(await read(path.join("supabase", "migrations", migration)));
+    await pool.query(await read(path.join("backend", "supabase", "migrations", migration)));
   }
 
-  await pool.query(await read("tests/postgres/mobile-dev-seed.sql"));
+  await pool.query(await read("backend/db-tests/mobile-dev-seed.sql"));
 
   const client = await pool.connect();
   try {

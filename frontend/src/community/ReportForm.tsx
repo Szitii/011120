@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
-import type { ActorContext, CommunityClient, CommunityReport, ReportReason, ReportTarget } from "../../../../packages/community-contracts/types.ts";
+import type { ActorContext, CommunityClient, CommunityReport, ReportReason, ReportTarget } from "../../../contracts/community.ts";
 import { safeClientMessage } from "../adapters/real-api.ts";
 import { communityRequestKey } from "./client.ts";
 import { CommunityButton as Button, communityStyles as s } from "./components.tsx";

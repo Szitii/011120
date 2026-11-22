@@ -1,4 +1,4 @@
-import type { ActorContext, HumanProfileSettings } from "../../../community-contracts/types.ts";
+import type { ActorContext, HumanProfileSettings } from "../../../contracts/community.ts";
 
 export interface CommunityRead {
   actor: ActorContext;
