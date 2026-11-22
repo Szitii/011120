@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { CommunityCommand, CommunityRead } from "./port.ts";
-import type { HumanProfileSettings } from "../../../community-contracts/types.ts";
+import type { HumanProfileSettings } from "../../../contracts/community.ts";
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid community request."); };

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, CommunityDetail, CommunityProfile, CommunityPost,
-  CommunityBlock, ReportTarget, CommunityPage, CommunityNotification, CommunityFeedMode, CommunityActorFilter } from "../../../../packages/community-contracts/types.ts";
+  CommunityBlock, ReportTarget, CommunityPage, CommunityNotification, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
 import { safeClientMessage } from "../adapters/real-api.ts";
 import { communityRequestKey } from "./client.ts";
 import { CommunityRequestScope } from "./request-scope.ts";

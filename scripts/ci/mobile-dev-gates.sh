@@ -2,7 +2,7 @@
 set -euo pipefail
 
 for suite in protection community account; do
-  node --experimental-strip-types "tests/postgres/${suite}-runtime.ts"
+  node --experimental-strip-types "backend/db-tests/${suite}-runtime.ts"
 done
 
 export MOBILE_DEV_HOST=127.0.0.1
@@ -11,7 +11,7 @@ export MOBILE_DEV_OWNER_TOKEN=companion-social-stage1-owner
 export MOBILE_DEV_API_BASE_URL="http://127.0.0.1:${MOBILE_DEV_PORT}"
 
 api_log="$(mktemp)"
-node --experimental-strip-types packages/foundation/src/dev/mobile-http-server.ts >"$api_log" 2>&1 &
+node --experimental-strip-types backend/src/dev/mobile-http-server.ts >"$api_log" 2>&1 &
 api_pid=$!
 cleanup() {
   kill "$api_pid" 2>/dev/null || true

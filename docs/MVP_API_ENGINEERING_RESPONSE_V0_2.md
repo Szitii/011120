@@ -4,7 +4,7 @@ Status: Engineering review complete locally; remote evidence is recorded only af
 Handoff: `03-02-MVP-UX-API-2026-09-18-V1`  
 Receiver response: **ACCEPTED WITH GAPS**
 
-This is the Engineering artifact for the existing server-only HTTP/API boundary execution unit. It does not create a second backlog or runtime. The normative machine contract is `openapi/v0.yaml` (`0.2.0`). Endpoint names describe stable resources and do not encode client tab labels.
+This is the Engineering artifact for the existing server-only HTTP/API boundary execution unit. It does not create a second backlog or runtime. The normative machine contract is `contracts/openapi/v0.yaml` (`0.2.0`). Endpoint names describe stable resources and do not encode client tab labels.
 
 ## Stable request context
 

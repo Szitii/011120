@@ -16,7 +16,7 @@ import { createClientBootstrap, type ClientBootstrap } from "./src/adapters";
 import { RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
 import { AccountGate } from "./src/auth/AccountGate";
 import type { AccountBinding } from "./src/auth/account-session";
-import type { CommunityClient, CommunityPost, CommunityProfile } from "../../packages/community-contracts/types";
+import type { CommunityClient, CommunityPost, CommunityProfile } from "../contracts/community";
 import { colors } from "./src/theme";
 import { CommunityScreen } from "./src/community/CommunityScreen";
 import { HumanProfileEditor } from "./src/community/HumanProfileEditor";

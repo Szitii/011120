@@ -35,10 +35,10 @@ echo "== Root production dependency audit =="
 npm audit --omit=dev
 
 echo "== Mobile typecheck / tests / Expo exports =="
-npm install --prefix apps/mobile --ignore-scripts
-npm run check --prefix apps/mobile
-npm run export:ci --prefix apps/mobile
-npm run export:web:ci --prefix apps/mobile
+npm install --prefix frontend --ignore-scripts
+npm run check --prefix frontend
+npm run export:ci --prefix frontend
+npm run export:web:ci --prefix frontend
 
 echo "== PostgreSQL 17 contract =="
 docker run -d --rm   --name "$container"   -e POSTGRES_DB="$postgres_db"   -e POSTGRES_PASSWORD="$postgres_password"   -p "127.0.0.1:${postgres_port}:5432"   postgres:17 >/dev/null
@@ -60,7 +60,7 @@ fi
 export PGPASSWORD="$postgres_password"
 export DATABASE_URL="postgresql://postgres:${postgres_password}@127.0.0.1:${postgres_port}/${postgres_db}"
 export COMPANION_SOCIAL_TEST_DATABASE=1
-bash scripts/test-postgres.sh
+bash backend/scripts/test-postgres.sh
 
 echo "== Disposable mobile dev database =="
 mobile_db="companion_social_mobile_dev_ci"

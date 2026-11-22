@@ -70,7 +70,7 @@ $env:EXPO_PUBLIC_OWNER_BEARER_TOKEN = "companion-social-stage1-owner"
 $env:EXPO_PUBLIC_SAMPLE_COMPANION_COMPANION_ID = "00000000-0000-0000-0000-0000000002a1"
 $env:EXPO_PUBLIC_DATA_MODE = "dev"
 
-Set-Location (Join-Path $Root "apps/mobile")
+Set-Location (Join-Path $Root "frontend")
 if (-not (Test-Path "node_modules")) {
   npm install
 }

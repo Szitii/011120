@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { PostgresOwnerAdapter, PostgresPersistenceError, PostgresServerAdapter } from "../../packages/foundation/src/persistence/postgres/index.ts";
-import { createPgPool, PgOwnerExecutor, PgPoolExecutor } from "../../packages/foundation/src/persistence/postgres/client.ts";
-import { runStaleStartedReconciliation } from "../../packages/foundation/src/compute/reconciliation-worker.ts";
-import { EncounterSafetyPipeline, createProductionEncounterOrchestrator } from "../../packages/foundation/src/encounter/index.ts";
+import { PostgresOwnerAdapter, PostgresPersistenceError, PostgresServerAdapter } from "../src/persistence/postgres/index.ts";
+import { createPgPool, PgOwnerExecutor, PgPoolExecutor } from "../src/persistence/postgres/client.ts";
+import { runStaleStartedReconciliation } from "../src/compute/reconciliation-worker.ts";
+import { EncounterSafetyPipeline, createProductionEncounterOrchestrator } from "../src/encounter/index.ts";
 
 const connectionString=process.env.DATABASE_URL;
 if(!connectionString||process.env.COMPANION_SOCIAL_TEST_DATABASE!=="1")throw new Error("Disposable PostgreSQL test interlock is required.");

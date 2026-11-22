@@ -8,16 +8,16 @@
   },
   "scripts": {
     "check": "npm run typecheck && npm run validate:openapi && npm run test:coverage",
-    "test": "node --experimental-strip-types --test packages/foundation/test/*.test.ts",
-    "test:postgres": "bash scripts/test-postgres.sh",
-    "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-functions=90 --test-coverage-branches=80 packages/foundation/test/*.test.ts",
+    "test": "node --experimental-strip-types --test backend/test/*.test.ts",
+    "test:postgres": "bash backend/scripts/test-postgres.sh",
+    "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-functions=90 --test-coverage-branches=80 backend/test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "validate:openapi": "npx --yes @redocly/cli@1.27.2 lint openapi/v0.yaml --extends minimal",
-    "dev:mobile:db:init": "node --experimental-strip-types scripts/init-mobile-dev-db.ts",
-    "dev:mobile:api": "node --experimental-strip-types packages/foundation/src/dev/mobile-http-server.ts",
-    "test:mobile:residency": "node --experimental-strip-types scripts/smoke-companion-residency.ts",
+    "validate:openapi": "npx --yes @redocly/cli@1.27.2 lint contracts/openapi/v0.yaml --extends minimal",
+    "dev:mobile:db:init": "node --experimental-strip-types backend/scripts/init-mobile-dev-db.ts",
+    "dev:mobile:api": "node --experimental-strip-types backend/src/dev/mobile-http-server.ts",
+    "test:mobile:residency": "node --experimental-strip-types backend/scripts/smoke-companion-residency.ts",
     "decisionbench": "node --experimental-strip-types spikes/decisionbench/run.ts",
-    "start:mobile:api": "node --experimental-strip-types packages/foundation/src/http/supabase-mobile-server.ts"
+    "start:mobile:api": "node --experimental-strip-types backend/src/http/supabase-mobile-server.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.2",

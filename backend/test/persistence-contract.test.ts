@@ -3,73 +3,73 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 const migration = readFileSync(
-  new URL("../../../supabase/migrations/202609130001_v0_import_identity.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130001_v0_import_identity.sql", import.meta.url),
   "utf8",
 );
 const socialMemoryMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609130002_social_projection_memory_gate.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130002_social_projection_memory_gate.sql", import.meta.url),
   "utf8",
 );
 const computeMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609130003_compute_ledger_budgets.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130003_compute_ledger_budgets.sql", import.meta.url),
   "utf8",
 );
 const encounterMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609130004_bounded_encounters_life_inbox.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130004_bounded_encounters_life_inbox.sql", import.meta.url),
   "utf8",
 );
 const atomicDeliveryMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609130007_atomic_publication_encounter_delivery.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130007_atomic_publication_encounter_delivery.sql", import.meta.url),
   "utf8",
 );
 const nonDeliveryMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609130008_atomic_encounter_non_delivery.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130008_atomic_encounter_non_delivery.sql", import.meta.url),
   "utf8",
 );
 const executionClaimMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609130009_pre_provider_encounter_claim.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130009_pre_provider_encounter_claim.sql", import.meta.url),
   "utf8",
 );
 const staleRecoveryMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609130010_stale_unstarted_encounter_recovery.sql", import.meta.url),
+  new URL("../supabase/migrations/202609130010_stale_unstarted_encounter_recovery.sql", import.meta.url),
   "utf8",
 );
 const supabaseSecurityMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609140011_supabase_security_baseline.sql", import.meta.url),
+  new URL("../supabase/migrations/202609140011_supabase_security_baseline.sql", import.meta.url),
   "utf8",
 );
 const futureFunctionDefaultDenyMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609160012_future_function_default_deny.sql", import.meta.url),
+  new URL("../supabase/migrations/202609160012_future_function_default_deny.sql", import.meta.url),
   "utf8",
 );
 const startedReconciliationMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609160013_started_encounter_reconciliation.sql", import.meta.url),
+  new URL("../supabase/migrations/202609160013_started_encounter_reconciliation.sql", import.meta.url),
   "utf8",
 );
 const reconciliationScanMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609160014_stale_started_candidate_scan.sql", import.meta.url),
+  new URL("../supabase/migrations/202609160014_stale_started_candidate_scan.sql", import.meta.url),
   "utf8",
 );
 const invitationConsentMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609160015_encounter_invitation_consent.sql", import.meta.url),
+  new URL("../supabase/migrations/202609160015_encounter_invitation_consent.sql", import.meta.url),
   "utf8",
 );
 const encounterOrchestrationMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609160016_encounter_safety_command.sql", import.meta.url),
+  new URL("../supabase/migrations/202609160016_encounter_safety_command.sql", import.meta.url),
   "utf8",
 );
 const trustedContextMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609170017_trusted_encounter_context.sql", import.meta.url),
+  new URL("../supabase/migrations/202609170017_trusted_encounter_context.sql", import.meta.url),
   "utf8",
 );
 const stage1PresentationMigration = readFileSync(
-  new URL("../../../supabase/migrations/202609220028_stage1_identity_participant_presentation.sql", import.meta.url),
+  new URL("../supabase/migrations/202609220028_stage1_identity_participant_presentation.sql", import.meta.url),
   "utf8",
 );
-const openapi = readFileSync(new URL("../../../openapi/v0.yaml", import.meta.url), "utf8");
-const mvpResponse = readFileSync(new URL("../../../docs/MVP_API_ENGINEERING_RESPONSE_V0_2.md", import.meta.url), "utf8");
+const openapi = readFileSync(new URL("../../contracts/openapi/v0.yaml", import.meta.url), "utf8");
+const mvpResponse = readFileSync(new URL("../../docs/MVP_API_ENGINEERING_RESPONSE_V0_2.md", import.meta.url), "utf8");
 const packageManifest = JSON.parse(
-  readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
 ) as Record<string, unknown>;
 
 describe("Foundation persistence and API contracts", () => {
@@ -173,7 +173,7 @@ describe("Foundation persistence and API contracts", () => {
   });
 
   it("reserves Compute atomically behind a private service-only command", () => {
-    const atomicComputeMigration = readFileSync("supabase/migrations/202609130005_atomic_compute_reservation.sql", "utf8");
+    const atomicComputeMigration = readFileSync("backend/supabase/migrations/202609130005_atomic_compute_reservation.sql", "utf8");
     assert.match(atomicComputeMigration, /pg_advisory_xact_lock/);
     assert.match(atomicComputeMigration, /from public\.compute_budgets[\s\S]*for update/);
     assert.match(atomicComputeMigration, /rejection_code := 'BUDGET_EXHAUSTED'/);
@@ -183,7 +183,7 @@ describe("Foundation persistence and API contracts", () => {
   });
 
   it("persists the Compute lifecycle as private atomic state transitions", () => {
-    const lifecycleMigration = readFileSync("supabase/migrations/202609130006_atomic_compute_lifecycle.sql", "utf8");
+    const lifecycleMigration = readFileSync("backend/supabase/migrations/202609130006_atomic_compute_lifecycle.sql", "utf8");
     assert.match(lifecycleMigration, /create or replace function companion_private\.start_compute_transaction/);
     assert.match(lifecycleMigration, /create or replace function companion_private\.settle_compute_transaction/);
     assert.match(lifecycleMigration, /create or replace function companion_private\.release_compute_transaction/);
@@ -343,7 +343,7 @@ describe("Foundation persistence and API contracts", () => {
   });
 
   it("persists Bring Companion behind private quarantine and atomic approval", () => {
-    const bringCompanionMigration = readFileSync(new URL("../../../supabase/migrations/202609180022_stage1_bring_companion_http.sql", import.meta.url), "utf8");
+    const bringCompanionMigration = readFileSync(new URL("../supabase/migrations/202609180022_stage1_bring_companion_http.sql", import.meta.url), "utf8");
     assert.match(bringCompanionMigration, /create or replace function public\.create_companion_import/);
     assert.match(bringCompanionMigration, /companion_private\.companion_imports/);
     assert.match(bringCompanionMigration, /convert_to\(p_raw_payload,'UTF8'\)/);

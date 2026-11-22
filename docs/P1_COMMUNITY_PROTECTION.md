@@ -20,16 +20,16 @@
 
 ## 主要文件
 
-- `supabase/migrations/202611220032_p1_community_protection.sql` 实现屏蔽表、私有举报表、可见性和事务命令。
-- `packages/community-contracts/types.ts` 和 `packages/foundation/src/community/` 定义契约、路由验证和持久化输入。
-- `apps/mobile/src/community/ReportForm.tsx` 实现原因、说明和回执。社区页面及内容卡加入举报、屏蔽确认和名单入口。
-- `openapi/community.yaml` 和 `openapi/v0.yaml` 记录新增 API。
-- `tests/postgres/protection-runtime.ts` 由 CI 在一次性种子数据库中验证。
+- `backend/supabase/migrations/202611220032_p1_community_protection.sql` 实现屏蔽表、私有举报表、可见性和事务命令。
+- `contracts/community.ts` 和 `backend/src/community/` 定义契约、路由验证和持久化输入。
+- `frontend/src/community/ReportForm.tsx` 实现原因、说明和回执。社区页面及内容卡加入举报、屏蔽确认和名单入口。
+- `contracts/openapi/community.yaml` 和 `contracts/openapi/v0.yaml` 记录新增 API。
+- `backend/db-tests/protection-runtime.ts` 由 CI 在一次性种子数据库中验证。
 
 已有测试数据库只需追加迁移 0032。全新测试库可按现有开发初始化流程执行全部迁移。运行保护集成测试前准备全新种子测试库，依次运行保护、社区、账号场景，和 CI 保持一致。集成测试会创建额外的测试身份、举报、屏蔽和动态。
 
 ```sh
-COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types tests/postgres/protection-runtime.ts
+COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types backend/db-tests/protection-runtime.ts
 ```
 
 `DATABASE_URL` 必须指向该一次性测试数据库。

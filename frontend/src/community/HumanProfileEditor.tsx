@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../../packages/community-contracts/types.ts";
+import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
 import { CommunityButton, communityStyles as s } from "./components.tsx";
 

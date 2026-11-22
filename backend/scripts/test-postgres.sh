@@ -13,9 +13,9 @@ if [[ "${existing_relations}" != "0" ]]; then
   exit 2
 fi
 
-psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f tests/postgres/bootstrap.sql
-for migration in supabase/migrations/*.sql; do
+psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f backend/db-tests/bootstrap.sql
+for migration in backend/supabase/migrations/*.sql; do
   psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${migration}"
 done
-psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f tests/postgres/security-contract.sql
-node --experimental-strip-types tests/postgres/adapter-runtime.ts
+psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f backend/db-tests/security-contract.sql
+node --experimental-strip-types backend/db-tests/adapter-runtime.ts
