@@ -36,7 +36,7 @@ describe("PostgreSQL pool executors", () => {
     assert.deepEqual(result.rows, [{ ok: true }]);
     assert.deepEqual(statements, [
       { via: "client", text: "begin" },
-      { via: "client", text: "set local role authenticated" },
+      { via: "client", text: "set local role companion_api" },
       { via: "client", text: "select set_config('request.jwt.claim.sub',$1,true)", values: [SUBJECT] },
       { via: "client", text: "select * from public.list_owner_companions()", values: [] },
       { via: "client", text: "commit" },
@@ -53,10 +53,10 @@ describe("PostgreSQL pool executors", () => {
   });
 
   it("keeps the original error and still releases the client when the rollback fails too", async () => {
-    const { pool, released } = fakePool(["set local role authenticated", "rollback"]);
+    const { pool, released } = fakePool(["set local role companion_api", "rollback"]);
     await assert.rejects(
       new PgOwnerExecutor(pool, SUBJECT).query("select 1", []),
-      /set local role authenticated failed/,
+      /set local role companion_api failed/,
     );
     assert.equal(released(), 1);
   });
