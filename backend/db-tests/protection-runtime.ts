@@ -94,14 +94,36 @@ try {
   } finally { await pool.query("update public.owners set status='ACTIVE' where id=$1",[B.ownerId]); }
   assert.equal((await call<CommunityPage<CommunityBlock>>(1,humanB,"blocks")).data.items.length,0);
   assert.equal((await call<CommunityPage<CommunityBlock>>(0,aiA,"blocks")).data.items.length,0);
+  // The blocker's other identities are unaffected; every identity of the blocked person is kept out.
   assert.equal((await call(0,aiA,`profile/${hb.id}`)).status,200);
-  assert.equal((await call(1,aiB,`profile/${ha.id}`)).status,200);
+  assert.equal((await call(0,aiA,`profile/${cb.id}`)).status,200);
+  await pool.query(`insert into companion_private.agent_settings(actor_id,can_post,can_follow,publish_mode,active_from,active_to)
+    select id,true,true,'DIRECT','00:00','00:00' from public.community_actors where kind='AI'`);
+  try {
+    assert.equal((await call(1,aiB,`profile/${ha.id}`)).status,404);
+    assert.equal((await call(1,aiB,`posts/${post.data.id}/comments`,"POST",{body:"back as the AI"})).status,404);
+    assert.equal((await call(1,aiB,`following/${ha.id}`,"PUT")).status,404);
+    assert.ok(!(await call<CommunityPage<CommunityPost>>(1,aiB,"feed")).data.items.some(p=>p.id===post.data.id));
+  } finally { await pool.query("delete from companion_private.agent_settings"); }
   assert.equal(ca.kind,"AI"); assert.equal(cb.kind,"AI");
+  // Encounter invitations between the two Owners are refused while any block stands, either way.
+  const invite = async (key: string) => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin"); await c.query("set local role authenticated");
+      await c.query("select set_config('request.jwt.claim.sub',$1,true)",[B.ownerSubject]);
+      await c.query(`select * from public.issue_encounter_invitation('00000000-0000-0000-0000-0000000005b1','00000000-0000-0000-0000-0000000005a1',
+        '00000000-0000-0000-0000-0000000004b1','00000000-0000-0000-0000-0000000004a1','00000000-0000-0000-0000-0000000003b1',
+        '00000000-0000-0000-0000-0000000003a1','Blocked invitation','ONE_SHOT_ENCOUNTER',repeat('1',64),now()+interval '1 day',$1,repeat('2',64))`,[key]);
+    } finally { await c.query("rollback"); c.release(); }
+  };
+  await assert.rejects(invite("3".repeat(64)), e => (e as { code?: string }).code === "55000");
   assert.equal((await call(0,humanA,`blocks/${hb.id}`,"DELETE")).status,200);
   assert.equal((await call<{blocked:boolean}>(0,humanA,`blocks/${hb.id}`,"PUT",undefined,blockKey)).data.blocked,false);
   assert.equal((await call<CommunityProfile>(0,humanA,`profile/${hb.id}`)).data.following,false);
   assert.equal((await call(1,humanB,`posts/${post.data.id}`)).status,200);
-  console.log("Protection integration 3: own block list, Companion independence, unblock and stale retry safety");
+  await invite("4".repeat(64)); // unblocked: the same invitation goes through (rolled back)
+  console.log("Protection integration 3: own block list covering the person, unblock and stale retry safety");
 
   const outcomes = await Promise.all([
     call(0,humanA,`blocks/${hb.id}`,"PUT"),
