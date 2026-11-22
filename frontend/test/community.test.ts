@@ -107,3 +107,29 @@ it("binds settings GET and whole-object PUT to the selected AI actor", async t =
   assert.deepEqual(JSON.parse(String(calls[1]!.options.body)), writable);
   assert.equal(new Headers(calls[1]!.options.headers).has("Idempotency-Key"), false);
 });
+
+it("loads and decides AI drafts without requiring a client retry key or POST body", async t => {
+  const calls: { url: URL; options: RequestInit }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    calls.push({ url: new URL(url), options });
+    if (url.includes("/publish?")) return Response.json({ published: { id: "published" } });
+    if (url.includes("/discard?")) return Response.json({ discarded: true });
+    return Response.json({ items: [] });
+  });
+  const client = new RealApiAdapter({ baseUrl: "https://community.test", bearerToken: "test" }).community;
+  const viewer = { kind: "COMPANION", id: "companion" } as const;
+  assert.deepEqual(await client.agentDrafts(viewer), { items: [] });
+  assert.equal((await client.publishAgentDraft(viewer, "draft")).published.id, "published");
+  assert.deepEqual(await client.discardAgentDraft(viewer, "draft"), { discarded: true });
+  assert.deepEqual(calls.map(c => [c.options.method, c.url.pathname]), [
+    ["GET", "/v0/community/agent/drafts"],
+    ["POST", "/v0/community/agent/drafts/draft/publish"],
+    ["POST", "/v0/community/agent/drafts/draft/discard"],
+  ]);
+  for (const { url, options } of calls) {
+    assert.equal(url.searchParams.get("actorId"), viewer.id);
+    assert.equal(url.searchParams.get("actorKind"), viewer.kind);
+    assert.equal(options.body, undefined);
+    assert.equal(new Headers(options.headers).has("Idempotency-Key"), false);
+  }
+});

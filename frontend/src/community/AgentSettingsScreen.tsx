@@ -9,7 +9,9 @@ import { CommunityRequestScope } from "./request-scope.ts";
 
 const inputStyle = { ...s.input, minHeight: 44 };
 
-export function AgentSettingsScreen({ client, viewer }: { client: CommunityClient; viewer: AgentViewer }) {
+export function AgentSettingsScreen({ client, viewer, onOpenDrafts }: {
+  client: CommunityClient; viewer: AgentViewer; onOpenDrafts: () => void;
+}) {
   const [view, setView] = useState<AgentSettingsView>();
   const [form, setForm] = useState<SettingsForm>();
   const [message, setMessage] = useState("");
@@ -48,6 +50,7 @@ export function AgentSettingsScreen({ client, viewer }: { client: CommunityClien
   }, [load, scope]);
 
   const payload = form && settingsPayload(form);
+  const edited = view && JSON.stringify(form) !== JSON.stringify(settingsForm(view));
   const locked = loading || saving || needsReload;
   const deviceZone = view?.revision === 1 && !useSavedZone
     ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
@@ -92,6 +95,8 @@ export function AgentSettingsScreen({ client, viewer }: { client: CommunityClien
     {loading && <ActivityIndicator accessibilityLabel="正在加载家机设置" />}
     {message !== "" && <Text accessibilityRole="alert" style={s.meta}>{message}</Text>}
     {view && form && <>
+      <Button label={`草稿 ${view.usage.pendingDrafts}/20`} disabled={locked || edited} onPress={onOpenDrafts} />
+      {edited && <Text style={s.meta}>保存或取消修改后可打开草稿箱。</Text>}
       <View style={s.card}>
         <Text accessibilityRole="header" style={s.author}>什么时候动</Text>
         <Text style={s.meta}>以家机身份发帖、评论、关注和取关时会应用这些设置。</Text>
@@ -124,7 +129,10 @@ export function AgentSettingsScreen({ client, viewer }: { client: CommunityClien
         </View>)}
       </View>
       {!payload && <Text accessibilityRole="alert" style={s.error}>时间请填 HH:MM，限额请填范围内的整数。</Text>}
-      <Button label={saving ? "正在保存…" : "保存家机设置"} selected disabled={locked || !payload} onPress={() => void save()} />
+      <View style={s.row}>
+        <Button label={saving ? "正在保存…" : "保存家机设置"} selected disabled={locked || !payload} onPress={() => void save()} />
+        {edited && <Button label="取消修改" disabled={locked} onPress={() => { accept(view); setMessage(""); }} />}
+      </View>
     </>}
     {(!view || needsReload) && !loading && <Button label="重新加载设置" onPress={() => void load(needsReload ? "设置已在别处更新。" : "")} />}
   </ScrollView>;

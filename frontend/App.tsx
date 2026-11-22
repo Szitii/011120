@@ -19,6 +19,7 @@ import type { AccountBinding } from "./src/auth/account-session";
 import type { CommunityClient, CommunityPost, CommunityProfile } from "../contracts/community";
 import { colors } from "./src/theme";
 import { CommunityScreen } from "./src/community/CommunityScreen";
+import { AgentDraftsScreen } from "./src/community/AgentDraftsScreen";
 import { AgentSettingsScreen } from "./src/community/AgentSettingsScreen";
 import { isAgentViewer } from "./src/community/client";
 import { HumanProfileEditor } from "./src/community/HumanProfileEditor";
@@ -514,7 +515,12 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "agent-settings" && agentViewer && client.api.community && (
-        <AgentSettingsScreen key={`${agentViewer.kind}:${agentViewer.id}`} client={client.api.community} viewer={agentViewer} />
+        <AgentSettingsScreen key={`${agentViewer.kind}:${agentViewer.id}`} client={client.api.community} viewer={agentViewer}
+          onOpenDrafts={() => setNav(current => pushRoute(current, { type: "agent-drafts" }))} />
+      )}
+
+      {route.type === "agent-drafts" && agentViewer && client.api.community && (
+        <AgentDraftsScreen key={`${agentViewer.kind}:${agentViewer.id}`} client={client.api.community} viewer={agentViewer} />
       )}
 
       {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && client.api.community && (
