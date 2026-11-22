@@ -1,4 +1,4 @@
-import type { ActorContext, AgentDraft, AgentSettings, AgentSettingsView, CommunityComment, CommunityPost, CommunityClient as BaseCommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
+import type { ActorContext, AgentDraft, AgentSettings, AgentSettingsView, CommunityComment, CommunityFollow, CommunityPage, CommunityPost, CommunityClient as BaseCommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
 
 export type AgentViewer = ActorContext & { kind: "COMPANION" | "SOCIAL_TWIN" };
 
@@ -7,6 +7,8 @@ export function isAgentViewer(viewer: ActorContext | undefined): viewer is Agent
 }
 
 export interface CommunityClient extends BaseCommunityClient {
+  following(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
+  followers(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
   agentDrafts(viewer: AgentViewer): Promise<{ items: AgentDraft[] }>;
   publishAgentDraft(viewer: AgentViewer, id: string): Promise<{ published: CommunityPost | CommunityComment }>;
   discardAgentDraft(viewer: AgentViewer, id: string): Promise<{ discarded: true }>;
@@ -23,6 +25,8 @@ export function createCommunityClient(request: Requester): CommunityClient {
     return `/v0/community/${resource}?${params}`;
   };
   return {
+    following: (v, cursor) => request("GET", path(v, "following", { cursor })),
+    followers: (v, cursor) => request("GET", path(v, "followers", { cursor })),
     agentDrafts: v => request("GET", path(v, "agent/drafts")),
     publishAgentDraft: (v, id) => request("POST", path(v, `agent/drafts/${encodeURIComponent(id)}/publish`)),
     discardAgentDraft: (v, id) => request("POST", path(v, `agent/drafts/${encodeURIComponent(id)}/discard`)),

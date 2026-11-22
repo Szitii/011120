@@ -16,12 +16,13 @@ import { createClientBootstrap, type ClientBootstrap } from "./src/adapters";
 import { RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
 import { AccountGate } from "./src/auth/AccountGate";
 import type { AccountBinding } from "./src/auth/account-session";
-import type { CommunityClient, CommunityPost, CommunityProfile } from "../contracts/community";
+import type { CommunityPost, CommunityProfile } from "../contracts/community";
 import { colors } from "./src/theme";
 import { CommunityScreen } from "./src/community/CommunityScreen";
 import { AgentDraftsScreen } from "./src/community/AgentDraftsScreen";
 import { AgentSettingsScreen } from "./src/community/AgentSettingsScreen";
-import { isAgentViewer } from "./src/community/client";
+import { CommunityFollowList, type FollowDirection } from "./src/community/CommunityFollowList";
+import { isAgentViewer, type CommunityClient } from "./src/community/client";
 import { HumanProfileEditor } from "./src/community/HumanProfileEditor";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type {
@@ -1281,7 +1282,10 @@ function MyScreen({
   const { skin, availableSkins, setSkinById } = useSkin();
   const [colorModalOpen, setColorModalOpen] = useState(false);
 
-  const [communityData, setCommunityData] = useState<LoadState<{ profile: CommunityProfile; posts: CommunityPost[] }>>({ kind: "idle" });
+  const [communityData, setCommunityData] = useState<LoadState<CommunityPost[]>>({ kind: "idle" });
+  const [ownProfile, setOwnProfile] = useState<CommunityProfile>();
+  const [followDirection, setFollowDirection] = useState<FollowDirection>();
+  const [profileRefresh, setProfileRefresh] = useState(0);
   const subject = identity.kind === "success" ? identity.value.activeSubject : undefined;
   const actorKind = subject?.kind;
   const actorId = subject?.id;
@@ -1290,18 +1294,17 @@ function MyScreen({
     if (!community || !actorKind || !actorId) return;
     const viewer = { kind: actorKind, id: actorId };
     let active = true;
-    setCommunityData({ kind: "loading" });
+    setCommunityData(previous => previous.kind === "success" ? previous : { kind: "loading" });
     void community.profile(viewer).then(async profile => {
       if (!active) return;
+      setOwnProfile(profile);
       const feed = await community.feed(viewer, { authorId: profile.id });
-      if (active) setCommunityData({ kind: "success", value: { profile, posts: feed.items } });
+      if (active) setCommunityData({ kind: "success", value: feed.items });
     }).catch(error => {
       if (active) setCommunityData({ kind: "error", ...safeClientMessage(error) });
     });
     return () => { active = false; };
-  }, [community, actorKind, actorId]);
-
-  const ownProfile = communityData.kind === "success" ? communityData.value.profile : undefined;
+  }, [community, actorKind, actorId, profileRefresh]);
   const displayName = ownProfile?.displayName ?? subject?.presentation.displayName
     ?? (isSampleCompanion ? companionName : "我的账号");
   const bio = ownProfile?.bio;
@@ -1338,14 +1341,15 @@ function MyScreen({
             <Text style={[styles.statNum, { color: skin.colors.ink }]}>{ownProfile?.postsCount ?? "—"}</Text>
             <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>动态</Text>
           </View>
-          <View style={styles.statCol}>
-            <Text style={[styles.statNum, { color: skin.colors.ink }]}>{ownProfile?.followersCount ?? "—"}</Text>
-            <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>粉丝</Text>
-          </View>
-          <View style={styles.statCol}>
-            <Text style={[styles.statNum, { color: skin.colors.ink }]}>{ownProfile?.followingCount ?? "—"}</Text>
-            <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>关注</Text>
-          </View>
+          {([["followers", "粉丝", ownProfile?.followersCount], ["following", "关注", ownProfile?.followingCount]] as const)
+            .map(([direction, label, count]) => (
+              <Pressable key={direction} style={styles.statCol} accessibilityRole="button"
+                accessibilityLabel={`${label} ${count ?? "未加载"}`} disabled={!ownProfile}
+                onPress={() => setFollowDirection(direction)}>
+                <Text style={[styles.statNum, { color: skin.colors.ink }]}>{count ?? "—"}</Text>
+                <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>{label}</Text>
+              </Pressable>
+            ))}
           {onEditHumanProfile && <Pressable accessibilityRole="button" onPress={onEditHumanProfile} style={styles.editProfileButton}>
             <Text style={styles.settingsText}>编辑社区资料</Text>
           </Pressable>}
@@ -1387,11 +1391,19 @@ function MyScreen({
       <Text style={[styles.privateHomeSectionTitle, { color: skin.colors.ink }]}>最近动态</Text>
       {communityData.kind === "loading" ? <ActivityIndicator /> : null}
       {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: skin.colors.inkSub }]}>{communityData.title}</Text> : null}
-      {communityData.kind === "success" && communityData.value.posts.slice(0, 3).map(post => (
+      {communityData.kind === "success" && communityData.value.slice(0, 3).map(post => (
         <Text key={post.id} style={[styles.feedBody, { color: skin.colors.ink }]}>{post.body}</Text>
       ))}
-      {(communityData.kind === "idle" || (communityData.kind === "success" && communityData.value.posts.length === 0)) &&
+      {(communityData.kind === "idle" || (communityData.kind === "success" && communityData.value.length === 0)) &&
         <Text style={[styles.heroBio, { color: skin.colors.inkSub }]}>暂无动态</Text>}
+
+      {followDirection && community && actorKind && actorId && (
+        <CommunityFollowList client={community} viewer={{ kind: actorKind, id: actorId }} direction={followDirection}
+          canFollow={ownProfile?.canPublish === true} onClose={changed => {
+            setFollowDirection(undefined);
+            if (changed) setProfileRefresh(current => current + 1);
+          }} />
+      )}
 
       {/* Top-right Settings Gear Modal */}
       <BottomSheet visible={settingsOpen} title="设置" onClose={onCloseSettings}>

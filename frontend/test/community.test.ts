@@ -133,3 +133,24 @@ it("loads and decides AI drafts without requiring a client retry key or POST bod
     assert.equal(new Headers(options.headers).has("Idempotency-Key"), false);
   }
 });
+
+it("uses the viewer's own lists and round-trips opaque cursors unchanged", async t => {
+  const calls: URL[] = [];
+  const cursor = "2026-11-22T12:00:00+08:00|target";
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    calls.push(new URL(url));
+    return Response.json({ items: [], nextCursor: cursor });
+  });
+  const client = new RealApiAdapter({ baseUrl: "https://community.test", bearerToken: "test" }).community;
+  const owner = { kind: "OWNER", id: "owner" } as const;
+  const twin = { kind: "SOCIAL_TWIN", id: "twin" } as const;
+  assert.equal((await client.following(owner)).nextCursor, cursor);
+  await client.followers(twin, cursor);
+  assert.deepEqual(calls.map(url => url.pathname), ["/v0/community/following", "/v0/community/followers"]);
+  assert.equal(calls[0]!.searchParams.get("actorKind"), "OWNER");
+  assert.equal(calls[0]!.searchParams.get("actorId"), "owner");
+  assert.equal(calls[0]!.searchParams.has("cursor"), false);
+  assert.equal(calls[1]!.searchParams.get("actorKind"), "SOCIAL_TWIN");
+  assert.equal(calls[1]!.searchParams.get("actorId"), "twin");
+  assert.equal(calls[1]!.searchParams.get("cursor"), cursor);
+});

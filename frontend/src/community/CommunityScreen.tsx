@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
-import type { ActorContext, CommunityClient, CommunityDetail, CommunityProfile, CommunityPost,
+import type { ActorContext, CommunityDetail, CommunityProfile, CommunityPost,
   CommunityBlock, ReportTarget, CommunityPage, CommunityNotification, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
 import { safeClientMessage } from "../adapters/real-api.ts";
-import { communityRequestKey } from "./client.ts";
+import { CommunityFollowList, type FollowDirection } from "./CommunityFollowList.tsx";
+import { communityRequestKey, type CommunityClient } from "./client.ts";
 import { CommunityRequestScope } from "./request-scope.ts";
 import { ActorLine, CommunityButton as Button, ContentCard, communityStyles as s } from "./components.tsx";
 import { ReportForm } from "./ReportForm.tsx";
@@ -22,6 +23,7 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
   client: CommunityClient; viewer: ActorContext; legacy: React.ReactNode; initialScrollY?: number; onScroll: (y: number) => void;
 }) {
   const { skin } = useSkin();
+  const [followDirection, setFollowDirection] = useState<FollowDirection>();
   const [reportTarget, setReportTarget] = useState<ReportTarget>();
   const [blockTarget, setBlockTarget] = useState<CommunityProfile>();
   const [page, setPage] = useState<Page>({ type: "feed" });
@@ -165,7 +167,11 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
         <ActorLine actor={data.profile} onPress={() => undefined} />
         <Text style={s.meta}>@{data.profile.handle}</Text>
         {data.profile.bio !== "" && <Text style={s.body}>{data.profile.bio}</Text>}
-        <Text style={s.body}>动态 {data.profile.postsCount} · 关注 {data.profile.followingCount} · 粉丝 {data.profile.followersCount}</Text>
+        {data.profile.isSelf ? <View style={s.row}>
+          <Text style={s.body}>动态 {data.profile.postsCount}</Text>
+          <Button label={`关注 ${data.profile.followingCount}`} disabled={busy} onPress={() => setFollowDirection("following")} />
+          <Button label={`粉丝 ${data.profile.followersCount}`} disabled={busy} onPress={() => setFollowDirection("followers")} />
+        </View> : <Text style={s.body}>动态 {data.profile.postsCount} · 关注 {data.profile.followingCount} · 粉丝 {data.profile.followersCount}</Text>}
         {data.profile.isSelf ? (data.profile.kind === "HUMAN"
           ? <Button label="编辑资料" disabled={busy} onPress={() => setEditingProfile(true)} />
           : <Text style={s.meta}>这是当前操作身份的独立主页。</Text>) :
@@ -246,6 +252,11 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
       </>}
       {error !== "" && <Text accessibilityRole="alert" style={[s.body, { color: skin.colors.ink }]}>{error} 请重试。</Text>}
     </BottomSheet>
+    {followDirection && <CommunityFollowList client={client} viewer={viewer} direction={followDirection}
+      canFollow={own?.canPublish === true} onClose={changed => {
+        setFollowDirection(undefined);
+        if (changed) void load();
+      }} />}
     {reportTarget && <Modal animationType="slide" onRequestClose={closeReport}>
       <SafeAreaView style={s.page}>
         <ReportForm client={client} viewer={viewer} target={reportTarget} onClose={closeReport} />
