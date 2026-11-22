@@ -1,6 +1,6 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
@@ -16,7 +16,6 @@ export function FloatingGlassTabs({
   onSelect: (tab: RootTab) => void;
 }) {
   const { skin } = useSkin();
-  const inactiveColor = skin.isDark ? "#94A3B8" : "#64748B";
   const items: Array<{
     key: RootTab;
     label: string;
@@ -45,11 +44,11 @@ export function FloatingGlassTabs({
         },
       ]}
     >
-      <LiquidGlassSurface variant="dock" borderRadius={RADIUS.pill}>
+      <LiquidGlassSurface>
         <View style={styles.row}>
           {items.map((item) => {
             const active = current === item.key;
-            const color = active ? skin.colors.tabActive : inactiveColor;
+            const color = active ? skin.colors.tabActive : skin.colors.tabInactive;
             return (
               <Pressable
                 key={item.key}

@@ -1,59 +1,22 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { BUILTIN_SKINS, mergeRemoteSkin, type SkinId, type SkinTheme } from "./skinTokens";
+import React, { createContext, useContext, useMemo, useState } from "react";
+import { BUILTIN_SKINS, type SkinId, type SkinTheme } from "./skinTokens";
 
-export interface SkinContextValue {
+interface SkinContextValue {
   skin: SkinTheme;
-  skinId: SkinId;
-  availableSkins: SkinTheme[];
+  availableSkins: readonly SkinTheme[];
   setSkinById: (id: SkinId) => void;
-  registerRemoteSkins: (patches: Array<Partial<SkinTheme> & { id: string; name: string }>) => void;
 }
 
 const SkinContext = createContext<SkinContextValue | null>(null);
+const availableSkins = Object.values(BUILTIN_SKINS);
 
-export function SkinProvider({
-  initialSkinId = "default",
-  children,
-}: {
-  initialSkinId?: SkinId;
-  children: React.ReactNode;
-}) {
-  const [registry, setRegistry] = useState<Record<string, SkinTheme>>(() => ({
-    ...BUILTIN_SKINS,
-  }));
-  const [skinId, setSkinId] = useState<SkinId>(initialSkinId);
-
-  const setSkinById = useCallback(
-    (id: SkinId) => {
-      setSkinId((prev) => (registry[id] ? id : prev));
-    },
-    [registry],
-  );
-
-  const registerRemoteSkins = useCallback(
-    (patches: Array<Partial<SkinTheme> & { id: string; name: string }>) => {
-      setRegistry((prev) => {
-        const next = { ...prev };
-        for (const patch of patches) {
-          const base = patch.isDark ? BUILTIN_SKINS.titanium : BUILTIN_SKINS.default;
-          next[patch.id] = mergeRemoteSkin(base, patch);
-        }
-        return next;
-      });
-    },
-    [],
-  );
-
-  const value = useMemo<SkinContextValue>(() => {
-    const active = registry[skinId] ?? BUILTIN_SKINS.default;
-    return {
-      skin: active,
-      skinId: active.id,
-      availableSkins: Object.values(registry),
-      setSkinById,
-      registerRemoteSkins,
-    };
-  }, [registry, skinId, setSkinById, registerRemoteSkins]);
+export function SkinProvider({ children }: { children: React.ReactNode }) {
+  const [skinId, setSkinById] = useState<SkinId>("default");
+  const value = useMemo<SkinContextValue>(() => ({
+    skin: BUILTIN_SKINS[skinId],
+    availableSkins,
+    setSkinById,
+  }), [skinId]);
 
   return <SkinContext.Provider value={value}>{children}</SkinContext.Provider>;
 }

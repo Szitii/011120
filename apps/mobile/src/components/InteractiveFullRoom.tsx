@@ -12,12 +12,11 @@ import {
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { BottomSheet } from "./BottomSheet";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { GlassChatBubble } from "./GlassChatBubble";
 import { useSkin } from "../theme/SkinProvider";
-import { RADIUS } from "../theme/layoutTokens";
 
 const ROOM_ISO_IMG = require("../../assets/room-iso-25d.jpg");
 
@@ -195,7 +194,7 @@ export function InteractiveFullRoom({
       </Animated.View>
 
       <View style={styles.hintPill}>
-        <LiquidGlassSurface variant="chip" borderRadius={RADIUS.pill}>
+        <LiquidGlassSurface>
           <View style={styles.hintInner}>
             <View style={styles.hintDot} />
             <Text style={styles.hintText}>点地板走动 · 点书桌翻备忘录</Text>
@@ -206,7 +205,7 @@ export function InteractiveFullRoom({
       <View style={styles.edgeTools}>
         {edgeTools.map((t) => (
           <Pressable key={t.label} onPress={t.onPress} style={({ pressed }) => pressed && { transform: [{ scale: 0.92 }] }}>
-            <LiquidGlassSurface variant="chip" borderRadius={22}>
+            <LiquidGlassSurface borderRadius={22}>
               <View style={styles.edgeBtn}>
                 <Ionicons name={t.icon} size={18} color={t.color ?? "#18181B"} />
                 <Text style={[styles.edgeLabel, t.color ? { color: t.color } : null]}>{t.label}</Text>

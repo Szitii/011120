@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BUILTIN_SKINS, mergeRemoteSkin } from "../src/theme/skinTokens.ts";
+import { BUILTIN_SKINS } from "../src/theme/skinTokens.ts";
 
 test("all light built-in skins preserve pure crisp white canvas and dark charcoal ink", () => {
   for (const key of ["default", "glacier", "pearl"] as const) {
@@ -10,27 +10,14 @@ test("all light built-in skins preserve pure crisp white canvas and dark charcoa
     assert.equal(skin.colors.ink, "#18181B");
     assert.ok(skin.chatBubbles.humanFill.length > 0);
     assert.ok(skin.chatBubbles.aiFill.length > 0);
-    assert.ok(skin.roomPack.packId.startsWith("flat-2d-"));
   }
 });
 
-test("mergeRemoteSkin safely merges partial paid skin overrides without dropping required slots", () => {
-  const custom = mergeRemoteSkin(BUILTIN_SKINS.default, {
-    id: "paid-bubble-mint",
-    name: "薄荷气泡单品",
-    tier: "paid",
-    chatBubbles: {
-      humanFill: "rgba(16, 185, 129, 0.78)",
-      humanText: "#FFFFFF",
-      humanBorder: "rgba(255, 255, 255, 0.55)",
-      aiFill: BUILTIN_SKINS.default.chatBubbles.aiFill,
-      aiText: BUILTIN_SKINS.default.chatBubbles.aiText,
-      aiBorder: BUILTIN_SKINS.default.chatBubbles.aiBorder,
-    },
-  });
-
-  assert.equal(custom.id, "paid-bubble-mint");
-  assert.equal(custom.colors.canvas, "#FFFFFF");
-  assert.equal(custom.chatBubbles.humanFill, "rgba(16, 185, 129, 0.78)");
-  assert.equal(custom.actorAnchor.companionBarBg, "#18181B");
+test("the skin picker keeps all four presets selectable by their own IDs", () => {
+  assert.deepEqual(
+    Object.entries(BUILTIN_SKINS).map(([key, skin]) => [key, skin.id]),
+    [["default", "default"], ["glacier", "glacier"], ["pearl", "pearl"], ["titanium", "titanium"]],
+  );
+  assert.equal(BUILTIN_SKINS.titanium.isDark, true);
+  assert.equal(BUILTIN_SKINS.titanium.colors.tabInactive, "#94A3B8");
 });

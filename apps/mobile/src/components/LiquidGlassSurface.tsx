@@ -5,19 +5,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
 
-export type GlassVariant = "dock" | "chip" | "iconTile";
-
-/**
- * 真·苹果 Liquid Glass 液态玻璃组件：
- * 使用 expo-blur 实时高斯模糊折射背景 + LinearGradient 斜向玻璃高光层 + 双层折射描边。
- */
 export function LiquidGlassSurface({
-  variant = "chip",
   borderRadius = RADIUS.pill,
   style,
   children,
 }: {
-  variant?: GlassVariant;
   borderRadius?: number;
   style?: StyleProp<ViewStyle>;
   children: React.ReactNode;
@@ -27,9 +19,7 @@ export function LiquidGlassSurface({
 
   const sheenColors: [string, string, string] = isDark
     ? ["rgba(255,255,255,0.16)", "rgba(255,255,255,0.04)", "rgba(255,255,255,0.10)"]
-    : variant === "iconTile"
-      ? ["rgba(255,255,255,0.82)", "rgba(255,255,255,0.34)", "rgba(255,255,255,0.62)"]
-      : ["rgba(255,255,255,0.74)", "rgba(255,255,255,0.32)", "rgba(255,255,255,0.60)"];
+    : ["rgba(255,255,255,0.74)", "rgba(255,255,255,0.32)", "rgba(255,255,255,0.60)"];
 
   return (
     <View

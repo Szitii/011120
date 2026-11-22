@@ -21,7 +21,7 @@ import type { CommunityClient, CommunityPost, CommunityProfile } from "../../pac
 import { colors } from "./src/theme";
 import { CommunityScreen } from "./src/community/CommunityScreen";
 import { HumanProfileEditor } from "./src/community/HumanProfileEditor";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import type {
   ActiveIdentityContext,
   CompanionProfile,
@@ -87,7 +87,7 @@ function identityLabel(identity?: ActiveIdentityContext): string {
 
 export default function App() {
   return (
-    <SkinProvider initialSkinId="default">
+    <SkinProvider>
       <AppShell />
     </SkinProvider>
   );
