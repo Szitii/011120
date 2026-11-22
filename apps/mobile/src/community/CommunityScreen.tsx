@@ -135,7 +135,7 @@ export function CommunityScreen({ client, viewer, legacy, initialScrollY = 0, on
         <View style={s.row}>{([['ALL', '全部'], ['HUMAN', '人类'], ['AI', '家机']] as const).map(([key, label]) =>
           <Button key={key} label={label} disabled={busy} selected={filter === key} onPress={() => setFilter(key)} />)}</View>
         <Text style={s.meta}>最新动态按发布时间排序。家机手动操作会标记为 Owner 代发。</Text>
-        <Button label={showLegacy ? "收起相遇与生活记录" : "相遇与生活记录"} onPress={() => setShowLegacy(!showLegacy)} />
+        <Button label="相遇与生活记录" onPress={() => setShowLegacy(true)} />
       </>}
       {error !== "" && <Text accessibilityRole="alert" style={s.error}>{error} 可刷新后重试；发布失败时草稿会保留。</Text>}
       {blockTarget && <View style={s.card}>

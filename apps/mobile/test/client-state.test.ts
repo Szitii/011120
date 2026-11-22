@@ -20,14 +20,10 @@ describe("real client binding state architecture", () => {
   it("restores source route and per-identity World scroll position", () => {
     let state = initialNavigationState();
     state = saveScroll(state, "owner-1", "world", 428);
-    state = pushRoute(state, { type: "encounter", encounterId: "enc-1", sourceTab: "world", sourceScrollY: 428 });
-    state = pushRoute(state, {
-      type: "profile",
-      companionId: "sample_companion-1",
-      source: "ENCOUNTER",
-      fromEncounterId: "enc-1",
-    });
+    state = pushRoute(state, { type: "encounter", encounterId: "enc-1" });
+    state = pushRoute(state, { type: "profile", companionId: "sample_companion-1" });
     state = popRoute(state);
+    assert.deepEqual(state.stack.at(-1), { type: "encounter", encounterId: "enc-1" });
     state = popRoute(state);
     assert.deepEqual(state.stack, [{ type: "root", tab: "world" }]);
     assert.equal(state.scrollByIdentityAndTab[scrollKey("owner-1", "world")], 428);
@@ -36,27 +32,14 @@ describe("real client binding state architecture", () => {
   it("keeps profile navigation distinct from explicit identity switching", () => {
     let state = initialNavigationState();
     state = selectTab(state, "my");
-    state = pushRoute(state, {
-      type: "profile",
-      companionId: "sample_companion-1",
-      source: "OWNER_ROSTER",
-    });
+    state = pushRoute(state, { type: "profile", companionId: "sample_companion-1" });
     const route = state.stack.at(-1);
     assert.equal(route?.type, "profile");
     if (route?.type === "profile") {
-      assert.equal(route.source, "OWNER_ROSTER");
+      assert.equal(route.companionId, "sample_companion-1");
       assert.equal("viewContext" in route, false);
     }
     assert.equal(state.rootTab, "my");
-  });
-
-  it("supports a real post-switch contextual route before Companion Social Platform", () => {
-    let state = initialNavigationState();
-    state = pushRoute(state, { type: "encounter", encounterId: "enc-1", sourceTab: "world", sourceScrollY: 0 });
-    state = pushRoute(state, { type: "identity-context", encounterId: "enc-1", companionId: "sample_companion-1" });
-    assert.equal(state.stack.at(-1)?.type, "identity-context");
-    state = selectTab(state, "world");
-    assert.deepEqual(state.stack, [{ type: "root", tab: "world" }]);
   });
 
   it("keeps root labels client-side and independent from API resources", () => {

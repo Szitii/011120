@@ -145,7 +145,6 @@ function WorldApp({ client, account, isMockMode }: {
   const [mySettingsOpen, setMySettingsOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const worldScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
-  const identityEpochRef = useRef(0);
 
   const route = nav.stack[nav.stack.length - 1] ?? {
     type: "root" as const,
@@ -163,7 +162,6 @@ function WorldApp({ client, account, isMockMode }: {
   useEffect(() => {
     void loadIdentityOwner();
     return () => {
-      identityEpochRef.current += 1;
       cache.purgeViewerSensitive();
     };
   }, [client]);
@@ -179,14 +177,12 @@ function WorldApp({ client, account, isMockMode }: {
     ) {
       void loadProfile(identity.value.activeSubject.id);
     }
-    if (route.type === "encounter" || route.type === "identity-context") {
-      void loadEncounter(route.encounterId);
-    }
+    if (route.type === "encounter") void loadEncounter(route.encounterId);
     if (route.type === "profile") void loadProfile(route.companionId);
   }, [
     route.type,
     route.type === "root" ? route.tab : "",
-    route.type === "encounter" || route.type === "identity-context" ? route.encounterId : "",
+    route.type === "encounter" ? route.encounterId : "",
     route.type === "profile" ? route.companionId : "",
     identity.kind === "success" ? identity.value.activeSubject.id : "",
   ]);
@@ -225,16 +221,16 @@ function WorldApp({ client, account, isMockMode }: {
   }
 
   async function loadWorld() {
-    const epoch = identityEpochRef.current;
+    const epoch = cache.epoch;
     setWorld({ kind: "loading" });
     try {
       const cached = cache.get<WorldCollection>("world");
       if (cached) {
-        if (epoch === identityEpochRef.current) setWorld(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
+        if (epoch === cache.epoch) setWorld(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
       const value = await client.api.worldItems();
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       cache.set("world", value);
       setWorld(value.items.length ? { kind: "success", value } : { kind: "empty" });
       requestAnimationFrame(() => {
@@ -242,14 +238,14 @@ function WorldApp({ client, account, isMockMode }: {
         worldScrollRef.current?.scrollTo({ y, animated: !reducedMotion });
       });
     } catch (error) {
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       const safe = safeClientMessage(error);
       setWorld({ kind: "error", ...safe });
     }
   }
 
   async function loadLife() {
-    const epoch = identityEpochRef.current;
+    const epoch = cache.epoch;
     setLife({ kind: "loading" });
     try {
       const viewer =
@@ -260,39 +256,39 @@ function WorldApp({ client, account, isMockMode }: {
       const key = `life-continuity:${viewerKey}`;
       const cached = cache.get<LifeContinuityCollection>(key);
       if (cached) {
-        if (epoch === identityEpochRef.current) setLife(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
+        if (epoch === cache.epoch) setLife(cached.items.length ? { kind: "success", value: cached } : { kind: "empty" });
         return;
       }
       const value = await client.api.lifeContinuity(viewer);
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       cache.set(key, value);
       setLife(value.items.length ? { kind: "success", value } : { kind: "empty" });
     } catch (error) {
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       const safe = safeClientMessage(error);
       setLife({ kind: "error", ...safe });
     }
   }
 
   async function loadEncounter(id: string) {
-    const epoch = identityEpochRef.current;
+    const epoch = cache.epoch;
     setEncounter({ kind: "loading" });
     try {
       const key = `encounter:${id}`;
       const value =
         cache.get<EncounterDetail>(key) ?? (await client.api.encounterDetail(id));
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       cache.set(key, value);
       setEncounter({ kind: "success", value });
     } catch (error) {
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       const safe = safeClientMessage(error);
       setEncounter({ kind: "error", ...safe });
     }
   }
 
   async function loadProfile(id: string) {
-    const epoch = identityEpochRef.current;
+    const epoch = cache.epoch;
     setProfile({ kind: "loading" });
     try {
       const viewer =
@@ -303,11 +299,11 @@ function WorldApp({ client, account, isMockMode }: {
       const key = `profile:${viewerKey}:${id}`;
       const value =
         cache.get<CompanionProfile>(key) ?? (await client.api.companionProfile(id, viewer));
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       cache.set(key, value);
       setProfile({ kind: "success", value });
     } catch (error) {
-      if (epoch !== identityEpochRef.current) return;
+      if (epoch !== cache.epoch) return;
       const safe = safeClientMessage(error);
       setProfile({ kind: "error", ...safe });
     }
@@ -321,7 +317,6 @@ function WorldApp({ client, account, isMockMode }: {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
-    identityEpochRef.current += 1;
     setIdentitySwitchPending(true);
     setIdentity({ kind: "loading" });
     setWorld({ kind: "idle" });
@@ -367,10 +362,6 @@ function WorldApp({ client, account, isMockMode }: {
 
   async function switchCompanionFromUi(item: OwnerCompanionSummary) {
     if (!item.socialReady) return;
-    if (route.type === "encounter") {
-      await switchToCompanionContext(item);
-      return;
-    }
     await switchIdentity({
       kind: "COMPANION",
       id: item.companionId,
@@ -380,86 +371,16 @@ function WorldApp({ client, account, isMockMode }: {
 
   function openEncounter(item: WorldItem) {
     if (item.source.type !== "ENCOUNTER" || item.viewerCapabilities.openDetail !== true) return;
-    const y = nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0;
-    setNav((current) =>
-      pushRoute(current, {
-        type: "encounter",
-        encounterId: item.source.id,
-        sourceTab: "world",
-        sourceScrollY: y,
-        ...(item.author.companionId ? { companionId: item.author.companionId } : {}),
-      }),
-    );
+    setNav((current) => pushRoute(current, { type: "encounter", encounterId: item.source.id }));
   }
 
-  function openProfile(companionId: string, source: "WORLD_ACTOR" | "ENCOUNTER" | "OWNER_ROSTER", fromEncounterId?: string) {
-    setNav((current) =>
-      pushRoute(current, {
-        type: "profile",
-        companionId,
-        source,
-        ...(fromEncounterId ? { fromEncounterId } : {}),
-      }),
-    );
+  function openLifeEncounter(item: LifeContinuityItem) {
+    if (item.kind !== "ENCOUNTER" || item.viewerCapabilities.openDetail !== true) return;
+    setNav((current) => pushRoute(current, { type: "encounter", encounterId: item.linkedObject.id }));
   }
 
-  function openProfileFromEncounter() {
-    if (route.type !== "encounter" || !route.companionId) return;
-    openProfile(route.companionId, "ENCOUNTER", route.encounterId);
-  }
-
-  async function switchToCompanionContext(item: OwnerCompanionSummary) {
-    if (route.type !== "encounter" || !item.socialReady) {
-      return;
-    }
-    const previousIdentity = identityValue;
-    const previousName = companionDisplayName;
-
-    identityEpochRef.current += 1;
-    setIdentitySwitchPending(true);
-    setIdentity({ kind: "loading" });
-    setWorld({ kind: "idle" });
-    setLife({ kind: "idle" });
-    setEncounter({ kind: "idle" });
-    setProfile({ kind: "idle" });
-    cache.purgeViewerSensitive();
-
-    try {
-      const value = await client.api.identityContext({
-        kind: "COMPANION",
-        id: item.companionId,
-      });
-      setCompanionDisplayName(item.displayName);
-      setIdentity({ kind: "success", value });
-      setNav((current) =>
-        pushRoute(current, {
-          type: "identity-context",
-          encounterId: route.encounterId,
-          companionId: item.companionId,
-        }),
-      );
-    } catch (error) {
-      const safe = safeClientMessage(error);
-      if (previousIdentity) {
-        try {
-          const restored =
-            previousIdentity.activeSubject.kind === "OWNER"
-              ? await client.api.identityContext()
-              : await client.api.identityContext({
-                  kind: previousIdentity.activeSubject.kind,
-                  id: previousIdentity.activeSubject.id,
-                });
-          setCompanionDisplayName(previousName);
-          setIdentity({ kind: "success", value: restored });
-        } catch {
-          setIdentity({ kind: "error", ...safe });
-        }
-      } else {
-        setIdentity({ kind: "error", ...safe });
-      }
-    } finally {
-      setIdentitySwitchPending(false);
-    }
+  function openProfile(companionId: string) {
+    setNav((current) => pushRoute(current, { type: "profile", companionId }));
   }
 
   function goBack() {
@@ -505,7 +426,7 @@ function WorldApp({ client, account, isMockMode }: {
           onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))}
           legacy={<WorldScreen state={world}
             scrollRef={worldScrollRef} onScroll={() => undefined}
-            onOpenActor={id => openProfile(id, "WORLD_ACTOR")} onOpenEncounter={openEncounter} onRetry={() => void loadWorld()} />}
+            onOpenActor={openProfile} onOpenEncounter={openEncounter} onRetry={() => void loadWorld()} />}
         /> : identitySwitchPending ? <ActivityIndicator accessibilityLabel="正在切换身份" /> :
         <WorldScreen
           state={world}
@@ -514,7 +435,7 @@ function WorldApp({ client, account, isMockMode }: {
           onScroll={(y) =>
             setNav((current) => saveScroll(current, identityId, "world", y))
           }
-          onOpenActor={(companionId) => openProfile(companionId, "WORLD_ACTOR")}
+          onOpenActor={openProfile}
           onOpenEncounter={openEncounter}
           onRetry={() => void loadWorld()}
         />
@@ -530,16 +451,7 @@ function WorldApp({ client, account, isMockMode }: {
           companionName={companionDisplayName}
           isMockMode={isMockMode}
           onOpenTimeline={() => setNav((current) => pushRoute(current, { type: "life-archive" }))}
-          onOpenEncounter={(item) => {
-            if (item.kind !== "ENCOUNTER" || item.viewerCapabilities.openDetail !== true) return;
-            setNav((current) => pushRoute(current, {
-              type: "encounter",
-              encounterId: item.linkedObject.id,
-              sourceTab: "home",
-              sourceScrollY: 0,
-              ...(item.counterpart?.companionId ? { companionId: item.counterpart.companionId } : {}),
-            }));
-          }}
+          onOpenEncounter={openLifeEncounter}
         />
       )}
 
@@ -554,18 +466,7 @@ function WorldApp({ client, account, isMockMode }: {
           }
           companionName={companionDisplayName}
           onRetry={() => void loadLife()}
-          onOpenEncounter={(item) => {
-            if (item.kind !== "ENCOUNTER" || item.viewerCapabilities.openDetail !== true) return;
-            setNav((current) =>
-              pushRoute(current, {
-                type: "encounter",
-                encounterId: item.linkedObject.id,
-                sourceTab: "home",
-                sourceScrollY: 0,
-                ...(item.counterpart?.companionId ? { companionId: item.counterpart.companionId } : {}),
-              }),
-            );
-          }}
+          onOpenEncounter={openLifeEncounter}
         />
       )}
 
@@ -582,7 +483,7 @@ function WorldApp({ client, account, isMockMode }: {
           isMockMode={isMockMode}
           settingsOpen={mySettingsOpen}
           onCloseSettings={() => setMySettingsOpen(false)}
-          onOpenCompanionProfile={(item) => openProfile(item.companionId, "OWNER_ROSTER")}
+          onOpenCompanionProfile={(item) => openProfile(item.companionId)}
           onControls={(item) => {
             setCompanionDisplayName(item.displayName);
             setNav((current) => pushRoute(current, {
@@ -614,7 +515,7 @@ function WorldApp({ client, account, isMockMode }: {
         <EncounterScreen
           state={encounter}
           onRetry={() => void loadEncounter(route.encounterId)}
-          onProfile={(companionId) => openProfile(companionId, "ENCOUNTER", route.encounterId)}
+          onProfile={openProfile}
           onMoment={() => setMomentMode((value) => !value)}
           momentMode={momentMode}
           companionName={companionDisplayName}
@@ -640,7 +541,7 @@ function WorldApp({ client, account, isMockMode }: {
           onApproved={() => void loadOwnerCompanions()}
           onResidencyChanged={() => void loadOwnerCompanions()}
           onOpenCompanion={(identity) => {
-            openProfile(identity.companionId, "OWNER_ROSTER");
+            openProfile(identity.companionId);
           }}
         />
       )}
@@ -656,7 +557,7 @@ function WorldApp({ client, account, isMockMode }: {
           }}
           onActivated={() => void loadOwnerCompanions()}
           onOpenCompanion={() => {
-            openProfile(route.companionId, "OWNER_ROSTER");
+            openProfile(route.companionId);
           }}
         />
       )}
@@ -666,16 +567,6 @@ function WorldApp({ client, account, isMockMode }: {
           api={client.api}
           companionId={route.companionId}
           companionName={companionDisplayName}
-        />
-      )}
-
-      {route.type === "identity-context" && (
-        <CompanionContextScreen
-          state={encounter}
-          identity={identity}
-          companionName={companionDisplayName}
-          onRetry={() => void loadEncounter(route.encounterId)}
-          onWorld={() => setNav((current) => selectTab(current, "world"))}
         />
       )}
 
@@ -1098,70 +989,6 @@ function EncounterScreen({
   );
 }
 
-function CompanionContextScreen({
-  state,
-  identity,
-  companionName,
-  onRetry,
-  onWorld,
-}: {
-  state: LoadState<EncounterDetail>;
-  identity: LoadState<ActiveIdentityContext>;
-  companionName: string;
-  onRetry: () => void;
-  onWorld: () => void;
-}) {
-  if (
-    identity.kind === "loading" ||
-    state.kind === "loading" ||
-    state.kind === "idle"
-  ) {
-    return <Loading />;
-  }
-  if (identity.kind === "error") {
-    return <ErrorState title={identity.title} retry={identity.retry} onRetry={onRetry} />;
-  }
-  if (state.kind === "error") {
-    return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
-  }
-  if (identity.kind !== "success" || state.kind !== "success") {
-    return <Centered title="这个身份暂时进不去。" />;
-  }
-
-  return (
-    <ScrollView style={styles.content} contentContainerStyle={styles.contextPage}>
-      <View style={styles.contextHeader}>
-        <View style={styles.largeSampleCompanionAvatar}>
-          <Text style={styles.largeSampleCompanionAvatarText}>{companionName.slice(0, 1).toUpperCase()}</Text>
-        </View>
-        <View>
-          <Text style={styles.contextEyebrow}>CURRENT: {companionName}</Text>
-          <Text style={styles.contextTitle}>现在是 {companionName}</Text>
-        </View>
-      </View>
-
-      <View style={styles.contextNotice}>
-        <Text style={styles.contextNoticeTitle}>切过来了。</Text>
-        <Text style={styles.contextNoticeBody}>
-          可以继续了。
-        </Text>
-      </View>
-
-      <View style={styles.contextThread}>
-        <Text style={styles.sectionLabel}>刚才那件事</Text>
-        <Text style={styles.contextThreadTitle}>{state.value.status}</Text>
-        <Text style={styles.feedMeta}>{formatDate(state.value.occurredAt)}</Text>
-        <Text style={styles.bodyText}>
-          {state.value.body ?? "这里也没留下什么。"}
-        </Text>
-      </View>
-
-      <Pressable style={styles.primaryPill} onPress={onWorld}>
-        <Text style={styles.primaryPillText}>去 {companionName} 那边</Text>
-      </Pressable>
-    </ScrollView>
-  );
-}
 
 function ProfileScreen({
   state,
@@ -1780,17 +1607,6 @@ const styles = StyleSheet.create({
   brand: { flexShrink: 1, fontSize: 14, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
   chevron: { color: colors.tertiary, fontSize: 15, marginTop: -3 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
-  headerAvatarButton: { padding: 2 },
-  headerAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#ECE9E6",
-  },
-  headerAvatarSampleCompanion: { backgroundColor: "#F7E7E1" },
-  headerAvatarText: { fontSize: 11, fontWeight: "700", color: colors.text },
   iconButton: {
     width: 36,
     height: 36,
@@ -1828,25 +1644,6 @@ const styles = StyleSheet.create({
   feedFilterText: { fontSize: 12, color: colors.muted },
   feedFilterTextActive: { fontWeight: "700", color: colors.roseDark },
   feedActorTag: { color: colors.roseDark, backgroundColor: colors.roseWash, paddingVertical: 2, paddingHorizontal: 6, fontSize: 10, borderRadius: 6, overflow: "hidden" },
-  feedSwitcher: {
-    alignSelf: "flex-start",
-    marginTop: 12,
-    padding: 3,
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 999,
-    backgroundColor: "#F2F2F7",
-  },
-  feedSwitcherMuted: { paddingHorizontal: 12, paddingVertical: 6, fontSize: 12, color: colors.tertiary },
-  feedSwitcherActive: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: colors.canvas,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-  },
-  feedSwitcherActiveText: { fontSize: 12, fontWeight: "600", color: colors.ink },
   feedItem: {
     paddingHorizontal: 16,
     paddingTop: 16,
@@ -1909,7 +1706,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   participantAvatarImage: { width: 44, height: 44, borderRadius: 22 },
-  participantAvatarAlt: { backgroundColor: "#E9EFF0" },
   participantName: { marginTop: 6, fontSize: 11, lineHeight: 15, textAlign: "center", color: colors.muted },
   participantHandle: { marginTop: 3, fontSize: 10, lineHeight: 14, textAlign: "center", color: colors.tertiary },
   connectionLine: { width: 18, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
@@ -1932,26 +1728,6 @@ const styles = StyleSheet.create({
   bodyText: { marginTop: 10, fontSize: 15, lineHeight: 23, color: colors.text },
   warning: { marginTop: 10, fontSize: 12, color: "#8E652B" },
   actionStack: { marginTop: 22, gap: 10 },
-  primaryPill: {
-    minHeight: 44,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 999,
-    backgroundColor: colors.ink,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  primaryPillText: { color: colors.canvas, fontSize: 14, fontWeight: "600" },
-  accentPill: {
-    minHeight: 44,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 999,
-    backgroundColor: colors.roseDark,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  accentPillText: { color: colors.canvas, fontSize: 14, fontWeight: "600" },
   secondaryPill: {
     minHeight: 42,
     paddingHorizontal: 18,
@@ -1974,35 +1750,6 @@ const styles = StyleSheet.create({
   momentRule: { marginVertical: 22, height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   momentBody: { fontSize: 16, lineHeight: 25, color: colors.text, marginBottom: 24 },
 
-  contextPage: { padding: 18, paddingBottom: 44 },
-  contextHeader: { flexDirection: "row", alignItems: "center", gap: 14, paddingTop: 10 },
-  largeSampleCompanionAvatar: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: "#F7E7E1",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  largeSampleCompanionAvatarText: { fontSize: 20, fontWeight: "700", color: colors.roseDark },
-  contextEyebrow: { fontSize: 10, letterSpacing: 1.1, color: colors.roseDark, fontWeight: "700" },
-  contextTitle: { marginTop: 4, fontSize: 24, fontWeight: "700", color: colors.ink },
-  contextNotice: {
-    marginTop: 24,
-    padding: 16,
-    borderRadius: 16,
-    backgroundColor: colors.roseWash,
-  },
-  contextNoticeTitle: { fontSize: 14, fontWeight: "700", color: colors.text },
-  contextNoticeBody: { marginTop: 6, fontSize: 13, lineHeight: 20, color: colors.muted },
-  contextThread: {
-    marginTop: 20,
-    paddingVertical: 18,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-  },
-  contextThreadTitle: { marginTop: 8, fontSize: 20, fontWeight: "700", color: colors.text },
 
   profilePage: { padding: 20, paddingBottom: 44 },
   profileTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -2024,36 +1771,17 @@ const styles = StyleSheet.create({
   profileHandle: { marginTop: 3, fontSize: 13, color: colors.muted },
   profileMetaRow: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
   profileMeta: { fontSize: 12, color: colors.muted },
-  profileDot: { color: "#C4C4C8" },
   profileDivider: { marginVertical: 20, height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   profileSection: { gap: 7 },
-  profileSectionValue: { fontSize: 16, fontWeight: "600", color: colors.text },
 
   lifePage: { padding: 20, paddingBottom: 44 },
   lifeEyebrow: { marginTop: 10, fontSize: 10, letterSpacing: 1.2, color: colors.roseDark, fontWeight: "700" },
   lifeTitle: { marginTop: 7, fontSize: 30, lineHeight: 36, fontWeight: "700", color: colors.ink },
   lifeSub: { marginTop: 10, fontSize: 14, lineHeight: 22, color: colors.muted },
-  lifeTimeline: { marginTop: 34, flexDirection: "row", alignItems: "flex-start" },
-  timelineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.rose, marginTop: 6 },
-  timelineLine: { width: 28, height: StyleSheet.hairlineWidth, backgroundColor: colors.rose, marginTop: 10 },
   lifeTimelineList: { marginTop: 22, gap: 10 },
   lifeContinuityCard: { padding: 16, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas },
   lifeContinuityTitle: { marginTop: 7, fontSize: 16, lineHeight: 22, fontWeight: "700", color: colors.text },
-  lifeUnreadDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.rose },
   timelineCard: { flex: 1, marginLeft: 10, padding: 16, borderRadius: 16, backgroundColor: "#FBF4F5" },
-  timelineTitle: { marginTop: 7, fontSize: 18, fontWeight: "700", color: colors.text },
-  lifeEntry: {
-    marginTop: 20,
-    minHeight: 68,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  lifeEntryTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
 
   accountAvatar: {
     width: 46,
@@ -2069,8 +1797,6 @@ const styles = StyleSheet.create({
   editProfileButton: { minHeight: 44, paddingHorizontal: 8, flexDirection: "row", alignItems: "center" },
   accountHandle: { marginTop: 3, fontSize: 11, color: colors.tertiary },
   accountArrow: { fontSize: 22, color: "#C7C7CC", fontWeight: "300" },
-  sectionHeaderLinkUnused: { fontSize: 11, color: colors.tertiary },
-  partnerRowStatic: { opacity: 0.72 },
   settingsText: { flex: 1, fontSize: 13, color: colors.text },
 
   modalBackdrop: {
