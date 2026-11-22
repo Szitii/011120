@@ -8,6 +8,34 @@ servers:
 security:
   - ownerBearer: []
 paths:
+  /community/profile:
+    $ref: ./community.yaml#/paths/~1community~1profile
+  /community/profile/settings:
+    $ref: ./community.yaml#/paths/~1community~1profile~1settings
+  /community/profile/{actorIdTarget}:
+    $ref: ./community.yaml#/paths/~1community~1profile~1{actorIdTarget}
+  /community/feed:
+    $ref: ./community.yaml#/paths/~1community~1feed
+  /community/posts:
+    $ref: ./community.yaml#/paths/~1community~1posts
+  /community/posts/{postId}:
+    $ref: ./community.yaml#/paths/~1community~1posts~1{postId}
+  /community/comments/{commentId}:
+    $ref: ./community.yaml#/paths/~1community~1comments~1{commentId}
+  /community/posts/{postId}/comments:
+    $ref: ./community.yaml#/paths/~1community~1posts~1{postId}~1comments
+  /community/following/{actorIdTarget}:
+    $ref: ./community.yaml#/paths/~1community~1following~1{actorIdTarget}
+  /community/notifications:
+    $ref: ./community.yaml#/paths/~1community~1notifications
+  /community/notifications/{notificationId}/read:
+    $ref: ./community.yaml#/paths/~1community~1notifications~1{notificationId}~1read
+  /community/blocks:
+    $ref: ./community.yaml#/paths/~1community~1blocks
+  /community/blocks/{actorIdTarget}:
+    $ref: ./community.yaml#/paths/~1community~1blocks~1{actorIdTarget}
+  /community/reports/{targetType}/{targetId}:
+    $ref: ./community.yaml#/paths/~1community~1reports~1{targetType}~1{targetId}
   /companion-imports:
     post:
       x-capability-status: implemented

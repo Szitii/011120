@@ -429,6 +429,54 @@ describe("server-only MVP HTTP/API boundary", () => {
     assert.equal(approval.companionId, id("3"));
   });
 
+  it("rejects array values for enumerated fields instead of coercing them to strings", async () => {
+    const { api, owner } = harness();
+    const controls = await api.handle(request(
+      "PATCH",
+      `/v0/controls?companionId=${id("3")}`,
+      { socialTwinVisibility: ["PUBLIC"] },
+      { "idempotency-key": "controls-key-0001", "if-match": "1" },
+    ));
+    assert.equal(controls.status, 400);
+    const persona = await api.handle(request(
+      "PUT",
+      `/v0/companions/${id("3")}/social-persona`,
+      {
+        sourceIdentityVersionId: id("51"), handle: "sample_companion", profileVisibility: "PRIVATE",
+        autonomyMode: ["QUIET"], selections: [{ sourceField: "displayName", targetField: "displayName" }],
+      },
+      { "idempotency-key": "persona-key-00001" },
+    ));
+    assert.equal(persona.status, 400);
+    assert.equal(owner.calls.length, 0);
+  });
+
+  it("rejects contradictory viewer parameters, a missing trace header, and hides unexpected failures", async () => {
+    const { api, owner } = harness();
+    const ownerWithId = await api.handle(request("GET", `/v0/life-continuity?activeSubjectKind=OWNER&activeSubjectId=${id("3")}`));
+    assert.equal(ownerWithId.status, 400);
+    assert.match((ownerWithId.body as { title: string }).title, /OWNER Life view does not accept activeSubjectId/);
+    const companionWithoutId = await api.handle(request("GET", `/v0/companions/${id("3")}/profile?activeSubjectKind=COMPANION`));
+    assert.equal(companionWithoutId.status, 400);
+    assert.match((companionWithoutId.body as { title: string }).title, /activeSubjectId is required/);
+    assert.equal(owner.calls.length, 0);
+    const noTrace = await api.handle({
+      method: "POST",
+      url: "/v0/encounters",
+      headers: { authorization: "Bearer owner-token", "content-type": "application/json", "idempotency-key": "encounter-key-0001" },
+      body: { invitationId: id("2"), message: "hello" },
+    });
+    assert.equal((noTrace.body as { code: string }).code, "TRACE_ID_REQUIRED");
+    owner.failure = new Error("unexpected private detail");
+    const failed = await api.handle(request("POST", "/v0/encounter-invitations", {
+      initiatorTwinId: id("3"), responderTwinId: id("4"), initiatorSocialPersonaId: id("5"), responderSocialPersonaId: id("6"),
+      initiatorIdentityVersionId: id("7"), responderIdentityVersionId: id("8"), purpose: "one meeting",
+      scope: "ONE_SHOT_ENCOUNTER", contextHash: "a".repeat(64), expiresAt: "2026-09-19T00:00:00Z",
+    }, { "idempotency-key": "invitation-key-02" }));
+    assert.equal(failed.status, 500);
+    assert.doesNotMatch(JSON.stringify(failed.body), /private detail/);
+  });
+
   it("translates database failures without exposing SQL or private details", async () => {
     const { api, owner } = harness();
     owner.failure = new PostgresPersistenceError("DATABASE_UNAVAILABLE", "sensitive diagnostic SELECT private_memory", "08006");

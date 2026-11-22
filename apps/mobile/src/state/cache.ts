@@ -5,11 +5,11 @@ export class ViewerSensitiveCache {
   get epoch(): number { return this.#epoch; }
 
   get<T>(key: string): T | undefined {
-    return this.#values.get(`${this.#epoch}:${key}`) as T | undefined;
+    return this.#values.get(key) as T | undefined;
   }
 
   set<T>(key: string, value: T): void {
-    this.#values.set(`${this.#epoch}:${key}`, value);
+    this.#values.set(key, value);
   }
 
   purgeViewerSensitive(): number {

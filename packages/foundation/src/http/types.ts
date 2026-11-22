@@ -1,6 +1,12 @@
-import type { ImportReview, CompanionIdentity, NormalizedIdentityDraft, ImportFinding, CompanionImportRecord } from "../companion-import/types.ts";
+import type {
+  CompanionIdentity,
+  ImportFinding,
+  ImportReview,
+  ImportSourceFormat,
+  NormalizedIdentityDraft,
+} from "../companion-import/types.ts";
 import type { ComputeReceipt } from "../compute/receipt.ts";
-import type { PersistentEncounterResult } from "../encounter/persistent-orchestrator.ts";
+import type { PersistentEncounterCommand, PersistentEncounterResult } from "../encounter/persistent-orchestrator.ts";
 import type {
   InvitationListCursor,
   InvitationMutationResult,
@@ -241,14 +247,20 @@ export interface OwnerApiPort {
   listLifeEventInbox(limit: number, before?: { readonly createdAt: string; readonly id: string }): Promise<LifeEventInboxCollectionView>;
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItemView | undefined>;
   getControls(companionId: string): Promise<ControlsResourceView | undefined>;
-  updateControls(input: { readonly companionId: string; readonly ifMatch: number; readonly patch: ControlsPatchInput; readonly idempotencyKeyHash: string; readonly requestHash: string }): Promise<ControlsResourceView | undefined>;
+  updateControls(input: {
+    readonly companionId: string;
+    readonly ifMatch: number;
+    readonly patch: ControlsPatchInput;
+    readonly idempotencyKeyHash: string;
+    readonly requestHash: string;
+  }): Promise<ControlsResourceView | undefined>;
   createCompanionImport(input: {
     readonly rawPayload: string;
     readonly originalSha256: string;
     readonly byteLength: number;
     readonly parserVersion: string;
     readonly policyVersion: string;
-    readonly sourceFormat: CompanionImportRecord["sourceFormat"];
+    readonly sourceFormat: ImportSourceFormat;
     readonly draft: NormalizedIdentityDraft;
     readonly findings: readonly ImportFinding[];
     readonly idempotencyKeyHash: string;
@@ -277,6 +289,7 @@ export interface OwnerApiPort {
 export interface AuthenticatedOwnerSession {
   readonly ownerId: string;
   readonly owner: OwnerApiPort;
+  readonly community?: import("../community/port.ts").CommunityPort;
 }
 
 export interface OwnerSessionResolver {
@@ -284,15 +297,7 @@ export interface OwnerSessionResolver {
 }
 
 export interface EncounterCommandPort {
-  run(input: {
-    readonly actorOwnerId: string;
-    readonly invitationId: string;
-    readonly encounterId: string;
-    readonly message: string;
-    readonly maxMemories?: number;
-    readonly idempotencyKey: string;
-    readonly traceId: string;
-  }): Promise<PersistentEncounterResult>;
+  run(input: PersistentEncounterCommand): Promise<PersistentEncounterResult>;
 }
 
 export class ApiAuthenticationError extends Error {
@@ -302,6 +307,16 @@ export class ApiAuthenticationError extends Error {
     super(code);
     this.name = "ApiAuthenticationError";
     this.code = code;
+  }
+}
+
+export class OwnerSessionError extends Error {
+  readonly code: "FORBIDDEN" | "SERVICE_UNAVAILABLE";
+
+  constructor(code: "FORBIDDEN" | "SERVICE_UNAVAILABLE") {
+    super(code);
+    this.code = code;
+    this.name = "OwnerSessionError";
   }
 }
 

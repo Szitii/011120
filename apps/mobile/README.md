@@ -5,7 +5,7 @@ This Expo / React Native app is the existing 02 × 03 real-client binding unit f
 ## Architecture
 
 - Expo / React Native App Shell
-- client-owned root navigation: World / Life / My
+- client-owned root navigation: Public Community / Private Home / My
 - server-derived Owner / Companion active identity context
 - real OpenAPI adapter in `src/adapters/real-api.ts`
 - explicit, isolated mock adapter with no default presentation data
@@ -39,9 +39,39 @@ The Owner roster is server-derived through `GET /v0/companions`. Imported reside
 
 `EXPO_PUBLIC_SAMPLE_COMPANION_COMPANION_ID` remains only a controlled development bootstrap identifier for the seeded SampleCompanion fixture. Newly activated imported Companions do not depend on that variable. `GET /v0/identity-context` remains authoritative after every identity switch.
 
+## Supabase sign-in for internal testers
+
+For a dedicated test Supabase project:
+
+1. Apply the repository migrations through `202611210031_p1_human_profile.sql`. Enable email/password Auth and disable public signup in the project settings. Pre-create and confirm the two testers' email accounts through Supabase Auth.
+2. Link each test Owner to its own Supabase user UUID in `public.owners.auth_user_id` and keep the Owner `ACTIVE`. Keep existing Owner IDs when linking existing test data. These IDs own the community data and Companion rosters. Companions use the existing authorized identity switch under a human account.
+3. Start the authenticated API from the repository root with `npm run start:mobile:api`. Set `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY`. The backend database login needs permission to `SET ROLE authenticated`. The API listens on `127.0.0.1:8787` by default. Set `MOBILE_API_HOST` and `MOBILE_API_PORT` as needed. Use an HTTPS endpoint reachable from the iPhone or Web client.
+4. Start or export Expo with the following public environment variables. Use the publishable key or legacy anon key for the same test project.
+
+   ```bash
+   EXPO_PUBLIC_DATA_MODE=real
+   EXPO_PUBLIC_API_BASE_URL=https://api.example.test
+   EXPO_PUBLIC_SUPABASE_URL=https://your-test-project.supabase.co
+   EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-test-publishable-key
+   ```
+
+Supabase Auth manages password sign-in and token refresh. The mobile API verifies the bearer with Supabase Auth before resolving the active Owner under PostgreSQL RLS. The mobile app persists the session in native SecureStore or browser localStorage. In **我的 → 退出登录或切换账号**, sign out of this device and enter the other tester's credentials. The login screen is limited to sign-in.
+
+Real mode is the default and requires both API and Supabase configuration. Loopback HTTP is supported for local tests. The fixed-bearer path requires explicit `dev` mode and the development host.
+
+### iPhone acceptance checks
+
+Use an iPhone build configured for the test API and test Supabase project above. Record the build commit, iOS version and outcome for each step.
+
+1. Sign in as tester A. Verify the human identity and its Companion roster. Publish a short test post as A. Select an authorized Companion, then verify that the three main tabs still work.
+2. Force-quit and reopen the app. Verify that the account restores under A and only A's roster is available. Send the app to the background and reopen it after the test access token's expiry time. Verify that requests succeed again with the refreshed session.
+3. Leave a community draft, open **我的 → 退出登录或切换账号** and sign in as tester B. Verify that the draft is empty, the starting identity is B, and the identity picker shows only B's Companions.
+4. Have B follow A. Verify that A’s test post appears in B’s human following feed and that A receives a follow notification from B. Check that B’s Companion following feed omits the post and that neither B nor A’s Companion can see A’s notification.
+5. Sign out B, then force-quit and reopen. Verify that the login screen persists. For the expiry recovery check, revoke a test session from Supabase and attempt to refresh the community page. Verify that the app returns to login and the account can sign in again.
+
 ## Fastest Windows + iPhone workflow
 
-The repository now includes a development-only PostgreSQL + HTTP/Auth + seed composition for physical-device testing. It does not add production auth, App Store deployment, or a real Provider.
+The local launcher uses a development-only PostgreSQL, API and seed configuration for physical-device testing.
 
 Prerequisites:
 
@@ -64,7 +94,7 @@ The launcher:
 4. loads dedicated Stage 1 development fixtures;
 5. validates Owner identity, SampleCompanion identity, World Encounter actor mapping, Companion Profile, and Encounter Detail against PostgreSQL;
 6. opens the development HTTP API on port `8787`;
-7. starts Expo in real-data mode with the matching development token and SampleCompanion id.
+7. starts Expo in explicit `dev` mode with the matching development token and SampleCompanion id.
 
 Then scan the Expo QR code with the iPhone.
 
@@ -84,7 +114,7 @@ docker compose -f compose.mobile-dev.yml down -v
 
 Then run the launcher again.
 
-## Manual real-mode workflow
+## Local development configuration
 
 The development host defaults are:
 
@@ -96,7 +126,7 @@ The HTTP host remains protected by the disposable-development interlock `COMPANI
 
 The dedicated mobile seed is test/development data only. It contains SampleCompanion plus one public Encounter participant and one terminal no-media Encounter so the first real-client path can be exercised without inventing Runtime success in the client.
 
-Real mode is the default. Mock mode remains explicit only:
+To use the separate mock adapter:
 
 ```bash
 EXPO_PUBLIC_DATA_MODE=mock npm start
@@ -110,7 +140,7 @@ The Stage 1 HTTP host exposes the real `MvpApiBoundary` and PostgreSQL Owner-sco
 
 Encounter creation through `POST /v0/encounters` is still intentionally not enabled by this dev host; it never fabricates Provider output or a successful Encounter.
 
-Production auth/session delivery, production hosting, real Provider execution, App Store submission, and production deployment remain outside this execution unit.
+
 
 ## Checks
 
@@ -125,9 +155,19 @@ From `apps/mobile`:
 ```bash
 npm run check
 npm run export:ci
+npm run export:web:ci
 ```
 
-Repository CI also runs the Foundation/OpenAPI/security checks, PostgreSQL contract tests, and a real HTTP residency smoke that imports a disposable Companion, approves it, activates its Social Twin, verifies Controls, switches identity, and reads its profile.
+Repository CI also runs the Foundation and PostgreSQL security checks, the community HTTP suite, an account isolation contract against PostgreSQL with an Auth HTTP test double, and the development residency smoke.
+
+To run the account contract against real Auth, set `COMPANION_SOCIAL_REAL_AUTH_TEST=1`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `AUTH_TEST_EMAIL_A`, `AUTH_TEST_PASSWORD_A`, `AUTH_TEST_EMAIL_B`, and `AUTH_TEST_PASSWORD_B`. Use a disposable database with the mobile seed's domain rows and Owner IDs linked to the two real Auth user IDs. Create the Auth users through Supabase and use their IDs in place of the placeholder subjects in the fixture. Run from the repository root:
+
+```bash
+# Point DATABASE_URL at the disposable seeded database.
+COMPANION_SOCIAL_DEV_DATABASE=1 node --experimental-strip-types tests/postgres/account-runtime.ts
+```
+
+The real-Auth run adds password grants, refresh-token rotation, device logout and rejection of revoked sessions to the isolation checks. With a disposable Auth instance issuing JWTs with a lifetime of 5–30 seconds, set `AUTH_TEST_VERIFY_TOKEN_EXPIRY=1` to also verify a naturally expired bearer and refresh back into the same Owner.
 
 
 ## 2026-09-22 manual validation build

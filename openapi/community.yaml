@@ -1,0 +1,787 @@
+openapi: 3.1.0
+info:
+  title: Companion World P1 Community API
+  version: 0.1.0
+  description: Development MVP. Human authentication owns the session; actor context
+    is verified in PostgreSQL on every call. No autonomous AI, media or friends-only
+    publishing in this batch.
+servers:
+- url: /v0
+security:
+- ownerBearer: []
+paths:
+  /community/profile:
+    get:
+      operationId: getOwnCommunityProfile
+      summary: Current independent social profile
+      x-capability-status: implemented
+      parameters:
+      - &id002
+        name: actorKind
+        in: query
+        required: true
+        schema:
+          type: string
+          enum:
+          - OWNER
+          - COMPANION
+          - SOCIAL_TWIN
+      - &id003
+        name: actorId
+        in: query
+        required: true
+        schema: &id004
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400': &id001
+          description: Safe problem response. 404 also covers foreign, private, suspended
+            and withdrawn resources.
+          content:
+            application/problem+json:
+              schema:
+                type: object
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/profile/settings:
+    parameters:
+    - name: actorKind
+      in: query
+      required: true
+      schema:
+        const: OWNER
+    - *id003
+    get:
+      operationId: getHumanProfileSettings
+      summary: Read the signed-in human actor's editable community profile and its revision
+      responses:
+        '200': &humanProfileResponse
+          description: Human community profile and current revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanProfileSettings'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '501': *id001
+    put:
+      operationId: updateHumanProfileSettings
+      summary: Save the signed-in human actor's public nickname and biography
+      description: A stale revision returns 409 if the current profile differs from the requested values.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HumanProfileSettings'
+      responses:
+        '200': *humanProfileResponse
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/profile/{actorIdTarget}:
+    get:
+      operationId: getCommunityProfile
+      summary: Public human or AI social profile; no Owner linkage or private identity
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: actorIdTarget
+        in: path
+        required: true
+        schema: *id004
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/feed:
+    get:
+      operationId: getCommunityFeed
+      summary: Latest or per-actor following feed. Text posts only; latest is chronological.
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: mode
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - LATEST
+          - FOLLOWING
+          default: LATEST
+      - name: filter
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - ALL
+          - HUMAN
+          - AI
+          default: ALL
+      - name: authorId
+        in: query
+        required: false
+        schema: *id004
+      - &id005
+        name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          description: Opaque timestamp|UUID keyset cursor from nextCursor.
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPage'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/posts:
+    post:
+      operationId: publishCommunityPost
+      summary: Publish public text; AI manual source is always OWNER_PROXY
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - &id006
+        name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 16
+          maxLength: 128
+      responses:
+        '201':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - body
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+  /community/posts/{postId}:
+    get:
+      operationId: getCommunityPost
+      summary: Post detail and latest comments; private or withdrawn posts return
+        404
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: postId
+        in: path
+        required: true
+        schema: *id004
+      - *id005
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+    delete:
+      operationId: deleteCommunityPost
+      summary: Delete only as the exact author actor; old retries cannot recover withdrawn
+        text
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: postId
+        in: path
+        required: true
+        schema: *id004
+      - *id006
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - deleted
+                properties:
+                  deleted:
+                    const: true
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/comments/{commentId}:
+    delete:
+      operationId: deleteCommunityComment
+      summary: Delete only as the exact author actor; old retries cannot recover withdrawn
+        text
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: commentId
+        in: path
+        required: true
+        schema: *id004
+      - *id006
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - deleted
+                properties:
+                  deleted:
+                    const: true
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/posts/{postId}/comments:
+    post:
+      operationId: commentOnCommunityPost
+      summary: Comment on an accessible post and atomically notify its author
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: postId
+        in: path
+        required: true
+        schema: *id004
+      - *id006
+      responses:
+        '201':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - body
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+  /community/following/{actorIdTarget}:
+    put:
+      operationId: followCommunityActor
+      summary: Set one-way subscription; does not create friendship or memory permissions
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: actorIdTarget
+        in: path
+        required: true
+        schema: *id004
+      - *id006
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - following
+                properties:
+                  following:
+                    type: boolean
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+    delete:
+      operationId: unfollowCommunityActor
+      summary: Set one-way subscription; does not create friendship or memory permissions
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: actorIdTarget
+        in: path
+        required: true
+        schema: *id004
+      - *id006
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - following
+                properties:
+                  following:
+                    type: boolean
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/notifications:
+    get:
+      operationId: getCommunityNotifications
+      summary: Inbox for current actor only; no Owner-wide aggregation
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - *id005
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPage'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/notifications/{notificationId}/read:
+    put:
+      operationId: readCommunityNotification
+      summary: Acknowledge only the current actor notification
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: notificationId
+        in: path
+        required: true
+        schema: *id004
+      - *id006
+      responses:
+        '200':
+          description: Authorized community result
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - read
+                properties:
+                  read:
+                    const: true
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '501': *id001
+  /community/blocks:
+    get:
+      operationId: listCommunityBlocks
+      summary: List only the active actor's outgoing blocks
+      parameters:
+      - *id002
+      - *id003
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Blocked public social identities with a keyset cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, actor, createdAt]
+                      properties:
+                        id: *id004
+                        actor:
+                          $ref: '#/components/schemas/Actor'
+                        createdAt:
+                          type: string
+                          format: date-time
+                  nextCursor:
+                    type: [string, 'null']
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+  /community/blocks/{actorIdTarget}:
+    parameters:
+    - *id002
+    - *id003
+    - *id006
+    - name: actorIdTarget
+      in: path
+      required: true
+      schema: *id004
+    put:
+      operationId: blockCommunityActor
+      summary: Block a social identity and remove follows in both directions
+      description: Blocks apply to both actors' content and interactions. Each human or AI actor manages its own blocks.
+      responses:
+        '200': &blockResponse
+          description: Current outgoing block state, including on idempotent replay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [blocked]
+                properties:
+                  blocked:
+                    type: boolean
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+    delete:
+      operationId: unblockCommunityActor
+      summary: Remove the current actor's outgoing block
+      description: Follows removed by a block must be created again explicitly.
+      responses:
+        '200': *blockResponse
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+  /community/reports/{targetType}/{targetId}:
+    post:
+      operationId: reportCommunityTarget
+      summary: Submit a private report about a visible profile, post or comment
+      description: Returns an opaque receipt. Repeated reports from the same actor for the same target share a receipt. Evidence is kept privately for later review. This endpoint does not implement a moderation decision.
+      parameters:
+      - *id002
+      - *id003
+      - *id006
+      - name: targetType
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [actors, posts, comments]
+      - name: targetId
+        in: path
+        required: true
+        schema: *id004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, details]
+              properties:
+                reason:
+                  type: string
+                  enum: [SPAM, HARASSMENT, HARMFUL, PRIVACY, OTHER]
+                details:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Report receipt with no evidence or reporter details
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, status]
+                properties:
+                  id: *id004
+                  status:
+                    type: string
+                    const: SUBMITTED
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+
+components:
+  securitySchemes:
+    ownerBearer:
+      type: http
+      scheme: bearer
+  schemas:
+    HumanProfileSettings:
+      type: object
+      additionalProperties: false
+      required: [displayName, bio, revision]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        bio:
+          type: string
+          maxLength: 500
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+    Actor:
+      type: object
+      required:
+      - id
+      - kind
+      - displayName
+      - handle
+      - bio
+      - avatar
+      properties:
+        id: *id004
+        kind:
+          type: string
+          enum:
+          - HUMAN
+          - AI
+        displayName: &id007
+          type: string
+        handle: *id007
+        bio: *id007
+        avatar:
+          type:
+          - string
+          - 'null'
+    Profile:
+      allOf:
+      - $ref: '#/components/schemas/Actor'
+      - type: object
+        required:
+        - isSelf
+        - following
+        - followersCount
+        - followingCount
+        - postsCount
+        - canPublish
+        properties:
+          isSelf: &id008
+            type: boolean
+          following: *id008
+          followersCount: &id009
+            type: integer
+            minimum: 0
+          followingCount: *id009
+          postsCount: *id009
+          canPublish: *id008
+    Post:
+      type: object
+      required:
+      - id
+      - author
+      - body
+      - createdAt
+      - source
+      - canDelete
+      - visibility
+      - commentsCount
+      properties:
+        id: *id004
+        author: &id010
+          $ref: '#/components/schemas/Actor'
+        body: *id007
+        createdAt: &id011
+          type: string
+          format: date-time
+        source: &id012
+          type: string
+          enum:
+          - HUMAN_MANUAL
+          - OWNER_PROXY
+        canDelete: *id008
+        visibility:
+          const: PUBLIC
+        commentsCount: *id009
+    Comment:
+      type: object
+      required:
+      - id
+      - author
+      - body
+      - createdAt
+      - source
+      - canDelete
+      - postId
+      properties:
+        id: *id004
+        author: *id010
+        body: *id007
+        createdAt: *id011
+        source: *id012
+        canDelete: *id008
+        postId: *id004
+    Notification:
+      type: object
+      required:
+      - id
+      - kind
+      - actor
+      - postId
+      - createdAt
+      - readAt
+      properties:
+        id: *id004
+        kind:
+          type: string
+          enum:
+          - COMMENT
+          - FOLLOW
+        actor:
+          $ref: '#/components/schemas/Actor'
+        postId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        createdAt: *id011
+        readAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    PostPage:
+      type: object
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Post'
+        nextCursor:
+          type:
+          - string
+          - 'null'
+    CommentPage:
+      type: object
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Comment'
+        nextCursor:
+          type:
+          - string
+          - 'null'
+    NotificationPage:
+      type: object
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Notification'
+        nextCursor:
+          type:
+          - string
+          - 'null'
+    Detail:
+      type: object
+      required:
+      - post
+      - comments
+      properties:
+        post:
+          $ref: '#/components/schemas/Post'
+        comments:
+          $ref: '#/components/schemas/CommentPage'

@@ -1,14 +1,10 @@
-export type RootTab = "world" | "life" | "my";
+export type RootTab = "world" | "home" | "my";
 export type Route =
   | { type: "root"; tab: RootTab }
-  | { type: "encounter"; encounterId: string; sourceTab: RootTab; sourceScrollY: number; companionId?: string }
-  | {
-      type: "profile";
-      companionId: string;
-      source: "WORLD_ACTOR" | "ENCOUNTER" | "OWNER_ROSTER";
-      fromEncounterId?: string;
-    }
-  | { type: "identity-context"; encounterId: string; companionId: string }
+  | { type: "life-archive" }
+  | { type: "edit-human-profile" }
+  | { type: "encounter"; encounterId: string }
+  | { type: "profile"; companionId: string }
   | { type: "bring-companion" }
   | {
       type: "social-activation";

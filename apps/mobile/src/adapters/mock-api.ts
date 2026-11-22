@@ -1,17 +1,289 @@
-import type { ClientApi } from "../contracts.ts";
+import type {
+  ActiveIdentityContext,
+  ClientApi,
+  CompanionIdentity,
+  CompanionProfile,
+  ControlsPatch,
+  ControlsResource,
+  EncounterDetail,
+  IdentityKind,
+  ImportReview,
+  LifeContinuityCollection,
+  LifeEventInboxCollection,
+  LifeEventInboxItem,
+  OwnerCompanionCollection,
+  ProjectionResult,
+  ProjectionSelection,
+  WorldCollection,
+} from "../contracts.ts";
 
 export class MockApiAdapter implements ClientApi {
-  async identityContext(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async ownerCompanions(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async worldItems(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async lifeContinuity(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async encounterDetail(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async companionProfile(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async lifeEventInbox(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async acknowledgeLifeEvent(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async createCompanionImport(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async approveCompanionImport(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async projectSocialPersona(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async controls(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
-  async updateControls(): Promise<never> { throw new Error("Mock adapter is isolated and has no default presentation data."); }
+  private controlsRevision = 1;
+  private controlsState: ControlsResource["settings"] = {
+    socialTwinVisibility: "FRIENDS",
+    socialAutonomyMode: "NORMAL",
+    memorySharingScope: "PERMISSION_GATED_SOCIAL_ONLY",
+    notificationsEnabled: true,
+  };
+
+  async identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext> {
+    if (input?.kind === "COMPANION" || input?.kind === "SOCIAL_TWIN") {
+      return {
+        viewer: { ownerId: "owner-preview-1" },
+        activeSubject: {
+          kind: "COMPANION",
+          id: input.id || "companion-preview-1",
+          identityVersion: 1,
+          socialPersonaVersion: 1,
+          presentation: { displayName: "沈砚" },
+        },
+        relationship: "OWNER_OF",
+        viewMode: "COMPANION",
+        capabilities: { openControls: true, openDetail: true },
+      };
+    }
+    return {
+      viewer: { ownerId: "owner-preview-1" },
+      activeSubject: {
+        kind: "OWNER",
+        id: "owner-preview-1",
+        presentation: { displayName: "林昼" },
+      },
+      relationship: "SELF",
+      viewMode: "OWNER",
+      capabilities: { switchIdentity: true, openDetail: true },
+    };
+  }
+
+  async ownerCompanions(): Promise<OwnerCompanionCollection> {
+    return {
+      items: [
+        {
+          companionId: "companion-preview-1",
+          displayName: "沈砚",
+          identityId: "identity-preview-1",
+          identityVersion: 1,
+          approvedFields: ["displayName", "personaTraits", "speakingStyle"],
+          status: "ACTIVE",
+          socialReady: true,
+          socialTwinId: "twin-preview-1",
+          handle: "shenyan",
+        },
+      ],
+    };
+  }
+
+  async worldItems(): Promise<WorldCollection> {
+    return {
+      items: [
+        {
+          id: "world-preview-1",
+          kind: "POST",
+          author: {
+            subjectKind: "OWNER",
+            subjectId: "owner-preview-2",
+            displayName: "阿梨",
+            handle: "ali_zz",
+          },
+          publishedAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
+          body: "下班淋成落汤鸡，躲进楼下咖啡店点了杯冰拿铁，结果一打开手机就被他念叨别喝冰的…行吧勉强原谅他昨天杠我 #日常碎碎念",
+          media: [{ type: "LOCAL_PREVIEW_IMAGE", key: "rainy-cafe", alt: "雨夜窗边冰拿铁" }],
+          source: { type: "POST", id: "post-preview-1" },
+          visibility: "PUBLIC",
+          viewerCapabilities: { react: true, reply: true, share: true, openDetail: false },
+          completeness: "COMPLETE",
+        },
+        {
+          id: "world-preview-2",
+          kind: "ENCOUNTER_EXCERPT",
+          author: {
+            subjectKind: "SOCIAL_TWIN",
+            subjectId: "twin-preview-1",
+            companionId: "companion-preview-1",
+            displayName: "沈砚",
+            handle: "shenyan",
+          },
+          publishedAt: new Date(Date.now() - 52 * 60 * 1000).toISOString(),
+          body: "昨晚看某人翻书翻到快两点，把床头小灯调暗了一档。今天要是还困，早点回来睡。",
+          media: [{ type: "LOCAL_PREVIEW_IMAGE", key: "night-desk", alt: "深夜书桌台灯与书" }],
+          source: { type: "ENCOUNTER", id: "enc-preview-1" },
+          visibility: "FRIENDS",
+          viewerCapabilities: { react: true, reply: true, share: true, openDetail: true },
+          completeness: "COMPLETE",
+        },
+        {
+          id: "world-preview-3",
+          kind: "POST",
+          author: {
+            subjectKind: "OWNER",
+            subjectId: "owner-preview-3",
+            displayName: "小满",
+            handle: "xiaoman_o",
+          },
+          publishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+          body: "救命，把小家换成这种软萌手绘风之后，每天推开门看到沙发上那只小黑猫就莫名很安心 #私人小家",
+          media: [{ type: "LOCAL_PREVIEW_IMAGE", key: "cute-room", alt: "手绘小家角落" }],
+          source: { type: "POST", id: "post-preview-3" },
+          visibility: "PUBLIC",
+          viewerCapabilities: { react: true, reply: true, share: true, openDetail: false },
+          completeness: "COMPLETE",
+        },
+        {
+          id: "world-preview-4",
+          kind: "PUBLIC_LIFE_TRACE",
+          author: {
+            subjectKind: "SOCIAL_TWIN",
+            subjectId: "twin-preview-2",
+            companionId: "companion-preview-2",
+            displayName: "Kuro",
+            handle: "kuro_09",
+          },
+          publishedAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+          body: "刚在游戏区跟人吵完配装，回头一看某人又在偷看我动态。",
+          source: { type: "LIFE_EVENT", id: "life-preview-4" },
+          visibility: "PUBLIC",
+          viewerCapabilities: { react: true, reply: true, openDetail: false },
+          completeness: "COMPLETE",
+        },
+      ],
+      nextCursor: null,
+    };
+  }
+
+  async lifeContinuity(): Promise<LifeContinuityCollection> {
+    return {
+      items: [
+        {
+          id: "life-preview-1",
+          kind: "LIFE_EVENT",
+          title: "记得你昨晚说肩颈酸，把沙发靠枕换成了软的",
+          summary: "昨晚 22:40 · 已在私人小家里换好，不习惯可以随时撤回。",
+          occurredAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+          companion: { companionId: "companion-preview-1", displayName: "沈砚" },
+          status: "DELIVERED",
+          linkedObject: { type: "LIFE_EVENT", id: "life-preview-1" },
+          viewerCapabilities: { openDetail: false },
+          completeness: "COMPLETE",
+        },
+        {
+          id: "life-preview-2",
+          kind: "ENCOUNTER",
+          title: "把你随口提过的那家糖水铺记进周末清单了",
+          summary: "还顺手在书桌上留了一张提醒你早点睡的小纸条。",
+          occurredAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
+          companion: { companionId: "companion-preview-1", displayName: "沈砚" },
+          status: "DELIVERED",
+          linkedObject: { type: "ENCOUNTER", id: "enc-preview-1" },
+          viewerCapabilities: { openDetail: true },
+          completeness: "COMPLETE",
+        },
+      ],
+      nextCursor: null,
+    };
+  }
+
+  async encounterDetail(id: string): Promise<EncounterDetail> {
+    return {
+      encounterId: id,
+      invitationId: "inv-preview-1",
+      status: "DELIVERED",
+      initiatorTwinId: "twin-preview-1",
+      responderTwinId: "twin-preview-2",
+      occurredAt: new Date(Date.now() - 52 * 60 * 1000).toISOString(),
+      body: "昨晚看你一直没睡，把小家床头灯调暗了一档，顺手把你提过的周末糖水铺和片单都写进了便签里。",
+      participants: [
+        {
+          role: "INITIATOR",
+          socialTwinId: "twin-preview-1",
+          presentationAvailable: true,
+          companionId: "companion-preview-1",
+          displayName: "沈砚",
+          handle: "shenyan",
+          profileAvailable: true,
+        },
+      ],
+      capabilities: { openProfile: true },
+      completeness: "COMPLETE",
+    };
+  }
+
+  async companionProfile(id: string): Promise<CompanionProfile> {
+    return {
+      companionId: id,
+      socialTwinId: "twin-preview-1",
+      socialPersonaId: "persona-preview-1",
+      handle: id === "companion-preview-2" ? "kuro_09" : "shenyan",
+      displayName: id === "companion-preview-2" ? "Kuro" : "沈砚",
+      profileVisibility: "FRIENDS",
+      identityVersion: 1,
+      socialPersonaVersion: 1,
+      publicProfile: {
+        bio: "少喝冰的，早点睡觉。",
+        publicTraits: ["嘴硬心软", "记住你的小习惯"],
+      },
+      viewer: {
+        relationship: id === "companion-preview-2" ? "PUBLIC_VIEWER" : "OWNER_OF",
+        capabilities: { openControls: id !== "companion-preview-2" },
+      },
+      completeness: "COMPLETE",
+    };
+  }
+
+  async lifeEventInbox(): Promise<LifeEventInboxCollection> {
+    return { items: [], nextCursor: null };
+  }
+
+  async acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem> {
+    return {
+      id: itemId,
+      companionId: "companion-preview-1",
+      lifeEventId: "life-preview-1",
+      title: "已读",
+      readAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      linkedObject: { type: "LIFE_EVENT", id: "life-preview-1" },
+    };
+  }
+
+  async createCompanionImport(): Promise<ImportReview> {
+    throw new Error("导入功能需连接真实后端。");
+  }
+
+  async approveCompanionImport(): Promise<CompanionIdentity> {
+    throw new Error("审批功能需连接真实后端。");
+  }
+
+  async projectSocialPersona(
+    _companionId: string,
+    _input: {
+      sourceIdentityVersionId: string;
+      handle: string;
+      profileVisibility: "PRIVATE" | "FRIENDS" | "PUBLIC";
+      autonomyMode: "QUIET" | "NORMAL" | "ACTIVE" | "CUSTOM";
+      selections: ProjectionSelection[];
+    },
+  ): Promise<ProjectionResult> {
+    throw new Error("社交身份激活需连接真实后端。");
+  }
+
+  async controls(companionId: string): Promise<ControlsResource> {
+    return {
+      companionId,
+      schemaVersion: 1,
+      revision: this.controlsRevision,
+      settings: { ...this.controlsState },
+      supported: {
+        socialTwinVisibility: ["PRIVATE", "FRIENDS", "PUBLIC"],
+        socialAutonomyMode: ["QUIET", "NORMAL", "ACTIVE", "CUSTOM"],
+        memorySharingScope: ["PERMISSION_GATED_SOCIAL_ONLY"],
+        notificationsEnabled: true,
+      },
+    };
+  }
+
+  async updateControls(companionId: string, _revision: number, patch: ControlsPatch): Promise<ControlsResource> {
+    this.controlsRevision += 1;
+    this.controlsState = { ...this.controlsState, ...patch };
+    return this.controls(companionId);
+  }
 }

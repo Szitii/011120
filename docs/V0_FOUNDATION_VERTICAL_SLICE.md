@@ -1,5 +1,7 @@
 # V0 Foundation Vertical Slice
 
+> 2026-11-22: the in-memory domain services and repositories described below were removed. PostgreSQL functions behind the typed adapter are the only implementation of these rules; see ADR-0020.
+
 Status: Executable domain slice complete
 
 Last updated: 2026-09-13
@@ -74,11 +76,9 @@ Run:
 npm run check
 ```
 
-The gate includes strict TypeScript checks and deterministic tests covering injection, credentials, PII, active content, unknown fields, nested metadata, cross-Owner access, raw-byte isolation, idempotency substitution, malformed/oversized inputs, explicit approval, sanitized export, and immutable version progression.
+The gate includes strict TypeScript checks and deterministic tests of the code that ships: the character-card parser (injection, credentials, PII, active content, unknown fields, nested metadata, malformed and oversized inputs), the Encounter safety pipeline, the persistent Encounter orchestrator, the HTTP boundary, and the PostgreSQL adapter and client.
 
-Compute tests additionally cover hard-cap refusal, reason/billing ceilings, reservation-before-provider ordering, idempotency, cancelled holds, failed/blocked cost settlement, compensating reconciliation, and independent publication consumption.
-
-Encounter integration tests cover mutual consent, Owner scope, expiry, one-shot/idempotent execution, prompt injection, PII redaction, credential blocking, blank/oversized input, private-memory canaries, publication exhaustion, provider failure, malformed provider usage, output DLP, Life Event separation, and Owner-scoped receipts.
+The rules those tests do not reach (Owner scoping, quarantine, approval, identity versions, Compute and publication budgets, consent, memory permissions) live in PostgreSQL functions and are verified by the PostgreSQL integration gate below. The Bring Companion functions (`create_companion_import`, `approve_companion_import`) currently have only static migration checks and one happy-path smoke test; negative-path contract tests for them are still owed.
 
 ## PostgreSQL integration gate
 
@@ -88,8 +88,7 @@ The repository includes a disposable PostgreSQL 17 CI job that applies all migra
 
 - Run the Supabase security contract against the local Supabase stack as an additional release gate; the PostgreSQL harness now reproduces and verifies default grants, Auth subject claims, Storage policies, and the service-role transaction boundary.
 - Complete the remaining PostgreSQL transaction commands for identity version advancement and invitation issuance/approval. Compute lifecycle, publication lifecycle, pre-provider execution claim, stale unstarted recovery, stale started reconciliation with bounded worker orchestration, successful Encounter delivery, and terminal failed/blocked persistence are implemented.
-- Wire the domain service to the PostgreSQL adapter; the in-memory adapter still provides process-local concurrency coalescing, while successful database delivery now has durable idempotency.
-- Connect the in-memory Encounter orchestration service to the now-implemented Owner-authenticated invitation adapter; PostgreSQL issuance, dual approval/rejection, participant reads, immutable consent evidence, and claim eligibility are complete.
+- (Superseded 2026-11-22) The in-memory domain and Encounter services were removed rather than wired to PostgreSQL; the persistent orchestrator and the HTTP boundary call the typed adapter directly.
 - Add a production provider adapter only after timeout, retry, tokenizer, pricing, and reconciliation behavior pass contract tests; no provider is configured now.
 - Add streaming upload storage and isolated parsing before supporting binary cards or archives.
 - Define a cryptographic issuer/signature scheme before calling Identity Passport externally verifiable.

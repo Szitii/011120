@@ -47,3 +47,7 @@ The function can be superseded by a versioned backend transaction adapter after 
 ## Constitution implications
 
 This decision strengthens Owner budget authority and the ComputeTransaction attribution requirement. It does not change Memory, Social Twin, Private Companion, publication, billing, privacy, or product-direction policy.
+
+## Follow-up (2026-11-22)
+
+The TypeScript pre-check mentioned above (`compute/policy.ts`, `compute/service.ts`) was removed together with the other in-memory domain services. PostgreSQL is the only enforcement point; see ADR-0020.

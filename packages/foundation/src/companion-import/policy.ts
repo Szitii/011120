@@ -40,7 +40,9 @@ const credentialPatterns = [
 ];
 
 const piiPatterns = [
-  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+  // An address needs one word character somewhere before the @. Matching only that keeps the scan
+  // linear: the former `\b[A-Z0-9._%+-]+@` prefix took over a second on a crafted 32 KB string.
+  /[A-Z0-9_][._%+-]*@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
   /(?<!\d)(?:\+?\d[\d .()-]{7,}\d)(?!\d)/,
 ];
 
@@ -99,5 +101,6 @@ export function safePreview(value: string): string {
     return "[REDACTED]";
   }
 
-  return value.replace(/\s+/g, " ").slice(0, 80);
+  // Cutting inside a surrogate pair would leave a lone surrogate, which PostgreSQL jsonb rejects.
+  return value.replace(/\s+/g, " ").slice(0, 80).replace(/[\uD800-\uDBFF]$/, "");
 }

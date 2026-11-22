@@ -68,7 +68,7 @@ if (-not $apiReady) {
 $env:EXPO_PUBLIC_API_BASE_URL = "http://127.0.0.1:8787"
 $env:EXPO_PUBLIC_OWNER_BEARER_TOKEN = "companion-social-stage1-owner"
 $env:EXPO_PUBLIC_SAMPLE_COMPANION_COMPANION_ID = "00000000-0000-0000-0000-0000000002a1"
-Remove-Item Env:EXPO_PUBLIC_DATA_MODE -ErrorAction SilentlyContinue
+$env:EXPO_PUBLIC_DATA_MODE = "dev"
 
 Set-Location (Join-Path $Root "apps/mobile")
 if (-not (Test-Path "node_modules")) {
