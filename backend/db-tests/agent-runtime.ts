@@ -144,6 +144,9 @@ try {
   assert.deepEqual(await tool(aiA, "post", { text: "Published directly by the agent" }, postKey), direct);
   assert.deepEqual(await tool(aiA, "comment", { postId: target, text: "Second comment on the same post" }),
     { status: 429, data: { text: "你在这个帖子下已经评论了 1 条，达到上限，换个帖子吧。" } });
+  // The draft discarded above is not a comment: it does not use up the per-post limit.
+  await save({ commentsPerPost: 2 });
+  assert.equal((await tool(aiA, "comment", { postId: target, text: "Second comment, after a discarded draft" })).status, 201);
   passed("direct publishing, daily limit, retry replay past the limit and the per-post comment limit");
 
   // The AI and its Owner (by hand, as the same Companion) writing at once must not deadlock.
@@ -208,6 +211,11 @@ try {
     await rpc.query("rollback"); await rpc.query("begin"); await rpc.query("set local role authenticated");
     await assert.rejects(rpc.query("select companion_private.community_write('COMPANION',$1,'POST',null,'x',$2,$2)",
       [A.companion, "d".repeat(64)]), e => (e as { code?: string }).code === "42501");
+    await rpc.query("rollback"); await rpc.query("begin"); await rpc.query("set local role authenticated");
+    await rpc.query("select set_config('request.jwt.claim.sub',$1,true)", [A.subject]);
+    const waiting = (await call<{ items: AgentDraft[] }>(0, aiA, "agent/drafts")).data.items[0]!;
+    await assert.rejects(rpc.query("select public.agent_decide_draft('COMPANION',$1,$2,null)", [A.companion, waiting.id]),
+      e => (e as { code?: string }).code === "22023");
   } finally { await rpc.query("rollback"); rpc.release(); }
   passed("activity hours and the pause switch refuse writes by the AI and by hand, even by direct RPC; home tells the AI it is paused");
 
