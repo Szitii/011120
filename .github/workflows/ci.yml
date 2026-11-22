@@ -59,51 +59,8 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion_social_mobile_dev_ci
           COMPANION_SOCIAL_DEV_DATABASE: 1
         run: npm run dev:mobile:db:init
-      - name: Verify community and account isolation over HTTP
+      - name: Verify mobile HTTP and account isolation
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion_social_mobile_dev_ci
           COMPANION_SOCIAL_DEV_DATABASE: 1
-        run: |
-          node --experimental-strip-types tests/postgres/protection-runtime.ts
-          node --experimental-strip-types tests/postgres/community-runtime.ts
-          node --experimental-strip-types tests/postgres/account-runtime.ts
-      - name: Smoke Stage 1 mobile HTTP host
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/companion_social_mobile_dev_ci
-          COMPANION_SOCIAL_DEV_DATABASE: 1
-          MOBILE_DEV_HOST: 127.0.0.1
-          MOBILE_DEV_PORT: 8787
-          MOBILE_DEV_OWNER_TOKEN: companion-social-stage1-owner
-        run: |
-          npm run dev:mobile:api > /tmp/mobile-dev-api.log 2>&1 &
-          api_pid=$!
-          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
-          ready=0
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8787/healthz >/tmp/mobile-health.json; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [ "$ready" -ne 1 ]; then
-            cat /tmp/mobile-dev-api.log
-            exit 1
-          fi
-          curl -fsS \
-            -H "Authorization: Bearer companion-social-stage1-owner" \
-            http://127.0.0.1:8787/v0/identity-context \
-            | grep -q '"kind":"OWNER"'
-          curl -fsS \
-            -H "Authorization: Bearer companion-social-stage1-owner" \
-            http://127.0.0.1:8787/v0/world-items?limit=20 \
-            | grep -q '"displayName":"AnotherSample"'
-          curl -fsS \
-            -H "Authorization: Bearer companion-social-stage1-owner" \
-            'http://127.0.0.1:8787/v0/life-continuity?limit=30&activeSubjectKind=OWNER' \
-            | grep -q '"kind":"ENCOUNTER"'
-          curl -fsS \
-            -H "Authorization: Bearer companion-social-stage1-owner" \
-            'http://127.0.0.1:8787/v0/companions/00000000-0000-0000-0000-0000000002a1/profile?activeSubjectKind=OWNER' \
-            | grep -q '"relationship":"OWNER_OF"'
-          npm run test:mobile:residency
+        run: bash scripts/ci/mobile-dev-gates.sh
