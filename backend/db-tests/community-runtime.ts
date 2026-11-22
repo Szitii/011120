@@ -46,6 +46,9 @@ try {
   assert.ok(retry.every(r=>r.data.id===post.data.id));
   assert.equal((await call(0,humanA,"posts","POST",{body:"Changed"},key)).status,409);
   assert.equal((await call(0,humanA,"posts","POST",{body:"False",source:"AI_AUTONOMOUS"})).status,400);
+  // Writing as an AI obeys its agent settings (defaults: no posting, drafts first); open them for this suite.
+  await pool.query(`insert into companion_private.agent_settings(actor_id,can_post,publish_mode,active_from,active_to)
+    select id,true,'DIRECT','00:00','00:00' from public.community_actors where kind='AI'`);
   const proxy = await call<CommunityPost>(0,aiA,"posts","POST",{ body:"Clearly attributed proxy post" });
   assert.equal(proxy.status,201); assert.equal(proxy.data.source,"OWNER_PROXY"); assert.equal(proxy.data.author.id,ca.id);
   assert.equal((await call(0,humanA,`posts/${proxy.data.id}`,"DELETE")).status,404);

@@ -73,6 +73,10 @@ try {
 
   const refused = await tool(aiA, "post", { text: "Not allowed by default" });
   assert.deepEqual(refused, { status: 403, data: { text: '主人没有开启"自己发新帖"，现在不能发帖。' } });
+  // The same Owner token on the plain community routes is bound by the same settings.
+  assert.equal((await call(0, aiA, "posts", "POST", { body: "By hand, not allowed" })).status, 403);
+  assert.equal((await call(0, aiA, `posts/${target}/comments`, "POST", { body: "By hand in DRAFT mode" })).status, 403);
+  assert.equal((await call(0, aiA, `following/${hb.id}`, "PUT")).status, 403);
   const draftKey = randomUUID();
   const drafted = await tool(aiA, "comment", { postId: target, text: "  A drafted comment  " }, draftKey);
   assert.equal(drafted.status, 202, drafted.data.text);
@@ -136,6 +140,7 @@ try {
   assert.ok((await call<CommunityPage<CommunityPost>>(1, humanB, "feed")).data.items.some(p => p.id === postId));
   assert.deepEqual(await tool(aiA, "post", { text: "One too many" }),
     { status: 429, data: { text: `今天的发帖次数已用完（${used.postsToday + 1}/${used.postsToday + 1}），明天再来。` } });
+  assert.equal((await call(0, aiA, "posts", "POST", { body: "One too many, by hand" })).status, 409);
   assert.deepEqual(await tool(aiA, "post", { text: "Published directly by the agent" }, postKey), direct);
   assert.deepEqual(await tool(aiA, "comment", { postId: target, text: "Second comment on the same post" }),
     { status: 429, data: { text: "你在这个帖子下已经评论了 1 条，达到上限，换个帖子吧。" } });
@@ -146,9 +151,10 @@ try {
     "insert into public.community_posts(actor_id, body, source) values ($1, 'A busy post', 'HUMAN_MANUAL') returning id", [hb.id])).rows[0]!.id;
   const now = (await current()).usage;
   await save({ dailyComments: Math.min(100, now.commentsToday + 10), commentsPerPost: 10 });
+  const ownerKey = randomUUID();
   const racing = await Promise.all(Array.from({ length: 8 }, (_, i) => i % 2 === 0
     ? tool(aiA, "comment", { postId: busy, text: `agent ${i}` })
-    : call<unknown>(0, aiA, `posts/${busy}/comments`, "POST", { body: `owner ${i}` })));
+    : call<unknown>(0, aiA, `posts/${busy}/comments`, "POST", { body: `owner ${i}` }, i === 1 ? ownerKey : undefined)));
   assert.deepEqual(racing.map(r => r.status), [201, 201, 201, 201, 201, 201, 201, 201]);
   passed("concurrent AI and Owner comments on the same post take locks in one order and all succeed");
 
@@ -190,7 +196,20 @@ try {
   assert.deepEqual(await tool(aiA, "comment", { postId: postId, text: "Paused" }),
     { status: 403, data: { text: "主人暂停了你的活动：现在只能看，不能发言或关注。" } });
   assert.match((await tool(aiA, "home", {})).data.text, /\n主人暂停了你的活动：现在只能看，不能发言或关注。\n/);
-  passed("activity hours and the pause switch refuse writes; home tells the AI it is paused");
+  assert.equal((await call(0, aiA, `posts/${postId}/comments`, "POST", { body: "Paused, by hand" })).status, 403);
+  // A retry of a write that was already done replays it; it is not a new write.
+  assert.equal((await call(0, aiA, `posts/${busy}/comments`, "POST", { body: "owner 1" }, ownerKey)).status, 201);
+  const rpc = await pool.connect();
+  try {
+    await rpc.query("begin"); await rpc.query("set local role authenticated");
+    await rpc.query("select set_config('request.jwt.claim.sub',$1,true)", [A.subject]);
+    await assert.rejects(rpc.query("select public.community_command('COMPANION',$1,'POST',null,'Direct RPC while paused',$2,$2)",
+      [A.companion, "c".repeat(64)]), e => (e as { code?: string }).code === "42501");
+    await rpc.query("rollback"); await rpc.query("begin"); await rpc.query("set local role authenticated");
+    await assert.rejects(rpc.query("select companion_private.community_write('COMPANION',$1,'POST',null,'x',$2,$2)",
+      [A.companion, "d".repeat(64)]), e => (e as { code?: string }).code === "42501");
+  } finally { await rpc.query("rollback"); rpc.release(); }
+  passed("activity hours and the pause switch refuse writes by the AI and by hand, even by direct RPC; home tells the AI it is paused");
 
   const denied = await pool.connect();
   try {
