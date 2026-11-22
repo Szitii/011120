@@ -3,6 +3,7 @@ export type Route =
   | { type: "root"; tab: RootTab }
   | { type: "life-archive" }
   | { type: "edit-human-profile" }
+  | { type: "agent-settings" }
   | { type: "encounter"; encounterId: string }
   | { type: "profile"; companionId: string }
   | { type: "bring-companion" }

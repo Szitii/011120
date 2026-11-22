@@ -85,3 +85,25 @@ it("binds block management and all report kinds to the selected actor and stable
   assert.ok(calls[5]!.url.includes("/reports/comments/target"));
   assert.deepEqual(JSON.parse(calls[5]!.body as string), { reason: "HARASSMENT", details: "details" });
 });
+
+it("binds settings GET and whole-object PUT to the selected AI actor", async t => {
+  const calls: { url: URL; options: RequestInit }[] = [];
+  const writable = {
+    paused: false, autoEnabled: false, intervalMinutes: 180, activeFrom: "09:00", activeTo: "23:00",
+    timeZone: "Asia/Shanghai", canPost: false, canComment: true, canFollow: true,
+    publishMode: "DRAFT" as const, dailyPosts: 3, dailyComments: 10, dailyFollows: 5, commentsPerPost: 3, revision: 7,
+  };
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    calls.push({ url: new URL(url), options });
+    return Response.json({ ...writable, revision: options.method === "PUT" ? 8 : 7 });
+  });
+  const client = new RealApiAdapter({ baseUrl: "https://community.test", bearerToken: "test" }).community;
+  const viewer = { kind: "SOCIAL_TWIN", id: "twin" } as const;
+  assert.equal((await client.agentSettings(viewer)).revision, 7);
+  assert.equal((await client.saveAgentSettings(viewer, writable)).revision, 8);
+  assert.deepEqual(calls.map(c => c.options.method), ["GET", "PUT"]);
+  assert.ok(calls.every(c => c.url.pathname === "/v0/community/agent/settings"
+    && c.url.searchParams.get("actorKind") === viewer.kind && c.url.searchParams.get("actorId") === viewer.id));
+  assert.deepEqual(JSON.parse(String(calls[1]!.options.body)), writable);
+  assert.equal(new Headers(calls[1]!.options.headers).has("Idempotency-Key"), false);
+});

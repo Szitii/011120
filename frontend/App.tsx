@@ -19,6 +19,8 @@ import type { AccountBinding } from "./src/auth/account-session";
 import type { CommunityClient, CommunityPost, CommunityProfile } from "../contracts/community";
 import { colors } from "./src/theme";
 import { CommunityScreen } from "./src/community/CommunityScreen";
+import { AgentSettingsScreen } from "./src/community/AgentSettingsScreen";
+import { isAgentViewer } from "./src/community/client";
 import { HumanProfileEditor } from "./src/community/HumanProfileEditor";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type {
@@ -152,6 +154,9 @@ function WorldApp({ client, account, isMockMode }: {
   };
   const identityValue = identity.kind === "success" ? identity.value : undefined;
   const identityId = identityValue?.activeSubject.id ?? "anonymous";
+  const subject = identityValue?.activeSubject;
+  const viewer = subject && { kind: subject.kind, id: subject.id };
+  const agentViewer = isAgentViewer(viewer) ? viewer : undefined;
 
   useEffect(() => {
     void AccessibilityInfo.isReduceMotionEnabled().then(setReducedMotion);
@@ -501,9 +506,15 @@ function WorldApp({ client, account, isMockMode }: {
             }));
           }}
           onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
+          onAgentSettings={agentViewer && client.api.community
+            ? () => setNav(current => pushRoute(current, { type: "agent-settings" })) : undefined}
           onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && client.api.community
             ? () => setNav(current => pushRoute(current, { type: "edit-human-profile" })) : undefined}
         />
+      )}
+
+      {route.type === "agent-settings" && agentViewer && client.api.community && (
+        <AgentSettingsScreen key={`${agentViewer.kind}:${agentViewer.id}`} client={client.api.community} viewer={agentViewer} />
       )}
 
       {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && client.api.community && (
@@ -1242,6 +1253,7 @@ function MyScreen({
   onResumeCompanion,
   onBringCompanion,
   onEditHumanProfile,
+  onAgentSettings,
 }: {
   community?: CommunityClient;
   identity: LoadState<ActiveIdentityContext>;
@@ -1258,6 +1270,7 @@ function MyScreen({
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
   onBringCompanion: () => void;
   onEditHumanProfile?: () => void;
+  onAgentSettings?: () => void;
 }) {
   const { skin, availableSkins, setSkinById } = useSkin();
   const [colorModalOpen, setColorModalOpen] = useState(false);
@@ -1377,6 +1390,15 @@ function MyScreen({
       {/* Top-right Settings Gear Modal */}
       <BottomSheet visible={settingsOpen} title="设置" onClose={onCloseSettings}>
         <View style={[styles.cleanCardGroup, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
+        {onAgentSettings && (
+          <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={() => {
+            onCloseSettings();
+            onAgentSettings();
+          }}>
+            <Text style={[styles.cleanRowTitle, { color: skin.colors.ink }]}>家机活动设置</Text>
+            <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
+          </Pressable>
+        )}
         {!isSampleCompanion && (
           <Pressable
             style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}

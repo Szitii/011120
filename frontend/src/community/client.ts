@@ -1,4 +1,15 @@
-import type { ActorContext, CommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
+import type { ActorContext, AgentSettings, AgentSettingsView, CommunityClient as BaseCommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
+
+export type AgentViewer = ActorContext & { kind: "COMPANION" | "SOCIAL_TWIN" };
+
+export function isAgentViewer(viewer: ActorContext | undefined): viewer is AgentViewer {
+  return viewer?.kind === "COMPANION" || viewer?.kind === "SOCIAL_TWIN";
+}
+
+export interface CommunityClient extends BaseCommunityClient {
+  agentSettings(viewer: AgentViewer): Promise<AgentSettingsView>;
+  saveAgentSettings(viewer: AgentViewer, settings: AgentSettings): Promise<AgentSettingsView>;
+}
 
 type Requester = <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown, key?: string) => Promise<T>;
 
@@ -9,6 +20,8 @@ export function createCommunityClient(request: Requester): CommunityClient {
     return `/v0/community/${resource}?${params}`;
   };
   return {
+    agentSettings: v => request("GET", path(v, "agent/settings")),
+    saveAgentSettings: (v, settings) => request("PUT", path(v, "agent/settings"), settings),
     blocks: (v, cursor) => request("GET", path(v, "blocks", { cursor })),
     block: (v, actorId, blocked, key) => request(blocked ? "PUT" : "DELETE",
       path(v, `blocks/${encodeURIComponent(actorId)}`), undefined, key),

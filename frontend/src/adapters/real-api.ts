@@ -17,7 +17,7 @@ import type {
   ProjectionSelection,
   WorldCollection,
 } from "../contracts.ts";
-import { createCommunityClient } from "../community/client.ts";
+import { createCommunityClient, type CommunityClient } from "../community/client.ts";
 
 export class ApiProblemError extends Error {
   readonly status: number;
@@ -41,7 +41,7 @@ type RealApiConfig = { baseUrl: string } & ({ bearerToken: string } | { session:
 
 export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
-  readonly community: import("../../../contracts/community.ts").CommunityClient;
+  readonly community: CommunityClient;
 
   constructor(config: RealApiConfig) {
     this.config = config;
