@@ -50,15 +50,6 @@ describe("real client binding state architecture", () => {
     assert.equal(state.rootTab, "my");
   });
 
-  it("supports a real post-switch contextual route before Companion Social Platform", () => {
-    let state = initialNavigationState();
-    state = pushRoute(state, { type: "encounter", encounterId: "enc-1", sourceTab: "world", sourceScrollY: 0 });
-    state = pushRoute(state, { type: "identity-context", encounterId: "enc-1", companionId: "sample_companion-1" });
-    assert.equal(state.stack.at(-1)?.type, "identity-context");
-    state = selectTab(state, "world");
-    assert.deepEqual(state.stack, [{ type: "root", tab: "world" }]);
-  });
-
   it("keeps root labels client-side and independent from API resources", () => {
     let state = initialNavigationState();
     state = selectTab(state, "life");

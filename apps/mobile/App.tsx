@@ -121,14 +121,12 @@ export default function App() {
     ) {
       void loadProfile(identity.value.activeSubject.id);
     }
-    if (route.type === "encounter" || route.type === "identity-context") {
-      void loadEncounter(route.encounterId);
-    }
+    if (route.type === "encounter") void loadEncounter(route.encounterId);
     if (route.type === "profile") void loadProfile(route.companionId);
   }, [
     route.type,
     route.type === "root" ? route.tab : "",
-    route.type === "encounter" || route.type === "identity-context" ? route.encounterId : "",
+    route.type === "encounter" ? route.encounterId : "",
     route.type === "profile" ? route.companionId : "",
     identity.kind === "success" ? identity.value.activeSubject.id : "",
   ]);
@@ -301,11 +299,7 @@ export default function App() {
   }
 
   async function switchCompanionFromUi(item: OwnerCompanionSummary) {
-    if (!item.socialReady || "error" in bootstrap) return;
-    if (route.type === "encounter") {
-      await switchToCompanionContext(item);
-      return;
-    }
+    if (!item.socialReady) return;
     await switchIdentity({
       kind: "COMPANION",
       id: item.companionId,
@@ -336,63 +330,6 @@ export default function App() {
         ...(fromEncounterId ? { fromEncounterId } : {}),
       }),
     );
-  }
-
-  function openProfileFromEncounter() {
-    if (route.type !== "encounter" || !route.companionId) return;
-    openProfile(route.companionId, "ENCOUNTER", route.encounterId);
-  }
-
-  async function switchToCompanionContext(item: OwnerCompanionSummary) {
-    if ("error" in bootstrap || route.type !== "encounter" || !item.socialReady) {
-      return;
-    }
-    const previousIdentity = identityValue;
-    const previousName = companionDisplayName;
-
-    setIdentitySwitchPending(true);
-    setIdentity({ kind: "loading" });
-    setWorld({ kind: "idle" });
-    setEncounter({ kind: "idle" });
-    setProfile({ kind: "idle" });
-    cache.purgeViewerSensitive();
-
-    try {
-      const value = await bootstrap.value.api.identityContext({
-        kind: "COMPANION",
-        id: item.companionId,
-      });
-      setCompanionDisplayName(item.displayName);
-      setIdentity({ kind: "success", value });
-      setNav((current) =>
-        pushRoute(current, {
-          type: "identity-context",
-          encounterId: route.encounterId,
-          companionId: item.companionId,
-        }),
-      );
-    } catch (error) {
-      const safe = safeClientMessage(error);
-      if (previousIdentity) {
-        try {
-          const restored =
-            previousIdentity.activeSubject.kind === "OWNER"
-              ? await bootstrap.value.api.identityContext()
-              : await bootstrap.value.api.identityContext({
-                  kind: previousIdentity.activeSubject.kind,
-                  id: previousIdentity.activeSubject.id,
-                });
-          setCompanionDisplayName(previousName);
-          setIdentity({ kind: "success", value: restored });
-        } catch {
-          setIdentity({ kind: "error", ...safe });
-        }
-      } else {
-        setIdentity({ kind: "error", ...safe });
-      }
-    } finally {
-      setIdentitySwitchPending(false);
-    }
   }
 
   function goBack() {
@@ -433,8 +370,6 @@ export default function App() {
       {route.type === "root" && route.tab === "world" && (
         <WorldScreen
           state={world}
-          isSampleCompanion={isSampleCompanion}
-          companionName={companionDisplayName}
           scrollRef={worldScrollRef}
           onScroll={(y) =>
             setNav((current) => saveScroll(current, identityId, "world", y))
@@ -558,16 +493,6 @@ export default function App() {
         />
       )}
 
-      {route.type === "identity-context" && (
-        <CompanionContextScreen
-          state={encounter}
-          identity={identity}
-          companionName={companionDisplayName}
-          onRetry={() => void loadEncounter(route.encounterId)}
-          onWorld={() => setNav((current) => selectTab(current, "world"))}
-        />
-      )}
-
       {!isMoment && route.type === "root" && (
         <BottomTabs
           current={nav.rootTab}
@@ -639,8 +564,6 @@ function AppHeader({
 
 function WorldScreen({
   state,
-  isSampleCompanion,
-  companionName,
   scrollRef,
   onScroll,
   onOpenActor,
@@ -648,8 +571,6 @@ function WorldScreen({
   onRetry,
 }: {
   state: LoadState<WorldCollection>;
-  isSampleCompanion: boolean;
-  companionName: string;
   scrollRef: React.RefObject<ScrollView | null>;
   onScroll: (y: number) => void;
   onOpenActor: (companionId: string) => void;
@@ -907,71 +828,6 @@ function EncounterScreen({
   );
 }
 
-function CompanionContextScreen({
-  state,
-  identity,
-  companionName,
-  onRetry,
-  onWorld,
-}: {
-  state: LoadState<EncounterDetail>;
-  identity: LoadState<ActiveIdentityContext>;
-  companionName: string;
-  onRetry: () => void;
-  onWorld: () => void;
-}) {
-  if (
-    identity.kind === "loading" ||
-    state.kind === "loading" ||
-    state.kind === "idle"
-  ) {
-    return <Loading />;
-  }
-  if (identity.kind === "error") {
-    return <ErrorState title={identity.title} retry={identity.retry} onRetry={onRetry} />;
-  }
-  if (state.kind === "error") {
-    return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
-  }
-  if (identity.kind !== "success" || state.kind !== "success") {
-    return <Centered title="这个身份暂时进不去。" />;
-  }
-
-  return (
-    <ScrollView style={styles.content} contentContainerStyle={styles.contextPage}>
-      <View style={styles.contextHeader}>
-        <View style={styles.largeSampleCompanionAvatar}>
-          <Text style={styles.largeSampleCompanionAvatarText}>{companionName.slice(0, 1).toUpperCase()}</Text>
-        </View>
-        <View>
-          <Text style={styles.contextEyebrow}>CURRENT: {companionName}</Text>
-          <Text style={styles.contextTitle}>现在是 {companionName}</Text>
-        </View>
-      </View>
-
-      <View style={styles.contextNotice}>
-        <Text style={styles.contextNoticeTitle}>切过来了。</Text>
-        <Text style={styles.contextNoticeBody}>
-          可以继续了。
-        </Text>
-      </View>
-
-      <View style={styles.contextThread}>
-        <Text style={styles.sectionLabel}>刚才那件事</Text>
-        <Text style={styles.contextThreadTitle}>{state.value.status}</Text>
-        <Text style={styles.feedMeta}>{formatDate(state.value.occurredAt)}</Text>
-        <Text style={styles.bodyText}>
-          {state.value.body ?? "这里也没留下什么。"}
-        </Text>
-      </View>
-
-      <Pressable style={styles.primaryPill} onPress={onWorld}>
-        <Text style={styles.primaryPillText}>去 {companionName} 那边</Text>
-      </Pressable>
-    </ScrollView>
-  );
-}
-
 function ProfileScreen({
   state,
   onRetry,
@@ -1169,20 +1025,14 @@ function MyScreen({
         </View>
       ) : (
         <View style={styles.accountCard}>
-          <View style={[styles.accountAvatar, isSampleCompanion && styles.accountAvatarSampleCompanion]}>
-            <Text style={styles.accountAvatarText}>
-              {isSampleCompanion ? companionName.slice(0, 1).toUpperCase() : "你"}
-            </Text>
+          <View style={styles.accountAvatar}>
+            <Text style={styles.accountAvatarText}>你</Text>
           </View>
           <View style={styles.accountCardText}>
-            <Text style={styles.accountName}>{isSampleCompanion ? companionName : "你"}</Text>
-            <Text style={styles.accountHandle}>
-              {identity.kind === "success" ? (isSampleCompanion ? `现在是 ${companionName}` : "现在是你") : "稍等。"}
-            </Text>
+            <Text style={styles.accountName}>你</Text>
+            <Text style={styles.accountHandle}>{identity.kind === "success" ? "现在是你" : "稍等。"}</Text>
           </View>
         </View>
-  
-  
       )}
 
       {!isSampleCompanion && (
@@ -1408,14 +1258,11 @@ function ErrorState({
 
 const colors = {
   canvas: "#FFFFFF",
-  paper: "#FAF9FE",
   ink: "#000000",
   text: "#1A1B1F",
   muted: "#666666",
   tertiary: "#8E8E93",
   line: "#EFEFF4",
-  soft: "#F4F3F8",
-  rose: "#D9777F",
   roseDark: "#C8656F",
   roseWash: "#FBEFF0",
 };
@@ -1451,17 +1298,6 @@ const styles = StyleSheet.create({
   headerBrandCenter: { position: "absolute", left: 0, right: 0, alignItems: "center", justifyContent: "center" },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
   headerTitle: { fontSize: 16, fontWeight: "600", color: colors.text },
-  headerAvatarButton: { padding: 2 },
-  headerAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#ECE9E6",
-  },
-  headerAvatarSampleCompanion: { backgroundColor: "#F7E7E1" },
-  headerAvatarText: { fontSize: 11, fontWeight: "700", color: colors.text },
   iconButton: {
     width: 36,
     height: 36,
@@ -1474,25 +1310,6 @@ const styles = StyleSheet.create({
   feed: { paddingBottom: 26 },
   feedHeading: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
   feedTitle: { fontSize: 26, lineHeight: 32, fontWeight: "700", color: colors.ink, letterSpacing: -0.6 },
-  feedSwitcher: {
-    alignSelf: "flex-start",
-    marginTop: 12,
-    padding: 3,
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 999,
-    backgroundColor: "#F2F2F7",
-  },
-  feedSwitcherMuted: { paddingHorizontal: 12, paddingVertical: 6, fontSize: 12, color: colors.tertiary },
-  feedSwitcherActive: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: colors.canvas,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-  },
-  feedSwitcherActiveText: { fontSize: 12, fontWeight: "600", color: colors.ink },
   feedItem: {
     paddingHorizontal: 16,
     paddingTop: 16,
@@ -1555,7 +1372,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   participantAvatarImage: { width: 44, height: 44, borderRadius: 22 },
-  participantAvatarAlt: { backgroundColor: "#E9EFF0" },
   participantName: { marginTop: 6, fontSize: 11, color: colors.muted },
   connectionLine: { width: 38, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
   encounterBadge: {
@@ -1577,26 +1393,6 @@ const styles = StyleSheet.create({
   bodyText: { marginTop: 10, fontSize: 15, lineHeight: 23, color: colors.text },
   warning: { marginTop: 10, fontSize: 12, color: "#8E652B" },
   actionStack: { marginTop: 22, gap: 10 },
-  primaryPill: {
-    minHeight: 44,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 999,
-    backgroundColor: colors.ink,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  primaryPillText: { color: colors.canvas, fontSize: 14, fontWeight: "600" },
-  accentPill: {
-    minHeight: 44,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 999,
-    backgroundColor: colors.roseDark,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  accentPillText: { color: colors.canvas, fontSize: 14, fontWeight: "600" },
   secondaryPill: {
     minHeight: 42,
     paddingHorizontal: 18,
@@ -1619,35 +1415,6 @@ const styles = StyleSheet.create({
   momentRule: { marginVertical: 22, height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   momentBody: { fontSize: 16, lineHeight: 25, color: colors.text, marginBottom: 24 },
 
-  contextPage: { padding: 18, paddingBottom: 44 },
-  contextHeader: { flexDirection: "row", alignItems: "center", gap: 14, paddingTop: 10 },
-  largeSampleCompanionAvatar: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: "#F7E7E1",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  largeSampleCompanionAvatarText: { fontSize: 20, fontWeight: "700", color: colors.roseDark },
-  contextEyebrow: { fontSize: 10, letterSpacing: 1.1, color: colors.roseDark, fontWeight: "700" },
-  contextTitle: { marginTop: 4, fontSize: 24, fontWeight: "700", color: colors.ink },
-  contextNotice: {
-    marginTop: 24,
-    padding: 16,
-    borderRadius: 16,
-    backgroundColor: colors.roseWash,
-  },
-  contextNoticeTitle: { fontSize: 14, fontWeight: "700", color: colors.text },
-  contextNoticeBody: { marginTop: 6, fontSize: 13, lineHeight: 20, color: colors.muted },
-  contextThread: {
-    marginTop: 20,
-    paddingVertical: 18,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-  },
-  contextThreadTitle: { marginTop: 8, fontSize: 20, fontWeight: "700", color: colors.text },
 
   profilePage: { padding: 20, paddingBottom: 44 },
   profileTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -1669,36 +1436,17 @@ const styles = StyleSheet.create({
   profileHandle: { marginTop: 3, fontSize: 13, color: colors.muted },
   profileMetaRow: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
   profileMeta: { fontSize: 12, color: colors.muted },
-  profileDot: { color: "#C4C4C8" },
   profileDivider: { marginVertical: 20, height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   profileSection: { gap: 7 },
-  profileSectionValue: { fontSize: 16, fontWeight: "600", color: colors.text },
 
   lifePage: { padding: 20, paddingBottom: 44 },
   lifeEyebrow: { marginTop: 10, fontSize: 10, letterSpacing: 1.2, color: colors.roseDark, fontWeight: "700" },
   lifeTitle: { marginTop: 7, fontSize: 30, lineHeight: 36, fontWeight: "700", color: colors.ink },
   lifeSub: { marginTop: 10, fontSize: 14, lineHeight: 22, color: colors.muted },
-  lifeTimeline: { marginTop: 34, flexDirection: "row", alignItems: "flex-start" },
-  timelineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.rose, marginTop: 6 },
-  timelineLine: { width: 28, height: StyleSheet.hairlineWidth, backgroundColor: colors.rose, marginTop: 10 },
   lifeTimelineList: { marginTop: 22, gap: 10 },
   lifeContinuityCard: { padding: 16, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas },
   lifeContinuityTitle: { marginTop: 7, fontSize: 16, lineHeight: 22, fontWeight: "700", color: colors.text },
-  lifeUnreadDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.rose },
   timelineCard: { flex: 1, marginLeft: 10, padding: 16, borderRadius: 16, backgroundColor: "#FBF4F5" },
-  timelineTitle: { marginTop: 7, fontSize: 18, fontWeight: "700", color: colors.text },
-  lifeEntry: {
-    marginTop: 20,
-    minHeight: 68,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  lifeEntryTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
 
   myPage: { padding: 18, paddingBottom: 32 },
   myTitle: { marginTop: 8, fontSize: 30, fontWeight: "700", color: colors.ink },
@@ -1731,7 +1479,6 @@ const styles = StyleSheet.create({
   accountArrow: { fontSize: 22, color: "#C7C7CC", fontWeight: "300" },
   sectionHeaderRow: { marginTop: 24, marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   sectionHeader: { fontSize: 13, fontWeight: "700", color: colors.text },
-  sectionHeaderLinkUnused: { fontSize: 11, color: colors.tertiary },
   partnerContainer: {
     marginBottom: 8,
     flexDirection: "row",
@@ -1750,7 +1497,6 @@ const styles = StyleSheet.create({
   },
   partnerAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
   partnerMain: { flex: 1, borderRadius: 0, backgroundColor: "transparent" },
-  partnerRowStatic: { opacity: 0.72 },
   partnerText: { flex: 1, marginLeft: 11 },
   partnerSettings: { width: 58, alignItems: "center", justifyContent: "center", borderLeftWidth: StyleSheet.hairlineWidth, borderColor: colors.line },
   partnerSettingsText: { fontSize: 11, color: colors.muted, fontWeight: "600" },

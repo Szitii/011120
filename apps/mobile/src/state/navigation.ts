@@ -8,7 +8,6 @@ export type Route =
       source: "WORLD_ACTOR" | "ENCOUNTER" | "OWNER_ROSTER";
       fromEncounterId?: string;
     }
-  | { type: "identity-context"; encounterId: string; companionId: string }
   | { type: "bring-companion" }
   | {
       type: "social-activation";
