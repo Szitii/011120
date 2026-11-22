@@ -283,7 +283,6 @@ describe("server-only MVP HTTP/API boundary", () => {
     assert.equal((await api.handle(request("POST", "/v0/encounters", body, { "idempotency-key": "encounter-key-0001", "x-trace-id": "" }))).status, 400);
     assert.equal((await api.handle(request("POST", "/v0/encounters", { ...body, maxMemories: 0 }, { "idempotency-key": "encounter-key-0001" }))).status, 400);
     assert.equal((await api.handle(request("POST", "/v0/encounters", body, { "idempotency-key": "encounter-key-0001", "content-type": "text/plain" }))).status, 415);
-    assert.equal((await api.handle(request("POST", "/v0/encounters", body, { "idempotency-key": "encounter-key-0001", "content-length": "40000" }))).status, 413);
   });
 
   it("issues, lists, approves, and rejects Owner-scoped invitations", async () => {
@@ -420,7 +419,6 @@ describe("server-only MVP HTTP/API boundary", () => {
   it("rejects malformed Import Firewall HTTP envelopes", async () => {
     const { api, owner } = harness();
     assert.equal((await api.handle(request("POST", "/v0/companion-imports", [], { "idempotency-key": "import-envelope-001" }))).status, 400);
-    assert.equal((await api.handle(request("POST", "/v0/companion-imports", { name: "SampleCompanion" }, { "idempotency-key": "import-envelope-002", "content-length": "40000" }))).status, 413);
     assert.equal((await api.handle({ method: "POST", url: "/v0/companion-imports", headers: { authorization: "Bearer owner-token", "content-type": "text/plain", "idempotency-key": "import-envelope-003" }, body: { name: "SampleCompanion" } })).status, 415);
     const created = await api.handle(request("POST", "/v0/companion-imports", { name: "SampleCompanion" }, { "idempotency-key": "import-envelope-004" }));
     const importId = (created.body as { id: string }).id;

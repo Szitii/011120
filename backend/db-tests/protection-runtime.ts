@@ -61,6 +61,8 @@ try {
   assert.equal((await call(0,humanA,`reports/posts/${post.data.id}`,"POST",{reason:"INVALID",details:""})).status,400);
   console.log("Protection integration 1: private report receipts, concurrent deduplication and actor authorization");
 
+  // humanA also follows B's AI: blocking B's human must end that follow too (the block covers the person).
+  assert.equal((await call(0,humanA,`following/${cb.id}`,"PUT")).status,200);
   const blockKey = randomUUID();
   assert.equal((await call(0,humanA,`blocks/${hb.id}`,"PUT",undefined,blockKey)).status,200);
   assert.equal((await call(0,humanA,`blocks/${ha.id}`,"PUT")).status,400);
@@ -77,7 +79,7 @@ try {
   assert.ok(!(await call<CommunityPage<CommunityPost>>(1,humanB,"feed")).data.items.some(p=>p.id===post.data.id));
   assert.ok(!(await call<CommunityPage<CommunityNotification>>(0,humanA,"notifications")).data.items.some(n=>n.actor.id===hb.id));
   assert.equal((await call(0,humanA,`notifications/${note.id}/read`,"PUT")).status,404);
-  const follows = await pool.query("select count(*) from public.community_follows where (actor_id=$1 and target_id=$2) or (actor_id=$2 and target_id=$1)",[ha.id,hb.id]);
+  const follows = await pool.query("select count(*) from public.community_follows where (actor_id=$1 and target_id=any($2)) or (actor_id=any($2) and target_id=$1)",[ha.id,[hb.id,cb.id]]);
   assert.equal(follows.rows[0]!.count,"0");
   assert.equal((await call(0,humanA,`reports/actors/${hb.id}`,"POST",reportBody)).status,404);
   console.log("Protection integration 2: bilateral feed, profile, detail, comment, follow and notification isolation");
@@ -188,7 +190,19 @@ try {
   assert.deepEqual((await pool.query("select (select count(*) from public.companion_identities) identities,(select count(*) from companion_private.memory_permissions) permissions")).rows[0],snapshot);
   assert.ok(Number((await pool.query("select count(*) from public.audit_events where action in ('COMMUNITY_BLOCK','COMMUNITY_UNBLOCK','COMMUNITY_REPORT_COMMENT')")).rows[0]!.count)>0);
   console.log("Protection integration 7: default-deny tables, anonymous RPC denial, audit and memory/identity preservation");
-  console.log("Protection PostgreSQL/HTTP integration passed: 7 scenario groups.");
+
+  // The hourly caps are per action: 30 posts in an hour stop posting, not commenting.
+  await pool.query("insert into public.community_posts(actor_id,body,source) select $1,'Hourly cap fixture','HUMAN_MANUAL' from generate_series(1,30)",[hb.id]);
+  try {
+    assert.equal((await call(1,humanB,"posts","POST",{body:"post 31"})).status,409);
+    assert.equal((await call(1,humanB,`posts/${post.data.id}/comments`,"POST",{body:"comment after 30 posts"})).status,201);
+  } finally {
+    await pool.query("delete from public.community_notifications where actor_id=$1 and kind='COMMENT'",[hb.id]);
+    await pool.query("delete from public.community_comments where actor_id=$1 and body='comment after 30 posts'",[hb.id]);
+    await pool.query("delete from public.community_posts where actor_id=$1 and body='Hourly cap fixture'",[hb.id]);
+  }
+  console.log("Protection integration 8: the hourly post cap does not stop comments");
+  console.log("Protection PostgreSQL/HTTP integration passed: 8 scenario groups.");
 } finally {
   await Promise.all(servers.map(server=>new Promise<void>(resolve=>server.close(()=>resolve()))));
   await pool.end();
