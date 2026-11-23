@@ -5,7 +5,11 @@
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import pg from "pg";
+import { PgAdminDb } from "../src/admin/db.ts";
+import { createAdminServer } from "../src/admin/server.ts";
 import { createPgPool, PgOwnerExecutor } from "../src/persistence/postgres/index.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 
@@ -29,13 +33,18 @@ for (const login of LOGINS) {
   await pool.query(`do $$ begin create role ${login} login password '${PASSWORD}' in role companion_admin;
     exception when duplicate_object then null; end $$`);
 }
-const operators = await Promise.all(LOGINS.map(async login => {
+const loginUrl = (login: string) => {
   const url = new URL(connectionString);
   url.username = login; url.password = PASSWORD;
-  const client = new pg.Client({ connectionString: url.toString() });
+  return url.toString();
+};
+const operators = await Promise.all(LOGINS.map(async login => {
+  const client = new pg.Client({ connectionString: loginUrl(login) });
   await client.connect();
   return client;
 }));
+let consoleServer: Server | undefined;
+const consolePool = new pg.Pool({ connectionString: loginUrl("admin_test_one"), max: 2 });
 const [one, two] = operators as [pg.Client, pg.Client];
 /** Calls one console function as an operator and returns its JSON. */
 const admin = async (who: pg.Client, fn: string, ...args: unknown[]): Promise<Json> =>
@@ -68,7 +77,7 @@ const seesPost = (id: string) => reads("detail", id);
 const seesProfile = (actor: string) => reads("profile", actor);
 const postBody = async (id: string) => (await pool.query("select body from public.community_posts where id = $1", [id])).rows[0]!.body as string;
 
-const chatId = randomUUID();
+const chatId = randomUUID(), consoleChat = randomUUID();
 const twinB = (await pool.query<{ id: string }>("select id from public.social_twins where companion_id = $1", [B.companion])).rows[0]!.id;
 const quotaBefore = (await admin(one, "models")).quota as { dailyCalls: number; dailyCostMinor: number };
 
@@ -364,11 +373,93 @@ try {
   assert.equal(new Set(ids).size, ids.length);
   passed("the log cannot be changed, names who did what and why, and pages without gaps");
 
+  // ---- the console itself, connected as an operator, against the real database ----
+  const TOKEN = "c".repeat(64);
+  consoleServer = createAdminServer({ db: new PgAdminDb(consolePool), token: TOKEN, timeZone: "UTC",
+    catalog: [{ name: "Spend fixture", provider: "admin-test-provider", model: "m-spend" }] });
+  const base = await new Promise<string>(resolve => consoleServer!.listen(0, "127.0.0.1", () =>
+    resolve(`http://127.0.0.1:${(consoleServer!.address() as AddressInfo).port}`)));
+  const web = async (path: string, form?: Record<string, string>) => {
+    const response = await fetch(`${base}${path}`, { method: form ? "POST" : "GET", redirect: "manual",
+      headers: { Cookie: `admin_console=${TOKEN}`, ...(form ? { "Content-Type": "application/x-www-form-urlencoded", Origin: base } : {}) },
+      ...(form ? { body: new URLSearchParams(form).toString() } : {}) });
+    return { status: response.status, location: response.headers.get("location"), body: await response.text() };
+  };
+  const why = (reason: string, more: Record<string, string> = {}) => ({ reason, confirm: "yes", ...more });
+  assert.equal((await fetch(`${base}/reports`)).status, 403, "no token, no console");
+  const entered = await fetch(`${base}/?token=${TOKEN}`, { redirect: "manual" });
+  assert.deepEqual([entered.status, entered.headers.get("location")], [303, "/reports"]);
+
+  const third = await person("Third");
+  const fresh = await report(third.actor, target.actor, "POST", first, "Admin fixture post one");
+  const open = await web("/reports");
+  assert.equal(open.status, 200);
+  assert.ok(open.body.includes(`action="/reports/${fresh}/resolve"`) && open.body.includes("Admin fixture post one"));
+  assert.deepEqual(await web(`/reports/${fresh}/resolve`, why("Console removal", { resolution: "REMOVED", back: "/reports?status=SUBMITTED" })),
+    { status: 303, location: "/reports?status=SUBMITTED&ok=1", body: "" });
+  assert.equal(await seesPost(first), false);
+  const closedList = await web("/reports?status=REVIEWED");
+  assert.ok(closedList.body.includes("Console removal") && closedList.body.includes("admin_test_one"));
+  assert.equal((await web(`/content/post/${first}/restore`, why("Console restore", { back: `/owners/${target.owner}` }))).location, `/owners/${target.owner}?ok=1`);
+  assert.equal(await seesPost(first), true);
+
+  const found = await web(`/owners?q=${encodeURIComponent(target.email)}`);
+  assert.ok(found.body.includes(`<a href="/owners/${target.owner}">${target.email}</a>`));
+  const opened = await web(`/owners/${target.owner}`);
+  assert.ok(opened.status === 200 && opened.body.includes("Admin fixture post one") && opened.body.includes("Console restore"));
+  assert.equal((await web(`/owners/${randomUUID()}`)).status, 404);
+  assert.equal((await web(`/owners/${target.owner}/suspend`, why("Console suspension"))).status, 303);
+  assert.equal(await claim(), null);
+  assert.ok((await web(`/owners/${target.owner}`)).body.includes(`action="/owners/${target.owner}/restore"`));
+  assert.equal((await web(`/owners/${target.owner}/restore`, why("Console lift"))).status, 303);
+  assert.equal(await claim(), target.owner);
+  const twice = await web(`/owners/${target.owner}/restore`, why("Console lift again", { back: `/owners/${target.owner}` }));
+  assert.equal(twice.status, 409);
+  assert.ok(twice.body.includes("现在并没有被停用 / 封禁") && twice.body.includes(`<a href="/owners/${target.owner}">返回</a>`));
+  assert.equal((await web(`/owners/${target.owner}/suspend`, { reason: "No tick" })).status, 409);
+  assert.equal(await claim(), target.owner);
+
+  assert.ok((await web(`/owners/${B.owner}`)).body.includes(`action="/twins/${twinB}/suspend"`));
+  assert.equal((await web(`/twins/${twinB}/suspend`, why("Console twin stop"))).status, 303);
+  assert.equal(await seesProfile(aiB), false);
+  assert.ok((await web(`/owners/${B.owner}`)).body.includes(`action="/twins/${twinB}/restore"`));
+  assert.equal((await web(`/twins/${twinB}/restore`, why("Console twin back"))).status, 303);
+  assert.equal(await seesProfile(aiB), true);
+
+  await pool.query("insert into companion_private.chats(id, owner_id, title) values ($1, $2, 'Console fixture chat')", [consoleChat, A.owner]);
+  await pool.query("insert into companion_private.chat_members(chat_id, companion_id, position) values ($1, $2, 1)", [consoleChat, A.companion]);
+  await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
+    values ($1, 'console private line', 'SENT', repeat('e', 64), now())`, [consoleChat]);
+  assert.ok((await web(`/owners/${A.owner}`)).body.includes(`<a href="/chats/${consoleChat}">Console fixture chat</a>`));
+  const gate = await web(`/chats/${consoleChat}`);
+  assert.ok(gate.status === 200 && !gate.body.includes("console private line"));
+  assert.equal((await web(`/chats/${consoleChat}`, { reason: " " })).status, 409);
+  const shown = await web(`/chats/${consoleChat}`, { reason: "Console check" });
+  assert.ok(shown.status === 200 && shown.body.includes("console private line") && shown.body.includes("SampleCompanion"));
+  assert.deepEqual((await pool.query("select operator, reason from companion_private.admin_log where action = 'READ_CHAT' and target_id = $1", [consoleChat])).rows,
+    [{ operator: "admin_test_one", reason: "Console check" }]);
+  assert.equal((await web(`/chats/${randomUUID()}`, { reason: "No such chat" })).status, 409);
+
+  const models = await web("/models");
+  assert.ok(models.status === 200 && models.body.includes("admin-test-provider/m-spend") && /合计:\d+ 次调用/.test(models.body));
+  assert.equal((await web("/models/switch", why("Console switch off", { target: "MODEL:admin-test-provider/m-spend", enabled: "off" }))).status, 303);
+  assert.ok((await web("/models")).body.includes("关(模型关闭)"));
+  assert.equal((await web("/models/switch", why("Console switch on", { target: "MODEL:admin-test-provider/m-spend", enabled: "on" }))).status, 303);
+  assert.ok(!(await web("/models")).body.includes("关(模型关闭)"));
+  assert.equal((await web("/models/quota", why("Console quota", { calls: String(quotaBefore.dailyCalls), cents: String(quotaBefore.dailyCostMinor) }))).status, 303);
+  const logged = await web("/log");
+  assert.ok(logged.status === 200 && ["Console quota", "Console switch on", "Console check", "查看私聊", "每日额度"].every(text => logged.body.includes(text)));
+  assert.ok((await web(`/log?owner=${target.owner}`)).body.includes("Console suspension"));
+  passed("the console pages work end to end as an operator: reports, Owners, Companions, content, chats, models and the log");
+
   // Leave the shared database as other suites expect it.
   await pool.query("update public.community_posts set deleted_at = coalesce(deleted_at, now()) where id = any($1)", [[first, second]]);
   console.log(`Admin PostgreSQL integration passed: ${groups} scenario groups.`);
 } finally {
-  await pool.query("delete from companion_private.chats where id = $1", [chatId]).catch(() => undefined);
+  consoleServer?.closeAllConnections();
+  await new Promise<void>(resolve => consoleServer ? consoleServer.close(() => resolve()) : resolve());
+  await consolePool.end().catch(() => undefined);
+  await pool.query("delete from companion_private.chats where id = any($1)", [[chatId, consoleChat]]).catch(() => undefined);
   await pool.query("update public.social_twins set status = 'ACTIVE' where id = $1", [twinB]).catch(() => undefined);
   await pool.query("update companion_private.chat_quota set daily_calls = $1, daily_cost_minor = $2", [quotaBefore.dailyCalls, quotaBefore.dailyCostMinor]).catch(() => undefined);
   await Promise.all(operators.map(client => client.end().catch(() => undefined)));
