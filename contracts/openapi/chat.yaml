@@ -315,6 +315,119 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /companions/{companionId}/diary:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: listDiary
+      summary: The Companion's diary (家机日记), newest first, 20 per page
+      x-capability-status: implemented
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema: {type: string}
+      responses:
+        '200':
+          description: A page of entries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiaryPage'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    post:
+      operationId: writeDiary
+      summary: Write an entry if one is due (send when the Owner opens the diary; waits for the model)
+      description: |
+        No body and no Idempotency-Key. The server decides: an entry is written only if the
+        Companion's frequency says one is due (counted from the previous entry) and something happened
+        since then: messages or home-room actions in the one-to-one chat, or the Companion's own
+        community posts and comments (at most the last 3 days). It may take 10-30 seconds. Repeating
+        the request is harmless: a second request while one is writing gets WRITING.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: What happened
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiaryWriteResult'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/diary/{entryId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: entryId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    delete:
+      operationId: deleteDiaryEntry
+      summary: Erase an entry (its days are not written about again)
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {type: boolean, const: true}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/diary-settings:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: getDiarySettings
+      summary: How often the Companion writes its diary (created with defaults on first read)
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiarySettings'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    put:
+      operationId: updateDiarySettings
+      summary: Replace the setting; send the revision last read (a stale revision is a 409)
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiarySettings'
+              unevaluatedProperties: false
+      responses:
+        '200':
+          description: Saved settings
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiarySettings'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
 components:
   securitySchemes:
     ownerBearer:
@@ -421,3 +534,52 @@ components:
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/ChatModelInfo'}}
         defaultModel: {type: [string, 'null'], description: What a Companion with model null uses; null when none is usable.}
+    DiarySettings:
+      type: object
+      required: [frequency, revision]
+      properties:
+        frequency:
+          type: string
+          enum: [OFF, RARE, DAILY, OFTEN]
+          description: |
+            OFF (不写) never. RARE (偶尔) about every 3 days. DAILY (每天, default) about once a day
+            (20 hours after the previous entry). OFTEN (常写) up to every 6 hours.
+        revision: {type: integer, minimum: 1}
+    DiaryEntry:
+      type: object
+      required: [id, companionId, body, writtenAt]
+      properties:
+        id: {type: string, format: uuid}
+        companionId: {type: string, format: uuid}
+        body: {type: string, description: Written by the Companion in the first person; may contain line breaks.}
+        writtenAt: {type: string, format: date-time}
+    DiaryPage:
+      type: object
+      required: [items, nextCursor, writing]
+      properties:
+        items: {type: array, description: Newest first., items: {$ref: '#/components/schemas/DiaryEntry'}}
+        nextCursor: {type: [string, 'null'], description: Pass as ?cursor= for older entries; null when there are no more.}
+        writing: {type: boolean, description: An entry is being written right now.}
+    DiaryWriteResult:
+      type: object
+      required: [status, entry, nextAt, failure]
+      properties:
+        status:
+          type: string
+          enum: [WRITTEN, OFF, WRITING, NOT_DUE, NOTHING_NEW, FAILED]
+          description: |
+            WRITTEN - `entry` is new. OFF - the diary is turned off. WRITING - one is being written
+            already. NOT_DUE - too soon (see nextAt). NOTHING_NEW - nothing happened since the last
+            entry. FAILED - see failure; no new attempt for 10 minutes.
+        entry:
+          oneOf:
+          - $ref: '#/components/schemas/DiaryEntry'
+          - type: 'null'
+        nextAt: {type: [string, 'null'], format: date-time, description: NOT_DUE only - the earliest time the next entry may be written.}
+        failure:
+          type: [string, 'null']
+          enum: [UNAVAILABLE, DISABLED, QUOTA, BLOCKED, ERROR, null]
+          description: |
+            FAILED only. UNAVAILABLE - no model yet ("coming soon"). DISABLED - switched off by the
+            platform. QUOTA - today's free calls are used up. BLOCKED - stopped by the safety scan.
+            ERROR - something went wrong.

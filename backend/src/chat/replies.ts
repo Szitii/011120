@@ -9,7 +9,8 @@
  */
 import { ACTION_TEXT, answersAction } from "./prompt.ts";
 import { SafetyPipeline } from "./safety.ts";
-import type { ChatClaim, ChatOutcome, ChatPort } from "./port.ts";
+import type { DiaryWriteResult } from "../../../contracts/chat.ts";
+import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob } from "./port.ts";
 
 /**
  * What a model made of a turn: 1 to 3 short messages, like texting (more are joined into the
@@ -22,9 +23,14 @@ export type Answer =
   | { refused: true }
   | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
 
+/** A diary entry the model wrote, or why there is none. */
+export type DiaryAnswer = { text: string } | { refused: true } | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
+
 /** Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on. */
 export interface ChatModel {
   reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal }): Promise<Answer>;
+  /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
+  diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
 }
 
 const MAX_MESSAGES = 3;
@@ -57,6 +63,18 @@ export const devChatModel: ChatModel = {
     const last = turn.history.at(-1);
     const speaker = turn.members.find(member => member.companionId === last?.companionId)?.displayName ?? "大家";
     return { messages: [`（开发环境假回复）${name}接着${speaker}的话说一句。`] };
+  },
+  async diary(job) {
+    const said = job.messages.filter(message => message.companionId === null && message.body !== null);
+    const actions = job.messages.filter(message => message.action !== null).length;
+    const last = said.at(-1)?.body;
+    return { text: [
+      `（开发环境假日记）主人和我说了 ${said.length} 句话`,
+      actions > 0 ? `，在小家里陪了我 ${actions} 次` : "",
+      job.posts.length > 0 ? `，我在社区写了 ${job.posts.length} 条` : "",
+      "。",
+      last ? `主人说：「${preview(last)}」` : "",
+    ].join("") };
   },
 };
 
@@ -91,13 +109,55 @@ export class ChatReplies {
     return written;
   }
 
-  async #answer(turn: ChatClaim, port: ChatPort): Promise<[ChatOutcome, string[] | null]> {
-    if (this.#model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
+  /**
+   * Writes a diary entry if one is due (the database decides), waiting for the model.
+   * Several requests for one Companion at once: one writes, the others get WRITING.
+   */
+  async writeDiary(companionId: string, port: ChatPort): Promise<DiaryWriteResult> {
+    const job = await port.diaryBegin(companionId);
+    if (job.status !== "WRITE") return { status: job.status, entry: null, nextAt: "nextAt" in job ? job.nextAt : null, failure: null };
+    const [text, failure] = await this.#diaryText(job, port);
+    const entry = await port.diaryFinish(job.entryId, job.claimId, text);
+    return entry !== null ? { status: "WRITTEN", entry, nextAt: null, failure: null }
+      : { status: "FAILED", entry: null, nextAt: null, failure: failure ?? "ERROR" };
+  }
+
+  async #diaryText(job: DiaryJob, port: ChatPort): Promise<[string, null] | [null, DiaryWriteResult["failure"]]> {
+    const model = this.#model;
+    if (model?.diary === undefined) return [null, "UNAVAILABLE"];
+    try {
+      const result = await this.#timed(signal => model.diary!(job, { port, signal }));
+      if ("refused" in result) return [null, "BLOCKED"];
+      if ("failed" in result) return [null, result.failed];
+      const text = result.text.trim();
+      if (text.length === 0 || text.length > MAX_CHARS) return [null, "ERROR"];
+      const scan = this.#safety.scanOutput(text);
+      if (scan.decision === "BLOCK") return [null, "BLOCKED"];
+      const safe = scan.sanitized.trim();
+      return safe.length > MAX_CHARS ? [null, "ERROR"] : [safe, null];
+    } catch {
+      return [null, "ERROR"];
+    }
+  }
+
+  /** Runs a model call that is aborted (and rejects) after the timeout. */
+  async #timed<T>(call: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(new Error("model timed out")), this.#timeoutMs);
     try {
       const stopped = new Promise<never>((_, reject) => abort.signal.addEventListener("abort", () => reject(abort.signal.reason)));
-      const result = await Promise.race([this.#model.reply(turn, { port, signal: abort.signal }), stopped]);
+      return await Promise.race([call(abort.signal), stopped]);
+    } finally {
+      clearTimeout(timer);
+      abort.abort();
+    }
+  }
+
+  async #answer(turn: ChatClaim, port: ChatPort): Promise<[ChatOutcome, string[] | null]> {
+    const model = this.#model;
+    if (model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
+    try {
+      const result = await this.#timed(signal => model.reply(turn, { port, signal }));
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];
       // An optional turn that cannot be made simply stays quiet; one that must answer says why.
@@ -114,9 +174,6 @@ export class ChatReplies {
       return safe.some(text => text.length > MAX_CHARS) ? ["ERROR", null] : ["SENT", safe];
     } catch {
       return ["ERROR", null]; // the model failed, timed out, or answered in the wrong shape
-    } finally {
-      clearTimeout(timer);
-      abort.abort();
     }
   }
 }

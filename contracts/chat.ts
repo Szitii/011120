@@ -96,3 +96,45 @@ export interface ChatModelList {
   /** What a Companion with model null uses; null when no model is usable. */
   defaultModel: string | null;
 }
+
+/**
+ * 家机日记: how often a Companion writes. Entries are written when the Owner opens the diary
+ * (POST /v0/companions/{id}/diary), if one is due and something happened since the last one.
+ * OFF: never. RARE: about every 3 days. DAILY: about once a day (default). OFTEN: up to every 6 hours.
+ */
+export interface DiarySettings {
+  frequency: "OFF" | "RARE" | "DAILY" | "OFTEN";
+  revision: number;
+}
+
+/** One diary entry, written by the Companion in the first person. Only its Owner sees it. */
+export interface DiaryEntry {
+  id: string;
+  companionId: string;
+  body: string;
+  writtenAt: string;
+}
+
+/** GET /v0/companions/{id}/diary */
+export interface DiaryPage {
+  /** Newest first, 20 per page. */
+  items: DiaryEntry[];
+  /** Pass as ?cursor= for older entries; null when there are no more. */
+  nextCursor: string | null;
+  /** An entry is being written right now (another device opened the diary). */
+  writing: boolean;
+}
+
+/**
+ * POST /v0/companions/{id}/diary: "write one if it is time".
+ * WRITTEN: `entry` is new. OFF: the diary is turned off. WRITING: one is being written already (GET again in a few seconds).
+ * NOT_DUE: too soon; `nextAt` is the earliest time. NOTHING_NEW: nothing happened since the last entry.
+ * FAILED: see `failure` (UNAVAILABLE no model yet, DISABLED switched off, QUOTA today's free calls used up,
+ * BLOCKED stopped by the safety scan, ERROR something went wrong); it may try again 10 minutes later.
+ */
+export interface DiaryWriteResult {
+  status: "WRITTEN" | "OFF" | "WRITING" | "NOT_DUE" | "NOTHING_NEW" | "FAILED";
+  entry: DiaryEntry | null;
+  nextAt: string | null;
+  failure: "UNAVAILABLE" | "DISABLED" | "QUOTA" | "BLOCKED" | "ERROR" | null;
+}

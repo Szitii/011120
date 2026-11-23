@@ -41,6 +41,13 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     reserve: async () => ({ decision: "RESERVED", transactionId: "tx" }),
     settle: async () => undefined,
     modelsEnabled: async models => models.map(() => true),
+    diary: async () => ({}),
+    deleteDiary: async () => ({}),
+    diarySettings: async () => ({}),
+    saveDiarySettings: async () => ({}),
+    diaryBegin: async () => ({ status: "OFF" }),
+    diaryReserve: async () => ({ decision: "STALE" }),
+    diaryFinish: async () => null,
   };
   return { port, calls, finished };
 }
