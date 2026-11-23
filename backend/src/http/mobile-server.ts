@@ -84,11 +84,6 @@ export const createMobileHttpServer = (
 ) => {
   const api = new MvpApiBoundary({
     sessions,
-    encounters: {
-      run: async () => {
-        throw new Error("Encounter creation is unavailable on the mobile HTTP host.");
-      },
-    },
     replies: chat.replies,
     ...(chat.catalog === undefined ? {} : { catalog: chat.catalog }),
   });

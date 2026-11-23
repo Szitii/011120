@@ -1,8 +1,6 @@
 import { contentHash } from "../companion-import/canonical.ts";
 import { hasCredential } from "../companion-import/policy.ts";
 
-export const ENCOUNTER_SAFETY_POLICY_VERSION = "encounter-safety/0.1.0";
-
 export interface SafetyScanResult {
   readonly contentHash: string;
   readonly sanitized: string;
@@ -37,7 +35,7 @@ function redactPii(content: string): { sanitized: string; redactionCount: number
   return { sanitized, redactionCount };
 }
 
-export class EncounterSafetyPipeline {
+export class SafetyPipeline {
   readonly #protectedTerms: readonly string[];
 
   constructor(protectedTerms: readonly string[] = []) {

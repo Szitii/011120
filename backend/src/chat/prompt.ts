@@ -51,7 +51,7 @@ function transcript(turn: ChatClaim): string {
   let used = 0;
   for (const message of [...turn.history].reverse()) {
     const body = message.companionId === null ? maskCredentials(message.body) : message.body;
-    const line = `【${nameOf(turn, message.companionId)}】${body.replace(/\r?\n/g, "\n  ")}`;
+    const line = `【${nameOf(turn, message.companionId)}】${body.replace(/\r\n|[\r\n\u0085\u2028\u2029]/g, "\n  ")}`;
     if (used + line.length > TRANSCRIPT_CHARS && lines.length > 0) break;
     lines.unshift(line);
     used += line.length;

@@ -7,7 +7,7 @@
  * If the server stops halfway, the claim expires after two minutes and the next request that
  * touches the chat picks it up again.
  */
-import { EncounterSafetyPipeline } from "../encounter/safety.ts";
+import { SafetyPipeline } from "./safety.ts";
 import type { ChatClaim, ChatOutcome, ChatPort } from "./port.ts";
 
 /**
@@ -58,7 +58,7 @@ export const devChatModel: ChatModel = {
 export class ChatReplies {
   readonly #model: ChatModel | undefined;
   readonly #timeoutMs: number;
-  readonly #safety = new EncounterSafetyPipeline();
+  readonly #safety = new SafetyPipeline();
   readonly #running = new Set<string>();
 
   /** Without a model, turns that must answer end as FAILED / UNAVAILABLE ("coming soon"); optional ones stay quiet. */

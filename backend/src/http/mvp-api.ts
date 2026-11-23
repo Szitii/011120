@@ -13,7 +13,6 @@ import {
   type ApiProblem,
   type AuthenticatedOwnerSession,
   type ControlsPatchInput,
-  type EncounterCommandPort,
   type MvpHttpRequest,
   type MvpHttpResponse,
   type OwnerSessionResolver,
@@ -21,7 +20,6 @@ import {
 } from "./types.ts";
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const SHA256 = /^[a-f0-9]{64}$/;
 const JSON_TYPE = "application/json";
 const PROBLEM_TYPE = "application/problem+json";
 const SUBJECT_KINDS = ["OWNER", "COMPANION", "SOCIAL_TWIN"] as const;
@@ -75,10 +73,15 @@ const requireString = (value: unknown, name: string, minimum: number, maximum: n
   return value;
 };
 
+// PostgreSQL accepts UTC offsets only up to 15:59.
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:0\d|1[0-5]):[0-5]\d)$/;
+
+// Passed on unchanged: cursors carry PostgreSQL's microseconds, and a JS Date would cut them to
+// milliseconds, so rows inside that sub-millisecond gap would drop out of the next page.
 const requireDateTime = (value: unknown, name: string): string => {
   const text = requireString(value, name, 1, 64);
-  if (Number.isNaN(Date.parse(text))) throw invalid(`${name} must be an ISO date-time.`);
-  return new Date(text).toISOString();
+  if (!ISO_DATE_TIME.test(text) || Number.isNaN(Date.parse(text))) throw invalid(`${name} must be an ISO date-time.`);
+  return text;
 };
 
 const oneOf = <T extends string>(value: unknown, allowed: readonly T[], name: string): T => {
@@ -121,14 +124,6 @@ const requireRevision = (request: MvpHttpRequest): number => {
   const value = Number(match[1]);
   if (!Number.isSafeInteger(value)) throw invalid("If-Match revision is invalid.");
   return value;
-};
-
-const requireTrace = (request: MvpHttpRequest): string => {
-  const value = header(request, "x-trace-id");
-  if (value === undefined) {
-    throw new RequestProblem(400, "TRACE_ID_REQUIRED", "X-Trace-Id is required.");
-  }
-  return requireString(value, "X-Trace-Id", 1, 128);
 };
 
 const limitParam = (query: URLSearchParams, fallback: number): number => {
@@ -240,7 +235,6 @@ interface RouteContext {
   readonly query: URLSearchParams;
   readonly params: readonly (string | undefined)[];
   readonly session: AuthenticatedOwnerSession;
-  readonly encounters: EncounterCommandPort;
   readonly id: () => string;
 }
 
@@ -249,96 +243,6 @@ type Handler = (context: RouteContext) => Promise<readonly [status: number, body
 
 const idempotencyHash = ({ request, session }: RouteContext, scope: string): string =>
   sha256(`${scope}:${session.ownerId}:${requireIdempotency(request)}`);
-
-const runEncounter: Handler = async ({ request, session, encounters, id }) => {
-  const idempotencyKey = requireIdempotency(request);
-  const traceId = requireTrace(request);
-  const body = requireObject(request, ["invitationId", "message", "maxMemories"]);
-  const maxMemories = body.maxMemories;
-  if (
-    maxMemories !== undefined &&
-    (!Number.isSafeInteger(maxMemories) || (maxMemories as number) < 1 || (maxMemories as number) > 20)
-  ) {
-    throw invalid("maxMemories must be between 1 and 20.");
-  }
-  const result = await encounters.run({
-    actorOwnerId: session.ownerId,
-    invitationId: requireUuid(body.invitationId, "invitationId"),
-    encounterId: id(),
-    message: requireString(body.message, "message", 1, 2_000),
-    ...(maxMemories === undefined ? {} : { maxMemories: maxMemories as number }),
-    idempotencyKey,
-    traceId,
-  });
-  return [200, {
-    encounterId: result.encounterId,
-    status: result.status,
-    ...(result.outcomeCode === undefined ? {} : { outcomeCode: result.outcomeCode }),
-    replayed: result.replayed,
-  }];
-};
-
-const issueInvitation: Handler = async (context) => {
-  const idempotencyKeyHash = idempotencyHash(context, "invitation");
-  const body = requireObject(context.request, [
-    "initiatorTwinId",
-    "responderTwinId",
-    "initiatorSocialPersonaId",
-    "responderSocialPersonaId",
-    "initiatorIdentityVersionId",
-    "responderIdentityVersionId",
-    "purpose",
-    "scope",
-    "contextHash",
-    "expiresAt",
-  ]);
-  const contextHash = requireString(body.contextHash, "contextHash", 64, 64);
-  if (!SHA256.test(contextHash)) throw invalid("contextHash is invalid.");
-  if (body.scope !== "ONE_SHOT_ENCOUNTER") throw invalid("Only ONE_SHOT_ENCOUNTER is supported.");
-  const invitation = {
-    initiatorTwinId: requireUuid(body.initiatorTwinId, "initiatorTwinId"),
-    responderTwinId: requireUuid(body.responderTwinId, "responderTwinId"),
-    initiatorSocialPersonaId: requireUuid(body.initiatorSocialPersonaId, "initiatorSocialPersonaId"),
-    responderSocialPersonaId: requireUuid(body.responderSocialPersonaId, "responderSocialPersonaId"),
-    initiatorIdentityVersionId: requireUuid(body.initiatorIdentityVersionId, "initiatorIdentityVersionId"),
-    responderIdentityVersionId: requireUuid(body.responderIdentityVersionId, "responderIdentityVersionId"),
-    purpose: requireString(body.purpose, "purpose", 1, 500),
-    scope: "ONE_SHOT_ENCOUNTER" as const,
-    contextHash,
-    expiresAt: requireDateTime(body.expiresAt, "expiresAt"),
-  };
-  const result = await context.session.owner.issueInvitation({
-    ...invitation,
-    idempotencyKeyHash,
-    requestHash: contentHash(invitation),
-  });
-  return [result.replayed ? 200 : 201, result];
-};
-
-const listInvitations: Handler = async ({ query, session }) => {
-  const limit = limitParam(query, 20);
-  const before = cursorParam(query, "beforeCreatedAt", "beforeInvitationId", "");
-  const items = await session.owner.listInvitations(
-    limit,
-    before && { createdAt: before.at, invitationId: before.id },
-  );
-  const last = items.at(-1);
-  const nextCursor = items.length === limit && last !== undefined
-    ? { beforeCreatedAt: last.createdAt, beforeInvitationId: last.invitationId }
-    : null;
-  return [200, { items, nextCursor }];
-};
-
-const decideInvitation: Handler = async (context) => {
-  const decision = context.params[1] === "approve" ? "approve" : "reject";
-  const idempotencyKeyHash = idempotencyHash(context, decision);
-  const invitationId = requireUuid(context.params[0], "invitationId");
-  const requestHash = contentHash({ invitationId, decision });
-  const { owner } = context.session;
-  return [200, decision === "approve"
-    ? await owner.approveInvitation(invitationId, idempotencyKeyHash, requestHash)
-    : await owner.rejectInvitation(invitationId, idempotencyKeyHash, requestHash)];
-};
 
 const getIdentityContext: Handler = async ({ query, session }) => {
   const kind = query.get("activeSubjectKind");
@@ -521,15 +425,9 @@ const updateControls: Handler = async (context) => {
   })];
 };
 
-const getComputeReceipt: Handler = async ({ params, session }) =>
-  [200, await session.owner.getComputeReceipt(requireUuid(params[0], "transactionId"))];
 
 const ROUTES: readonly (readonly [method: string, path: RegExp, handler: Handler])[] = [
-  ["POST", /^\/v0\/encounters$/, runEncounter],
   ["GET", /^\/v0\/encounters\/([^/]+)$/, getEncounterDetail],
-  ["POST", /^\/v0\/encounter-invitations$/, issueInvitation],
-  ["GET", /^\/v0\/encounter-invitations$/, listInvitations],
-  ["POST", /^\/v0\/encounter-invitations\/([^/]+)\/(approve|reject)$/, decideInvitation],
   ["GET", /^\/v0\/identity-context$/, getIdentityContext],
   ["GET", /^\/v0\/world-items$/, listWorldItems],
   ["GET", /^\/v0\/companions$/, listOwnerCompanions],
@@ -543,19 +441,16 @@ const ROUTES: readonly (readonly [method: string, path: RegExp, handler: Handler
   ["POST", /^\/v0\/companion-imports\/([^/]+)\/approve$/, approveCompanionImport],
   ["GET", /^\/v0\/controls$/, getControls],
   ["PATCH", /^\/v0\/controls$/, updateControls],
-  ["GET", /^\/v0\/compute-receipts\/([^/]+)$/, getComputeReceipt],
 ];
 
 export class MvpApiBoundary {
   readonly #sessions: OwnerSessionResolver;
-  readonly #encounters: EncounterCommandPort;
   readonly #id: () => string;
   readonly #replies: ChatReplies;
   readonly #catalog: ChatCatalog | undefined;
 
   constructor(input: {
     readonly sessions: OwnerSessionResolver;
-    readonly encounters: EncounterCommandPort;
     readonly id?: () => string;
     /** Writes Companion chat replies; without one, replies end as UNAVAILABLE. */
     readonly replies?: ChatReplies;
@@ -563,7 +458,6 @@ export class MvpApiBoundary {
     readonly catalog?: ChatCatalog;
   }) {
     this.#sessions = input.sessions;
-    this.#encounters = input.encounters;
     this.#id = input.id ?? randomUUID;
     this.#replies = input.replies ?? new ChatReplies();
     this.#catalog = input.catalog;
@@ -589,7 +483,6 @@ export class MvpApiBoundary {
           query: url.searchParams,
           params: match.slice(1),
           session,
-          encounters: this.#encounters,
           id: this.#id,
         });
         return body === undefined ? problem(...NOT_FOUND, traceId) : json(status, body, traceId);

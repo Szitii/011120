@@ -21,19 +21,22 @@ ANTHROPIC_API_KEY=... npm run chat:try -- claude-haiku-5-5 "今天好累啊"
 
 ## 关掉(总开关)
 
-用运营人员的数据库账号连库(`DATABASE_URL`;账号要属于 `companion_admin`,数据库管理员账号也可以)。改动立刻对所有服务器生效,每次都连同原因和操作账号记进管理日志:
+在管理台(`npm run admin`,见 `ADMIN_CONSOLE.md`)的「模型与费用」页操作:选全部、某一家厂商或某一个模型,选开或关,写原因。改动立刻对所有服务器生效,每次都连同原因和操作账号记进管理日志。
+
+管理台起不来时的应急办法:用运营人员的数据库账号(属于 `companion_admin`)直接连库,执行一行,同样记日志、同样必须写原因:
 
 ```
-npm run chat:admin -- status
-npm run chat:admin -- off all "原因"                       # 全部平台模型
-npm run chat:admin -- off provider openai "原因"           # 某一家
-npm run chat:admin -- off model anthropic/claude-opus-5-5 # 某一个
-npm run chat:admin -- on all|provider X|model X
+select companion_admin.model_switch_set('ALL', '*', false, '原因');                                 -- 全部平台模型
+select companion_admin.model_switch_set('PROVIDER', 'openai', false, '原因');                        -- 某一家
+select companion_admin.model_switch_set('MODEL', 'anthropic/claude-opus-5-5', false, '原因');        -- 某一个
+select companion_admin.models();                                                                     -- 查看现状
 ```
+
+第三个参数 `true` 是打开。
 
 关掉后回复显示"平台模型暂时关闭",不扣额度,聊天记录照常能看。选了被关掉模型的家机,会自动改用默认模型回复;默认模型也被关掉时才显示"暂时关闭"。
 
-名字要按清单里的写:厂商用 `providers` 里的名字(区分大小写),模型用"厂商/厂商那边的模型名"。写错了脚本会拒绝,并列出可用的名字。两点要知道:
+名字要按清单里的写:厂商用 `providers` 里的名字(区分大小写),模型用"厂商/厂商那边的模型名"。管理台只列出清单里有的名字;直接写 SQL 时数据库不检查名字,写错了开关不会管住任何模型。两点要知道:
 
 - 开关看的是"哪家厂商、哪个模型名"。同一个模型经由另一家转发(例如经 OpenRouter 调 Claude),要另外关那一家。
 - Claude 的 Opus、Sonnet 开了"拒答时自动换模型"(`fallbacks`),换上的模型由 Anthropic 决定,不受这里的模型开关管。如果监管要求某个模型绝对不能用,把对应条目的 `fallbacks` 关掉,或者直接关掉整个厂商。
@@ -42,8 +45,10 @@ npm run chat:admin -- on all|provider X|model X
 
 每个家机每个自然日(UTC)自动有一份:默认 200 次模型调用、1 美元(占位数值)。改:
 
+在管理台「模型与费用」页填次数、美分和原因;应急时用 SQL:
+
 ```
-npm run chat:admin -- quota 100 50 "原因"   # 每天 100 次、50 美分;从新建的额度开始生效
+select companion_admin.chat_quota_set(100, 50, '原因');   -- 每天 100 次、50 美分;从新建的额度开始生效
 ```
 
 用完后回复显示"今天的额度用完了"。每次调用都记在算力账本里(回复:`OWNER_DIRECT_RESPONSE`;判断要不要开口:`CHAT_TURN_DECISION`)。token 数按实际记录;费用以美分记账,调用前按上限预占(向上取整),调用后按实际用量结算(四舍五入),所以很便宜的调用不会每次都扣掉 1 美分。厂商没报用量、调用失败或服务器中途停掉的,按预占的上限扣。

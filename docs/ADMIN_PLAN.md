@@ -67,7 +67,7 @@
 | `log` | 操作日志 |
 
 - 旧的 `model_switch_log` 并入 `admin_log`。
-- 现有的命令行 `npm run chat:admin` 照常能用;不写原因时日志里会记"命令行,未填原因"。
+- 命令行 `npm run chat:admin` 已于 2026-11-23 删除(与管理台重复,且允许不填原因);应急时直接执行 SQL,见 `docs/manual/CHAT_MODELS.md`。
 
 做法依据的事实(2026-11-23 对照代码核实):
 

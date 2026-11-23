@@ -34,7 +34,9 @@ export class PlatformChatModel implements ChatModel {
     const judge = turn.optional ? this.#catalog.decisionModel() : undefined;
     if (judge !== undefined) {
       const decided = await this.#run(port, turn, "DECIDE", judge, decisionPrompt(turn), DECIDE_TOKENS, signal);
-      if ("failed" in decided || decided.refused || !parseDecision(decided.text)) return { pass: true };
+      // A judge switched off by the platform counts as no judge: the reply model decides itself.
+      const quiet = "failed" in decided ? decided.failed !== "DISABLED" : decided.refused || !parseDecision(decided.text);
+      if (quiet) return { pass: true };
     }
     let result = await this.#run(port, turn, "REPLY", model, replyPrompt(turn), REPLY_TOKENS, signal);
     // The chosen model was switched off by the platform: answer with the default instead.

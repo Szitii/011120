@@ -81,10 +81,8 @@ const main = async (): Promise<void> => {
     chat: chatFromEnvironment("stage1-mobile-dev"),
   });
 
-  const shutdown = (): void => {
-    server.close();
-    void pool.end();
-  };
+  // Close the pool only after the last request has finished.
+  const shutdown = (): void => { server.close(() => { void pool.end(); }); };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 

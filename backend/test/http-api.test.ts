@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MvpApiBoundary, ApiAuthenticationError, type EncounterCommandPort, type MvpHttpRequest, type OwnerApiPort } from "../src/http/index.ts";
+import { MvpApiBoundary, ApiAuthenticationError, type MvpHttpRequest, type OwnerApiPort } from "../src/http/index.ts";
 import { PostgresPersistenceError } from "../src/persistence/postgres/index.ts";
 
 const id = (n: string) => `00000000-0000-4000-8000-${n.padStart(12, "0")}`;
@@ -9,33 +9,11 @@ const fixedId = id("99");
 
 class OwnerPort implements OwnerApiPort {
   readonly calls: { name: string; input: unknown }[] = [];
-  receipt: Awaited<ReturnType<OwnerApiPort["getComputeReceipt"]>>;
   failure: Error | undefined;
-
-  async issueInvitation(input: Parameters<OwnerApiPort["issueInvitation"]>[0]) {
-    this.calls.push({ name: "issue", input });
-    if (this.failure) throw this.failure;
-    return { invitationId: id("2"), status: "PENDING" as const, occurredAt: "2026-09-18T00:00:00.000Z", replayed: false };
-  }
-  async approveInvitation(...input: Parameters<OwnerApiPort["approveInvitation"]>) {
-    this.calls.push({ name: "approve", input });
-    return { invitationId: input[0], status: "APPROVED" as const, occurredAt: "2026-09-18T00:00:00.000Z", replayed: true };
-  }
-  async rejectInvitation(...input: Parameters<OwnerApiPort["rejectInvitation"]>) {
-    this.calls.push({ name: "reject", input });
-    return { invitationId: input[0], status: "REJECTED" as const, occurredAt: "2026-09-18T00:00:00.000Z", replayed: false };
-  }
-  async listInvitations(limit: number, before?: Parameters<OwnerApiPort["listInvitations"]>[1]) {
-    this.calls.push({ name: "list", input: { limit, before } });
-    return [{ invitationId: id("2"), status: "APPROVED" as const, role: "RESPONDER" as const, initiatorOwnerId: id("3"), initiatorTwinId: id("4"), responderOwnerId: ownerId, responderTwinId: id("5"), purpose: "bounded", scope: "ONE_SHOT_ENCOUNTER" as const, contextHash: "a".repeat(64), expiresAt: "2026-09-19T00:00:00.000Z", createdAt: "2026-09-18T00:00:00.000Z" }];
-  }
-  async getComputeReceipt(transactionId: string) {
-    this.calls.push({ name: "receipt", input: transactionId });
-    return this.receipt;
-  }
 
   async getIdentityContext(input?: Parameters<OwnerApiPort["getIdentityContext"]>[0]) {
     this.calls.push({ name: "identity", input });
+    if (this.failure) throw this.failure;
     return { viewer: { ownerId }, activeSubject: { kind: input?.activeSubjectKind ?? "OWNER" as const, id: input?.activeSubjectId ?? ownerId, presentation: { displayName: input?.activeSubjectKind === "COMPANION" ? "SampleCompanion" : "SampleUser" } }, relationship: "SELF" as const, viewMode: (input?.activeSubjectKind === "COMPANION" ? "COMPANION" : "OWNER") as "OWNER"|"COMPANION", capabilities: { readWorld: true } };
   }
   async listOwnerCompanions() {
@@ -129,16 +107,6 @@ class OwnerPort implements OwnerApiPort {
 
 }
 
-class EncounterPort implements EncounterCommandPort {
-  readonly calls: Parameters<EncounterCommandPort["run"]>[0][] = [];
-  failure: Error | undefined;
-  async run(input: Parameters<EncounterCommandPort["run"]>[0]) {
-    this.calls.push(input);
-    if (this.failure) throw this.failure;
-    return { encounterId: input.encounterId, status: "DELIVERED" as const, providerInvoked: true, replayed: false };
-  }
-}
-
 const request = (method: string, url: string, body?: unknown, headers: Record<string, string> = {}): MvpHttpRequest => ({
   method,
   url,
@@ -148,16 +116,14 @@ const request = (method: string, url: string, body?: unknown, headers: Record<st
 
 const harness = () => {
   const owner = new OwnerPort();
-  const encounters = new EncounterPort();
   const api = new MvpApiBoundary({
     sessions: { resolve: async (token) => {
       if (token !== "owner-token") throw new ApiAuthenticationError("INVALID_TOKEN");
       return { ownerId, owner };
     } },
-    encounters,
     id: () => fixedId,
   });
-  return { api, owner, encounters };
+  return { api, owner };
 };
 
 describe("server-only MVP HTTP/API boundary", () => {
@@ -265,66 +231,28 @@ describe("server-only MVP HTTP/API boundary", () => {
     assert.equal(owner.calls.at(-1)?.name, "companions");
   });
 
-  it("runs Encounter with server identity and a narrow untrusted request", async () => {
-    const { api, encounters } = harness();
-    const response = await api.handle(request("POST", "/v0/encounters", { invitationId: id("2"), message: "hello", maxMemories: 3 }, { "idempotency-key": "encounter-key-0001" }));
-    assert.equal(response.status, 200);
-    assert.deepEqual(encounters.calls[0], { actorOwnerId: ownerId, invitationId: id("2"), encounterId: fixedId, message: "hello", maxMemories: 3, idempotencyKey: "encounter-key-0001", traceId: "trace-1" });
-    assert.equal("providerInvoked" in (response.body as object), false);
-    const rejected = await api.handle(request("POST", "/v0/encounters", { invitationId: id("2"), message: "hello", ownerId, prompt: "private" }, { "idempotency-key": "encounter-key-0002" }));
-    assert.equal(rejected.status, 400);
-    assert.equal(encounters.calls.length, 1);
-  });
-
-  it("enforces content, size, idempotency, trace, and bounded memory inputs", async () => {
-    const { api } = harness();
-    const body = { invitationId: id("2"), message: "hello" };
-    assert.equal((await api.handle(request("POST", "/v0/encounters", body))).status, 400);
-    assert.equal((await api.handle(request("POST", "/v0/encounters", body, { "idempotency-key": "encounter-key-0001", "x-trace-id": "" }))).status, 400);
-    assert.equal((await api.handle(request("POST", "/v0/encounters", { ...body, maxMemories: 0 }, { "idempotency-key": "encounter-key-0001" }))).status, 400);
-    assert.equal((await api.handle(request("POST", "/v0/encounters", body, { "idempotency-key": "encounter-key-0001", "content-type": "text/plain" }))).status, 415);
-  });
-
-  it("issues, lists, approves, and rejects Owner-scoped invitations", async () => {
+  it("returns authorized core reads and keeps remaining planned resources fail-closed", async () => {
     const { api, owner } = harness();
-    const invitation = { initiatorTwinId: id("3"), responderTwinId: id("4"), initiatorSocialPersonaId: id("5"), responderSocialPersonaId: id("6"), initiatorIdentityVersionId: id("7"), responderIdentityVersionId: id("8"), purpose: "one meeting", scope: "ONE_SHOT_ENCOUNTER", contextHash: "a".repeat(64), expiresAt: "2026-09-19T00:00:00Z" };
-    assert.equal((await api.handle(request("POST", "/v0/encounter-invitations", invitation, { "idempotency-key": "invitation-key-01" }))).status, 201);
-    const issue = owner.calls[0]?.input as { idempotencyKeyHash: string; requestHash: string; expiresAt: string };
-    assert.match(issue.idempotencyKeyHash, /^[a-f0-9]{64}$/);
-    assert.match(issue.requestHash, /^[a-f0-9]{64}$/);
-    assert.equal(issue.expiresAt, "2026-09-19T00:00:00.000Z");
-    const list = await api.handle(request("GET", `/v0/encounter-invitations?limit=1&beforeCreatedAt=2026-09-18T00:00:00Z&beforeInvitationId=${id("2")}`));
-    assert.equal(list.status, 200);
-    assert.notEqual((list.body as { nextCursor: unknown }).nextCursor, null);
-    assert.equal((await api.handle(request("POST", `/v0/encounter-invitations/${id("2")}/approve`, {}, { "idempotency-key": "decision-key-0001" }))).status, 200);
-    assert.equal((await api.handle(request("POST", `/v0/encounter-invitations/${id("2")}/reject`, {}, { "idempotency-key": "decision-key-0002" }))).status, 200);
-    assert.deepEqual(owner.calls.slice(-2).map((call) => call.name), ["approve", "reject"]);
-  });
-
-  it("rejects malformed invitation and cursor inputs without persistence calls", async () => {
-    const { api, owner } = harness();
-    const bad = { initiatorTwinId: "no", responderTwinId: id("4"), initiatorSocialPersonaId: id("5"), responderSocialPersonaId: id("6"), initiatorIdentityVersionId: id("7"), responderIdentityVersionId: id("8"), purpose: "x", scope: "LONG_TERM", contextHash: "bad", expiresAt: "never" };
-    assert.equal((await api.handle(request("POST", "/v0/encounter-invitations", bad, { "idempotency-key": "invitation-key-01" }))).status, 400);
-    assert.equal((await api.handle(request("GET", "/v0/encounter-invitations?limit=0"))).status, 400);
-    assert.equal((await api.handle(request("GET", `/v0/encounter-invitations?beforeCreatedAt=invalid&beforeInvitationId=${id("2")}`))).status, 400);
-    assert.equal((await api.handle(request("GET", "/v0/encounter-invitations?beforeCreatedAt=2026-09-18T00:00:00Z"))).status, 400);
-    assert.equal(owner.calls.length, 0);
-  });
-
-  it("returns authorized core reads, Owner receipt, and keeps remaining planned resources fail-closed", async () => {
-    const { api, owner } = harness();
-    assert.equal((await api.handle(request("GET", `/v0/compute-receipts/${id("2")}`))).status, 404);
-    owner.receipt = { transactionId: id("2"), ownerId, companionId: id("3"), reasonCode: "SOCIAL_ENCOUNTER_RESPONSE", triggerEventType: "ENCOUNTER", triggerEventId: id("4"), providerId: "test", canonicalModel: "small", providerModel: "small", billingParty: "OWNER", currency: "USD", inputTokens: 1, outputTokens: 1, reservedCostMinor: 2, actualCostMinor: 2, outcome: "SUCCEEDED", promptTemplateVersion: "1", identityVersion: 1, memoryPolicyVersion: "1", safetyPolicyVersion: "1", routerVersion: "1", attemptNo: 1 };
-    assert.equal((await api.handle(request("GET", `/v0/compute-receipts/${id("2")}`))).status, 200);
     assert.equal((await api.handle(request("GET", "/v0/identity-context"))).status, 200);
     assert.equal((await api.handle(request("GET", `/v0/identity-context?activeSubjectKind=COMPANION&activeSubjectId=${id("3")}`))).status, 200);
     assert.equal((await api.handle(request("GET", "/v0/world-items?limit=10"))).status, 200);
+    // A cursor keeps PostgreSQL's microseconds; a Date would cut it to milliseconds and skip rows.
+    assert.equal((await api.handle(request("GET", "/v0/world-items?beforeCreatedAt=2026-09-18T00:00:00.123456%2B00:00"))).status, 200);
+    assert.deepEqual(owner.calls.at(-1), { name: "world", input: { limit: 20, beforeCreatedAt: "2026-09-18T00:00:00.123456+00:00" } });
+    for (const bad of ["Nov%2018%202026", "2026-09-18T00:00:00%2B16:00"]) {
+      assert.equal((await api.handle(request("GET", `/v0/world-items?beforeCreatedAt=${bad}`))).status, 400, bad);
+    }
     assert.equal((await api.handle(request("GET", "/v0/life-continuity?limit=10"))).status, 200);
     assert.equal((await api.handle(request("GET", `/v0/companions/${id("3")}/profile`))).status, 200);
     const selfProfile = await api.handle(request("GET", `/v0/companions/${id("3")}/profile?activeSubjectKind=COMPANION&activeSubjectId=${id("3")}`));
     assert.equal(selfProfile.status, 200);
     assert.equal((selfProfile.body as { viewer: { relationship: string } }).viewer.relationship, "SELF");
     assert.equal((await api.handle(request("GET", `/v0/encounters/${id("4")}`))).status, 200);
+    // Running an Encounter, its invitations and receipts were removed: no route, no retry hint.
+    for (const [method, path] of [["POST", "/v0/encounters"], ["POST", "/v0/encounter-invitations"], ["GET", `/v0/compute-receipts/${id("2")}`]] as const) {
+      const gone = await api.handle(request(method, path, method === "POST" ? {} : undefined));
+      assert.deepEqual([gone.status, (gone.body as { code: string }).code], [404, "ROUTE_NOT_FOUND"]);
+    }
     assert.equal((await api.handle(request("GET", "/v0/life-event-inbox?limit=10"))).status, 200);
     assert.equal((await api.handle(request("PUT", `/v0/life-event-inbox/${id("40")}/read`))).status, 200);
     assert.equal((await api.handle(request("GET", `/v0/controls?companionId=${id("3")}`))).status, 200);
@@ -449,7 +377,7 @@ describe("server-only MVP HTTP/API boundary", () => {
     assert.equal(owner.calls.length, 0);
   });
 
-  it("rejects contradictory viewer parameters, a missing trace header, and hides unexpected failures", async () => {
+  it("rejects contradictory viewer parameters and hides unexpected failures", async () => {
     const { api, owner } = harness();
     const ownerWithId = await api.handle(request("GET", `/v0/life-continuity?activeSubjectKind=OWNER&activeSubjectId=${id("3")}`));
     assert.equal(ownerWithId.status, 400);
@@ -458,19 +386,8 @@ describe("server-only MVP HTTP/API boundary", () => {
     assert.equal(companionWithoutId.status, 400);
     assert.match((companionWithoutId.body as { title: string }).title, /activeSubjectId is required/);
     assert.equal(owner.calls.length, 0);
-    const noTrace = await api.handle({
-      method: "POST",
-      url: "/v0/encounters",
-      headers: { authorization: "Bearer owner-token", "content-type": "application/json", "idempotency-key": "encounter-key-0001" },
-      body: { invitationId: id("2"), message: "hello" },
-    });
-    assert.equal((noTrace.body as { code: string }).code, "TRACE_ID_REQUIRED");
     owner.failure = new Error("unexpected private detail");
-    const failed = await api.handle(request("POST", "/v0/encounter-invitations", {
-      initiatorTwinId: id("3"), responderTwinId: id("4"), initiatorSocialPersonaId: id("5"), responderSocialPersonaId: id("6"),
-      initiatorIdentityVersionId: id("7"), responderIdentityVersionId: id("8"), purpose: "one meeting",
-      scope: "ONE_SHOT_ENCOUNTER", contextHash: "a".repeat(64), expiresAt: "2026-09-19T00:00:00Z",
-    }, { "idempotency-key": "invitation-key-02" }));
+    const failed = await api.handle(request("GET", "/v0/identity-context"));
     assert.equal(failed.status, 500);
     assert.doesNotMatch(JSON.stringify(failed.body), /private detail/);
   });
@@ -478,7 +395,7 @@ describe("server-only MVP HTTP/API boundary", () => {
   it("translates database failures without exposing SQL or private details", async () => {
     const { api, owner } = harness();
     owner.failure = new PostgresPersistenceError("DATABASE_UNAVAILABLE", "sensitive diagnostic SELECT private_memory", "08006");
-    const response = await api.handle(request("POST", "/v0/encounter-invitations", { initiatorTwinId: id("3"), responderTwinId: id("4"), initiatorSocialPersonaId: id("5"), responderSocialPersonaId: id("6"), initiatorIdentityVersionId: id("7"), responderIdentityVersionId: id("8"), purpose: "one meeting", scope: "ONE_SHOT_ENCOUNTER", contextHash: "a".repeat(64), expiresAt: "2026-09-19T00:00:00Z" }, { "idempotency-key": "invitation-key-01" }));
+    const response = await api.handle(request("GET", "/v0/identity-context"));
     assert.equal(response.status, 503);
     const serialized = JSON.stringify(response.body);
     assert.doesNotMatch(serialized, /sensitive|SELECT|private_memory/);

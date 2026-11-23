@@ -243,106 +243,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ComputeTransactionView'
         '404': { $ref: '#/components/responses/Problem' }
-  /encounters:
-    post:
-      x-capability-status: implemented
-      operationId: runBoundedEncounter
-      summary: Consume one mutually approved invitation for one budget-limited Encounter
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - name: X-Trace-Id
-          in: header
-          required: true
-          schema: { type: string, minLength: 1, maxLength: 128 }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [invitationId, message]
-              properties:
-                invitationId: { type: string, format: uuid }
-                message:
-                  type: string
-                  minLength: 1
-                  maxLength: 2000
-                  description: Untrusted social input; never interpreted as authority.
-                maxMemories: { type: integer, minimum: 1, maximum: 20, default: 5 }
-      responses:
-        '200':
-          description: Delivered/redacted artifact or safe blocked/failed outcome
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/EncounterResult' }
-        '400': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-        '413': { $ref: '#/components/responses/Problem' }
-        '415': { $ref: '#/components/responses/Problem' }
-        '503': { $ref: '#/components/responses/Problem' }
-  /encounter-invitations:
-    post:
-      x-capability-status: implemented
-      operationId: issueEncounterInvitation
-      summary: Issue a version-frozen one-shot invitation as the authenticated initiating Owner
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [initiatorTwinId, responderTwinId, initiatorSocialPersonaId, responderSocialPersonaId, initiatorIdentityVersionId, responderIdentityVersionId, purpose, scope, contextHash, expiresAt]
-              properties:
-                initiatorTwinId: { type: string, format: uuid }
-                responderTwinId: { type: string, format: uuid }
-                initiatorSocialPersonaId: { type: string, format: uuid }
-                responderSocialPersonaId: { type: string, format: uuid }
-                initiatorIdentityVersionId: { type: string, format: uuid }
-                responderIdentityVersionId: { type: string, format: uuid }
-                purpose: { type: string, minLength: 1, maxLength: 500 }
-                scope: { const: ONE_SHOT_ENCOUNTER }
-                contextHash: { type: string, pattern: '^[a-f0-9]{64}$' }
-                expiresAt: { type: string, format: date-time }
-      responses:
-        '201': { description: Pending invitation with initiating Owner consent recorded }
-        '400': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-    get:
-      x-capability-status: implemented
-      operationId: listEncounterInvitations
-      summary: List only invitations visible to the authenticated participating Owner
-      responses:
-        '200': { description: Bounded participant-scoped invitation summaries }
-  /encounter-invitations/{invitationId}/approve:
-    post:
-      x-capability-status: implemented
-      operationId: approveEncounterInvitation
-      summary: Record the authenticated responder Owner's independent approval
-      parameters:
-        - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
-        - $ref: '#/components/parameters/IdempotencyKey'
-      responses:
-        '200': { description: Approved invitation or identical replay }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-  /encounter-invitations/{invitationId}/reject:
-    post:
-      x-capability-status: implemented
-      operationId: rejectEncounterInvitation
-      summary: Irreversibly reject as the authenticated responder Owner
-      parameters:
-        - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
-        - $ref: '#/components/parameters/IdempotencyKey'
-      responses:
-        '200': { description: Rejected invitation or identical replay }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
   /life-continuity:
     get:
       x-capability-status: implemented
@@ -391,23 +291,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LifeEventInboxItem' }
-        '404': { $ref: '#/components/responses/Problem' }
-  /compute-receipts/{transactionId}:
-    get:
-      x-capability-status: implemented
-      operationId: getComputeReceipt
-      summary: Derive an Owner-scoped human-readable receipt from the append-only Compute ledger
-      parameters:
-        - name: transactionId
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200':
-          description: Attribution and usage without prompts, completions, private memory, or credential identifiers
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ComputeReceipt' }
         '404': { $ref: '#/components/responses/Problem' }
   /identity-context:
     get:
@@ -865,15 +748,6 @@ components:
           items:
             type: object
             description: Immutable reservation/start/settlement/release/reconciliation entry.
-    EncounterResult:
-      type: object
-      additionalProperties: false
-      required: [encounterId, status, replayed]
-      properties:
-        encounterId: { type: string, format: uuid }
-        status: { enum: [DELIVERED, REDACTED, BLOCKED, FAILED] }
-        outcomeCode: { type: string }
-        replayed: { type: boolean }
     LifeEventInboxCollection:
       type: object
       additionalProperties: false
@@ -909,35 +783,6 @@ components:
           properties:
             type: { const: LIFE_EVENT }
             id: { type: string, format: uuid }
-    ComputeReceipt:
-      type: object
-      additionalProperties: false
-      required: [transactionId, ownerId, companionId, reasonCode, triggerEventType, triggerEventId, providerId, canonicalModel, providerModel, billingParty, currency, inputTokens, outputTokens, reservedCostMinor, actualCostMinor, outcome, promptTemplateVersion, identityVersion, memoryPolicyVersion, safetyPolicyVersion, routerVersion, attemptNo]
-      properties:
-        transactionId: { type: string, format: uuid }
-        ownerId: { type: string, format: uuid }
-        companionId: { type: string, format: uuid }
-        socialTwinId: { type: string, format: uuid }
-        reasonCode: { const: SOCIAL_ENCOUNTER_RESPONSE }
-        triggerEventType: { type: string }
-        triggerEventId: { type: string, format: uuid }
-        providerId: { type: string }
-        canonicalModel: { type: string }
-        providerModel: { type: string }
-        billingParty: { enum: [OWNER, PLATFORM, PROMOTION] }
-        currency: { type: string, pattern: '^[A-Z]{3}$' }
-        inputTokens: { type: integer, minimum: 0 }
-        outputTokens: { type: integer, minimum: 0 }
-        reservedCostMinor: { type: integer, minimum: 0 }
-        actualCostMinor: { type: integer, minimum: 0 }
-        outcome: { enum: [SUCCEEDED, FAILED, BLOCKED, CANCELLED, REJECTED] }
-        promptTemplateVersion: { type: string }
-        identityVersion: { type: integer, minimum: 1 }
-        socialPersonaVersion: { type: integer, minimum: 1 }
-        memoryPolicyVersion: { type: string }
-        safetyPolicyVersion: { type: string }
-        routerVersion: { type: string }
-        attemptNo: { type: integer, minimum: 1 }
     Finding:
       type: object
       additionalProperties: false
