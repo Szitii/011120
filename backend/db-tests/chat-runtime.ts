@@ -356,6 +356,13 @@ try {
   const secondChat = (await call<Chat>(0, "chats", "POST", { companionIds: [second] })).data;
   assert.equal((await call<CompanionActionResult>(0, `companions/${second}/actions`, "POST", { action: "WAVE" })).data.chatId, secondChat.id);
   await settle(secondChat.id);
+  // Thirty quick taps: the Companion still sees the conversation, and only the last tap of the burst.
+  for (let i = 0; i < 30; i += 1) await call(0, `companions/${second}/actions`, "POST", { action: i === 29 ? "CUDDLE" : "HUG" });
+  await pool.query(`insert into companion_private.chat_messages(chat_id, companion_id, status, reply_to, optional)
+    values ($1, $2, 'PENDING', 'OWNER', true)`, [secondChat.id, second]);
+  const tapped = (await portA.claim(secondChat.id))!;
+  assert.deepEqual(tapped.history.map(h => h.action ?? h.body), ["WAVE", "（开发环境假回复）SecondCompanion知道你在小家里向你挥了挥手", "CUDDLE"]);
+  await portA.finish(tapped.replyId, tapped.claimId, "PASSED", null);
   passed("home-room actions: kept in the one-to-one chat, seen by the Companion, one reply per burst");
 
   const pageChat = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-0000000003")).data;

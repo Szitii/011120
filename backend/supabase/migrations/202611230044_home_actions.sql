@@ -5,7 +5,8 @@ begin;
 -- The app plays the animation at once; this only records it, so the Companion knows:
 --   * Each action is one Owner row in the one-to-one chat with that Companion (action set, no
 --     body). The chat page shows it as a grey line, and the Companion sees it among the last 30
---     messages it reads before every reply. That is all the "memory" there is for now.
+--     messages it reads before every reply. That is all the "memory" there is for now. Of several
+--     actions in a row (nothing said in between) the Companion sees only the last one.
 --   * The first action of a burst queues one optional turn: the Companion may answer with a line
 --     or stay quiet (the model decides). An action less than 3 minutes after the previous one,
 --     or while a reply is already on the way, queues nothing, so tapping again and again costs
@@ -64,7 +65,8 @@ begin
   return jsonb_build_object('chatId', c.id, 'message', companion_private.chat_message_json(m)) || companion_private.chat_progress(c);
 end $$;
 
--- Same as in 0041, plus each history entry carries its action.
+-- Same as in 0041, plus each history entry carries its action, and an action directly followed by
+-- another action is left out.
 create or replace function public.chat_claim(p_chat uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare c companion_private.chats%rowtype; m companion_private.chat_messages%rowtype; claim uuid := gen_random_uuid();
@@ -110,6 +112,10 @@ begin
     'history', coalesce((select jsonb_agg(jsonb_build_object('companionId', q.companion_id, 'body', q.body, 'action', q.action,
         'mentions', to_jsonb(q.mentions), 'sentAt', q.shown_at) order by q.shown_at, q.id)
       from (select * from companion_private.chat_messages h where h.chat_id = c.id and h.status = 'SENT'
+        -- Actions in a row read as the last of them, so taps cannot push the conversation out of the 30.
+        and (h.action is null or (select n.action from companion_private.chat_messages n
+          where n.chat_id = h.chat_id and n.status = 'SENT' and (n.shown_at, n.id) > (h.shown_at, h.id)
+          order by n.shown_at, n.id limit 1) is null)
         order by h.shown_at desc, h.id desc limit 30) q), '[]'));
 end $$;
 
