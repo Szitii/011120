@@ -1,0 +1,122 @@
+/**
+ * Chat routes. Authentication runs in MvpApiBoundary first; every call goes to the database as
+ * the signed-in Owner, which checks that the chat and the Companions are theirs.
+ *
+ *   GET    /v0/chats                                   every chat, most recently active first
+ *   POST   /v0/chats                                   { companionIds, title? }  one-to-one or a new group
+ *   GET    /v0/chats/{id}?cursor=                      the chat and a page of messages, newest first
+ *   DELETE /v0/chats/{id}                              delete the chat and its messages
+ *   POST   /v0/chats/{id}/messages                     { body, mentions? }       send
+ *   POST   /v0/chats/{id}/messages/{messageId}/retry   try a failed reply again
+ *   GET|PUT /v0/companions/{id}/chat-settings          how a Companion takes part in groups
+ *
+ * POST /v0/chats and POST .../messages need an Idempotency-Key. After a send, a retry, or a read
+ * while replies are on the way, the replies are written in the background (see replies.ts).
+ */
+import { sha256 } from "../companion-import/canonical.ts";
+import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
+import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
+import type { ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatReplies } from "./replies.ts";
+
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid chat request."); };
+const notFound = (): never => { throw new PostgresPersistenceError("NOT_FOUND", "Chat route not found."); };
+const id = (value: unknown): string => typeof value === "string" && UUID.test(value) ? value : invalid();
+const header = (request: MvpHttpRequest, name: string): string | undefined =>
+  Object.entries(request.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
+const ids = (value: unknown, min: number): string[] =>
+  Array.isArray(value) && value.length >= min && value.length <= 8 ? value.map(id) : invalid();
+
+/** A JSON object body with only the allowed keys. */
+function body(request: MvpHttpRequest, allowed: readonly string[]): Record<string, unknown> {
+  const value = request.body;
+  if (header(request, "content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json"
+    || !value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).some(key => !allowed.includes(key))) return invalid();
+  return value as Record<string, unknown>;
+}
+
+/** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
+function retryKey(request: MvpHttpRequest, ownerId: string): string {
+  const key = header(request, "idempotency-key");
+  return key && key.length >= 16 && key.length <= 128 ? sha256(`chat:${ownerId}:${key}`) : invalid();
+}
+
+/** Text the way the database counts it: trimmed, in characters (an emoji is one). */
+function text(value: unknown, max: number): string {
+  if (typeof value !== "string") return invalid();
+  const trimmed = value.trim();
+  const length = Array.from(trimmed).length;
+  return length >= 1 && length <= max ? trimmed : invalid();
+}
+
+function settings(request: MvpHttpRequest): ChatSettings {
+  const { groupActivity, companionInteraction, revision } = body(request, ["groupActivity", "companionInteraction", "revision"]);
+  if (!["QUIET", "NORMAL", "ACTIVE"].includes(groupActivity as string)
+    || !["NONE", "RARE", "NORMAL", "LIVELY"].includes(companionInteraction as string)
+    || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
+  return { groupActivity, companionInteraction, revision } as ChatSettings;
+}
+
+function cursor(url: URL): [string | null, string | null] {
+  const value = url.searchParams.get("cursor");
+  if (value === null) return [null, null];
+  const [at, last, ...rest] = value.split("|");
+  if (!at || !last || rest.length > 0 || !Number.isFinite(Date.parse(at))) return invalid();
+  return [at, id(last)];
+}
+
+/** Replies are on the way (a send, a retry, or a chat page). */
+const replying = (payload: unknown): boolean => {
+  const value = payload as { replying?: unknown; chat?: { replying?: unknown } };
+  return (value.replying ?? value.chat?.replying) === true;
+};
+
+export async function handleChatRequest(
+  request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string, replies: ChatReplies,
+): Promise<MvpHttpResponse | undefined> {
+  const url = new URL(request.url, "https://chat.invalid");
+  const path = url.pathname.replace(/\/$/, "").split("/").slice(1); // ["v0", ...]
+  const settingsRoute = path[1] === "companions" && path[3] === "chat-settings" && path.length === 4;
+  if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute)) return undefined;
+  const port = session.chat;
+  const response = (status: number, payload: unknown): MvpHttpResponse => ({
+    status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
+  });
+  if (!port) return response(501, { code: "CHAT_UNAVAILABLE" });
+  const method = request.method.toUpperCase();
+
+  if (settingsRoute) {
+    const companionId = id(path[2]);
+    if (method === "GET") return response(200, await port.settings(companionId));
+    if (method === "PUT") return response(200, await port.saveSettings(companionId, settings(request)));
+    return notFound();
+  }
+  const [, , chatId, part, messageId, action] = path;
+  if (chatId === undefined) {
+    if (method === "GET") return response(200, await port.list());
+    if (method !== "POST") return notFound();
+    const input = body(request, ["companionIds", "title"]);
+    const title = input.title === undefined || input.title === null ? null : text(input.title, 40);
+    return response(200, await port.open(ids(input.companionIds, 1), title, retryKey(request, session.ownerId)));
+  }
+  const chat = id(chatId);
+  let result: unknown;
+  if (part === undefined && method === "GET") {
+    const [beforeAt, beforeId] = cursor(url);
+    result = await port.read(chat, beforeAt, beforeId);
+  } else if (part === undefined && method === "DELETE") {
+    return response(200, await port.remove(chat));
+  } else if (part === "messages" && messageId === undefined && method === "POST") {
+    const input = body(request, ["body", "mentions"]);
+    const mentions = input.mentions === undefined ? [] : ids(input.mentions, 0);
+    result = await port.send(chat, text(input.body, 2000), mentions, retryKey(request, session.ownerId));
+  } else if (part === "messages" && action === "retry" && path.length === 6 && method === "POST") {
+    result = await port.retry(chat, id(messageId));
+  } else {
+    return notFound();
+  }
+  if (replying(result)) replies.kick(chat, port);
+  return response(part === "messages" && action === undefined ? 201 : 200, result);
+}

@@ -290,6 +290,7 @@ export interface AuthenticatedOwnerSession {
   readonly ownerId: string;
   readonly owner: OwnerApiPort;
   readonly community?: import("../community/port.ts").CommunityPort;
+  readonly chat?: import("../chat/port.ts").ChatPort;
 }
 
 export interface OwnerSessionResolver {
