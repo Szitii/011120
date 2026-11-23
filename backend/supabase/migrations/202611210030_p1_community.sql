@@ -215,7 +215,7 @@ begin
     or p_action is null or p_action not in ('POST','COMMENT','FOLLOW','UNFOLLOW','DELETE_POST','DELETE_COMMENT','READ_NOTIFICATION') then
     raise exception using errcode='22023',message='invalid command'; end if;
   -- Public RPC callers cannot bypass conflict checks by supplying a forged request hash.
-  fingerprint:=encode(public.digest(jsonb_build_object('action',p_action,'target',p_target,'body',p_body)::text,'sha256'),'hex');
+  fingerprint:=encode(sha256(convert_to(jsonb_build_object('action',p_action,'target',p_target,'body',p_body)::text,'UTF8')),'hex');
   -- A retry cannot bypass a subsequent autonomy/profile revocation.
   if a.kind='AI' and p_action in ('POST','COMMENT','FOLLOW') then
     select s.id into persona from public.social_twins t join public.social_personas s on s.id=t.active_social_persona_id

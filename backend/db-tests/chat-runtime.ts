@@ -368,7 +368,7 @@ try {
 
   const pageChat = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-0000000003")).data;
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
-    select $1, 'message ' || n, 'SENT', encode(public.digest('k' || n, 'sha256'), 'hex'), now() - (40 - n) * interval '1 second'
+    select $1, 'message ' || n, 'SENT', encode(sha256(convert_to('k' || n,'UTF8')), 'hex'), now() - (40 - n) * interval '1 second'
     from generate_series(1, 35) n`, [pageChat.id]);
   const firstPage = await call<ChatPage>(0, `chats/${pageChat.id}`);
   assert.equal(firstPage.data.items.length, 30);

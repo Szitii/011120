@@ -26,7 +26,7 @@ alter table public.encounter_invitations
 
 update public.encounter_invitations as invitation
 set status = 'APPROVED', scope = 'ONE_SHOT_ENCOUNTER',
-    context_hash = encode(digest('legacy-invitation:' || invitation.id::text, 'sha256'), 'hex'),
+    context_hash = encode(sha256(convert_to('legacy-invitation:' || invitation.id::text,'UTF8')), 'hex'),
     initiator_social_persona_id = initiator_twin.active_social_persona_id,
     initiator_social_persona_version = initiator_persona.version,
     initiator_identity_version_id = initiator_persona.source_identity_version_id,
@@ -105,7 +105,7 @@ begin
   select * into ip from public.social_personas where id=it.active_social_persona_id;
   select * into rp from public.social_personas where id=rt.active_social_persona_id;
   if ip.id is null or rp.id is null then raise exception using errcode='55000',message='direct invitation seed has invalid Social Twin binding'; end if;
-  new.status:='APPROVED';new.scope:='ONE_SHOT_ENCOUNTER';new.context_hash:=pg_catalog.encode(public.digest('controlled-seed:'||new.id::text,'sha256'),'hex');
+  new.status:='APPROVED';new.scope:='ONE_SHOT_ENCOUNTER';new.context_hash:=pg_catalog.encode(sha256(convert_to('controlled-seed:'||new.id::text,'UTF8')),'hex');
   new.initiator_social_persona_id:=ip.id;new.initiator_social_persona_version:=ip.version;new.initiator_identity_version_id:=ip.source_identity_version_id;new.initiator_identity_version:=ip.source_identity_version;
   new.responder_social_persona_id:=rp.id;new.responder_social_persona_version:=rp.version;new.responder_identity_version_id:=rp.source_identity_version_id;new.responder_identity_version:=rp.source_identity_version;new.approved_at:=coalesce(new.created_at,statement_timestamp());
   return new;

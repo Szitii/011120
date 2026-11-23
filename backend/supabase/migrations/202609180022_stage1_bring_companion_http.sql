@@ -2,7 +2,7 @@ begin;
 
 alter table companion_private.companion_imports add column request_hash text;
 update companion_private.companion_imports
-set request_hash=encode(public.digest('legacy-import:'||id::text||':'||original_sha256,'sha256'),'hex')
+set request_hash=encode(sha256(convert_to('legacy-import:'||id::text||':'||original_sha256,'UTF8')),'hex')
 where request_hash is null;
 alter table companion_private.companion_imports
   alter column request_hash set not null,
@@ -86,7 +86,7 @@ begin
     raise exception using errcode='22023',message='invalid sanitized Companion import';
   end if;
   if octet_length(convert_to(p_raw_payload,'UTF8'))<>p_byte_length
-    or encode(public.digest(convert_to(p_raw_payload,'UTF8'),'sha256'),'hex')<>p_original_sha256 then
+    or encode(sha256(convert_to(p_raw_payload,'UTF8')),'hex')<>p_original_sha256 then
     raise exception using errcode='22023',message='Companion import payload attribution mismatch';
   end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(actor.id::text||':'||p_idempotency_key_hash,0));
@@ -223,10 +223,10 @@ begin
     'parserVersion',import_row.parser_version,'policyVersion',import_row.policy_version,
     'approvedCandidateIds',(select jsonb_agg(x order by x) from unnest(p_approved_candidate_ids) x)
   );
-  content_hash:=encode(public.digest((jsonb_build_object(
+  content_hash:=encode(sha256(convert_to((jsonb_build_object(
     'companionId',new_companion_id,'version',next_version,'displayName',display_name,
     'identityDocument',identity_doc,'sourceManifest',source_manifest
-  ))::text,'sha256'),'hex');
+  ))::text,'UTF8')),'hex');
 
   insert into public.companion_identities(
     id,owner_id,companion_id,version,display_name,identity_document,source_manifest,content_hash,

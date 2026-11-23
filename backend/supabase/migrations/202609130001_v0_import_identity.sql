@@ -1,6 +1,5 @@
 begin;
 
-create extension if not exists pgcrypto;
 create schema if not exists companion_private;
 
 revoke all on schema companion_private from public, anon, authenticated;
