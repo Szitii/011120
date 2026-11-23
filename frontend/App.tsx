@@ -63,6 +63,7 @@ import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
 import { PearlInteractiveRoom } from "./src/components/PearlInteractiveRoom";
 import { BottomSheet } from "./src/components/BottomSheet";
 import { GlassChatBubble } from "./src/components/GlassChatBubble";
+import { DiaryScreen } from "./src/diary/DiaryScreen";
 import { ChatScreen } from "./src/chat/ChatScreen";
 import type { ChatClient } from "./src/chat/client";
 import { useHomeChat } from "./src/chat/useHomeChat";
@@ -171,6 +172,8 @@ function WorldApp({ client, account, isMockMode }: {
   const viewer = subject && { kind: subject.kind, id: subject.id };
   const agentViewer = isAgentViewer(viewer) ? viewer : undefined;
   const canUseChat = viewer?.kind === "OWNER" && !identitySwitchPending && !!client.api.chat;
+  const homeCompanion = ownerCompanions.kind === "success" ? ownerCompanions.value.items[0] : undefined;
+  const diaryClient = viewer?.kind === "OWNER" && !identitySwitchPending ? client.api.diary : undefined;
   const profileId = route.type === "profile" ? route.companionId
     : route.type === "root" && route.tab === "my" && viewer?.kind === "COMPANION" ? viewer.id
     : undefined;
@@ -383,7 +386,7 @@ function WorldApp({ client, account, isMockMode }: {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
-    if (target.kind !== "OWNER" && route.type === "chat") {
+    if (target.kind !== "OWNER" && (route.type === "chat" || route.type === "diary")) {
       setNav((current) => selectTab(current, current.rootTab));
     }
     setIdentitySwitchPending(true);
@@ -523,12 +526,19 @@ function WorldApp({ client, account, isMockMode }: {
         <PrivateHomeScreen
           key={`${currentKind}:${identityId}`}
           chatClient={canUseChat ? client.api.chat : undefined}
-          companionId={ownerCompanions.kind === "success" ? ownerCompanions.value.items[0]?.companionId : undefined}
+          companionId={homeCompanion?.companionId}
           isCompanion={isSampleCompanion}
           isMockMode={isMockMode}
           isActive={route.type === "root" && route.tab === "home"}
           userName={identityLabel(identityValue)}
-          companionName={ownerCompanions.kind === "success" ? (ownerCompanions.value.items[0]?.displayName ?? companionDisplayName) : companionDisplayName}
+          companionName={homeCompanion?.displayName ?? companionDisplayName}
+          onOpenDiary={diaryClient && homeCompanion ? () => setNav(current => {
+            const top = current.stack.at(-1);
+            if (top?.type !== "root" || top.tab !== "home") return current;
+            return pushRoute(current, {
+              type: "diary", companionId: homeCompanion.companionId, companionName: homeCompanion.displayName,
+            });
+          }) : undefined}
           onOpenChat={(chatId, compId, compName, autoFocus) =>
             setNav((current) =>
               pushRoute(current, {
@@ -556,6 +566,11 @@ function WorldApp({ client, account, isMockMode }: {
           backLabel={route.fromTab === "my" ? "返回" : "返回小家"}
           onBackToHome={goBack}
         />
+      )}
+
+      {route.type === "diary" && diaryClient && (
+        <DiaryScreen key={`${viewerKey}:${route.companionId}`} client={diaryClient}
+          companionId={route.companionId} companionName={route.companionName} />
       )}
 
       {route.type === "life-archive" && (
@@ -685,6 +700,7 @@ function WorldApp({ client, account, isMockMode }: {
           companionId={route.companionId}
           companionName={companionDisplayName}
           onVisibilitySaved={invalidateCompanionViews}
+          diaryClient={diaryClient}
         />
       )}
 
@@ -1161,6 +1177,7 @@ function PrivateHomeScreen({
   isMockMode,
   isActive,
   onOpenChat,
+  onOpenDiary,
 }: {
   chatClient?: ChatClient;
   companionId?: string;
@@ -1169,6 +1186,7 @@ function PrivateHomeScreen({
   isCompanion: boolean;
   isMockMode: boolean;
   isActive: boolean;
+  onOpenDiary?: () => void;
   onOpenChat: (chatId?: string, companionId?: string, companionName?: string, autoFocus?: boolean) => void;
 }) {
   const { chatId: activeChatId, messages: latestMessages, submit } = useHomeChat(chatClient, companionId, isActive);
@@ -1191,6 +1209,7 @@ function PrivateHomeScreen({
         companionName={companionName}
         isCompanionView={isCompanion}
         isActive={isActive}
+        onOpenDiary={onOpenDiary}
         onAction={action => submit.current?.(action)}
       />
 

@@ -2,6 +2,7 @@ export type RootTab = "world" | "home" | "my";
 export type Route =
   | { type: "root"; tab: RootTab }
   | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: "home" | "my" }
+  | { type: "diary"; companionId: string; companionName: string }
   | { type: "life-archive" }
   | { type: "edit-human-profile" }
   | { type: "agent-settings" }
