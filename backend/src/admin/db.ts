@@ -32,21 +32,21 @@ const KNOWN: readonly (readonly [RegExp, string])[] = [
   [/^owner not found$/, "没有找到这个主人。"],
   [/^owner is deleted$/, "这个主人账号已经删除。"],
   [/^chat not found$/, "没有找到这个会话,可能主人已经删除了。"],
+  [/^permission denied/, "这个数据库账号没有管理权限(需要属于 companion_admin)。"],
 ];
-const BY_CODE: Readonly<Record<string, string>> = {
-  "22023": "输入不对", "23514": "输入不对", "23502": "输入不对", "22P02": "输入不对",
-  "55000": "状态已经变了", "P0001": "没有找到",
-  "42501": "这个数据库账号没有管理权限(需要属于 companion_admin)",
-};
+// SQLSTATEs that mean "refused, nothing happened": what the console functions raise on purpose
+// (22023, 55000, P0001), values the database will not take (23514 check, 22007/22008 dates,
+// 22P02 ids) and missing privileges (42501). Anything else is a fault, not a refusal.
+const REFUSED = new Set(["22023", "55000", "P0001", "23514", "22007", "22008", "22P02", "42501"]);
 
 /** Turns a database error into words for the operator, or returns it unchanged when it is not a refusal. */
 export function explain(error: unknown): unknown {
   const { code, message } = error as { code?: unknown; message?: unknown };
-  if (typeof code !== "string" || typeof message !== "string" || !(code in BY_CODE)) return error;
+  if (typeof code !== "string" || typeof message !== "string" || !REFUSED.has(code)) return error;
   for (const [pattern, text] of KNOWN) {
     if (pattern.test(message)) return new AdminRefusal(message.replace(pattern, text));
   }
-  return new AdminRefusal(`${BY_CODE[code]}:${message}`);
+  return new AdminRefusal(`没有执行:${message}`);
 }
 
 export class PgAdminDb implements AdminDb {

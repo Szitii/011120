@@ -4,7 +4,7 @@
  *   ADMIN_DATABASE_URL=postgresql://<your operator login>:<password>@<host>/<database> npm run admin
  *
  * The login must be a member of companion_admin (see docs/manual/ADMIN_CONSOLE.md). The console
- * listens on 127.0.0.1 only and prints a link that carries a one-time token; a new one every start.
+ * listens on 127.0.0.1 only and prints a link that carries the access token; a new one every start.
  */
 import { randomBytes } from "node:crypto";
 import pg from "pg";
@@ -15,7 +15,7 @@ import { ChatCatalog } from "../src/chat/models.ts";
 const connectionString = process.env.ADMIN_DATABASE_URL;
 if (!connectionString) throw new Error("Set ADMIN_DATABASE_URL to the database, as your own operator login (a member of companion_admin).");
 const port = Number(process.env.ADMIN_PORT ?? 8790);
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("ADMIN_PORT must be a port number.");
+if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("ADMIN_PORT must be a port from 1024 to 65535.");
 
 const pool = new pg.Pool({ connectionString, max: 2, application_name: "companion-social-admin" });
 const { who } = (await pool.query<{ who: string }>("select session_user as who")).rows[0]!;

@@ -86,7 +86,7 @@ async function start(returns: Returned = {}, failure?: unknown) {
     const req = httpRequest({ host: "127.0.0.1", port, path, method: sent.method ?? (body === undefined ? "GET" : "POST"), headers: {
       Host: sent.host ?? `127.0.0.1:${port}`,
       ...(sent.cookie === null ? {} : { Cookie: sent.cookie ?? `other=1; admin_console=${TOKEN}` }),
-      ...(sent.origin === undefined ? {} : { Origin: sent.origin }),
+      ...(body === undefined && sent.origin === undefined || sent.origin === "" ? {} : { Origin: sent.origin ?? `http://127.0.0.1:${port}` }),
       ...(body === undefined ? {} : { "Content-Type": sent.type ?? "application/x-www-form-urlencoded" }),
     } }, response => {
       const chunks: Buffer[] = [];
@@ -101,7 +101,7 @@ async function start(returns: Returned = {}, failure?: unknown) {
 const change = (fields: Record<string, string> = {}) => ({ reason: " because ", confirm: "yes", ...fields });
 
 it("lets in only this machine, the start-up token and the console's own forms", async () => {
-  const { send, calls, port } = await start();
+  const { send, calls, errors, port } = await start();
   assert.throws(() => createAdminServer({ db: fakeDb().db, token: "short", catalog }));
   for (const host of ["evil.example", `evil.example:${port}`, `127.0.0.1:${port + 1}`]) {
     assert.deepEqual([(await send("/reports", { host })).status, (await send("/reports", { host })).body], [403, "Forbidden"]);
@@ -121,21 +121,26 @@ it("lets in only this machine, the start-up token and the console's own forms", 
   const opened = await send("/reports", { host: `localhost:${port}` });
   assert.equal(opened.status, 200);
   assert.match(String(opened.headers["content-security-policy"]), /default-src 'none'/);
-  assert.deepEqual([opened.headers["cache-control"], opened.headers["referrer-policy"], opened.headers["x-content-type-options"]], ["no-store", "no-referrer", "nosniff"]);
+  // Not no-referrer: a browser posts forms from a no-referrer page with "Origin: null", which the console refuses.
+  assert.deepEqual([opened.headers["cache-control"], opened.headers["referrer-policy"], opened.headers["x-content-type-options"]], ["no-store", "same-origin", "nosniff"]);
   assert.deepEqual([(await send("/")).status, (await send("/")).headers.location], [303, "/reports"]);
   assert.equal((await send("/nowhere")).status, 404);
   assert.equal((await send("/owners/not-an-id")).status, 404);
   assert.equal((await send("/reports", { method: "PUT" })).status, 405);
+  assert.deepEqual([(await send("//[", { cookie: null })).status, (await send("//[")).status, errors], [400, 400, []], "an address that is not one is refused quietly");
 
   const before = calls.length;
-  for (const origin of ["https://evil.example", `http://127.0.0.1:${port + 1}`, "null"]) {
+  for (const origin of ["https://evil.example", `http://127.0.0.1:${port + 1}`, "null", ""]) {
     assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change(), origin })).status, 403);
   }
   assert.equal(calls.length, before, "a form from another page changes nothing");
   assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change(), origin: `http://localhost:${port}` })).status, 303);
   assert.equal((await send("/elsewhere", { form: change() })).status, 404);
   assert.equal((await send(`/owners/${OWNER}/suspend`, { body: "{}", type: "application/json" })).status, 409);
-  assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change({ reason: "x".repeat(20_000) }) })).status, 409);
+  for (const length of [20_000, 300_000]) {
+    const tooLong = await send(`/owners/${OWNER}/suspend`, { form: change({ reason: "x".repeat(length) }) });
+    assert.deepEqual([tooLong.status, /提交的内容太长/.test(tooLong.body)], [409, true], "a body that is too long is refused, not left hanging");
+  }
 });
 
 it("shows the report queue with everything escaped, and closes a report only with a reason and a tick", async () => {
@@ -169,7 +174,7 @@ it("shows the report queue with everything escaped, and closes a report only wit
   calls.length = 0;
   const closed = await send(`/reports/${REPORT}/resolve`, { form: change({ resolution: "REMOVED", back: "/reports?status=SUBMITTED" }) });
   assert.deepEqual([closed.status, closed.headers.location], [303, "/reports?status=SUBMITTED&ok=1"]);
-  assert.deepEqual(calls, [["report_resolve", REPORT, "REMOVED", " because "]]);
+  assert.deepEqual(calls, [["report_resolve", REPORT, "REMOVED", "because"]]);
   calls.length = 0;
   for (const form of [change({ resolution: "REMOVED", confirm: "" }), { resolution: "REMOVED", confirm: "yes", reason: "  " }, { resolution: "REMOVED", confirm: "yes" },
     change({ resolution: "BANISHED" }), change()]) {
@@ -202,7 +207,8 @@ it("tells the operator why the database refused, and hides what went wrong other
   const said = (code: string, message: string) => (explain({ code, message }) as Error).message;
   assert.equal(said("55000", "report already reviewed by admin_bob"), "这条举报已经被 admin_bob 处理过了,这次没有执行。");
   assert.equal(said("22023", "a reason of 1 to 500 characters is required"), "请填写原因(1 到 500 个字)。");
-  assert.equal(said("23514", "new row violates check constraint"), "输入不对:new row violates check constraint");
+  assert.equal(said("23514", "new row violates check constraint"), "没有执行:new row violates check constraint");
+  assert.equal(said("22007", "invalid input syntax for type timestamp with time zone"), "没有执行:invalid input syntax for type timestamp with time zone");
   assert.match(said("42501", "permission denied for schema companion_admin"), /没有管理权限/);
   const other = new Error("boom");
   assert.equal(explain(other), other);
@@ -245,6 +251,8 @@ it("lists and searches Owners, and opens one with what can be done about them", 
   assert.deepEqual(actions, [`/owners/${OWNER}/suspend`, `/twins/${TWIN}/suspend`, `/twins/${id(21)}/restore`,
     `/content/post/${POST}/remove`, `/content/post/${id(41)}/restore`, `/content/comment/${COMMENT}/remove`]);
   assert.match(detail.body, /作者已删除/);
+  assert.match(detail.body, /本人发的[\s\S]*主人代发/);
+  assert.match(detail.body, /<b>Mochi<\/b> <span class="muted">正常<\/span>[\s\S]*<span class="muted">草稿<\/span>/);
   assert.match(detail.body, /社区身份:还没有/);
   assert.match(detail.body, new RegExp(`<a href="/chats/${CHAT}">一对一</a>`));
   assert.match(detail.body, /<a href="\/chats\/[0-9a-f-]+">群聊<\/a>/);
@@ -269,10 +277,10 @@ it("lists and searches Owners, and opens one with what can be done about them", 
     const answer = await send(path, { form: change({ back }) });
     assert.deepEqual([answer.status, answer.headers.location], [303, `${back}?ok=1`], path);
   }
-  assert.deepEqual(calls, [["owner_suspend", OWNER, true, " because "], ["owner_suspend", OWNER, false, " because "],
-    ["twin_suspend", TWIN, true, " because "], ["twin_suspend", TWIN, false, " because "],
-    ["content_remove", "POST", POST, " because "], ["content_restore", "POST", POST, " because "],
-    ["content_remove", "COMMENT", COMMENT, " because "], ["content_restore", "COMMENT", COMMENT, " because "]]);
+  assert.deepEqual(calls, [["owner_suspend", OWNER, true, "because"], ["owner_suspend", OWNER, false, "because"],
+    ["twin_suspend", TWIN, true, "because"], ["twin_suspend", TWIN, false, "because"],
+    ["content_remove", "POST", POST, "because"], ["content_restore", "POST", POST, "because"],
+    ["content_remove", "COMMENT", COMMENT, "because"], ["content_restore", "COMMENT", COMMENT, "because"]]);
   assert.equal((await send(`/content/actor/${POST}/remove`, { form: change() })).status, 404);
 });
 
@@ -282,8 +290,9 @@ it("shows a private chat only after a reason is given", async () => {
   assert.equal(gate.status, 200);
   assert.match(gate.body, /查看私聊内容需要填写原因/);
   assert.deepEqual(calls, [], "opening the page reads nothing");
-  for (const form of [{ reason: "" }, { reason: "   " }, {}]) {
-    const refused = await send(`/chats/${CHAT}`, { form });
+  assert.match(gate.body, new RegExp(`name="back" value="/chats/${CHAT}"`));
+  for (const reason of ["", "   "]) {
+    const refused = await send(`/chats/${CHAT}`, { form: { reason, back: `/chats/${CHAT}` } });
     assert.equal(refused.status, 409);
     assert.match(refused.body, new RegExp(`<a href="/chats/${CHAT}">返回</a>`));
   }
@@ -298,7 +307,8 @@ it("shows a private chat only after a reason is given", async () => {
   assert.match(shown.body, /\(正在回复\)/);
   assert.match(shown.body, /\(回复失败\) QUOTA/);
   assert.match(shown.body, /本次查看已记入日志,原因:Checking a report/);
-  assert.match(shown.body, new RegExp(`name="reason" value="Checking a report"><input type="hidden" name="at" value="${AT.replace("+", "\\+")}">\\s*<input type="hidden" name="id" value="${id(81)}">`));
+  assert.match(shown.body, new RegExp(`name="back" value="/chats/${CHAT}"><input type="hidden" name="reason" value="Checking a report">\\s*` +
+    `<input type="hidden" name="at" value="${AT.replace("+", "\\+")}">\\s*<input type="hidden" name="id" value="${id(81)}">`));
 
   calls.length = 0;
   const last = await start({ chat_read: { chat: { ...fixtures.chat_read.chat, title: "Family", direct: false }, items: [], next: null } });
@@ -335,6 +345,11 @@ it("shows model switches, the quota and what was spent, and changes only what th
   const noSwitches = await start({ models: { ...fixtures.models, switches: [] } });
   assert.ok(!(await noSwitches.send("/models?from=yesterday&to=2026-11-10")).body.includes("最近一次的原因"));
   assert.deepEqual(noSwitches.calls[1], ["spend", "2026-11-04", "2026-11-10"], "a date that is not a date falls back");
+  for (const range of ["from=2026-02-31&to=2026-13-01", "from=2026-02-30&to=0000-00-00", "to=2026-11-23T10:00"]) {
+    const impossible = await start();
+    assert.equal((await impossible.send(`/models?${range}`)).status, 200, range);
+    assert.deepEqual(impossible.calls[1], ["spend", "2026-11-17", "2026-11-23"], "a day that does not exist falls back too");
+  }
 
   calls.length = 0;
   const back = "/models?from=2026-11-17&to=2026-11-23";
@@ -342,8 +357,8 @@ it("shows model switches, the quota and what was spent, and changes only what th
   assert.deepEqual([switched.status, switched.headers.location], [303, `${back}&ok=1`]);
   await send("/models/switch", { form: change({ target: "ALL:*", enabled: "on" }) });
   await send("/models/switch", { form: change({ target: "PROVIDER:other", enabled: "off" }) });
-  assert.deepEqual(calls, [["model_switch_set", "MODEL", "claude/claude-big", false, " because "], ["model_switch_set", "ALL", "*", true, " because "],
-    ["model_switch_set", "PROVIDER", "other", false, " because "]]);
+  assert.deepEqual(calls, [["model_switch_set", "MODEL", "claude/claude-big", false, "because"], ["model_switch_set", "ALL", "*", true, "because"],
+    ["model_switch_set", "PROVIDER", "other", false, "because"]]);
   calls.length = 0;
   for (const form of [change({ target: "MODEL:claude/unknown", enabled: "off" }), change({ target: "PROVIDER:nobody", enabled: "off" }),
     change({ target: "ALL:*" }), change({ target: "ALL:*", enabled: "maybe" }), change({ enabled: "off" })]) {
@@ -354,7 +369,7 @@ it("shows model switches, the quota and what was spent, and changes only what th
   }
   assert.deepEqual(calls, []);
   assert.equal((await send("/models/quota", { form: change({ calls: "150", cents: "80" }) })).status, 303);
-  assert.deepEqual(calls, [["chat_quota_set", 150, 80, " because "]]);
+  assert.deepEqual(calls, [["chat_quota_set", 150, 80, "because"]]);
 });
 
 it("pages through the log, for everyone or one Owner", async () => {
@@ -362,7 +377,8 @@ it("pages through the log, for everyone or one Owner", async () => {
   const all = await send("/log");
   assert.deepEqual(calls, [["log", null, null]]);
   assert.match(all.body, /<td>admin_alice<\/td><td>移除帖子<\/td>/);
-  assert.match(all.body, /<td>admin_bob<\/td><td>模型开关<\/td>\s*<td>ALL \*<\/td>/);
+  assert.match(all.body, /<td>admin_bob<\/td><td>模型开关<\/td>\s*<td>全部模型 \*<\/td>/);
+  assert.match(all.body, new RegExp(`<a href="/owners/${OWNER}">帖子</a>`));
   assert.match(all.body, /<a href="\/log\?before=8">更早的记录<\/a>/);
   assert.ok(!all.body.includes("<script>alert"));
   calls.length = 0;

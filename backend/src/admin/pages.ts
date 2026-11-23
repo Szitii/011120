@@ -59,7 +59,7 @@ export interface CatalogEntry { readonly name: string; readonly provider: string
 // ---------- escaping ----------
 
 /** HTML that is safe to send: built only by `html`. */
-export class Safe {
+class Safe {
   readonly text: string;
   constructor(text: string) { this.text = text; }
 }
@@ -70,7 +70,7 @@ const piece = (value: unknown): string =>
     : value === null || value === undefined || value === false ? ""
     : String(value).replace(/[&<>"']/g, c => ESCAPES[c]!);
 /** A template whose inserted values are escaped, except other `html` results and lists of them. */
-export function html(strings: TemplateStringsArray, ...values: unknown[]): Safe {
+function html(strings: TemplateStringsArray, ...values: unknown[]): Safe {
   return new Safe(strings.reduce((out, s, i) => out + s + (i < values.length ? piece(values[i]) : ""), ""));
 }
 
@@ -82,7 +82,15 @@ export const RESOLUTIONS: Readonly<Record<string, string>> = {
 };
 const OWNER_STATUS: Readonly<Record<string, string>> = { ACTIVE: "正常", SUSPENDED: "已封禁", DELETED: "已删除" };
 const TWIN_STATUS: Readonly<Record<string, string>> = { ACTIVE: "正常", LIMITED: "受限", SUSPENDED: "已停用" };
-const TARGETS: Readonly<Record<string, string>> = { ACTOR: "账号", POST: "帖子", COMMENT: "评论" };
+const COMPANION_STATUS: Readonly<Record<string, string>> = { DRAFT: "草稿", ACTIVE: "正常", PAUSED: "已暂停", QUARANTINED: "已隔离", DELETED: "已删除" };
+const SOURCES: Readonly<Record<string, string>> = {
+  HUMAN_MANUAL: "本人发的", OWNER_PROXY: "主人代发", PLATFORM_MODEL: "平台模型写的", EXTERNAL_AGENT: "外部家机写的",
+};
+/** What a report or a log row is about. */
+const TARGETS: Readonly<Record<string, string>> = {
+  ACTOR: "账号", POST: "帖子", COMMENT: "评论", OWNER: "主人", SOCIAL_TWIN: "家机", REPORT: "举报", CHAT: "会话",
+  CHAT_QUOTA: "每日额度", ALL: "全部模型", PROVIDER: "厂商", MODEL: "模型",
+};
 const ACTIONS: Readonly<Record<string, string>> = {
   REMOVE_POST: "移除帖子", REMOVE_COMMENT: "移除评论", RESTORE_POST: "恢复帖子", RESTORE_COMMENT: "恢复评论",
   SUSPEND_TWIN: "停用家机", RESTORE_TWIN: "恢复家机", SUSPEND_OWNER: "封禁主人", RESTORE_OWNER: "解封主人",
@@ -93,9 +101,9 @@ const MESSAGE_STATUS: Readonly<Record<string, string>> = {
 };
 const word = (table: Readonly<Record<string, string>>, key: string | null) => key === null ? "" : table[key] ?? key;
 
-export interface View { readonly timeZone: string }
-const time = (view: View, value: string | null) => value === null ? "" :
-  new Date(value).toLocaleString("zh-CN", { timeZone: view.timeZone, hour12: false });
+/** A moment as the operator reads it, in the IANA time zone `zone`. */
+const time = (zone: string, value: string | null) => value === null ? "" :
+  new Date(value).toLocaleString("zh-CN", { timeZone: zone, hour12: false });
 const money = (minor: number, currency: string) => `${(minor / 100).toFixed(2)} ${currency}`;
 const name = (value: string | null) => value ?? "(未命名)";
 
@@ -116,7 +124,7 @@ input[name=reason]{flex:1;min-width:200px}button{cursor:pointer}.muted{color:#66
 
 const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户"], ["/models", "模型与费用"], ["/log", "操作日志"]];
 
-export function page(title: string, at: string, body: Safe, done = false): string {
+function page(title: string, at: string, body: Safe, done = false): string {
   return html`<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · 管理后台</title><style>${new Safe(STYLE)}</style></head><body>
 <nav>${NAV.map(([path, label]) => html`<a href="${path}" class="${at === path ? "on" : ""}">${label}</a>`)}</nav>
@@ -137,21 +145,22 @@ const ownerLink = (id: string, label: string | null) => html`<a href="/owners/${
 const status = (table: Readonly<Record<string, string>>, value: string | null) =>
   html`<span class="tag ${value === "ACTIVE" ? "" : "bad"}">${word(table, value)}</span>`;
 
-function logTable(view: View, log: LogPage): Safe {
+function logTable(zone: string, log: LogPage): Safe {
   if (log.items.length === 0) return html`<p class="muted">没有记录。</p>`;
   return html`<table><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>原因</th><th>详情</th></tr>${log.items.map(l => html`
-<tr><td>${time(view, l.createdAt)}</td><td>${l.operator}</td><td>${word(ACTIONS, l.action)}</td>
-<td>${l.ownerId === null ? html`${l.targetType} ${l.targetId}` : html`<a href="/owners/${l.ownerId}">${l.targetType}</a> <span class="muted">${l.targetId}</span>`}</td>
+<tr><td>${time(zone, l.createdAt)}</td><td>${l.operator}</td><td>${word(ACTIONS, l.action)}</td>
+<td>${l.ownerId === null ? html`${word(TARGETS, l.targetType)} ${l.targetId}`
+    : html`<a href="/owners/${l.ownerId}">${word(TARGETS, l.targetType)}</a> <span class="muted">${l.targetId}</span>`}</td>
 <td>${l.reason}</td><td>${Object.keys(l.detail).length === 0 ? "" : html`<details><summary>查看</summary><pre>${JSON.stringify(l.detail, null, 1)}</pre></details>`}</td></tr>`)}</table>`;
 }
 
 // ---------- pages ----------
 
-function reportCard(view: View, r: Report, back: string): Safe {
+function reportCard(zone: string, r: Report, back: string): Safe {
   const options = ["NONE", ...(r.targetType === "ACTOR" ? [] : ["REMOVED"]), ...(r.target.kind === "AI" ? ["TWIN_SUSPENDED"] : []), "OWNER_SUSPENDED"];
   const who = (a: Actor) => html`${ownerLink(a.ownerId, a.displayName)} <span class="muted">${a.kind === "AI" ? "家机" : "真人"}</span>`;
   return html`<div class="card">
-<div><b>${word(REASONS, r.reason)}</b> · 举报的是${word(TARGETS, r.targetType)} · ${time(view, r.createdAt)}
+<div><b>${word(REASONS, r.reason)}</b> · 举报的是${word(TARGETS, r.targetType)} · ${time(zone, r.createdAt)}
 ${r.others > 0 ? html` · <span class="tag bad">同一对象还有 ${r.others} 条待处理举报,会一起结案</span>` : ""}</div>
 <div>举报人:${who(r.reporter)} 被举报:${who(r.target)}
  主人${status(OWNER_STATUS, r.target.ownerStatus)}${r.target.twinStatus === null ? "" : html` 家机${status(TWIN_STATUS, r.target.twinStatus)}`}</div>
@@ -161,79 +170,81 @@ ${r.details === "" ? "" : html`<div>举报说明:${r.details}</div>`}
 ${r.status === "SUBMITTED"
     ? act(`/reports/${r.id}/resolve`, "结案", back, html`<select name="resolution" required><option value="">怎么处理…</option>${
       options.map(o => html`<option value="${o}">${word(RESOLUTIONS, o)}</option>`)}</select>`)
-    : html`<div>处理结果:<b>${word(RESOLUTIONS, r.resolution)}</b> · ${r.reviewedBy} · ${time(view, r.reviewedAt)}<br>原因:${r.note}</div>`}
+    : html`<div>处理结果:<b>${word(RESOLUTIONS, r.resolution)}</b> · ${r.reviewedBy} · ${time(zone, r.reviewedAt)}<br>原因:${r.note}</div>`}
 </div>`;
 }
 
-export function reportsPage(view: View, queue: ReportQueue, state: "SUBMITTED" | "REVIEWED", done: boolean): string {
+export function reportsPage(zone: string, queue: ReportQueue, state: "SUBMITTED" | "REVIEWED", done: boolean): string {
   const back = `/reports?status=${state}`;
   return page("举报", "/reports", html`<p><a href="/reports?status=SUBMITTED">待处理(${queue.pending})</a> ·
 <a href="/reports?status=REVIEWED">已处理</a></p>
 ${queue.items.length === 0 ? html`<p class="muted">${state === "SUBMITTED" ? "没有待处理的举报。" : "还没有处理过的举报。"}</p>` : ""}
-${queue.items.map(r => reportCard(view, r, back))}
+${queue.items.map(r => reportCard(zone, r, back))}
 ${queue.items.length === 100 ? html`<p class="muted">只显示前 100 条。</p>` : ""}`, done);
 }
 
-export function ownersPage(view: View, list: OwnerList, search: string): string {
+export function ownersPage(zone: string, list: OwnerList, search: string): string {
   return page("用户", "/owners", html`<form method="get" action="/owners" class="act">
 <input name="q" value="${search}" placeholder="邮箱或名字的一部分,或完整的主人编号"><button>搜索</button></form>
 ${list.more ? html`<p class="muted">结果超过 100 个,只显示最新的 100 个。请用搜索缩小范围。</p>` : ""}
 <table><tr><th>邮箱</th><th>名字</th><th>状态</th><th>家机</th><th>帖子</th><th>注册时间</th></tr>${list.items.map(o => html`
 <tr><td><a href="/owners/${o.id}">${o.email ?? "(没有邮箱)"}</a></td><td>${name(o.displayName)}</td><td>${status(OWNER_STATUS, o.status)}</td>
-<td>${o.companions}</td><td>${o.posts}</td><td>${time(view, o.createdAt)}</td></tr>`)}</table>
+<td>${o.companions}</td><td>${o.posts}</td><td>${time(zone, o.createdAt)}</td></tr>`)}</table>
 ${list.items.length === 0 ? html`<p class="muted">没有找到。</p>` : ""}`);
 }
 
-function contentRows(view: View, kind: "post" | "comment", items: Content[], back: string): Safe {
+function contentRows(zone: string, kind: "post" | "comment", items: Content[], back: string): Safe {
   if (items.length === 0) return html`<p class="muted">没有。</p>`;
   return html`${items.map(c => html`<div class="card"><div class="muted">${name(c.author.displayName)}(${c.author.kind === "AI" ? "家机" : "真人"})
- · ${time(view, c.createdAt)} · ${c.source}${c.removedByAdmin ? html` · <span class="tag bad">已被管理员移除</span>`
+ · ${time(zone, c.createdAt)} · ${word(SOURCES, c.source)}${c.removedByAdmin ? html` · <span class="tag bad">已被管理员移除</span>`
     : c.deletedAt === null ? "" : html` · <span class="tag">作者已删除</span>`}</div>
 <blockquote>${c.body}</blockquote>
 ${c.removedByAdmin ? act(`/content/${kind}/${c.id}/restore`, "恢复", back)
     : c.deletedAt === null ? act(`/content/${kind}/${c.id}/remove`, "移除", back) : ""}</div>`)}`;
 }
 
-export function ownerPage(view: View, detail: OwnerDetail, chats: ChatList, log: LogPage, done: boolean): string {
+export function ownerPage(zone: string, detail: OwnerDetail, chats: ChatList, log: LogPage, done: boolean): string {
   const o = detail.owner, back = `/owners/${o.id}`, suspended = o.status === "SUSPENDED";
   return page(`用户:${o.email ?? name(o.displayName)}`, "/owners", html`
-<div class="card">名字:${name(o.displayName)} · 邮箱:${o.email ?? "(没有)"} · 注册:${time(view, o.createdAt)} · 状态:${status(OWNER_STATUS, o.status)}
+<div class="card">名字:${name(o.displayName)} · 邮箱:${o.email ?? "(没有)"} · 注册:${time(zone, o.createdAt)} · 状态:${status(OWNER_STATUS, o.status)}
 <div class="muted">主人编号:${o.id}</div>
 ${o.status === "DELETED" ? "" : act(`/owners/${o.id}/${suspended ? "restore" : "suspend"}`, suspended ? "解封" : "封禁", back)}
 <div class="muted">封禁后:这个人的所有请求立刻被拒绝,他和他的家机在社区里对别人不可见。</div></div>
 <h2>家机</h2>${detail.companions.length === 0 ? html`<p class="muted">没有家机。</p>` : detail.companions.map(c => html`<div class="card">
-<b>${name(c.displayName)}</b> <span class="muted">${c.status}</span> · 社区身份:${c.twinId === null ? "还没有" : status(TWIN_STATUS, c.twinStatus)}
+<b>${name(c.displayName)}</b> <span class="muted">${word(COMPANION_STATUS, c.status)}</span> · 社区身份:${c.twinId === null ? "还没有" : status(TWIN_STATUS, c.twinStatus)}
 ${c.twinId === null ? "" : act(`/twins/${c.twinId}/${c.twinStatus === "SUSPENDED" ? "restore" : "suspend"}`,
     c.twinStatus === "SUSPENDED" ? "恢复社区身份" : "停用社区身份", back)}</div>`)}
 <p class="muted">停用社区身份后:这个家机发不了帖,别人看不到它;和主人的私聊不受影响。</p>
-<h2>最近的帖子</h2>${contentRows(view, "post", detail.posts, back)}
-<h2>最近的评论</h2>${contentRows(view, "comment", detail.comments, back)}
+<h2>最近的帖子</h2>${contentRows(zone, "post", detail.posts, back)}
+<h2>最近的评论</h2>${contentRows(zone, "comment", detail.comments, back)}
 <h2>私聊会话</h2>${chats.items.length === 0 ? html`<p class="muted">没有会话。</p>` : html`
 <table><tr><th>会话</th><th>成员</th><th>消息数</th><th>最近活动</th></tr>${chats.items.map(c => html`
 <tr><td><a href="/chats/${c.id}">${c.title ?? (c.direct ? "一对一" : "群聊")}</a></td><td>${c.members.map(m => name(m.displayName)).join("、")}</td>
-<td>${c.messages}</td><td>${time(view, c.activeAt)}</td></tr>`)}</table>`}
+<td>${c.messages}</td><td>${time(zone, c.activeAt)}</td></tr>`)}</table>`}
 <p class="muted">打开会话要填写原因,每次查看都会记入日志。</p>
-<h2>关于这个用户的操作记录</h2>${logTable(view, log)}
+<h2>关于这个用户的操作记录</h2>${logTable(zone, log)}
 ${log.next === null ? "" : html`<p><a href="/log?owner=${o.id}&before=${log.next}">更早的记录</a></p>`}`, done);
 }
 
 export function chatGatePage(chatId: string): string {
   return page("查看私聊", "/owners", html`<p>查看私聊内容需要填写原因。每次查看都会记入日志:谁、看了哪个会话、为什么。</p>
-<form class="act" method="post" action="/chats/${chatId}"><input name="reason" required maxlength="500" placeholder="原因(必填,会记入日志)">
+<form class="act" method="post" action="/chats/${chatId}"><input type="hidden" name="back" value="/chats/${chatId}">
+<input name="reason" required maxlength="500" placeholder="原因(必填,会记入日志)">
 <button>查看</button></form>`);
 }
 
-export function chatPage(view: View, chat: ChatPage, reason: string): string {
+export function chatPage(zone: string, chat: ChatPage, reason: string): string {
   const names = new Map(chat.chat.members.map(m => [m.companionId, name(m.displayName)]));
   const speaker = (id: string | null) => id === null ? "主人" : names.get(id) ?? "(已离开的家机)";
   return page(`私聊:${chat.chat.title ?? (chat.chat.direct ? "一对一" : "群聊")}`, "/owners", html`
 <p><a href="/owners/${chat.chat.ownerId}">回到这个用户</a> · 成员:${chat.chat.members.map(m => name(m.displayName)).join("、")}</p>
 <p class="muted">本次查看已记入日志,原因:${reason}</p>
 ${chat.next === null ? html`<p class="muted">已经是最早的消息。</p>` : html`<form method="post" action="/chats/${chat.chat.id}">
-<input type="hidden" name="reason" value="${reason}"><input type="hidden" name="at" value="${chat.next.at}">
+<input type="hidden" name="back" value="/chats/${chat.chat.id}"><input type="hidden" name="reason" value="${reason}">
+<input type="hidden" name="at" value="${chat.next.at}">
 <input type="hidden" name="id" value="${chat.next.id}"><button>更早的消息</button></form>`}
 <div class="card">${chat.items.length === 0 ? html`<span class="muted">没有消息。</span>` : [...chat.items].reverse().map(m => html`
-<div class="msg"><b>${speaker(m.companionId)}</b><span class="muted">${time(view, m.createdAt)}</span>
+<div class="msg"><b>${speaker(m.companionId)}</b><span class="muted">${time(zone, m.createdAt)}</span>
 <pre>${m.body ?? html`<span class="muted">${word(MESSAGE_STATUS, m.status)}${m.failure === null ? "" : ` ${m.failure}`}</span>`}</pre></div>`)}</div>`);
 }
 
@@ -251,7 +262,7 @@ export function switchTargets(catalog: readonly CatalogEntry[]): { value: string
     ...catalog.map(m => ({ value: `MODEL:${m.provider}/${m.model}`, label: `模型 ${m.name}(${m.provider}/${m.model})` }))];
 }
 
-export function modelsPage(view: View, models: Models, spend: Spend, catalog: readonly CatalogEntry[], done: boolean): string {
+export function modelsPage(zone: string, models: Models, spend: Spend, catalog: readonly CatalogEntry[], done: boolean): string {
   const q = models.quota, back = `/models?from=${spend.from}&to=${spend.to}`;
   return page("模型与费用", "/models", html`
 <h2>模型开关</h2><table><tr><th>模型</th><th>厂商 / 模型名</th><th>现在</th></tr>${catalog.map(m => {
@@ -263,7 +274,7 @@ ${act("/models/switch", "执行", back, html`<select name="target" required><opt
 <select name="enabled" required><option value="">开还是关…</option><option value="off">关掉</option><option value="on">打开</option></select>`)}
 <p class="muted">关掉后立刻生效:回复显示“平台模型暂时关闭”,不扣额度。</p>
 ${models.switches.length === 0 ? "" : html`<table><tr><th>开关</th><th>状态</th><th>最近一次的原因</th><th>时间</th></tr>${models.switches.map(s => html`
-<tr><td>${s.scope} ${s.key}</td><td>${s.enabled ? "开" : "关"}</td><td>${s.note}</td><td>${time(view, s.updatedAt)}</td></tr>`)}</table>`}
+<tr><td>${word(TARGETS, s.scope)} ${s.key}</td><td>${s.enabled ? "开" : "关"}</td><td>${s.note}</td><td>${time(zone, s.updatedAt)}</td></tr>`)}</table>`}
 <h2>每个家机每天的免费额度</h2>
 <p>现在:每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
 ${act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
@@ -280,8 +291,8 @@ ${spend.byDay.map(d => html`<tr><td>${d.day}</td><td>${d.provider}/${d.model}</t
 <tr><td>${ownerLink(c.ownerId, c.displayName)}</td><td>${c.calls}</td><td>${money(c.costMinor, c.currency)}</td></tr>`)}</table>`}`, done);
 }
 
-export function logPage(view: View, log: LogPage, owner: string | null): string {
+export function logPage(zone: string, log: LogPage, owner: string | null): string {
   return page("操作日志", "/log", html`${owner === null ? "" : html`<p>只看主人 <a href="/owners/${owner}">${owner}</a> 相关的记录 · <a href="/log">看全部</a></p>`}
-${logTable(view, log)}
+${logTable(zone, log)}
 ${log.next === null ? "" : html`<p><a href="/log?before=${log.next}${owner === null ? "" : `&owner=${owner}`}">更早的记录</a></p>`}`);
 }

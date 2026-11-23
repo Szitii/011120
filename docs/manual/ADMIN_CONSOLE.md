@@ -20,9 +20,11 @@ create role admin_tianwei login password '一个长密码' in role companion_adm
 ADMIN_DATABASE_URL="postgresql://admin_tianwei:密码@数据库地址:5432/数据库名" npm run admin
 ```
 
-终端会打印一个链接,在**这台电脑**的浏览器里打开它。链接里带一次性口令,后台每次重新启动都会换。按 Ctrl+C 关闭。
+终端会打印一个链接,在**这台电脑**的浏览器里打开它。链接里带访问口令,后台每次重新启动都会换(同一次启动期间链接一直有效)。按 Ctrl+C 关闭。
 
-端口默认 8790,想换就加 `ADMIN_PORT=端口号`。
+端口默认 8790,想换就加 `ADMIN_PORT=端口号`(1024 到 65535)。
+
+模型开关页上能选的厂商和模型,来自**这台电脑**上的模型清单 `backend/config/chat-models.json`。如果线上服务器用的是另一份清单,启动后台时用 `CHAT_MODELS_FILE` 指向同一份,否则线上才有的模型在这里选不到。
 
 ## 五个页面
 
