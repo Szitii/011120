@@ -1,21 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { ApiProblemError } from "../adapters/real-api.ts";
 import { makeIdempotencyKey, type ChatClient } from "./client.ts";
+import { useAppIsActive } from "../state/useAppIsActive";
 
 const pollInterval = 1500;
 
 export function useHomeChat(client: ChatClient | undefined, companionId: string | undefined, isActive: boolean) {
-  const [appActive, setAppActive] = useState(AppState.currentState !== "background");
+  const appActive = useAppIsActive();
   const [preview, setPreview] = useState<{ chatId?: string; messages: ChatMessage[] }>({ messages: [] });
   const submit = useRef<((action: CompanionAction) => void) | undefined>(undefined);
-
-  useEffect(() => {
-    const listener = AppState.addEventListener("change", state => setAppActive(state === "active"));
-    return () => listener.remove();
-  }, []);
 
   useLayoutEffect(() => {
     setPreview({ messages: [] });
@@ -30,6 +25,7 @@ export function useHomeChat(client: ChatClient | undefined, companionId: string 
     let refreshRequested = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let remaining = 60;
+    const retries = new Set<ReturnType<typeof setTimeout>>();
 
     const refresh = async () => {
       if (!active || !chatId || fetching) return;
@@ -72,29 +68,32 @@ export function useHomeChat(client: ChatClient | undefined, companionId: string 
 
     submit.current = action => {
       const key = makeIdempotencyKey("home-action");
-      void (async () => {
-        for (let attempt = 0; active && attempt < 3; attempt++) {
-          try {
-            const result = await client.sendAction(companionId, action, key);
-            if (!active) return;
-            chatId = result.chatId;
-            setPreview(current => ({ ...current, chatId: result.chatId }));
-            remaining = 60;
-            refreshRequested = true;
-            void refresh();
-            return;
-          } catch (error) {
-            if (!active || attempt === 2 || (error instanceof ApiProblemError && error.status < 500)) return;
-            await new Promise<void>(resolve => setTimeout(resolve, 500 * (attempt + 1)));
-          }
+      const send = async (attempt: number) => {
+        try {
+          const result = await client.sendAction(companionId, action, key);
+          if (!active) return;
+          chatId = result.chatId;
+          setPreview(current => ({ ...current, chatId: result.chatId }));
+          remaining = 60;
+          refreshRequested = true;
+          void refresh();
+        } catch (error) {
+          if (!active || attempt === 2 || (error instanceof ApiProblemError && error.status < 500)) return;
+          const retry = setTimeout(() => {
+            retries.delete(retry);
+            void send(attempt + 1);
+          }, 500 * (attempt + 1));
+          retries.add(retry);
         }
-      })();
+      };
+      void send(0);
     };
 
     return () => {
       active = false;
       submit.current = undefined;
       clearTimeout(timer);
+      retries.forEach(retry => clearTimeout(retry));
     };
   }, [appActive, client, companionId, isActive]);
 

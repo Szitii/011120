@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  AppState,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -20,6 +19,7 @@ import { PixelAvatar } from "../components/PixelAvatar";
 import { PEARL_UI } from "../theme/skinTokens";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { safeClientMessage } from "../adapters/real-api";
+import { useAppIsActive } from "../state/useAppIsActive";
 
 const actionLabels = {
   WAVE: "你向 TA 挥了挥手",
@@ -64,6 +64,8 @@ export function ChatScreen({
   backLabel?: string;
   onBackToHome: () => void;
 }) {
+  const appActive = useAppIsActive();
+  const wasActive = useRef(appActive);
   const [chat, setChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -74,6 +76,10 @@ export function ChatScreen({
   const [draft, setDraft] = useState("");
   const inputRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
   const chatIdRef = useRef<string | undefined>(initialChatId);
+  const sessionRef = useRef(0);
+  const sendingRef = useRef(false);
+  const loadingOlderRef = useRef(false);
+  const retryingRef = useRef(new Set<string>());
   const pollInFlightRef = useRef(false);
   const reqVersionRef = useRef(0);
   const cursorExhaustedRef = useRef(false);
@@ -82,6 +88,7 @@ export function ChatScreen({
   const loadLatest = useCallback(async (targetChatId: string, silent = false) => {
     if (silent && pollInFlightRef.current) return;
     const reqVersion = silent ? reqVersionRef.current : ++reqVersionRef.current;
+    const current = () => chatIdRef.current === targetChatId && reqVersion === reqVersionRef.current;
     if (silent) pollInFlightRef.current = true;
     else {
       cursorExhaustedRef.current = false;
@@ -91,7 +98,7 @@ export function ChatScreen({
     try {
       const page = await client.getChat(targetChatId);
       // Discard stale poll response if chat changed or a newer send/load occurred while in flight
-      if (chatIdRef.current !== targetChatId || reqVersion !== reqVersionRef.current) return;
+      if (!current()) return;
       setChat(page.chat);
       setMessages((prev) => (silent && prev.length > 0 ? mergeLatestMessages(prev, page.items) : page.items));
       if (!silent) {
@@ -102,15 +109,16 @@ export function ChatScreen({
       }
       setError(null);
     } catch (e) {
-      if (!silent) setError(safeClientMessage(e).title);
+      if (!silent && current()) setError(safeClientMessage(e).title);
     } finally {
       if (silent) pollInFlightRef.current = false;
-      else setLoading(false);
+      else if (current()) setLoading(false);
     }
   }, [client]);
 
   useEffect(() => {
     let active = true;
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
     async function bootstrap() {
       setLoading(true);
       setError(null);
@@ -118,6 +126,7 @@ export function ChatScreen({
         let targetId = initialChatId;
         if (!targetId) {
           const list = await client.listChats();
+          if (!active) return;
           const matched = companionId
             ? list.items.find((c) => c.direct && c.members.some((m) => m.companionId === companionId))
             : list.items[0];
@@ -137,7 +146,7 @@ export function ChatScreen({
         chatIdRef.current = targetId;
         await loadLatest(targetId, false);
         if (active && autoFocus) {
-          setTimeout(() => inputRef.current?.focus(), 220);
+          focusTimer = setTimeout(() => inputRef.current?.focus(), 220);
         }
       } catch (e) {
         if (active) {
@@ -149,12 +158,16 @@ export function ChatScreen({
     void bootstrap();
     return () => {
       active = false;
+      sessionRef.current++;
+      reqVersionRef.current++;
+      chatIdRef.current = undefined;
+      clearTimeout(focusTimer);
     };
   }, [client, initialChatId, companionId, autoFocus, loadLatest]);
 
   // Serialized 1.5s polling whenever replying === true
   useEffect(() => {
-    if (!chat?.replying || !chatIdRef.current) return;
+    if (!appActive || !chat?.replying || !chatIdRef.current) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const activeId = chatIdRef.current;
@@ -171,22 +184,21 @@ export function ChatScreen({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [chat?.replying, loadLatest]);
+  }, [appActive, chat?.replying, loadLatest]);
 
-  // Refresh immediately when app returns to foreground
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active" && chatIdRef.current) {
-        void loadLatest(chatIdRef.current, true);
-      }
-    });
-    return () => sub.remove();
-  }, [loadLatest]);
+    if (appActive && !wasActive.current && chatIdRef.current) {
+      void loadLatest(chatIdRef.current, true);
+    }
+    wasActive.current = appActive;
+  }, [appActive, loadLatest]);
 
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (!text || !targetId || sending) return;
+    if (!text || !targetId || sendingRef.current) return;
+    const session = sessionRef.current;
+    sendingRef.current = true;
     setSending(true);
     setDraft("");
 
@@ -199,6 +211,7 @@ export function ChatScreen({
 
     try {
       const res = await client.sendMessage(targetId, text, undefined, key);
+      if (session !== sessionRef.current) return;
       reqVersionRef.current += 1;
       pendingSendRef.current = null;
       setMessages((prev) => [res.message, ...prev.filter((m) => m.id !== res.message.id)]);
@@ -208,32 +221,42 @@ export function ChatScreen({
         void loadLatest(targetId, true);
       }
     } catch (e) {
-      setDraft(text);
+      if (session !== sessionRef.current) return;
+      setDraft(current => current || text);
       setError(safeClientMessage(e).title);
     } finally {
-      setSending(false);
+      sendingRef.current = false;
+      if (session === sessionRef.current) setSending(false);
     }
   }
 
   async function handleRetry(messageId: string) {
     const targetId = chatIdRef.current;
-    if (!targetId) return;
+    if (!targetId || retryingRef.current.has(messageId)) return;
+    const session = sessionRef.current;
+    retryingRef.current.add(messageId);
     try {
       const res = await client.retryMessage(targetId, messageId);
+      if (session !== sessionRef.current) return;
       reqVersionRef.current += 1;
       setChat((prev) => (prev ? { ...prev, typing: res.typing, replying: res.replying } : prev));
       void loadLatest(targetId, true);
     } catch (e) {
-      setError(safeClientMessage(e).title);
+      if (session === sessionRef.current) setError(safeClientMessage(e).title);
+    } finally {
+      retryingRef.current.delete(messageId);
     }
   }
 
   async function handleLoadOlder() {
     const targetId = chatIdRef.current;
-    if (!targetId || !nextCursor || loadingOlder) return;
+    if (!targetId || !nextCursor || loadingOlderRef.current) return;
+    const session = sessionRef.current;
+    loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
       const older = await client.getChat(targetId, nextCursor);
+      if (session !== sessionRef.current) return;
       setMessages((prev) => {
         const seen = new Set(prev.map((m) => m.id));
         return [...prev, ...older.items.filter((m) => !seen.has(m.id))];
@@ -243,7 +266,8 @@ export function ChatScreen({
     } catch {
       // ignore transient pagination error
     } finally {
-      setLoadingOlder(false);
+      loadingOlderRef.current = false;
+      if (session === sessionRef.current) setLoadingOlder(false);
     }
   }
 

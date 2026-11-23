@@ -158,6 +158,7 @@ function WorldApp({ client, account, isMockMode }: {
   const [mySettingsOpen, setMySettingsOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const communityDraft = useRef<{ text: string; key: string } | undefined>(undefined);
+  const ownerCompanionsRequest = useRef(0);
   const worldScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   const route = nav.stack[nav.stack.length - 1] ?? {
@@ -199,8 +200,11 @@ function WorldApp({ client, account, isMockMode }: {
   }, []);
 
   useEffect(() => {
-    void loadIdentityOwner();
+    let active = true;
+    void loadIdentityOwner(() => active);
     return () => {
+      active = false;
+      ownerCompanionsRequest.current++;
       cache.purgeViewerSensitive();
     };
   }, [client]);
@@ -233,10 +237,11 @@ function WorldApp({ client, account, isMockMode }: {
     setProfileResult(undefined);
   }
 
-  async function loadIdentityOwner() {
+  async function loadIdentityOwner(current: () => boolean) {
     setIdentity({ kind: "loading" });
     try {
       const value = await client.api.identityContext();
+      if (!current()) return;
       setIdentity({ kind: "success", value });
       void loadOwnerCompanions();
       if (client.sample_companionCompanionId) {
@@ -244,25 +249,27 @@ function WorldApp({ client, account, isMockMode }: {
           const ownCompanion = await client.api.companionProfile(
             client.sample_companionCompanionId,
           );
-          setCompanionDisplayName(ownCompanion.displayName);
+          if (current()) setCompanionDisplayName(ownCompanion.displayName);
         } catch {
           // The Stage 1 shell can still operate without a resolved display name.
         }
       }
     } catch (error) {
       const safe = safeClientMessage(error);
-      setIdentity({ kind: "error", ...safe });
+      if (current()) setIdentity({ kind: "error", ...safe });
     }
   }
 
   async function loadOwnerCompanions() {
+    const request = ++ownerCompanionsRequest.current;
     setOwnerCompanions({ kind: "loading" });
     try {
       const value = await client.api.ownerCompanions();
+      if (request !== ownerCompanionsRequest.current) return;
       setOwnerCompanions(value.items.length ? { kind: "success", value } : { kind: "empty" });
     } catch (error) {
       const safe = safeClientMessage(error);
-      setOwnerCompanions({ kind: "error", ...safe });
+      if (request === ownerCompanionsRequest.current) setOwnerCompanions({ kind: "error", ...safe });
     }
   }
 
@@ -539,6 +546,7 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "chat" && canUseChat && client.api.chat && (
         <ChatScreen
+          key={JSON.stringify([viewerKey, route.chatId, route.companionId])}
           client={client.api.chat}
           initialChatId={route.chatId}
           companionId={route.companionId ?? (ownerCompanions.kind === "success" ? ownerCompanions.value.items[0]?.companionId : undefined)}
@@ -577,10 +585,6 @@ function WorldApp({ client, account, isMockMode }: {
           companionName={companionDisplayName}
           companions={ownerCompanions}
           selfProfile={profile}
-          account={account}
-          isMockMode={isMockMode}
-          settingsOpen={mySettingsOpen}
-          onCloseSettings={() => setMySettingsOpen(false)}
           onOpenCompanionProfile={(item) => openProfile(item.companionId)}
           onOpenCompanionChat={canUseChat ? (item) => setNav((current) => pushRoute(current, { type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my" })) : undefined}
           onControls={(item) => {
@@ -599,9 +603,6 @@ function WorldApp({ client, account, isMockMode }: {
               approvedFields: item.approvedFields,
             }));
           }}
-          onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
-          onAgentSettings={agentViewer && client.api.community
-            ? () => setNav(current => pushRoute(current, { type: "agent-settings" })) : undefined}
           onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && client.api.community
             ? () => setNav(current => pushRoute(current, { type: "edit-human-profile" })) : undefined}
         />
@@ -649,7 +650,6 @@ function WorldApp({ client, account, isMockMode }: {
       {route.type === "bring-companion" && (
         <BringCompanionScreen
           api={client.api}
-          onApproved={() => void loadOwnerCompanions()}
           onResidencyChanged={() => {
             invalidateCompanionViews();
             void loadOwnerCompanions();
@@ -805,7 +805,6 @@ function WorldScreen({
   onOpenEncounter: (item: WorldItem) => void;
   onRetry: () => void;
 }) {
-  const [actorFilter, setActorFilter] = useState<"ALL" | "OWNER" | "SOCIAL_TWIN">("ALL");
   if (state.kind === "loading" || state.kind === "idle") return <Loading />;
   if (state.kind === "empty") {
     return <Centered title="公共社区还没有可见内容" body="这里会展示真实发布或授权公开的社区记录。" />;
@@ -814,6 +813,8 @@ function WorldScreen({
     return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
   }
   if (state.kind !== "success") return <Centered title="公共社区暂时无法连接。" />;
+
+  const items = state.value.items.filter(item => item.kind !== "ENCOUNTER_EXCERPT");
 
   return (
     <ScrollView
@@ -827,11 +828,11 @@ function WorldScreen({
         <Text style={styles.feedTitle}>社区动态</Text>
       </View>
 
-      {state.value.items.filter((item) => item.kind !== "ENCOUNTER_EXCERPT" && (actorFilter === "ALL" || item.author.subjectKind === actorFilter)).length === 0 && (
+      {items.length === 0 && (
         <View style={styles.feedEnd}><Text style={styles.tinyMuted}>当前加载的记录里没有这一类内容。</Text></View>
       )}
 
-      {state.value.items.filter((item) => item.kind !== "ENCOUNTER_EXCERPT" && (actorFilter === "ALL" || item.author.subjectKind === actorFilter)).map((item) => (
+      {items.map((item) => (
         <FeedItem
           key={item.id}
           item={item}
@@ -860,10 +861,6 @@ function FeedItem({
   onOpen: () => void;
 }) {
   const canOpen = item.viewerCapabilities.openDetail === true && item.source.type === "ENCOUNTER";
-  const eventType =
-    item.kind === "ENCOUNTER_EXCERPT" ? "相遇" :
-    item.kind === "PUBLIC_LIFE_TRACE" ? "生活片段" :
-    item.kind === "MOMENT" ? "Moment" : "帖子";
   const hasMedia = (item.media?.length ?? 0) > 0;
 
   return (
@@ -1191,7 +1188,6 @@ function PrivateHomeScreen({
       showsVerticalScrollIndicator={false}
     >
       <PearlInteractiveRoom
-        userName={userName}
         companionName={companionName}
         isCompanionView={isCompanion}
         isActive={isActive}
@@ -1315,17 +1311,11 @@ function MyScreen({
   companionName,
   companions,
   selfProfile,
-  account,
-  isMockMode,
-  settingsOpen,
-  onCloseSettings,
   onOpenCompanionProfile,
   onOpenCompanionChat,
   onControls,
   onResumeCompanion,
-  onBringCompanion,
   onEditHumanProfile,
-  onAgentSettings,
 }: {
   community?: CommunityClient;
   identity: LoadState<ActiveIdentityContext>;
@@ -1333,20 +1323,13 @@ function MyScreen({
   companionName: string;
   companions: LoadState<OwnerCompanionCollection>;
   selfProfile: LoadState<CompanionProfile>;
-  account?: { email?: string; signOut: () => void };
-  isMockMode: boolean;
-  settingsOpen: boolean;
-  onCloseSettings: () => void;
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
   onOpenCompanionChat?: (item: OwnerCompanionSummary) => void;
   onControls: (item: OwnerCompanionSummary) => void;
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
-  onBringCompanion: () => void;
   onEditHumanProfile?: () => void;
-  onAgentSettings?: () => void;
 }) {
-  const { skin, availableSkins, setSkinById } = useSkin();
-  const [colorModalOpen, setColorModalOpen] = useState(false);
+  const { skin } = useSkin();
 
   const [communityData, setCommunityData] = useState<LoadState<CommunityPost[]>>({ kind: "idle" });
   const [ownProfile, setOwnProfile] = useState<CommunityProfile>();
@@ -1753,42 +1736,17 @@ const styles = StyleSheet.create({
   chevron: { color: colors.tertiary, fontSize: 15, marginTop: -3 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
   privateHomePage: { paddingHorizontal: CHROME.screenInset, paddingTop: 10, paddingBottom: 44 },
-  privateHomeEyebrow: { fontSize: 10, letterSpacing: 2, fontWeight: "700", color: colors.roseDark },
-  privateHomeTitle: { marginTop: 10, fontSize: 30, lineHeight: 39, fontWeight: "700", color: colors.text },
-  privateHomeSubtitle: { marginTop: 8, fontSize: 14, lineHeight: 22, color: colors.muted },
-  privateHomeRoom: {
-    marginTop: 24,
-    aspectRatio: 1.25,
-    borderRadius: RADIUS.roomFrame,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: PEARL_UI.highlight,
-    backgroundColor: PEARL_UI.background[1],
-    overflow: "hidden",
-  },
-  privateHomeImage: { width: "100%", height: "100%" },
-  privateHomeRoomLabel: { zIndex: 1, marginBottom: 12, fontSize: 11, color: "#65534C" },
   privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
-  privateHomeBody: { marginTop: 9, fontSize: 13, lineHeight: 22, color: colors.muted },
   privateHomeRecordList: { marginTop: 12, gap: 9 },
   privateHomeEmpty: { minHeight: 74, marginTop: 10, paddingHorizontal: 16, backgroundColor: "rgba(255,255,255,0.72)", borderWidth: 1, borderColor: PEARL_UI.highlight, borderRadius: 20, alignItems: "center", justifyContent: "center", gap: 8 },
   privateHomeRecordRow: { minHeight: 70, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: PEARL_UI.white, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 20, flexDirection: "row", alignItems: "center", shadowColor: "#8A857C", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 10, elevation: 1 },
-  privateHomeArchiveButton: { marginTop: 14, minHeight: 44, paddingHorizontal: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  privateHomeArchiveText: { fontSize: 13, fontWeight: "600", color: colors.roseDark },
   privateHomeRecordText: { flex: 1 },
   privateHomeRecordTitle: { fontSize: 14, fontWeight: "600", color: colors.text },
   privateHomeRecordCaption: { marginTop: 5, fontSize: 11, color: colors.muted },
-  privateHomeNote: { marginTop: 18, fontSize: 11, lineHeight: 18, color: colors.tertiary },
 
   feed: { paddingBottom: 26 },
   feedHeading: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
   feedTitle: { fontSize: 26, lineHeight: 32, fontWeight: "700", color: colors.ink, letterSpacing: -0.6 },
-  feedDisclaimer: { marginTop: 9, fontSize: 12, lineHeight: 18, color: colors.tertiary },
-  feedFilterRow: { marginTop: 15, flexDirection: "row", alignItems: "center", gap: 8 },
-  feedFilterPill: { borderRadius: 15, paddingVertical: 7, paddingHorizontal: 14, backgroundColor: colors.soft },
-  feedFilterPillActive: { backgroundColor: colors.roseWash },
-  feedFilterText: { fontSize: 12, color: colors.muted },
-  feedFilterTextActive: { fontWeight: "700", color: colors.roseDark },
-  feedActorTag: { color: colors.roseDark, backgroundColor: colors.roseWash, paddingVertical: 2, paddingHorizontal: 6, fontSize: 10, borderRadius: 6, overflow: "hidden" },
   feedItem: {
     backgroundColor: PEARL_UI.white,
     borderRadius: 20,
@@ -1804,18 +1762,8 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   feedAuthorRow: { flexDirection: "row", alignItems: "center" },
-  feedAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "#F1E6E4",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  feedAvatarText: { fontWeight: "700", color: colors.roseDark },
   feedAuthorText: { flex: 1, marginLeft: 10 },
   feedAuthorLine: { flexDirection: "row", alignItems: "center", gap: 6 },
-  feedAuthorHandle: { fontSize: 11, color: colors.tertiary },
   feedAuthorName: { fontSize: 14, fontWeight: "600", color: colors.text },
   feedMeta: { marginTop: 2, fontSize: 11, color: colors.tertiary },
   more: { fontSize: 15, color: colors.tertiary, letterSpacing: 1.5 },
@@ -1837,8 +1785,6 @@ const styles = StyleSheet.create({
   noMediaText: { marginTop: 4, fontSize: 12, color: colors.tertiary },
   feedActions: { marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  feedActionCluster: { flexDirection: "row", gap: 20 },
-  feedAction: { fontSize: 19, color: colors.muted },
   accentLink: { fontSize: 12, fontWeight: "600", color: colors.roseDark },
   feedEnd: { padding: 24, alignItems: "center" },
 
@@ -1848,15 +1794,6 @@ const styles = StyleSheet.create({
   encounterMeta: { marginTop: 6, fontSize: 12, color: colors.tertiary },
   participantRail: { marginTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "center" },
   participant: { flex: 1, minWidth: 0, alignItems: "center" },
-  participantAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#F9E9E3",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  participantAvatarImage: { width: 44, height: 44, borderRadius: 22 },
   participantName: { marginTop: 6, fontSize: 11, lineHeight: 15, textAlign: "center", color: colors.muted },
   participantHandle: { marginTop: 3, fontSize: 10, lineHeight: 14, textAlign: "center", color: colors.tertiary },
   connectionLine: { width: 18, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
@@ -1931,22 +1868,8 @@ const styles = StyleSheet.create({
   lifeContinuityCard: { padding: 16, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, backgroundColor: PEARL_UI.white },
   lifeContinuityTitle: { marginTop: 7, fontSize: 16, lineHeight: 22, fontWeight: "700", color: colors.text },
   timelineCard: { flex: 1, marginLeft: 10, padding: 16, borderRadius: 16, backgroundColor: PEARL_UI.white, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line },
-
-  accountAvatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: "#ECE9E6",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  accountAvatarSampleCompanion: { backgroundColor: "#F7E7E1" },
-  accountAvatarImage: { width: 38, height: 38, borderRadius: 19, backgroundColor: "#ECE9E6" },
-  accountAvatarText: { fontSize: 15, fontWeight: "700", color: colors.roseDark },
-  editProfileButton: { minHeight: 44, paddingHorizontal: 8, flexDirection: "row", alignItems: "center" },
   accountHandle: { marginTop: 3, fontSize: 11, color: colors.tertiary },
   accountArrow: { fontSize: 22, color: "#C7C7CC", fontWeight: "300" },
-  settingsText: { flex: 1, fontSize: 13, color: colors.text },
 
   modalBackdrop: {
     flex: 1,
@@ -1995,15 +1918,6 @@ const styles = StyleSheet.create({
   centerBody: { maxWidth: 360, fontSize: 14, lineHeight: 21, color: colors.muted, textAlign: "center" },
   tinyMuted: { fontSize: 11, lineHeight: 17, color: colors.tertiary },
   disabled: { opacity: 0.38 },
-  headerRoleChip: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 999,
-  },
-  headerRoleChipText: {
-    fontSize: 10.5,
-    fontWeight: "600",
-  },
   skinPreviewBox: {
     borderRadius: 22,
     borderWidth: 1,
@@ -2073,18 +1987,6 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     marginBottom: 18,
   },
-  heroBadgeDot: {
-    position: "absolute",
-    right: 0,
-    bottom: 0,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
   heroName: {
     fontSize: 20,
     fontWeight: "700",
@@ -2141,19 +2043,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
-  },
-  privateHomeSectionHeader: {
-    marginTop: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  privateHomeMoreBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    paddingVertical: 4,
-    paddingHorizontal: 6,
   },
   editProfilePill: {
     marginTop: 14,
@@ -2237,12 +2126,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.82)",
-  },
-  myCoverBanner: {
-    width: "100%",
-    height: 112,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.92)",
   },
 });

@@ -96,6 +96,7 @@ export function CommunityScreen({
   const feedY = useRef(initialScrollY);
   const restoreFeed = useRef(true);
   const active = useRef(true);
+  const visibleProfile = useRef<CommunityProfile | undefined>(undefined);
 
   useEffect(() => {
     active.current = true;
@@ -109,7 +110,7 @@ export function CommunityScreen({
     const current = scope.begin();
     setLoading(true);
     setError("");
-    const ownProfile = client.profile(viewer).then(
+    const ownProfile = cursor ? undefined : client.profile(viewer).then(
       (profile) => {
         if (current()) {
           setOwn(profile);
@@ -128,7 +129,8 @@ export function CommunityScreen({
     try {
       let next: Data;
       if (page.type === "profile") {
-        const profile = page.id ? await client.profile(viewer, page.id) : await ownProfile;
+        const profile = cursor ? visibleProfile.current
+          : page.id ? await client.profile(viewer, page.id) : await ownProfile;
         if (!profile || !current()) return;
         next = {
           type: "profile",
@@ -148,6 +150,7 @@ export function CommunityScreen({
         };
       }
       if (!current()) return;
+      if (next.type === "profile") visibleProfile.current = next.profile;
       setData((previous) => {
         if (!cursor || !previous || previous.type !== next.type) return next;
         if (next.type === "detail" && previous.type === "detail") {
@@ -223,6 +226,7 @@ export function CommunityScreen({
     setDeleteTarget(undefined);
     setComposeOpen(false);
     setData(undefined);
+    visibleProfile.current = undefined;
     setPage(next);
     restoreFeed.current = next.type === "feed";
     if (next.type !== "feed") scroll.current?.scrollTo({ y: 0, animated: false });

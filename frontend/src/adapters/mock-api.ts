@@ -18,7 +18,7 @@ import type {
 } from "../contracts.ts";
 
 import type { ChatClient } from "../chat/client.ts";
-import type { Chat, ChatMessage, ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatMessage, ChatSettings } from "../../../contracts/chat.ts";
 
 export class MockApiAdapter implements ClientApi {
   private mockChatMessages: ChatMessage[] = [

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Image, StyleSheet, View, type ImageSourcePropType } from "react-native";
 import { PEARL_UI } from "../theme/skinTokens";
 
