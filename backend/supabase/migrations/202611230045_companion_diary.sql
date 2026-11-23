@@ -269,7 +269,7 @@ begin
     where not exists(select 1 from public.compute_budgets b where b.owner_id = o and b.companion_id = e.companion_id
       and b.period_start <= now() and now() < b.period_end)
     on conflict do nothing;
-  key := encode(public.digest(e.claim_id::text || ':DIARY', 'sha256'), 'hex');
+  key := encode(sha256(convert_to(e.claim_id::text || ':DIARY','UTF8')), 'hex');
   begin
     select * into r from companion_private.reserve_compute_transaction(o, e.companion_id, null,
       'DIARY_ENTRY', 'DIARY_ENTRY', e.id, p_provider, null, p_model, p_model, 'OWNER', q.currency, p_pricing_version,
@@ -277,7 +277,7 @@ begin
       'diary/1', (select i.version from public.companions x join public.companion_identities i on i.id = x.current_identity_version_id
         where x.id = e.companion_id), null, 'diary-material/1', 'encounter-safety/0.1.0', 'diary/1',
       p_trace, 1, null, key,
-      encode(public.digest(concat_ws(':', key, p_provider, p_model, p_input_tokens, p_output_tokens, p_cost_minor), 'sha256'), 'hex'));
+      encode(sha256(convert_to(concat_ws(':', key, p_provider, p_model, p_input_tokens, p_output_tokens, p_cost_minor),'UTF8')), 'hex'));
   exception when sqlstate 'P0001' then -- no budget covers now
     return jsonb_build_object('decision', 'QUOTA', 'reason', 'NO_BUDGET');
   end;

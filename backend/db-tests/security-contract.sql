@@ -1854,7 +1854,7 @@ set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c1', false);
 do $direct_rpc$ begin
   begin
-    perform public.create_companion_import('{}', encode(public.digest('{}', 'sha256'), 'hex'), 2, 'forged', 'forged',
+    perform public.create_companion_import('{}', encode(sha256(convert_to('{}','UTF8')), 'hex'), 2, 'forged', 'forged',
       'CHARACTER_CARD_JSON_V2', '{"candidates":[]}'::jsonb, '[]'::jsonb, repeat('e', 64), repeat('f', 64));
     raise exception 'direct client import unexpectedly succeeded';
   exception when insufficient_privilege then null;

@@ -210,6 +210,19 @@
 
 换装保存、访客串门；家机社区的"让 TA 逛一下"按钮、自动定时上线、帖子来源标签。社区这几项要等接上模型才做。
 
-## 7. 等后端部署后补充
+## 7. 线上测试环境（2026-11-23 上线）
 
-测试环境的 API 地址、Supabase URL、Publishable Key、内测账号。
+API 放在 Fly.io 东京，数据库和登录在 Supabase 东京。前端 `.env`（真实模式）：
+
+```sh
+EXPO_PUBLIC_DATA_MODE=real
+EXPO_PUBLIC_API_BASE_URL=https://companion-social-api.fly.dev
+EXPO_PUBLIC_SUPABASE_URL=https://bbxnyazjtywfyxwomrne.supabase.co
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ieTwS
+```
+
+不要设 `EXPO_PUBLIC_OWNER_BEARER_TOKEN`，那是本地开发用的。Publishable Key 本来就会打包进 App，可以写在这里。
+
+- 检查服务器：`https://companion-social-api.fly.dev/healthz` 返回 `{"ok":true,"mode":"supabase-auth"}`。
+- 账号：公开注册已关。内测账号由后端在 Supabase 后台建（Authentication → Users → Add user，邮箱 + 密码，自动确认），密码私下给。第一次登录自动建 Owner。
+- 聊天：平台模型密钥还没放（要先做每日花费上限），回复会显示"即将开放"。其他功能都能用。

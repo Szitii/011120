@@ -335,7 +335,7 @@ begin
     where not exists(select 1 from public.compute_budgets b where b.owner_id = c.owner_id and b.companion_id = m.companion_id
       and b.period_start <= now() and now() < b.period_end)
     on conflict do nothing;
-  key := encode(public.digest(m.claim_id::text || ':' || p_purpose, 'sha256'), 'hex');
+  key := encode(sha256(convert_to(m.claim_id::text || ':' || p_purpose,'UTF8')), 'hex');
   begin
     select * into r from companion_private.reserve_compute_transaction(c.owner_id, m.companion_id, null,
       case p_purpose when 'REPLY' then 'OWNER_DIRECT_RESPONSE' else 'CHAT_TURN_DECISION' end, 'CHAT_MESSAGE', m.id,
@@ -343,7 +343,7 @@ begin
       'chat/1', (select i.version from public.companions x join public.companion_identities i on i.id = x.current_identity_version_id
         where x.id = m.companion_id), null, 'chat-history/1', 'encounter-safety/0.1.0', 'chat-router/1',
       p_trace, m.attempts, null, key,
-      encode(public.digest(concat_ws(':', key, p_provider, p_model, p_input_tokens, p_output_tokens, p_cost_minor), 'sha256'), 'hex'));
+      encode(sha256(convert_to(concat_ws(':', key, p_provider, p_model, p_input_tokens, p_output_tokens, p_cost_minor),'UTF8')), 'hex'));
   exception when sqlstate 'P0001' then -- no budget covers now
     return jsonb_build_object('decision', 'QUOTA', 'reason', 'NO_BUDGET');
   end;

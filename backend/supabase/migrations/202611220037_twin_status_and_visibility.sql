@@ -129,7 +129,7 @@ begin
     manifest:=manifest||jsonb_build_array(jsonb_build_object(
       'sourceField',source_field,
       'targetField',target_field,
-      'sourceValueHash',encode(public.digest(source_value::text,'sha256'),'hex')
+      'sourceValueHash',encode(sha256(convert_to(source_value::text,'UTF8')),'hex')
     ));
   end loop;
 
@@ -147,7 +147,7 @@ begin
   values(normalized_handle,actor.id,p_companion_id)
   on conflict(handle) do nothing;
 
-  persona_hash:=encode(public.digest(jsonb_build_object(
+  persona_hash:=encode(sha256(convert_to(jsonb_build_object(
     'companionId',p_companion_id,
     'version',next_version,
     'handle',normalized_handle,
@@ -157,7 +157,7 @@ begin
     'sourceIdentityVersionId',identity_row.id,
     'sourceIdentityVersion',identity_row.version,
     'projectionManifest',manifest
-  )::text,'sha256'),'hex');
+  )::text,'UTF8')),'hex');
 
   insert into public.social_personas(
     id,owner_id,companion_id,version,handle,display_name,public_document,profile_visibility,
@@ -201,7 +201,7 @@ begin
   values
     (gen_random_uuid(),actor.id,p_companion_id,'OWNER',actor.id,'SOCIAL_PERSONA_PROJECTED','SOCIAL_PERSONA',persona_row.id,persona_row.content_hash,approved_at),
     (gen_random_uuid(),actor.id,p_companion_id,'OWNER',actor.id,'SOCIAL_PERSONA_ACTIVATED','SOCIAL_TWIN',twin_row.id,
-      encode(public.digest(jsonb_build_object('activeSocialPersonaId',twin_row.active_social_persona_id,'autonomyMode',twin_row.autonomy_mode,'status',twin_row.status)::text,'sha256'),'hex'),
+      encode(sha256(convert_to(jsonb_build_object('activeSocialPersonaId',twin_row.active_social_persona_id,'autonomyMode',twin_row.autonomy_mode,'status',twin_row.status)::text,'UTF8')),'hex'),
       approved_at);
 
   return query select companion_private.social_projection_payload(persona_row,twin_row);
@@ -279,12 +279,12 @@ begin
       persona_row.profile_visibility:=controls.social_twin_visibility;
       persona_row.approved_by_owner_at:=statement_timestamp();
       persona_row.created_at:=statement_timestamp();
-      persona_row.content_hash:=encode(public.digest(jsonb_build_object(
+      persona_row.content_hash:=encode(sha256(convert_to(jsonb_build_object(
         'companionId',persona_row.companion_id,'version',persona_row.version,'handle',persona_row.handle,
         'displayName',persona_row.display_name,'publicDocument',persona_row.public_document,
         'profileVisibility',persona_row.profile_visibility,'sourceIdentityVersionId',persona_row.source_identity_version_id,
         'sourceIdentityVersion',persona_row.source_identity_version,'projectionManifest',persona_row.projection_manifest
-      )::text,'sha256'),'hex');
+      )::text,'UTF8')),'hex');
       insert into public.social_personas select (persona_row).*;
       update public.social_twins set active_social_persona_id=persona_row.id,updated_at=statement_timestamp() where id=twin_row.id;
       insert into public.audit_events(id,owner_id,companion_id,actor_type,actor_id,action,target_type,target_id,after_hash,occurred_at)
