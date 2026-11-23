@@ -5,6 +5,9 @@ import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool, PgOwnerExecutor } from "../src/persistence/postgres/index.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
+import { ChatCatalog } from "../src/chat/models.ts";
+import { PlatformChatModel } from "../src/chat/platform.ts";
+import type { ChatClaim } from "../src/chat/port.ts";
 import type { Chat, ChatPage, ChatSendResult, ChatSettings } from "../../contracts/chat.ts";
 
 const connectionString = process.env.DATABASE_URL;
@@ -124,12 +127,13 @@ try {
   assert.match(page.items[0]!.body!, /SecondCompanion接着SampleCompanion的话说一句/);
   passed("a group: both answer the Owner, then they talk to each other within their interaction limit");
 
-  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", revision: 1 });
+  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, revision: 1 });
   assert.equal((await call(1, `companions/${second}/chat-settings`)).status, 404);
   const quiet = await putSettings(second, { groupActivity: "QUIET", companionInteraction: "NONE" });
-  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", revision: 2 });
-  assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", revision: 1 })).status, 409);
-  assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "LOUD", companionInteraction: "NONE", revision: 2 })).status, 400);
+  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 2 });
+  assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: null, revision: 1 })).status, 409);
+  assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "LOUD", companionInteraction: "NONE", model: null, revision: 2 })).status, 400);
+  assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: "not-in-catalog", revision: 2 })).status, 400);
   await putSettings(A.companion, { groupActivity: "ACTIVE", companionInteraction: "NONE" });
   const say = async (body: string, mentions?: string[]) => {
     await call(0, `chats/${group.data.id}/messages`, "POST", { body, ...(mentions ? { mentions } : {}) });
@@ -212,7 +216,7 @@ try {
   assert.ok(claim);
   assert.deepEqual([claim.companion.displayName, claim.optional, claim.direct, claim.replyTo], ["SecondCompanion", false, false, "OWNER"]);
   assert.deepEqual(claim.companion.identity, { persona: "calm" });
-  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", revision: 0 });
+  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 0 });
   assert.equal(claim.history.at(-1)!.body, "抢一下");
   assert.equal(await portA.claim(fresh.id), null);
   assert.equal(await portA.finish(claim.replyId, randomUUID(), "SENT", ["冒名"]), false);
@@ -234,6 +238,99 @@ try {
   assert.deepEqual([odd.rows[0]!.payload.id, odd.rows[0]!.payload.direct], [direct.data.id, true]);
   passed("one reply at a time per chat; stale, foreign, malformed or orphaned finishes cannot write; odd arrays are normalised");
 
+  // ---- platform models through the real ledger: booking, switches, quota, abandoned calls ----
+  const ledgerChat = (await call<Chat>(0, "chats", "POST", { companionIds: [second, A.companion] }, "group-key-ledger-001")).data;
+  const ask = async (text: string) => { await portA.send(ledgerChat.id, text, [second], keyHash()); return (await portA.claim(ledgerChat.id))!; };
+  const book = (t: ChatClaim, model = "m-test") => portA.reserve({ replyId: t.replyId, claimId: t.claimId, purpose: "REPLY",
+    provider: "test-provider", model, pricingVersion: "test/1", inputTokens: 100, outputTokens: 50, costMinor: 1, traceId: "chat-ledger" });
+  const ledger = async (tx: string) => (await pool.query<{ s: string; outcome: string | null }>(`select string_agg(status, '>' order by sequence) as s,
+      max(outcome_code) as outcome from public.compute_ledger_entries where transaction_id = $1`, [tx])).rows[0]!;
+  const budget = async () => (await pool.query(`select max_model_calls, reserved_calls, settled_calls, settled_input_tokens, currency,
+      extract(epoch from period_end - period_start)::int as seconds from public.compute_budgets where companion_id = $1`, [second])).rows;
+  const lastFailure = async () => ((await latestOf(ledgerChat.id)).items[0]!).failure;
+  const latestOf = async (chatId: string): Promise<ChatPage> => {
+    for (;;) {
+      const read = await portA.read(chatId, null, null) as ChatPage;
+      if (!read.chat.replying) return read;
+      await pause(20);
+    }
+  };
+
+  let t = await ask("记账测试");
+  const booked = await book(t);
+  assert.equal(booked.decision, "RESERVED");
+  const tx = (booked as { transactionId: string }).transactionId;
+  assert.equal((await ledger(tx)).s, "RESERVED>STARTED");
+  assert.deepEqual(await budget(), [{ max_model_calls: 200, reserved_calls: 1, settled_calls: 0, settled_input_tokens: "0", currency: "USD", seconds: 86400 }],
+    "a free daily budget is created on first use");
+  await portA.settle(tx, 80, 20, 1, true);
+  assert.equal((await ledger(tx)).s, "RESERVED>STARTED>SUCCEEDED");
+  assert.deepEqual((await budget()).map(b => [b.reserved_calls, b.settled_calls, b.settled_input_tokens]), [[0, 1, "80"]]);
+  assert.equal(await portA.finish(t.replyId, t.claimId, "SENT", ["记好了"]), true);
+  await assert.rejects(new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).settle(tx, 1, 1, 1, true), { code: "NOT_FOUND" });
+
+  const switchModel = (scope: string, key: string, on: boolean) =>
+    pool.query("select companion_private.admin_set_model_switch($1, $2, $3, 'chat test')", [scope, key, on]);
+  const pair = [{ provider: "test-provider", model: "m-test" }, { provider: "test-provider", model: "m-other" }, { provider: "elsewhere", model: "m" }];
+  await switchModel("MODEL", "test-provider/m-test", false);
+  assert.deepEqual(await portA.modelsEnabled(pair), [false, true, true]);
+  await switchModel("PROVIDER", "test-provider", false);
+  assert.deepEqual(await portA.modelsEnabled(pair), [false, false, true]);
+  await switchModel("ALL", "*", false);
+  assert.deepEqual(await portA.modelsEnabled(pair), [false, false, false]);
+  t = await ask("关掉了吗");
+  assert.deepEqual(await book(t, "m-other"), { decision: "DISABLED" });
+  await portA.finish(t.replyId, t.claimId, "DISABLED", null);
+  assert.equal(await lastFailure(), "DISABLED");
+  for (const [scope, key] of [["ALL", "*"], ["PROVIDER", "test-provider"], ["MODEL", "test-provider/m-test"]] as const) await switchModel(scope, key, true);
+  assert.deepEqual(await portA.modelsEnabled(pair), [true, true, true]);
+  assert.equal((await pool.query("select count(*)::int as n from companion_private.model_switch_log where note = 'chat test'")).rows[0]!.n, 6);
+
+  await pool.query("update public.compute_budgets set max_model_calls = settled_calls where companion_id = $1", [second]);
+  t = await ask("额度用完");
+  assert.deepEqual(await book(t), { decision: "QUOTA", reason: "BUDGET_EXHAUSTED" });
+  await portA.finish(t.replyId, t.claimId, "QUOTA", null);
+  assert.equal(await lastFailure(), "QUOTA");
+  await pool.query("update public.compute_budgets set max_model_calls = 200 where companion_id = $1", [second]);
+
+  t = await ask("服务器中途停了");
+  const lost = (await book(t)) as { transactionId: string };
+  await pool.query("update companion_private.chat_messages set claimed_at = now() - interval '3 minutes' where id = $1", [t.replyId]);
+  const retaken = (await portA.claim(ledgerChat.id))!;
+  assert.equal(retaken.replyId, t.replyId);
+  assert.deepEqual(await ledger(lost.transactionId), { s: "RESERVED>STARTED>FAILED", outcome: "CHAT_ABANDONED" }, "charged the whole reservation");
+  assert.deepEqual(await book(t), { decision: "STALE" }, "the old claim can no longer book");
+  await portA.settle(lost.transactionId, 5, 5, 0, true); // the slow server reports in late: ignored, not an error
+  assert.equal((await ledger(lost.transactionId)).s, "RESERVED>STARTED>FAILED");
+  await portA.finish(retaken.replyId, retaken.claimId, "SENT", ["接上了"]);
+
+  // Turns deleted while their model call runs close the call: a new Owner message, and deleting the chat.
+  await pool.query(`insert into companion_private.chat_messages(chat_id, companion_id, status, reply_to, optional)
+    values ($1, $2, 'PENDING', 'COMPANION', true)`, [ledgerChat.id, second]);
+  const chatter = (await portA.claim(ledgerChat.id))!;
+  const chatterCall = (await book(chatter)) as { transactionId: string };
+  await portA.send(ledgerChat.id, "别聊了", [], keyHash());
+  assert.deepEqual(await ledger(chatterCall.transactionId), { s: "RESERVED>STARTED>FAILED", outcome: "CHAT_ABANDONED" });
+  const doomedChat = (await portA.open([second, A.companion], null, keyHash())) as Chat;
+  await portA.send(doomedChat.id, "删掉前", [second], keyHash());
+  const doomedTurn = (await portA.claim(doomedChat.id))!;
+  const doomedCall = (await book(doomedTurn)) as { transactionId: string };
+  await portA.remove(doomedChat.id);
+  assert.deepEqual(await ledger(doomedCall.transactionId), { s: "RESERVED>STARTED>FAILED", outcome: "CHAT_ABANDONED" });
+  await new ChatReplies().drain(ledgerChat.id, portA); // let anything queued by "别聊了" finish
+
+  const catalog = new ChatCatalog({ defaultModel: "fake", decisionModel: null, providers: { fakep: { kind: "anthropic", apiKeyEnv: "FAKE_KEY" } },
+    models: [{ id: "fake", name: "Fake", provider: "fakep", model: "fake-1", tier: "ECONOMY", inputPerMTok: 1, outputPerMTok: 1, enabled: true }] }, { FAKE_KEY: "k" });
+  const engine = new PlatformChatModel(catalog, async () => ({ text: "真模型的回复\n第二条", inputTokens: 300, outputTokens: 12, refused: false, cutOff: false }));
+  await portA.send(ledgerChat.id, "端到端", [second], keyHash());
+  await new ChatReplies(engine).drain(ledgerChat.id, portA);
+  assert.deepEqual((await latestOf(ledgerChat.id)).items.slice(0, 2).map(m => m.body), ["第二条", "真模型的回复"]);
+  const spent = await pool.query(`select e.status, e.input_tokens, e.output_tokens from public.compute_transactions x
+      join public.compute_ledger_entries e on e.transaction_id = x.id
+    where x.companion_id = $1 and x.provider_id = 'fakep' and e.entry_type = 'SETTLEMENT'`, [second]);
+  assert.deepEqual(spent.rows, [{ status: "SUCCEEDED", input_tokens: "300", output_tokens: "12" }]);
+  passed("platform models: a daily budget, booking and settling, kill switches, quota, abandoned and orphaned calls, end to end");
+
   const pageChat = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-0000000003")).data;
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
     select $1, 'message ' || n, 'SENT', encode(public.digest('k' || n, 'sha256'), 'hex'), now() - (40 - n) * interval '1 second'
@@ -248,7 +345,7 @@ try {
   passed("messages page newest first with a cursor");
 
   const list = await call<{ items: Chat[] }>(0, "chats");
-  assert.equal(list.data.items.length, 4);
+  assert.equal(list.data.items.length, 5);
   assert.equal(list.data.items[0]!.id, pageChat.id); // most recently active first
   assert.equal((await call<{ items: Chat[] }>(1, "chats")).data.items.length, 0);
   assert.equal((await call(1, `chats/${group.data.id}`, "DELETE")).status, 404);

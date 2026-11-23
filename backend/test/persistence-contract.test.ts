@@ -118,8 +118,8 @@ describe("Foundation persistence and API contracts", () => {
     assert.match(openapi, /socialRuntimeAuthority: \{ const: false \}/);
   });
 
-  it("limits production runtime dependencies to the licensed PostgreSQL driver", () => {
-    assert.deepEqual(packageManifest.dependencies, { pg: "^8.23.0" });
+  it("limits production runtime dependencies to the PostgreSQL driver and the pinned, Apache-2.0-licensed Claude SDK", () => {
+    assert.deepEqual(packageManifest.dependencies, { "@anthropic-ai/sdk": "1.6.0", pg: "^8.23.0" });
   });
 
   it("replaces Supabase defaults with explicit Auth, Storage, and service-role boundaries", () => {

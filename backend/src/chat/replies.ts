@@ -11,12 +11,19 @@ import { EncounterSafetyPipeline } from "../encounter/safety.ts";
 import type { ChatClaim, ChatOutcome, ChatPort } from "./port.ts";
 
 /**
- * One model that can speak as a Companion: 1 to 3 short messages, like texting (more are joined
- * into the third). `pass` means: stay quiet, allowed only when the turn is optional.
+ * What a model made of a turn: 1 to 3 short messages, like texting (more are joined into the
+ * third); `pass` to stay quiet (only allowed when the turn is optional); `refused` when the
+ * provider declined for safety reasons; or `failed` when no call could be made.
  */
+export type Answer =
+  | { messages: string[] }
+  | { pass: true }
+  | { refused: true }
+  | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
+
+/** Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on. */
 export interface ChatModel {
-  /** `signal` aborts when the call takes too long; pass it on to the model's HTTP request. */
-  reply(turn: ChatClaim, signal: AbortSignal): Promise<{ messages: string[] } | { pass: true }>;
+  reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal }): Promise<Answer>;
 }
 
 const MAX_MESSAGES = 3;
@@ -71,21 +78,24 @@ export class ChatReplies {
   async drain(chatId: string, port: ChatPort): Promise<number> {
     let written = 0;
     for (let turn = await port.claim(chatId); turn !== null; turn = await port.claim(chatId)) {
-      const [outcome, bodies] = await this.#answer(turn);
+      const [outcome, bodies] = await this.#answer(turn, port);
       await port.finish(turn.replyId, turn.claimId, outcome, bodies);
       written += 1;
     }
     return written;
   }
 
-  async #answer(turn: ChatClaim): Promise<[ChatOutcome, string[] | null]> {
+  async #answer(turn: ChatClaim, port: ChatPort): Promise<[ChatOutcome, string[] | null]> {
     if (this.#model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(new Error("model timed out")), this.#timeoutMs);
     try {
       const stopped = new Promise<never>((_, reject) => abort.signal.addEventListener("abort", () => reject(abort.signal.reason)));
-      const result = await Promise.race([this.#model.reply(turn, abort.signal), stopped]);
+      const result = await Promise.race([this.#model.reply(turn, { port, signal: abort.signal }), stopped]);
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
+      if ("refused" in result) return ["BLOCKED", null];
+      // An optional turn that cannot be made simply stays quiet; one that must answer says why.
+      if ("failed" in result) return [turn.optional ? "PASSED" : result.failed, null];
       const parts = result.messages.map(text => text.trim()).filter(text => text.length > 0);
       const messages = parts.length <= MAX_MESSAGES ? parts
         : [...parts.slice(0, MAX_MESSAGES - 1), parts.slice(MAX_MESSAGES - 1).join("\n")];

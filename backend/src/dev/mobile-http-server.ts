@@ -8,6 +8,7 @@ import {
 } from "../http/types.ts";
 import { createMobileHttpServer } from "../http/mobile-server.ts";
 import { PostgresChatAdapter } from "../chat/postgres.ts";
+import { chatFromEnvironment } from "../chat/setup.ts";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import {
   createPgPool,
@@ -49,7 +50,9 @@ export const createMobileDevHttpServer = (input: {
   readonly bearerToken: string;
   readonly ownerSubject: string;
   readonly ownerId: string;
-}) => createMobileHttpServer(new DevOwnerSessionResolver(input), "stage1-mobile-dev");
+  /** Default: the fixed fake reply and no catalog (what tests use). */
+  readonly chat?: Parameters<typeof createMobileHttpServer>[2];
+}) => createMobileHttpServer(new DevOwnerSessionResolver(input), "stage1-mobile-dev", input.chat);
 
 const main = async (): Promise<void> => {
   if (process.env.NODE_ENV === "production" || process.env.SUPABASE_URL || process.env.SUPABASE_PUBLISHABLE_KEY) {
@@ -75,6 +78,7 @@ const main = async (): Promise<void> => {
     bearerToken,
     ownerSubject: process.env.MOBILE_DEV_OWNER_SUBJECT ?? "00000000-0000-0000-0000-0000000000a1",
     ownerId: process.env.MOBILE_DEV_OWNER_ID ?? "00000000-0000-0000-0000-0000000001a1",
+    chat: chatFromEnvironment("stage1-mobile-dev"),
   });
 
   const shutdown = (): void => {

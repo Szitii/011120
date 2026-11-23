@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type pg from "pg";
+import { chatFromEnvironment } from "../chat/setup.ts";
 import { createPgPool } from "../persistence/postgres/client.ts";
 import { createMobileHttpServer } from "./mobile-server.ts";
 import { SupabaseOwnerSessionResolver } from "./supabase-owner-session.ts";
@@ -9,7 +10,8 @@ export const createSupabaseMobileHttpServer = (input: {
   pool: pg.Pool;
   supabaseUrl: string;
   publishableKey: string;
-}) => createMobileHttpServer(new SupabaseOwnerSessionResolver(input), "supabase-auth");
+  chat?: Parameters<typeof createMobileHttpServer>[2];
+}) => createMobileHttpServer(new SupabaseOwnerSessionResolver(input), "supabase-auth", input.chat);
 
 async function main() {
   const {
@@ -27,7 +29,7 @@ async function main() {
     throw new Error("MOBILE_API_PORT must be a valid TCP port.");
   }
   const pool = createPgPool(connectionString);
-  const server = createSupabaseMobileHttpServer({ pool, supabaseUrl, publishableKey });
+  const server = createSupabaseMobileHttpServer({ pool, supabaseUrl, publishableKey, chat: chatFromEnvironment("supabase-auth") });
   const shutdown = () => server.close(() => { void pool.end(); });
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);

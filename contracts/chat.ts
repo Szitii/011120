@@ -17,8 +17,11 @@ export interface ChatMessage {
   /** Companions the Owner @mentioned. */
   mentions: string[];
   status: "SENT" | "FAILED" | "BLOCKED";
-  /** FAILED only. UNAVAILABLE: no model can answer for now ("coming soon"). ERROR: something went wrong. */
-  failure: "UNAVAILABLE" | "ERROR" | null;
+  /**
+   * FAILED only. UNAVAILABLE: no model can answer yet ("coming soon"). DISABLED: the platform switched
+   * its models off for now. QUOTA: today's free replies are used up. ERROR: something went wrong.
+   */
+  failure: "UNAVAILABLE" | "DISABLED" | "QUOTA" | "ERROR" | null;
   /** true when POST .../retry may be used (failure ERROR). A BLOCKED reply is final. */
   retryable: boolean;
   sentAt: string;
@@ -59,5 +62,26 @@ export interface ChatSettings {
   groupActivity: "QUIET" | "NORMAL" | "ACTIVE";
   /** 家机互动倾向: how often it joins in when other Companions talk; at most 0 / 1 / 2 / 4 times per Owner message. */
   companionInteraction: "NONE" | "RARE" | "NORMAL" | "LIVELY";
+  /** A ChatModelInfo id from GET /v0/chat-models; null = the platform default. */
+  model: string | null;
   revision: number;
+}
+
+/** One model the Owner can pick (GET /v0/chat-models). */
+export interface ChatModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  tier: "ECONOMY" | "STANDARD" | "PREMIUM";
+  /** USD per million tokens, for showing the relative cost. */
+  inputPerMTok: number;
+  outputPerMTok: number;
+  /** false: listed but not usable now (no key configured or switched off by the platform). */
+  available: boolean;
+}
+
+export interface ChatModelList {
+  items: ChatModelInfo[];
+  /** What a Companion with model null uses; null when no model is usable. */
+  defaultModel: string | null;
 }

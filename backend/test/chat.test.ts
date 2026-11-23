@@ -14,7 +14,7 @@ const companion = "00000000-0000-0000-0000-0000000002a1";
 const other = "00000000-0000-0000-0000-0000000002a2";
 const messageId = "00000000-0000-0000-0000-00000000d001";
 
-const settings = { groupActivity: "NORMAL", companionInteraction: "NORMAL", revision: 1 } as const;
+const settings = { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, revision: 1 } as const;
 const turn = (overrides: Partial<ChatClaim> = {}): ChatClaim => ({
   chatId, replyId: messageId, claimId: "00000000-0000-0000-0000-00000000e001", replyTo: "OWNER", optional: false, direct: false,
   companion: { companionId: companion, displayName: "小光", identity: {}, settings },
@@ -37,6 +37,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     saveSettings: async (...args) => { calls.push(["saveSettings", ...args]); return {}; },
     claim: async () => turns.shift() ?? null,
     finish: async (replyId, _claim, outcome, bodies) => { finished.push([replyId, outcome, bodies]); return true; },
+    reserve: async () => ({ decision: "RESERVED", transactionId: "tx" }),
+    settle: async () => undefined,
+    modelsEnabled: async models => models.map(() => true),
   };
   return { port, calls, finished };
 }
@@ -66,7 +69,7 @@ it("routes every chat request to the database as the signed-in Owner", async () 
   assert.equal(await status(port, request(`chats/${chatId}/messages/${messageId}/retry`, "POST")), 200);
   assert.equal(await status(port, request(`companions/${companion}/chat-settings`)), 200);
   assert.equal(await status(port, request(`companions/${companion}/chat-settings`, "PUT",
-    { groupActivity: "QUIET", companionInteraction: "NONE", revision: 2 })), 200);
+    { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 2 })), 200);
   const [open, direct, read, send] = [calls[1]!, calls[2]!, calls[3]!, calls[5]!];
   assert.equal(open[2], "一家人");
   assert.match(open[3] as string, /^[a-f0-9]{64}$/);
@@ -74,7 +77,7 @@ it("routes every chat request to the database as the signed-in Owner", async () 
   assert.deepEqual(read.slice(1), [chatId, "2026-11-23T10:00:00Z", messageId]);
   assert.deepEqual(send.slice(1, 4), [chatId, "你好", [other]]);
   assert.notEqual(send[4], "stable-chat-test-key-1", "the retry key is hashed with the Owner");
-  assert.deepEqual(calls.at(-1), ["saveSettings", companion, { groupActivity: "QUIET", companionInteraction: "NONE", revision: 2 }]);
+  assert.deepEqual(calls.at(-1), ["saveSettings", companion, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 2 }]);
 });
 
 it("starts writing replies only while replies are on the way", async () => {
@@ -109,10 +112,11 @@ it("refuses malformed requests before they reach the database", async () => {
     request(`chats/${chatId}?cursor=yesterday|${messageId}`),
     request(`chats/${chatId}?cursor=2026-11-23T10:00:00Z`),
     request(`chats/${chatId}?cursor=2026-11-23T10:00:00Z|${messageId}|x`),
-    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "SOMETIMES", companionInteraction: "RARE", revision: 1 }),
-    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: 2, revision: 1 }),
-    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "RARE", revision: 0 }),
-    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "RARE" }),
+    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "SOMETIMES", companionInteraction: "RARE", model: null, revision: 1 }),
+    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: 2, model: null, revision: 1 }),
+    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "RARE", model: null, revision: 0 }),
+    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "RARE", model: null }),
+    request(`companions/${companion}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "RARE", model: "any-model", revision: 1 }),
   ];
   for (const req of bad) assert.equal(await refusal(port, req), "INVALID_INPUT", `${req.method} ${req.url} ${JSON.stringify(req.body)}`);
   for (const req of [request("chats", "PUT"), request(`chats/${chatId}/other`), request(`chats/${chatId}/messages/${messageId}/retry/x`, "POST"),
@@ -163,6 +167,10 @@ it("writes queued replies through the model and the safety scan", async () => {
     [undefined, turn(), "UNAVAILABLE", null],
     [undefined, turn({ optional: true }), "PASSED", null],
     [model({ text: "wrong shape" } as never), turn(), "ERROR", null],
+    [model({ refused: true }), turn(), "BLOCKED", null],
+    [model({ failed: "QUOTA" }), turn(), "QUOTA", null],
+    [model({ failed: "DISABLED" }), turn(), "DISABLED", null],
+    [model({ failed: "QUOTA" }), turn({ optional: true }), "PASSED", null],
     [model({ messages: ["a@b.co ".repeat(285)] }), turn(), "ERROR", null],
   ];
   for (const [chosen, claim, outcome, bodies] of cases) {
@@ -172,7 +180,7 @@ it("writes queued replies through the model and the safety scan", async () => {
   }
   const hung = fakePort([turn()]);
   let aborted = false;
-  await new ChatReplies({ reply: (_turn, signal) => new Promise(() => signal.addEventListener("abort", () => { aborted = true; })) }, 5)
+  await new ChatReplies({ reply: (_turn, { signal }) => new Promise(() => signal.addEventListener("abort", () => { aborted = true; })) }, 5)
     .drain(chatId, hung.port);
   assert.deepEqual(hung.finished, [[messageId, "ERROR", null]], "a model that never answers fails the turn instead of holding the chat");
   assert.ok(aborted, "the hung model call is told to stop");
@@ -213,8 +221,21 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   await adapter.retry(chatId, messageId);
   await adapter.remove(chatId);
   await adapter.settings(companion);
-  await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", revision: 1 });
-  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", 1]);
+  await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: "m", revision: 1 });
+  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", 1]);
+  rows = [{ payload: { decision: "QUOTA" } }];
+  assert.deepEqual(await adapter.reserve({ replyId: messageId, claimId: "c", purpose: "REPLY", provider: "p", model: "m",
+    pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3, traceId: "t" }), { decision: "QUOTA" });
+  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "REPLY", "p", "m", "v", 1, 2, 3, "t"]);
+  rows = [{ payload: { settled: true } }];
+  await adapter.settle("tx", 1, 2, 3, true);
+  assert.deepEqual(seen.at(-1)![1], ["tx", 1, 2, 3, true]);
+  rows = [{ payload: [true, false] }];
+  assert.deepEqual(await adapter.modelsEnabled([{ provider: "a", model: "x" }, { provider: "b", model: "y" }]), [true, false]);
+  assert.deepEqual(seen.at(-1)![1], [["a", "b"], ["x", "y"]]);
+  rows = [{ payload: [1] }];
+  await assert.rejects(adapter.modelsEnabled([]), { code: "DATABASE_ERROR" });
+  rows = [{ payload: { ok: true } }];
   assert.deepEqual(await adapter.claim(chatId), { ok: true });
   rows = [{ payload: { accepted: true } }];
   assert.equal(await adapter.finish(messageId, "c", "SENT", ["hi"]), true);

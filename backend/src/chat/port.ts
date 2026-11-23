@@ -17,7 +17,25 @@ export interface ChatClaim {
   history: { companionId: string | null; body: string; mentions: string[]; sentAt: string }[];
 }
 
-export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE";
+export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
+
+/** One model call to book in the compute ledger before it starts (chat_reserve). */
+export interface ChatReservation {
+  replyId: string;
+  claimId: string;
+  /** REPLY: writing the answer. DECIDE: the cheap "should it speak?" check. */
+  purpose: "REPLY" | "DECIDE";
+  provider: string;
+  model: string;
+  pricingVersion: string;
+  inputTokens: number;
+  outputTokens: number;
+  costMinor: number;
+  traceId: string;
+}
+
+/** RESERVED: go ahead. STALE: the turn moved on. DISABLED: switched off. QUOTA: today's budget is used up. */
+export type ReservationDecision = { decision: "RESERVED"; transactionId: string } | { decision: "STALE" | "DISABLED" | "QUOTA" };
 
 /** Every call runs as the signed-in Owner; the database checks ownership. */
 export interface ChatPort {
@@ -33,4 +51,10 @@ export interface ChatPort {
   claim(chatId: string): Promise<ChatClaim | null>;
   /** Server only: `bodies` are 1 to 3 messages for SENT, else null. False when the claim is stale. */
   finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null): Promise<boolean>;
+  /** Server only: book a model call and mark it started. */
+  reserve(input: ChatReservation): Promise<ReservationDecision>;
+  /** Server only: settle a started call with real usage (ok false: it failed). */
+  settle(transactionId: string, inputTokens: number, outputTokens: number, costMinor: number, ok: boolean): Promise<void>;
+  /** Whether each provider/model is switched on, in order. */
+  modelsEnabled(models: readonly { provider: string; model: string }[]): Promise<boolean[]>;
 }
