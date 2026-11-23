@@ -1881,7 +1881,9 @@ select public.test_assert(
   and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[])'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[])'::regprocedure, 'EXECUTE')
-  and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE'),
+  and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE'),
   'Companion chat replies can only be written by the API server'
 );
 select public.test_assert(

@@ -1,5 +1,6 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
 import type { ChatSettings } from "../../../contracts/chat.ts";
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatClaim, ChatOutcome, ChatPort, ChatReservation, ReservationDecision } from "./port.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
@@ -25,6 +26,10 @@ export class PostgresChatAdapter implements ChatPort {
 
   retry(chatId: string, messageId: string): Promise<unknown> {
     return this.#object("select public.chat_retry($1,$2) as payload", [chatId, messageId]);
+  }
+
+  act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown> {
+    return this.#object("select public.chat_act($1,$2,$3) as payload", [companionId, action, keyHash]);
   }
 
   remove(chatId: string): Promise<unknown> {

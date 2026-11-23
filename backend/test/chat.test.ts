@@ -19,7 +19,7 @@ const turn = (overrides: Partial<ChatClaim> = {}): ChatClaim => ({
   chatId, replyId: messageId, claimId: "00000000-0000-0000-0000-00000000e001", replyTo: "OWNER", optional: false, direct: false,
   companion: { companionId: companion, displayName: "小光", identity: {}, settings },
   members: [{ companionId: companion, displayName: "小光" }, { companionId: other, displayName: "阿默" }],
-  history: [{ companionId: null, body: "今天\n下雨了", mentions: [], sentAt: "2026-11-23T10:00:00Z" }],
+  history: [{ companionId: null, body: "今天\n下雨了", action: null, mentions: [], sentAt: "2026-11-23T10:00:00Z" }],
   ...overrides,
 });
 
@@ -31,6 +31,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     list: async () => { calls.push(["list"]); return { items: [] }; },
     read: async (...args) => { calls.push(["read", ...args]); return { chat: { typing: [], replying }, items: [], nextCursor: null }; },
     send: async (...args) => { calls.push(["send", ...args]); return { message: {}, typing: [], replying }; },
+    act: async (...args) => { calls.push(["act", ...args]); return { chatId, message: {}, typing: [], replying }; },
     retry: async (...args) => { calls.push(["retry", ...args]); return { typing: [], replying }; },
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
     settings: async (...args) => { calls.push(["settings", ...args]); return {}; },
@@ -78,6 +79,28 @@ it("routes every chat request to the database as the signed-in Owner", async () 
   assert.deepEqual(send.slice(1, 4), [chatId, "你好", [other]]);
   assert.notEqual(send[4], "stable-chat-test-key-1", "the retry key is hashed with the Owner");
   assert.deepEqual(calls.at(-1), ["saveSettings", companion, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 2 }]);
+  assert.equal(await status(port, request(`companions/${companion}/actions`, "POST", { action: "PAT_HEAD" })), 201);
+  const act = calls.at(-1)!;
+  assert.deepEqual(act.slice(0, 3), ["act", companion, "PAT_HEAD"]);
+  assert.equal(act[3], send[4], "the retry key is hashed the same way as for messages");
+});
+
+it("records home-room actions and starts the reply only when one may come", async () => {
+  kicks.length = 0;
+  await status(fakePort().port, request(`companions/${companion}/actions`, "POST", { action: "WAVE" }));
+  assert.equal(kicks.length, 0);
+  await status(fakePort([], true).port, request(`companions/${companion}/actions`, "POST", { action: "HUG" }));
+  assert.deepEqual(kicks, [chatId]);
+  const { port, calls } = fakePort();
+  for (const req of [
+    request(`companions/${companion}/actions`, "POST", { action: "KISS" }),
+    request(`companions/${companion}/actions`, "POST", { action: "WAVE", extra: true }),
+    request(`companions/${companion}/actions`, "POST", {}),
+    request(`companions/${companion}/actions`, "POST", { action: "WAVE" }, { "Idempotency-Key": "short" }),
+    request("companions/not-a-uuid/actions", "POST", { action: "WAVE" }),
+  ]) assert.equal(await refusal(port, req), "INVALID_INPUT", JSON.stringify(req.body));
+  assert.equal(await refusal(port, request(`companions/${companion}/actions`)), "NOT_FOUND");
+  assert.equal(calls.length, 0);
 });
 
 it("starts writing replies only while replies are on the way", async () => {
@@ -144,17 +167,22 @@ it("is reachable through the API boundary after authentication", async () => {
 it("writes queued replies through the model and the safety scan", async () => {
   const model = (answer: Awaited<ReturnType<ChatModel["reply"]>> | Error): ChatModel =>
     ({ reply: async () => { if (answer instanceof Error) throw answer; return answer; } });
-  const ownerSays = (body: string) => [{ companionId: null, body, mentions: [], sentAt: "2026-11-23T10:00:00Z" }];
+  const ownerSays = (body: string) => [{ companionId: null, body, action: null, mentions: [], sentAt: "2026-11-23T10:00:00Z" }];
   const cases: [ChatModel | undefined, ChatClaim, ChatOutcome, string[] | null][] = [
     [devChatModel, turn(), "SENT", ["（开发环境假回复）我是小光", "收到：「今天 下雨了」"]],
     [devChatModel, turn({ optional: true }), "PASSED", null],
     [devChatModel, turn({ optional: true, history: ownerSays("小光在吗") }), "SENT", ["（开发环境假回复）我是小光", "收到：「小光在吗」"]],
     [devChatModel, turn({ optional: true, history: ownerSays("大家早") }), "SENT", ["（开发环境假回复）我是小光", "收到：「大家早」"]],
     [devChatModel, turn({ replyTo: "COMPANION", optional: true, companion: { companionId: other, displayName: "阿默", identity: {}, settings },
-      history: [{ companionId: companion, body: "嗯", mentions: [], sentAt: "2026-11-23T10:00:01Z" }] }),
+      history: [{ companionId: companion, body: "嗯", action: null, mentions: [], sentAt: "2026-11-23T10:00:01Z" }] }),
       "SENT", ["（开发环境假回复）阿默接着小光的话说一句。"]],
     [devChatModel, turn({ replyTo: "COMPANION", history: [] }), "SENT", ["（开发环境假回复）小光接着大家的话说一句。"]],
     [devChatModel, turn({ history: [] }), "SENT", ["（开发环境假回复）我是小光", "收到：「」"]],
+    [devChatModel, turn({ direct: true, optional: true, history: [{ companionId: null, body: null, action: "HUG", mentions: [], sentAt: "t" }] }),
+      "SENT", ["（开发环境假回复）小光知道你在小家里抱了抱你"]],
+    [devChatModel, turn({ direct: true, optional: true, history: [] }), "SENT", ["（开发环境假回复）小光知道你来过"]],
+    [model(new Error("down")), turn({ direct: true, optional: true }), "PASSED", null],
+    [model(new Error("down")), turn({ optional: true }), "ERROR", null],
     [model({ messages: ["  好的 ", "", "联系我 13800138000 吧"] }), turn(), "SENT", ["好的", "联系我 [REDACTED_PII] 吧"]],
     [model({ messages: ["一", "二", "三", "四"] }), turn(), "SENT", ["一", "二", "三\n四"]],
     [model({ messages: ["没事", "password: hunter2"] }), turn(), "BLOCKED", null],

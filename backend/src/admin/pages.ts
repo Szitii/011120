@@ -34,7 +34,7 @@ export interface ChatList {
 }
 export interface ChatPage {
   chat: { id: string; ownerId: string; title: string | null; direct: boolean; members: Member[] };
-  items: { id: string; companionId: string | null; body: string | null; status: string; failure: string | null; createdAt: string }[];
+  items: { id: string; companionId: string | null; body: string | null; action?: string | null; status: string; failure: string | null; createdAt: string }[];
   next: { at: string; id: string } | null;
 }
 export interface Models {
@@ -99,6 +99,7 @@ const ACTIONS: Readonly<Record<string, string>> = {
 const MESSAGE_STATUS: Readonly<Record<string, string>> = {
   PENDING: "(正在回复)", FAILED: "(回复失败)", BLOCKED: "(被安全扫描拦下)", PASSED: "(选择不说话)",
 };
+const ACTION_WORD: Readonly<Record<string, string>> = { WAVE: "(小家动作:挥手)", PAT_HEAD: "(小家动作:摸头)", HUG: "(小家动作:抱抱)", CUDDLE: "(小家动作:贴贴)" };
 const word = (table: Readonly<Record<string, string>>, key: string | null) => key === null ? "" : table[key] ?? key;
 
 /** A moment as the operator reads it, in the IANA time zone `zone`. */
@@ -245,7 +246,8 @@ ${chat.next === null ? html`<p class="muted">已经是最早的消息。</p>` : 
 <input type="hidden" name="id" value="${chat.next.id}"><button>更早的消息</button></form>`}
 <div class="card">${chat.items.length === 0 ? html`<span class="muted">没有消息。</span>` : [...chat.items].reverse().map(m => html`
 <div class="msg"><b>${speaker(m.companionId)}</b><span class="muted">${time(zone, m.createdAt)}</span>
-<pre>${m.body ?? html`<span class="muted">${word(MESSAGE_STATUS, m.status)}${m.failure === null ? "" : ` ${m.failure}`}</span>`}</pre></div>`)}</div>`);
+<pre>${m.body ?? html`<span class="muted">${m.action ? word(ACTION_WORD, m.action)
+  : `${word(MESSAGE_STATUS, m.status)}${m.failure === null ? "" : ` ${m.failure}`}`}</span>`}</pre></div>`)}</div>`);
 }
 
 /** Whether a catalog model can be called now, and which switch stops it. */

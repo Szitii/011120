@@ -7,6 +7,7 @@
  * If the server stops halfway, the claim expires after two minutes and the next request that
  * touches the chat picks it up again.
  */
+import { ACTION_TEXT, answersAction } from "./prompt.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { ChatClaim, ChatOutcome, ChatPort } from "./port.ts";
 
@@ -44,6 +45,10 @@ const preview = (text: string): string => {
 export const devChatModel: ChatModel = {
   async reply(turn) {
     const name = turn.companion.displayName;
+    if (answersAction(turn)) {
+      const action = [...turn.history].reverse().find(message => message.action !== null)?.action;
+      return { messages: [`（开发环境假回复）${name}知道你${action ? ACTION_TEXT[action] : "来过"}`] };
+    }
     if (turn.replyTo === "OWNER") {
       const said = [...turn.history].reverse().find(message => message.companionId === null)?.body ?? "";
       if (turn.optional && ![name, "大家", "你们"].some(word => said.includes(word))) return { pass: true };
@@ -79,7 +84,8 @@ export class ChatReplies {
     let written = 0;
     for (let turn = await port.claim(chatId); turn !== null; turn = await port.claim(chatId)) {
       const [outcome, bodies] = await this.#answer(turn, port);
-      await port.finish(turn.replyId, turn.claimId, outcome, bodies);
+      // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
+      await port.finish(turn.replyId, turn.claimId, outcome === "ERROR" && answersAction(turn) ? "PASSED" : outcome, bodies);
       written += 1;
     }
     return written;

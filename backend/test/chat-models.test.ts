@@ -42,8 +42,8 @@ const turn = (overrides: Partial<ChatClaim> = {}): ChatClaim => ({
     identity: { identitySummary: "温柔\n爱笑", personaTraits: ["细心", ["幽默"]], speakingStyle: { 语气: "轻松", empty: null }, boundaries: [], unknown: "x" } },
   members: [{ companionId: me, displayName: "小光" }, { companionId: friend, displayName: "阿默" }],
   history: [
-    { companionId: friend, body: "早", mentions: [], sentAt: "t1" },
-    { companionId: null, body: "大家好\napi_key: sk-abcdefghijklmnopqrstu", mentions: [], sentAt: "t2" },
+    { companionId: friend, body: "早", action: null, mentions: [], sentAt: "t1" },
+    { companionId: null, body: "大家好\napi_key: sk-abcdefghijklmnopqrstu", action: null, mentions: [], sentAt: "t2" },
   ],
   ...overrides,
 });
@@ -100,13 +100,29 @@ it("builds prompts with the persona, the setting and a masked, bounded transcrip
   assert.match(replyPrompt(turn({ direct: true, history: [] })).user, /一对一私聊。[\s\S]*（还没有消息）/);
   assert.match(replyPrompt(turn({ members: [{ companionId: me, displayName: "小光" }] })).user, /群里有主人。/);
   assert.equal(replyPrompt(turn({ companion: { ...turn().companion, identity: null } })).system.includes("确认过的你的人设"), false);
-  const long = Array.from({ length: 40 }, (_, i) => ({ companionId: null, body: `${i}`.padEnd(400, "字"), mentions: [], sentAt: `${i}` }));
+  const long = Array.from({ length: 40 }, (_, i) => ({ companionId: null, body: `${i}`.padEnd(400, "字"), action: null, mentions: [], sentAt: `${i}` }));
   const bounded = replyPrompt(turn({ history: long })).user;
   assert.ok(bounded.length < 9_000 && bounded.includes("【主人】39") && !bounded.includes("【主人】0字"), "newest kept, oldest dropped");
-  assert.match(replyPrompt(turn({ history: [{ companionId: "ghost", body: "?", mentions: [], sentAt: "t" }] })).user, /【某位家机】/);
+  assert.match(replyPrompt(turn({ history: [{ companionId: "ghost", body: "?", action: null, mentions: [], sentAt: "t" }] })).user, /【某位家机】/);
   const decide = decisionPrompt(turn());
   assert.match(decide.system, /只回答一个字：是 或 否/);
   assert.match(decide.user, /最后的消息需要「小光」回应吗？$/);
+});
+
+it("tells the model about home-room actions and lets it stay quiet", () => {
+  const acted = turn({ direct: true, optional: true, history: [
+    { companionId: null, body: "晚安", action: null, mentions: [], sentAt: "t1" },
+    { companionId: null, body: null, action: "PAT_HEAD", mentions: [], sentAt: "t2" },
+  ] });
+  const { user } = replyPrompt(acted);
+  assert.match(user, /【主人】晚安\n【主人】（在小家里摸了摸你的头）/);
+  assert.match(user, /主人刚才对你做了个小动作[\s\S]*不刻意讨好/);
+  assert.match(user, new RegExp(`只输出 \\${PASS.slice(0, -1)}`));
+  const decide = decisionPrompt(acted);
+  assert.match(decide.system, /主人刚在小家里对它做了个小动作/);
+  assert.match(decide.user, /（在小家里摸了摸你的头）[\s\S]*「小光」要回一句话吗？$/);
+  // Later turns that must answer still see the action in the transcript.
+  assert.match(replyPrompt({ ...acted, optional: false }).user, /（在小家里摸了摸你的头）\n\n现在轮到你（小光）说话。$/);
 });
 
 it("reads the model's answer: lines, name prefixes, passes and decisions", () => {

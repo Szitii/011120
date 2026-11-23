@@ -2,6 +2,7 @@
  * Chat between an Owner and their own Companions (one-to-one or a group of up to 8).
  * Private: nothing here is ever shown to other people or used for public posts.
  */
+import type { CompanionAction } from "./companion-actions.ts";
 
 export interface ChatMember {
   companionId: string;
@@ -12,8 +13,13 @@ export interface ChatMessage {
   id: string;
   /** null: the Owner wrote it. */
   companionId: string | null;
-  /** null when the reply failed or was blocked. */
+  /** null when the reply failed or was blocked, and for an action. */
   body: string | null;
+  /**
+   * Set when the Owner did a home-room action (show it as a grey line, e.g. "你摸了摸 TA 的头"); then body is null.
+   * The server always sends it (null for ordinary messages); optional here so app code written before it still compiles.
+   */
+  action?: CompanionAction | null;
   /** Companions the Owner @mentioned. */
   mentions: string[];
   status: "SENT" | "FAILED" | "BLOCKED";
@@ -54,6 +60,11 @@ export interface ChatSendResult {
   message: ChatMessage;
   typing: string[];
   replying: boolean;
+}
+
+/** POST /v0/companions/{id}/actions: the action, recorded in the one-to-one chat `chatId`. */
+export interface CompanionActionResult extends ChatSendResult {
+  chatId: string;
 }
 
 /** How a Companion takes part in group chats. One-to-one chats always answer. */
