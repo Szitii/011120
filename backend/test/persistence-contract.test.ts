@@ -104,15 +104,16 @@ describe("Foundation persistence and API contracts", () => {
       "/companions/{companionId}/social-persona:",
       "/memory-access-decisions:explain:",
       "/compute-transactions/{transactionId}:",
-      "/encounters:",
       "/life-event-inbox:",
-      "/compute-receipts/{transactionId}:",
     ]) {
       assert.ok(openapi.includes(path));
     }
     assert.doesNotMatch(openapi, /^  \/feed:/m);
     assert.ok(openapi.includes("/community/feed:"));
     assert.ok(!openapi.includes("/dm"));
+    // The Encounter run, its invitations and receipts were removed: only reading an Encounter remains.
+    assert.ok(openapi.includes("/encounters/{encounterId}:"));
+    for (const gone of ["\n  /encounters:", "/encounter-invitations", "/compute-receipts"]) assert.ok(!openapi.includes(gone), gone);
     assert.match(openapi, /privateMemoryIncluded: \{ const: false \}/);
     assert.match(openapi, /socialRuntimeAuthority: \{ const: false \}/);
   });

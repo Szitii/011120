@@ -19,7 +19,7 @@
 | 目录 | 内容 | 负责 |
 |---|---|---|
 | `frontend/` | Expo / React Native 移动端和 Web 端，有自己的 `package.json` | 前端 |
-| `backend/src`、`backend/test` | TypeScript 服务端（HTTP 接口、数据库适配、导入、Encounter）和单元测试 | 后端 |
+| `backend/src`、`backend/test` | TypeScript 服务端（HTTP 接口、数据库适配、导入、社区、聊天、管理台）和单元测试 | 后端 |
 | `backend/supabase/migrations` | 数据库迁移：表、权限、业务规则都在这里 | 后端 |
 | `backend/db-tests` | 需要真实 PostgreSQL 的契约与集成测试 | 后端 |
 | `backend/scripts` | 初始化开发库、跑数据库测试、冒烟测试 | 后端 |
@@ -31,7 +31,7 @@
 
 ## 已确认的工程基础
 
-- TypeScript Foundation：外部角色卡导入解析与防火墙、`/v0` HTTP 边界、PostgreSQL 适配器、Encounter 编排与输入输出安全扫描。
+- TypeScript Foundation：外部角色卡导入解析与防火墙、`/v0` HTTP 边界、PostgreSQL 适配器、聊天回复与输出安全扫描。发起 Encounter 的服务端编排已于 2026-11-23 删除（从未接入真实服务器），只保留查看已有 Encounter 的读取接口；数据库里的 Encounter 函数暂未删除。
 - PostgreSQL / Supabase：身份版本、Social Twin 投影、Memory Permission Gate、Owner 作用域、RLS、安全事务、计算预算、Encounter 与 Life Event Inbox。业务规则只在数据库函数里实现一份，TypeScript 不再保留内存版副本。
 - API：OpenAPI v0.7.1 相关 Stage 1 读写接口及开发 HTTP host。
 - 移动客户端：Expo / React Native，身份切换、家机导入激活、公共社区详情与 Life Inbox 等开发路径。

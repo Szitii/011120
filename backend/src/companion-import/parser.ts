@@ -223,37 +223,25 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
     }
   }
 
+  const blockingIds = new Set(findings.filter((finding) => finding.action === "CANDIDATE_BLOCKED").map((finding) => finding.id));
   const candidates: IdentityCandidate[] = [];
-  const addStringCandidate = (sourceField: string, field: IdentityField): void => {
+  const addCandidate = (sourceField: string, field: IdentityField, asList = false): void => {
     const value = data[sourceField];
     if (typeof value !== "string" || value.trim() === "") return;
     const path = `${prefix}.${sourceField}`;
-    candidates.push(
-      candidate(
-        `candidate-${field}`,
-        field,
-        value.trim(),
-        path,
-        findingIdsByPath.get(path)?.filter((id) => findings.find((finding) => finding.id === id)?.action === "CANDIDATE_BLOCKED") ?? [],
-      ),
-    );
+    const trimmed = value.trim();
+    candidates.push(candidate(
+      `candidate-${field}`,
+      field,
+      asList ? Object.freeze([trimmed]) : trimmed,
+      path,
+      (findingIdsByPath.get(path) ?? []).filter((id) => blockingIds.has(id)),
+    ));
   };
 
-  addStringCandidate("name", "displayName");
-  addStringCandidate("description", "identitySummary");
-  const personality = data.personality;
-  if (typeof personality === "string" && personality.trim() !== "") {
-    const path = `${prefix}.personality`;
-    candidates.push(
-      candidate(
-        "candidate-personaTraits",
-        "personaTraits",
-        Object.freeze([personality.trim()]),
-        path,
-        findingIdsByPath.get(path)?.filter((id) => findings.find((finding) => finding.id === id)?.action === "CANDIDATE_BLOCKED") ?? [],
-      ),
-    );
-  }
+  addCandidate("name", "displayName");
+  addCandidate("description", "identitySummary");
+  addCandidate("personality", "personaTraits", true);
 
   if (!candidates.some((entry) => entry.field === "displayName")) {
     throw new ImportPolicyError("IMPORT_NAME_REQUIRED", "A non-empty character name is required.");

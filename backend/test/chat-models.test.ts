@@ -211,6 +211,12 @@ it("speaks through a platform model: books, calls, settles, and asks the cheap m
     assert.deepEqual(await platform.reply(turn(), { port: bookingPort([{ decision }]).port, signal }), { failed: decision });
     assert.deepEqual(await platform.reply(turn({ optional: true }), { port: bookingPort([{ decision }]).port, signal }), { pass: true });
   }
+  // The judge is switched off: the reply model is asked instead of the turn going quiet for good.
+  answers["claude-big"] = "我在";
+  const judgeOff = bookingPort([{ decision: "DISABLED" }]);
+  assert.deepEqual(await platform.reply(turn({ optional: true }), { port: judgeOff.port, signal }), { messages: ["我在"] });
+  assert.deepEqual(judgeOff.reserved.map(r => r.purpose), ["DECIDE", "REPLY"]);
+  answers["claude-big"] = "";
   await assert.rejects(platform.reply(turn(), { port: bookingPort([{ decision: "STALE" }]).port, signal }), /moved on/);
   assert.deepEqual(await new PlatformChatModel(new ChatCatalog(file, {}), call).reply(turn(), { port, signal }), { failed: "UNAVAILABLE" });
   const noJudge = new PlatformChatModel(new ChatCatalog({ ...file, decisionModel: null }, keys), call);

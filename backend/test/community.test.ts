@@ -79,13 +79,13 @@ it("rejects malformed contexts, cursors, bodies and missing retry keys before pe
 });
 
 it("runs community routing after authentication and uses the existing safe error envelope", async () => {
-  const api = new MvpApiBoundary({ sessions: { resolve: async () => session }, encounters: { run: async () => { throw Error("unused"); } } });
+  const api = new MvpApiBoundary({ sessions: { resolve: async () => session } });
   assert.equal((await api.handle({ method: "GET", url: "/v0/community/feed" })).status, 401);
   assert.equal((await api.handle(request("feed"))).status, 200);
   const denied = new MvpApiBoundary({ sessions: { resolve: async () => ({ ...session, community: {
     ...community,
     read: async () => { throw new PostgresPersistenceError("NOT_FOUND", "secret database text"); }, command: community.command,
-  } }) }, encounters: { run: async () => { throw Error("unused"); } } });
+  } }) } });
   const result = await denied.handle(request("notifications"));
   assert.equal(result.status, 404); assert.ok(!JSON.stringify(result.body).includes("secret database text"));
 });

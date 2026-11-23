@@ -133,7 +133,6 @@ it("is reachable through the API boundary after authentication", async () => {
   const { port } = fakePort();
   const api = new MvpApiBoundary({
     sessions: { resolve: async () => session(port) },
-    encounters: { run: async () => { throw new Error("unused"); } },
   });
   const ok = await api.handle(request("chats", "GET", undefined, { Authorization: "Bearer t" }));
   assert.equal(ok.status, 200);

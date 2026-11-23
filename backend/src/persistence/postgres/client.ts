@@ -50,5 +50,9 @@ export class PgOwnerExecutor implements SqlExecutor {
 
 export function createPgPool(connectionString: string): pg.Pool {
   if (connectionString.trim() === "") throw new Error("PostgreSQL connection string is required.");
-  return new pg.Pool({ connectionString, max: 10, application_name: "companion-social" });
+  // A full pool answers 503 after 5 s instead of making requests wait forever.
+  const pool = new pg.Pool({ connectionString, max: 10, connectionTimeoutMillis: 5_000, application_name: "companion-social" });
+  // An idle connection the database drops emits "error"; without a listener that kills the process.
+  pool.on("error", (error) => console.error(`PostgreSQL idle connection error: ${error.message}`));
+  return pool;
 }

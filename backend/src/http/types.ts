@@ -5,14 +5,6 @@ import type {
   ImportSourceFormat,
   NormalizedIdentityDraft,
 } from "../companion-import/types.ts";
-import type { ComputeReceipt } from "../compute/receipt.ts";
-import type { PersistentEncounterCommand, PersistentEncounterResult } from "../encounter/persistent-orchestrator.ts";
-import type {
-  InvitationListCursor,
-  InvitationMutationResult,
-  IssueInvitationInput,
-  OwnerInvitation,
-} from "../persistence/postgres/types.ts";
 
 export interface MvpHttpRequest {
   readonly method: string;
@@ -215,22 +207,6 @@ export interface ControlsResourceView {
 }
 
 export interface OwnerApiPort {
-  issueInvitation(input: IssueInvitationInput): Promise<InvitationMutationResult>;
-  approveInvitation(
-    invitationId: string,
-    idempotencyKeyHash: string,
-    requestHash: string,
-  ): Promise<InvitationMutationResult>;
-  rejectInvitation(
-    invitationId: string,
-    idempotencyKeyHash: string,
-    requestHash: string,
-  ): Promise<InvitationMutationResult>;
-  listInvitations(
-    limit: number,
-    before?: InvitationListCursor,
-  ): Promise<readonly OwnerInvitation[]>;
-  getComputeReceipt(transactionId: string): Promise<ComputeReceipt | undefined>;
   getIdentityContext(input?: { readonly activeSubjectKind?: "OWNER" | "COMPANION" | "SOCIAL_TWIN"; readonly activeSubjectId?: string }): Promise<ActiveIdentityContextView>;
   listOwnerCompanions(): Promise<readonly OwnerCompanionSummaryView[]>;
   listWorldItems(limit: number, beforeCreatedAt?: string): Promise<WorldCollectionView>;
@@ -295,10 +271,6 @@ export interface AuthenticatedOwnerSession {
 
 export interface OwnerSessionResolver {
   resolve(bearerToken: string): Promise<AuthenticatedOwnerSession>;
-}
-
-export interface EncounterCommandPort {
-  run(input: PersistentEncounterCommand): Promise<PersistentEncounterResult>;
 }
 
 export class ApiAuthenticationError extends Error {
