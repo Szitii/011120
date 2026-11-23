@@ -150,7 +150,10 @@ export class MockApiAdapter implements ClientApi {
     };
   }
 
-  async lifeContinuity(): Promise<LifeContinuityCollection> {
+  async lifeContinuity(viewer?: Parameters<ClientApi["lifeContinuity"]>[0]): Promise<LifeContinuityCollection> {
+    if (viewer && viewer.id !== (viewer.kind === "SOCIAL_TWIN" ? "twin-preview-1" : "companion-preview-1")) {
+      return { items: [], nextCursor: null };
+    }
     return {
       items: [
         {

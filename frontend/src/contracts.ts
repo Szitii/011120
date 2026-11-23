@@ -101,7 +101,7 @@ export interface CompanionProfile {
 }
 
 export interface ClientApi {
-  readonly community?: import("../../contracts/community.ts").CommunityClient;
+  readonly community?: import("./community/client.ts").CommunityClient;
   identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext>;
   ownerCompanions(): Promise<OwnerCompanionCollection>;
   worldItems(): Promise<WorldCollection>;

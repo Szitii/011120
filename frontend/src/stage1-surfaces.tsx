@@ -16,6 +16,8 @@ import type {
   ImportReview,
   ProjectionSelection,
 } from "./contracts.ts";
+import { SecondaryHeading, communityStyles } from "./community/components.tsx";
+import { PEARL_UI } from "./theme/skinTokens";
 import { safeClientMessage } from "./adapters/real-api.ts";
 
 type AsyncState<T> =
@@ -23,17 +25,6 @@ type AsyncState<T> =
   | { kind: "success"; value: T }
   | { kind: "empty" }
   | { kind: "error"; title: string; retry: boolean };
-
-const colors = {
-  canvas: "#FFFFFF",
-  text: "#1A1B1F",
-  muted: "#666666",
-  tertiary: "#8E8E93",
-  line: "#EFEFF4",
-  rose: "#C8656F",
-  roseWash: "#FBEFF0",
-  ink: "#000000",
-};
 
 function ErrorBlock({
   title,
@@ -60,10 +51,12 @@ export function ControlsScreen({
   api,
   companionId,
   companionName,
+  onVisibilitySaved,
 }: {
   api: ClientApi;
   companionId: string;
   companionName: string;
+  onVisibilitySaved: () => void;
 }) {
   const [state, setState] = useState<AsyncState<ControlsResource>>({ kind: "loading" });
   const [pending, setPending] = useState(false);
@@ -89,12 +82,14 @@ export function ControlsScreen({
     try {
       const value = await api.updateControls(companionId, state.value.revision, next);
       setState({ kind: "success", value });
+      if (next.socialTwinVisibility !== undefined) onVisibilitySaved();
     } catch (error) {
       const safe = safeClientMessage(error);
       if (safe.retry) {
         try {
           const refreshed = await api.controls(companionId);
           setState({ kind: "success", value: refreshed });
+          if (refreshed.settings.socialTwinVisibility !== state.value.settings.socialTwinVisibility) onVisibilitySaved();
         } catch {
           setState({ kind: "error", ...safe });
         }
@@ -118,8 +113,7 @@ export function ControlsScreen({
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.page}>
-      <Text style={styles.eyebrow}>CONTROLS</Text>
-      <Text style={styles.h1}>{companionName}</Text>
+      <SecondaryHeading title={companionName} />
       <Text style={styles.bodyMuted}>能动的都在这儿。不能动的，先别动。</Text>
 
       <ControlSection title="谁能看到">
@@ -369,7 +363,7 @@ export function BringCompanionScreen({
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
       <Text style={styles.eyebrow}>BRING COMPANION</Text>
-      <Text style={styles.h1}>带家机来</Text>
+      <SecondaryHeading title="带家机来" />
       <Text style={styles.bodyMuted}>先检查，再决定带哪些进来。外面的东西默认不算自己人。</Text>
 
       <View style={styles.noticeCard}>
@@ -398,7 +392,7 @@ export function BringCompanionScreen({
         autoCapitalize="none"
         autoCorrect={false}
         placeholder={'粘贴角色卡 JSON\n{ "name": "..." }'}
-        placeholderTextColor={colors.tertiary}
+        placeholderTextColor={PEARL_UI.muted}
         style={styles.input}
       />
 
@@ -687,7 +681,7 @@ export function SocialActivationScreen({
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.page}>
       <Text style={styles.eyebrow}>SOCIAL ID</Text>
-      <Text style={styles.h1}>{companion.displayName}</Text>
+      <SecondaryHeading title={companion.displayName} />
 
       {!activated ? (
         <>
@@ -779,49 +773,48 @@ export function SocialActivationScreen({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.canvas },
-  page: { padding: 20, paddingBottom: 48 },
+  screen: communityStyles.page,
+  page: { ...communityStyles.content, gap: 0 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 28 },
-  eyebrow: { fontSize: 10, letterSpacing: 1.2, color: colors.rose, fontWeight: "700" },
-  h1: { marginTop: 7, fontSize: 30, lineHeight: 36, fontWeight: "700", color: colors.ink },
-  h2: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: colors.ink, textAlign: "center" },
-  bodyMuted: { marginTop: 6, fontSize: 13, lineHeight: 20, color: colors.muted },
-  micro: { marginTop: 4, fontSize: 11, lineHeight: 17, color: colors.tertiary },
-  microStrong: { fontSize: 10, letterSpacing: 1, color: colors.rose, fontWeight: "700" },
+  eyebrow: { fontSize: 10, letterSpacing: 1.2, color: PEARL_UI.accentInk, fontWeight: "700" },
+  h2: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: PEARL_UI.ink, textAlign: "center" },
+  bodyMuted: { marginTop: 6, fontSize: 13, lineHeight: 20, color: PEARL_UI.muted },
+  micro: { marginTop: 4, fontSize: 11, lineHeight: 17, color: PEARL_UI.muted },
+  microStrong: { fontSize: 10, letterSpacing: 1, color: PEARL_UI.accentInk, fontWeight: "700" },
   stack: { marginTop: 22, gap: 10 },
-  card: { padding: 16, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas },
-  noticeCard: { padding: 14, borderRadius: 14, backgroundColor: colors.roseWash },
-  cardTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
+  card: communityStyles.card,
+  noticeCard: { padding: 14, borderRadius: 14, backgroundColor: PEARL_UI.accentWash },
+  cardTitle: { fontSize: 15, fontWeight: "700", color: PEARL_UI.ink },
   section: { marginTop: 26, gap: 10 },
-  sectionTitle: { fontSize: 13, fontWeight: "700", color: colors.text },
+  sectionTitle: { fontSize: 13, fontWeight: "700", color: PEARL_UI.ink },
   sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  infoButton: { width: 18, height: 18, borderRadius: 9, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center" },
-  infoButtonText: { fontSize: 11, fontWeight: "700", color: colors.tertiary },
-  helpCard: { padding: 13, borderRadius: 14, backgroundColor: "#F8F8FA", gap: 7 },
-  helpLine: { fontSize: 12, lineHeight: 18, color: colors.muted },
-  helpStrong: { fontWeight: "700", color: colors.text },
-  helpFootnote: { marginTop: 2, fontSize: 11, lineHeight: 17, color: colors.tertiary },
+  infoButton: { width: 18, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, alignItems: "center", justifyContent: "center" },
+  infoButtonText: { fontSize: 11, fontWeight: "700", color: PEARL_UI.muted },
+  helpCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, padding: 13, borderRadius: 14, backgroundColor: PEARL_UI.white, gap: 7 },
+  helpLine: { fontSize: 12, lineHeight: 18, color: PEARL_UI.muted },
+  helpStrong: { fontWeight: "700", color: PEARL_UI.ink },
+  helpFootnote: { marginTop: 2, fontSize: 11, lineHeight: 17, color: PEARL_UI.muted },
   pillWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  choicePill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: colors.line },
-  choicePillSelected: { backgroundColor: colors.ink, borderColor: colors.ink },
-  choiceText: { fontSize: 12, color: colors.text },
-  choiceTextSelected: { fontSize: 12, color: colors.canvas, fontWeight: "600" },
-  toggleRow: { minHeight: 66, padding: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  choicePill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line },
+  choicePillSelected: { backgroundColor: PEARL_UI.accentWash, borderColor: PEARL_UI.accent },
+  choiceText: { fontSize: 12, color: PEARL_UI.ink },
+  choiceTextSelected: { fontSize: 12, color: PEARL_UI.accentInk, fontWeight: "600" },
+  toggleRow: { backgroundColor: PEARL_UI.white, minHeight: 66, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   toggle: { width: 44, height: 26, borderRadius: 13, backgroundColor: "#D8D8DD", padding: 3 },
-  toggleOn: { backgroundColor: colors.rose },
-  toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.canvas },
+  toggleOn: { backgroundColor: PEARL_UI.accent },
+  toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: PEARL_UI.white },
   toggleKnobOn: { alignSelf: "flex-end" },
-  activationBlock: { marginTop: 26, paddingTop: 22, borderTopWidth: 1, borderColor: colors.line },
-  activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: colors.ink },
-  fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: colors.text },
-  shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 14, color: colors.text, fontSize: 13 },
-  importGuideCard: { marginTop: 14, padding: 14, borderRadius: 14, backgroundColor: "#F8F8FA", borderWidth: 1, borderColor: colors.line },
-  importGuideText: { marginTop: 8, fontSize: 12, lineHeight: 19, color: colors.muted },
-  input: { minHeight: 180, marginTop: 22, padding: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 16, color: colors.text, textAlignVertical: "top", fontFamily: "monospace", fontSize: 12, lineHeight: 18 },
-  primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center" },
-  primaryText: { color: colors.canvas, fontSize: 14, fontWeight: "600" },
-  secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center" },
-  secondaryText: { color: colors.text, fontSize: 13, fontWeight: "600" },
-  message: { marginTop: 18, textAlign: "center", fontSize: 13, color: colors.text },
+  activationBlock: { marginTop: 26, paddingTop: 22, borderTopWidth: 1, borderColor: PEARL_UI.line },
+  activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: PEARL_UI.ink },
+  fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: PEARL_UI.ink },
+  shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 14, color: PEARL_UI.ink, fontSize: 13 },
+  importGuideCard: { marginTop: 14, padding: 14, borderRadius: 14, backgroundColor: PEARL_UI.white, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line },
+  importGuideText: { marginTop: 8, fontSize: 12, lineHeight: 19, color: PEARL_UI.muted },
+  input: { minHeight: 180, marginTop: 22, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 16, color: PEARL_UI.ink, textAlignVertical: "top", fontFamily: "monospace", fontSize: 12, lineHeight: 18 },
+  primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: PEARL_UI.accentWash, alignItems: "center", justifyContent: "center" },
+  primaryText: { color: PEARL_UI.accentInk, fontSize: 14, fontWeight: "600" },
+  secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, alignItems: "center", justifyContent: "center" },
+  secondaryText: { color: PEARL_UI.ink, fontSize: 13, fontWeight: "600" },
+  message: { marginTop: 18, textAlign: "center", fontSize: 13, color: PEARL_UI.ink },
   disabled: { opacity: 0.38 },
 });

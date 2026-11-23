@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
-import { CommunityButton, communityStyles as s } from "./components.tsx";
+import { CommunityButton, SecondaryHeading, communityStyles as s } from "./components.tsx";
 
 export function HumanProfileEditor({ client, viewer, onClose }: {
   client: CommunityClient;
@@ -79,7 +79,7 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
   }
 
   return <ScrollView style={s.page} keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-    <Text accessibilityRole="header" style={s.title}>编辑社区资料</Text>
+    <SecondaryHeading title="编辑资料" />
     {loading && <ActivityIndicator accessibilityLabel="正在加载资料" color="#9C6D79" />}
     {settings && <View style={s.card}>
       <Text style={s.author}>社区昵称</Text>

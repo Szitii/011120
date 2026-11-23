@@ -35,10 +35,6 @@ export interface SkinTheme {
   identityBadges: {
     avatarRing: string;
   };
-  actorAnchor: {
-    companionBarBg: string;
-    companionBarText: string;
-  };
 }
 
 const LIGHT_BASE_COLORS = {
@@ -56,6 +52,20 @@ const LIGHT_BASE_COLORS = {
   tabInactive: "#64748B",
 };
 
+export const PEARL_UI = {
+  background: ["#F7F6F3", "#F1EFEA"],
+  white: "#FFFFFF",
+  ink: "#242322",
+  muted: "#625F5D",
+  accent: "#7B90AC",
+  accentInk: "#354760",
+  accentWash: "#E6EBF2",
+  line: "#E4E1DC",
+  highlight: "rgba(255,255,255,0.96)",
+  shadow: "#373537",
+  sheen: ["rgba(255,255,255,0.72)", "rgba(246,247,250,0.36)", "rgba(255,255,255,0.54)"],
+} as const;
+
 export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
   default: {
     id: "default",
@@ -63,21 +73,20 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
     isDark: false,
     colors: { ...LIGHT_BASE_COLORS },
     glass: {
-      activePillFill: "rgba(241,245,249,0.96)",
-      iconTint: "#2563EB",
-      border: "rgba(255,255,255,0.95)",
-      outerRing: "rgba(148,163,184,0.28)",
+      activePillFill: "rgba(123,144,172,0.27)",
+      iconTint: PEARL_UI.accentInk,
+      border: PEARL_UI.highlight,
+      outerRing: "rgba(116,122,136,0.17)",
     },
     chatBubbles: {
-      humanFill: "rgba(37,99,235,0.78)",
-      humanText: "#FFFFFF",
+      humanFill: "rgba(123,144,172,0.32)",
+      humanText: PEARL_UI.accentInk,
       humanBorder: "rgba(255,255,255,0.55)",
       aiFill: "rgba(255,255,255,0.82)",
-      aiText: "#18181B",
-      aiBorder: "rgba(255,255,255,0.96)",
+      aiText: PEARL_UI.ink,
+      aiBorder: PEARL_UI.highlight,
     },
     identityBadges: { avatarRing: "#CBD5E1" },
-    actorAnchor: { companionBarBg: "#18181B", companionBarText: "#FFFFFF" },
   },
   glacier: {
     id: "glacier",
@@ -99,7 +108,6 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
       aiBorder: "rgba(255,255,255,0.96)",
     },
     identityBadges: { avatarRing: "#BAE6FD" },
-    actorAnchor: { companionBarBg: "#18181B", companionBarText: "#FFFFFF" },
   },
   pearl: {
     id: "pearl",
@@ -121,7 +129,6 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
       aiBorder: "rgba(255,255,255,0.96)",
     },
     identityBadges: { avatarRing: "#FECDD3" },
-    actorAnchor: { companionBarBg: "#18181B", companionBarText: "#FFFFFF" },
   },
   titanium: {
     id: "titanium",
@@ -156,6 +163,5 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
       aiBorder: "rgba(255,255,255,0.22)",
     },
     identityBadges: { avatarRing: "#525866" },
-    actorAnchor: { companionBarBg: "#E2E8F0", companionBarText: "#0F172A" },
   },
 };

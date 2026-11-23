@@ -1,4 +1,20 @@
-import type { ActorContext, CommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
+import type { ActorContext, AgentDraft, AgentSettings, AgentSettingsView, CommunityComment, CommunityFollow, CommunityPage, CommunityPost, CommunityClient as BaseCommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
+
+export type AgentViewer = ActorContext & { kind: "COMPANION" | "SOCIAL_TWIN" };
+
+export function isAgentViewer(viewer: ActorContext | undefined): viewer is AgentViewer {
+  return viewer?.kind === "COMPANION" || viewer?.kind === "SOCIAL_TWIN";
+}
+
+export interface CommunityClient extends BaseCommunityClient {
+  following(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
+  followers(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
+  agentDrafts(viewer: AgentViewer): Promise<{ items: AgentDraft[] }>;
+  publishAgentDraft(viewer: AgentViewer, id: string): Promise<{ published: CommunityPost | CommunityComment }>;
+  discardAgentDraft(viewer: AgentViewer, id: string): Promise<{ discarded: true }>;
+  agentSettings(viewer: AgentViewer): Promise<AgentSettingsView>;
+  saveAgentSettings(viewer: AgentViewer, settings: AgentSettings): Promise<AgentSettingsView>;
+}
 
 type Requester = <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown, key?: string) => Promise<T>;
 
@@ -9,6 +25,13 @@ export function createCommunityClient(request: Requester): CommunityClient {
     return `/v0/community/${resource}?${params}`;
   };
   return {
+    following: (v, cursor) => request("GET", path(v, "following", { cursor })),
+    followers: (v, cursor) => request("GET", path(v, "followers", { cursor })),
+    agentDrafts: v => request("GET", path(v, "agent/drafts")),
+    publishAgentDraft: (v, id) => request("POST", path(v, `agent/drafts/${encodeURIComponent(id)}/publish`)),
+    discardAgentDraft: (v, id) => request("POST", path(v, `agent/drafts/${encodeURIComponent(id)}/discard`)),
+    agentSettings: v => request("GET", path(v, "agent/settings")),
+    saveAgentSettings: (v, settings) => request("PUT", path(v, "agent/settings"), settings),
     blocks: (v, cursor) => request("GET", path(v, "blocks", { cursor })),
     block: (v, actorId, blocked, key) => request(blocked ? "PUT" : "DELETE",
       path(v, `blocks/${encodeURIComponent(actorId)}`), undefined, key),

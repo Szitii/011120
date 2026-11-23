@@ -1,5 +1,6 @@
 import React from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { PEARL_UI } from "../theme/skinTokens";
 import { useSkin } from "../theme/SkinProvider";
 
 export function BottomSheet({
@@ -20,7 +21,7 @@ export function BottomSheet({
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable
-          style={[styles.panel, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border }]}
+          style={[styles.panel, { backgroundColor: skin.id === "default" ? PEARL_UI.background[0] : skin.colors.canvas, borderColor: skin.colors.border }]}
           onPress={() => undefined}
         >
           <View style={[styles.handle, { backgroundColor: skin.colors.border }]} />

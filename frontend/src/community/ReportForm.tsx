@@ -3,7 +3,7 @@ import { ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, CommunityReport, ReportReason, ReportTarget } from "../../../contracts/community.ts";
 import { safeClientMessage } from "../adapters/real-api.ts";
 import { communityRequestKey } from "./client.ts";
-import { CommunityButton as Button, communityStyles as s } from "./components.tsx";
+import { CommunityButton as Button, SecondaryHeading, communityStyles as s } from "./components.tsx";
 
 const reasons: { value: ReportReason; label: string }[] = [
   { value: "SPAM", label: "垃圾广告" }, { value: "HARASSMENT", label: "骚扰攻击" },
@@ -41,11 +41,11 @@ export function ReportForm({ client, viewer, target, onClose }: {
     }
   }
   return <ScrollView style={s.page} keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-    <Text accessibilityRole="header" style={s.title}>{receipt ? "已收到举报" : "举报"}</Text>
+    <SecondaryHeading title={receipt ? "已收到举报" : "举报"} />
     {receipt ? <>
       <Text style={s.body}>举报已提交，等待处理。</Text>
       <Text selectable style={s.meta}>回执编号 {receipt.id}</Text>
-      <Button label="返回社区" onPress={onClose} />
+      <Button glass label="返回社区" onPress={onClose} />
     </> : <>
       <Text style={s.body}>举报原因</Text>
       <View style={s.row}>{reasons.map(item => <Button key={item.value} label={item.label} selected={reason === item.value}

@@ -1,20 +1,32 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
+import { PEARL_UI } from "../theme/skinTokens";
 import type { RootTab } from "../state/navigation";
 
 export function FloatingGlassTabs({
   current,
-  isSampleCompanion,
   onSelect,
 }: {
   current: RootTab;
-  isSampleCompanion: boolean;
   onSelect: (tab: RootTab) => void;
 }) {
   const { skin } = useSkin();
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    pulse.setValue(0.94);
+    Animated.spring(pulse, {
+      toValue: 1,
+      speed: 24,
+      bounciness: 8,
+      useNativeDriver: true,
+    }).start();
+  }, [current, pulse]);
+
   const items: Array<{
     key: RootTab;
     label: string;
@@ -26,8 +38,8 @@ export function FloatingGlassTabs({
     {
       key: "my",
       label: "我的",
-      icon: isSampleCompanion ? "sparkles-outline" : "person-outline",
-      activeIcon: isSampleCompanion ? "sparkles" : "person",
+      icon: "person-outline",
+      activeIcon: "person",
     },
   ];
 
@@ -37,17 +49,19 @@ export function FloatingGlassTabs({
       style={[
         styles.wrapper,
         {
-          left: 24,
-          right: 24,
+          left: CHROME.screenInset,
+          right: CHROME.screenInset,
           bottom: CHROME.floatingDockBottom,
         },
       ]}
     >
-      <LiquidGlassSurface>
+      <LiquidGlassSurface glass>
         <View style={styles.row}>
           {items.map((item) => {
             const active = current === item.key;
-            const color = active ? skin.colors.tabActive : skin.colors.tabInactive;
+            const color = skin.id === "default"
+              ? (active ? PEARL_UI.accentInk : PEARL_UI.muted)
+              : (active ? skin.colors.tabActive : skin.colors.tabInactive);
             return (
               <Pressable
                 key={item.key}
@@ -64,10 +78,12 @@ export function FloatingGlassTabs({
                   pressed && { transform: [{ scale: 0.94 }] },
                 ]}
               >
-                <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
-                <Text style={[styles.label, { color, fontWeight: active ? "600" : "500" }]}>
-                  {item.label}
-                </Text>
+                <Animated.View style={[styles.tabInner, active && { transform: [{ scale: pulse }] }]}>
+                  <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
+                  <Text style={[styles.label, { color, fontWeight: active ? "600" : "500" }]}>
+                    {item.label}
+                  </Text>
+                </Animated.View>
               </Pressable>
             );
           })}
@@ -82,8 +98,12 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", padding: 4, gap: 4 },
   tab: {
     flex: 1,
-    height: 46,
+    minHeight: 48,
     borderRadius: RADIUS.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabInner: {
     alignItems: "center",
     justifyContent: "center",
   },

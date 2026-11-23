@@ -1,3 +1,4 @@
+import type { ActorContext } from "../../../contracts/community.ts";
 import type { SessionTokenSource } from "../auth/account-session.ts";
 import type {
   ActiveIdentityContext,
@@ -17,7 +18,7 @@ import type {
   ProjectionSelection,
   WorldCollection,
 } from "../contracts.ts";
-import { createCommunityClient } from "../community/client.ts";
+import { createCommunityClient, type CommunityClient } from "../community/client.ts";
 
 export class ApiProblemError extends Error {
   readonly status: number;
@@ -41,7 +42,7 @@ type RealApiConfig = { baseUrl: string } & ({ bearerToken: string } | { session:
 
 export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
-  readonly community: import("../../../contracts/community.ts").CommunityClient;
+  readonly community: CommunityClient;
 
   constructor(config: RealApiConfig) {
     this.config = config;
@@ -190,4 +191,18 @@ export function safeClientMessage(error: unknown): { title: string; retry: boole
     case 503: return { title: "现在没连上。", retry: true };
     default: return { title: "没连上。", retry: error.retryHint !== "DO_NOT_RETRY" };
   }
+}
+
+export type CommunityWriteAction = "发帖" | "评论" | "关注" | "取关";
+
+export function communityWriteMessage(error: unknown, actorKind: ActorContext["kind"], action?: CommunityWriteAction): string {
+  if (action && actorKind !== "OWNER" && error instanceof ApiProblemError) {
+    if (error.status === 403 && error.code === "FORBIDDEN") {
+      return `当前家机暂不能${action}。请前往「我的 → 设置 → 家机活动设置」，检查权限开关、暂停和活动时间。${action === "发帖" || action === "评论" ? "直接发布还需选择「直接发布」。" : ""}`;
+    }
+    if (error.status === 409 && error.code === "INVALID_STATE") {
+      return `家机的${action}次数可能已达上限，或操作过于频繁。请查看家机活动设置里的今日用量，或稍后再试。`;
+    }
+  }
+  return safeClientMessage(error).title;
 }

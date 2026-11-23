@@ -7,9 +7,11 @@ export const RADIUS = {
   bubble: 20,
   bubbleTail: 6,
   pill: 999,
+  roomFrame: 26,
 } as const;
 
 export const CHROME = {
+  screenInset: 16,
   floatingDockBottom: 12,
   scrollBottomClearance: 96,
 } as const;
