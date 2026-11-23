@@ -25,13 +25,7 @@ import {
   type CharacterAction,
 } from "../room/roomSlots";
 
-const COMPANION_WHISPERS = [
-  "今晚风大，回来喝杯热的。",
-  "靠枕换软了，过来坐会儿。",
-  "贴贴～今天辛苦啦。",
-  "黑胶机刚放了你喜欢的歌。",
-  "窗台的小猫刚睡着呢。",
-];
+import { findSafePath, type RoomPoint } from "../room/pathfinding";
 
 interface FloatingHeart {
   id: number;
@@ -40,221 +34,26 @@ interface FloatingHeart {
   anim: Animated.Value;
 }
 
-interface ObstacleBox {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
 type SeatKind = "none" | "sofa" | "bed";
 
-// Normalized furniture foot-collision boxes (0..1)
-const ROOM_OBSTACLES: ObstacleBox[] = [
-  { x1: 0.02, y1: 0.22, x2: 0.35, y2: 0.56 }, // Double bed
-  { x1: 0.33, y1: 0.28, x2: 0.45, y2: 0.43 }, // Nightstand
-  { x1: 0.65, y1: 0.22, x2: 0.98, y2: 0.43 }, // USM vinyl cabinet + floor lamp
-  { x1: 0.82, y1: 0.37, x2: 0.99, y2: 0.68 }, // Wavy mirror
-  { x1: 0.40, y1: 0.50, x2: 0.75, y2: 0.68 }, // Double sofa
-  { x1: 0.42, y1: 0.65, x2: 0.73, y2: 0.79 }, // Cloud coffee table
-  { x1: 0.03, y1: 0.56, x2: 0.23, y2: 0.83 }, // Olive plant
-];
-
-const GRID_COLS = 24;
-const GRID_ROWS = 30;
-const WALK_MIN_X = 0.14;
-const WALK_MAX_X = 0.81;
-const WALK_MIN_Y = 0.42;
-const WALK_MAX_Y = 0.87;
+function actionForSeat(seat: SeatKind): CharacterAction {
+  return seat === "bed" ? "sleep" : seat === "sofa" ? "sit" : "idle";
+}
 
 const WALK_FRAMES: CharacterAction[] = ["walk_1", "walk_2", "walk_3", "walk_4"];
 // Base room + all slots + both characters' idle sprites
 const TOTAL_ROOM_ASSETS = 1 + ROOM_SLOTS.length + 2;
-
-function isPointBlocked(nx: number, ny: number): boolean {
-  if (nx < WALK_MIN_X || nx > WALK_MAX_X || ny < WALK_MIN_Y || ny > WALK_MAX_Y) return true;
-  for (const b of ROOM_OBSTACLES) {
-    if (nx >= b.x1 && nx <= b.x2 && ny >= b.y1 && ny <= b.y2) return true;
-  }
-  return false;
-}
-
-function segmentIntersectsBox(ax: number, ay: number, bx: number, by: number, b: ObstacleBox, pad = 0.012): boolean {
-  const x1 = b.x1 - pad;
-  const y1 = b.y1 - pad;
-  const x2 = b.x2 + pad;
-  const y2 = b.y2 + pad;
-  const dx = bx - ax;
-  const dy = by - ay;
-  let t0 = 0;
-  let t1 = 1;
-  const checks: Array<[number, number]> = [
-    [-dx, ax - x1],
-    [dx, x2 - ax],
-    [-dy, ay - y1],
-    [dy, y2 - ay],
-  ];
-  for (const [p, q] of checks) {
-    if (Math.abs(p) < 1e-8) {
-      if (q < 0) return false;
-    } else {
-      const r = q / p;
-      if (p < 0) {
-        if (r > t1) return false;
-        if (r > t0) t0 = r;
-      } else {
-        if (r < t0) return false;
-        if (r < t1) t1 = r;
-      }
-    }
-  }
-  return t0 <= t1;
-}
-
-function isSegmentClear(ax: number, ay: number, bx: number, by: number): boolean {
-  if (
-    ax < WALK_MIN_X || ax > WALK_MAX_X || ay < WALK_MIN_Y || ay > WALK_MAX_Y ||
-    bx < WALK_MIN_X || bx > WALK_MAX_X || by < WALK_MIN_Y || by > WALK_MAX_Y
-  ) {
-    return false;
-  }
-  for (const b of ROOM_OBSTACLES) {
-    if (segmentIntersectsBox(ax, ay, bx, by, b, 0.012)) return false;
-  }
-  return true;
-}
-
-function nearestWalkableCell(nx: number, ny: number): [number, number] {
-  const targetC = Math.max(0, Math.min(GRID_COLS - 1, Math.round(nx * (GRID_COLS - 1))));
-  const targetR = Math.max(0, Math.min(GRID_ROWS - 1, Math.round(ny * (GRID_ROWS - 1))));
-  let bestC = targetC;
-  let bestR = targetR;
-  let bestDist = Infinity;
-  for (let r = 0; r < GRID_ROWS; r++) {
-    const gy = r / (GRID_ROWS - 1);
-    for (let c = 0; c < GRID_COLS; c++) {
-      const gx = c / (GRID_COLS - 1);
-      if (isPointBlocked(gx, gy)) continue;
-      const d = (c - targetC) * (c - targetC) + (r - targetR) * (r - targetR);
-      if (d < bestDist) {
-        bestDist = d;
-        bestC = c;
-        bestR = r;
-      }
-    }
-  }
-  return [bestC, bestR];
-}
-
-/**
- * 8-directional BFS + line-of-sight smoothing on normalized room grid.
- * Guarantees ZERO clipping through sofa, coffee table, bed, plant, or mirror.
- */
-function findSafePath(
-  startNx: number,
-  startNy: number,
-  goalNx: number,
-  goalNy: number,
-): Array<{ nx: number; ny: number }> {
-  const [sc, sr] = nearestWalkableCell(startNx, startNy);
-  const [gc, gr] = nearestWalkableCell(goalNx, goalNy);
-  const goalPt = { nx: gc / (GRID_COLS - 1), ny: gr / (GRID_ROWS - 1) };
-
-  if (sc === gc && sr === gr) return [goalPt];
-  if (isSegmentClear(startNx, startNy, goalPt.nx, goalPt.ny)) return [goalPt];
-
-  const total = GRID_COLS * GRID_ROWS;
-  const visited = new Uint8Array(total);
-  const parent = new Int32Array(total).fill(-1);
-  const queue: number[] = [];
-  const startIdx = sr * GRID_COLS + sc;
-  const goalIdx = gr * GRID_COLS + gc;
-
-  visited[startIdx] = 1;
-  queue.push(startIdx);
-
-  const dirs = [
-    [1, 0], [-1, 0], [0, 1], [0, -1],
-    [1, 1], [1, -1], [-1, 1], [-1, -1],
-  ];
-
-  let found = false;
-  let head = 0;
-  while (head < queue.length) {
-    const curr = queue[head++];
-    if (curr === goalIdx) {
-      found = true;
-      break;
-    }
-    const cc = curr % GRID_COLS;
-    const cr = Math.floor(curr / GRID_COLS);
-    for (const [dc, dr] of dirs) {
-      const nc = cc + dc;
-      const nr = cr + dr;
-      if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
-      const nIdx = nr * GRID_COLS + nc;
-      if (visited[nIdx]) continue;
-      const gx = nc / (GRID_COLS - 1);
-      const gy = nr / (GRID_ROWS - 1);
-      if (isPointBlocked(gx, gy)) continue;
-      // Prevent corner cutting on diagonals
-      if (dc !== 0 && dr !== 0) {
-        if (
-          isPointBlocked((cc + dc) / (GRID_COLS - 1), cr / (GRID_ROWS - 1)) ||
-          isPointBlocked(cc / (GRID_COLS - 1), (cr + dr) / (GRID_ROWS - 1))
-        ) {
-          continue;
-        }
-      }
-      visited[nIdx] = 1;
-      parent[nIdx] = curr;
-      queue.push(nIdx);
-    }
-  }
-
-  if (!found) return [goalPt];
-
-  const raw: Array<{ nx: number; ny: number }> = [];
-  let cur = goalIdx;
-  while (cur !== -1 && cur !== startIdx) {
-    const c = cur % GRID_COLS;
-    const r = Math.floor(cur / GRID_COLS);
-    raw.push({ nx: c / (GRID_COLS - 1), ny: r / (GRID_ROWS - 1) });
-    cur = parent[cur];
-  }
-  raw.reverse();
-
-  // Line-of-sight smoothing to produce clean, natural turns
-  const smoothed: Array<{ nx: number; ny: number }> = [];
-  let anchor = { nx: startNx, ny: startNy };
-  let i = 0;
-  while (i < raw.length) {
-    let farthest = i;
-    for (let j = raw.length - 1; j > i; j--) {
-      if (isSegmentClear(anchor.nx, anchor.ny, raw[j].nx, raw[j].ny)) {
-        farthest = j;
-        break;
-      }
-    }
-    smoothed.push(raw[farthest]);
-    anchor = raw[farthest];
-    i = farthest + 1;
-  }
-  return smoothed;
-}
 
 export function PearlInteractiveRoom({
   userName,
   companionName,
   isCompanionView,
   isActive = true,
-  onActionTriggered,
 }: {
   userName: string;
   companionName: string;
   isCompanionView: boolean;
   isActive?: boolean;
-  onActionTriggered?: (action: "wave" | "sit" | "snuggle" | "diary") => void;
 }) {
   const [stage, setStage] = useState({ w: 344, h: 430 });
   const [nightMode, setNightMode] = useState(false);
@@ -265,19 +64,8 @@ export function PearlInteractiveRoom({
   const [compAction, setCompAction] = useState<CharacterAction>("idle");
   const [userSortY, setUserSortY] = useState(0.46);
   const [compSortY, setCompSortY] = useState(0.46);
-  const [whisperIndex, setWhisperIndex] = useState(0);
   const [hearts, setHearts] = useState<FloatingHeart[]>([]);
-  const [bedMenuOpen, setBedMenuOpen] = useState(false);
   const zzzAnim = useRef(new Animated.Value(0)).current;
-
-  // Unified non-overlapping speech bubble state
-  const [roomSpeech, setRoomSpeech] = useState<{
-    text: string;
-    sender: "user" | "companion";
-    nx: number;
-    ny: number;
-  } | null>(null);
-  const speechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Persistent normalized positions (preserved across onLayout & tab switches!)
   const userNormRef = useRef({ nx: 0.60, ny: 0.46 });
@@ -294,6 +82,9 @@ export function PearlInteractiveRoom({
   const idleFloatA = useRef(new Animated.Value(0)).current;
   const idleFloatB = useRef(new Animated.Value(0)).current;
   const roomReveal = useRef(new Animated.Value(0)).current;
+  const userFade = useRef(new Animated.Value(1)).current;
+  const compFade = useRef(new Animated.Value(1)).current;
+  const companionReact = useRef(new Animated.Value(0)).current;
   const petBounce = useRef(new Animated.Value(1)).current;
   const diaryBounce = useRef(new Animated.Value(1)).current;
   const modeSpin = useRef(new Animated.Value(0)).current;
@@ -316,7 +107,6 @@ export function PearlInteractiveRoom({
   const compAnimRef = useRef<Animated.CompositeAnimation | null>(null);
   const userWalkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const compWalkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const actionResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Track real-time animated coordinates so interrupting mid-walk re-plans from actual live spot
   useEffect(() => {
@@ -398,14 +188,25 @@ export function PearlInteractiveRoom({
     return () => zzzLoop.stop();
   }, [isActive, appActive, someoneSleeping, zzzAnim]);
 
-  // Pause idle loops, walks, and timers when off-screen or backgrounded
+  function stopRoomMotion() {
+    userTokenRef.current++;
+    compTokenRef.current++;
+    userAnimRef.current?.stop();
+    compAnimRef.current?.stop();
+    stopWalkCycle(userWalkTimerRef);
+    stopWalkCycle(compWalkTimerRef);
+    userFade.setValue(1);
+    compFade.setValue(1);
+    setUserAction(actionForSeat(userSeatRef.current));
+    setCompAction(actionForSeat(compSeatRef.current));
+    companionReact.stopAnimation();
+    companionReact.setValue(0);
+  }
+
+  // Pause idle loops and movement when the room leaves the foreground.
   useEffect(() => {
     if (!isActive || !appActive) {
-      userAnimRef.current?.stop();
-      compAnimRef.current?.stop();
-      stopWalkCycle(userWalkTimerRef);
-      stopWalkCycle(compWalkTimerRef);
-      if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
+      stopRoomMotion();
       return;
     }
     const loopA = Animated.loop(
@@ -446,7 +247,7 @@ export function PearlInteractiveRoom({
       loopA.stop();
       loopB.stop();
     };
-  }, [isActive, appActive, idleFloatA, idleFloatB]);
+  }, [isActive, appActive, idleFloatA, idleFloatB, userFade, compFade, companionReact]);
 
   useEffect(() => {
     return () => {
@@ -454,14 +255,13 @@ export function PearlInteractiveRoom({
       compAnimRef.current?.stop();
       if (userWalkTimerRef.current) clearInterval(userWalkTimerRef.current);
       if (compWalkTimerRef.current) clearInterval(compWalkTimerRef.current);
-      if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
-      if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
     };
   }, []);
 
   function onLayout(e: LayoutChangeEvent) {
     const { width, height } = e.nativeEvent.layout;
-    if (width <= 0 || height <= 0) return;
+    if (width <= 0 || height <= 0 || (width === stageRef.current.w && height === stageRef.current.h)) return;
+    stopRoomMotion();
     stageRef.current = { w: width, h: height };
     setStage({ w: width, h: height });
     // Restore preserved normalized coordinates instead of resetting positions!
@@ -469,12 +269,6 @@ export function PearlInteractiveRoom({
     compY.setValue(compNormRef.current.ny * height);
     userX.setValue(userNormRef.current.nx * width);
     userY.setValue(userNormRef.current.ny * height);
-  }
-
-  function showSpeech(text: string, sender: "user" | "companion", nx: number, ny: number, ms = 2600) {
-    if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
-    setRoomSpeech({ text, sender, nx, ny });
-    speechTimerRef.current = setTimeout(() => setRoomSpeech(null), ms);
   }
 
   function spawnHeart(x: number, y: number) {
@@ -555,336 +349,176 @@ export function PearlInteractiveRoom({
     }
   }
 
-  function popCompanionWhisper() {
-    const next = (whisperIndex + 1) % COMPANION_WHISPERS.length;
-    setWhisperIndex(next);
-    showSpeech(COMPANION_WHISPERS[next], "companion", compNormRef.current.nx, compNormRef.current.ny);
-    spawnHeart(compNormRef.current.nx * stage.w, compNormRef.current.ny * stage.h - stage.h * 0.14);
+  type Actor = "user" | "companion";
+
+  function furnitureEntrance(who: Actor, seat: SeatKind): RoomPoint {
+    if (seat === "bed") return who === "user" ? { nx: 0.42, ny: 0.47 } : { nx: 0.39, ny: 0.47 };
+    // Reach the open front corners beside the coffee table before sitting.
+    return { nx: who === "user" ? 0.78 : 0.38, ny: 0.71 };
   }
 
-  /**
-   * Shared path-following engine for BOTH user and companion:
-   * - Exits current seat cleanly before walking
-   * - Uses obstacle-free BFS path on walkable grid
-   * - Updates facing per segment & loops all 4 walk frames
-   */
+  function planMove(who: Actor, target: RoomPoint, seat: SeatKind) {
+    const isUser = who === "user";
+    const currentSeat = (isUser ? userSeatRef : compSeatRef).current;
+    const start = currentSeat === "none"
+      ? (isUser ? userNormRef : compNormRef).current
+      : furnitureEntrance(who, currentSeat);
+    const end = seat === "none" ? target : furnitureEntrance(who, seat);
+    const sameSeat = currentSeat === seat && seat !== "none";
+    const path = sameSeat ? [] : findSafePath(start, end, seat !== "none");
+    return path ? { currentSeat, start, end, sameSeat, path } : undefined;
+  }
+
   function moveCharacterAlong(
-    who: "user" | "companion",
-    targetNx: number,
-    targetNy: number,
-    opts?: {
-      finalAction?: CharacterAction;
-      finalFacingLeft?: boolean;
-      seat?: SeatKind;
-      approachPoint?: { nx: number; ny: number };
-      showRipple?: boolean;
-      onArrive?: () => void;
-    },
+    who: Actor, target: RoomPoint, seat: SeatKind = "none",
+    feedback?: "ripple" | "heart", plan = planMove(who, target, seat),
   ) {
+    if (!plan) return;
+    const { currentSeat, start, end, sameSeat, path } = plan;
     const isUser = who === "user";
     const tokenRef = isUser ? userTokenRef : compTokenRef;
-    const myToken = ++tokenRef.current;
     const animRef = isUser ? userAnimRef : compAnimRef;
     const walkTimerRef = isUser ? userWalkTimerRef : compWalkTimerRef;
     const normRef = isUser ? userNormRef : compNormRef;
     const seatRef = isUser ? userSeatRef : compSeatRef;
-    const animX = isUser ? userX : compX;
-    const animY = isUser ? userY : compY;
+    const x = isUser ? userX : compX;
+    const y = isUser ? userY : compY;
+    const fade = isUser ? userFade : compFade;
     const setAction = isUser ? setUserAction : setCompAction;
-    const setFacingLeft = isUser ? setUserFacingLeft : setCompFacingLeft;
-
+    const setFacing = isUser ? setUserFacingLeft : setCompFacingLeft;
+    const token = ++tokenRef.current;
     animRef.current?.stop();
     stopWalkCycle(walkTimerRef);
-
-    const w = stageRef.current.w;
-    const h = stageRef.current.h;
-    const curSeat = seatRef.current;
-    const nextSeat: SeatKind = opts?.seat ?? "none";
-
-    // Build obstacle-free waypoint chain
-    const chain: Array<{ nx: number; ny: number }> = [];
-    let startNx = normRef.current.nx;
-    let startNy = normRef.current.ny;
-
-    // 1) If currently seated on sofa/bed and moving elsewhere, step cleanly to exit point first
-    if (curSeat === "sofa" && nextSeat !== "sofa") {
-      const exitPt = { nx: startNx < 0.58 ? 0.38 : 0.77, ny: 0.56 };
-      chain.push(exitPt);
-      startNx = exitPt.nx;
-      startNy = exitPt.ny;
-    } else if (curSeat === "bed" && nextSeat !== "bed") {
-      const exitPt = { nx: 0.39, ny: 0.49 };
-      chain.push(exitPt);
-      startNx = exitPt.nx;
-      startNy = exitPt.ny;
-    }
-
-    // 2) Route across walkable grid
-    if (nextSeat !== "none" && opts?.approachPoint) {
-      if (!(curSeat === nextSeat)) {
-        const approachPath = findSafePath(startNx, startNy, opts.approachPoint.nx, opts.approachPoint.ny);
-        chain.push(...approachPath);
-      }
-      chain.push({ nx: targetNx, ny: targetNy });
-    } else if (nextSeat === "none") {
-      const floorPath = findSafePath(startNx, startNy, targetNx, targetNy);
-      chain.push(...floorPath);
-    } else {
-      chain.push({ nx: targetNx, ny: targetNy });
-    }
-
-    const finalPt = chain[chain.length - 1] ?? { nx: targetNx, ny: targetNy };
-    if (opts?.showRipple) {
-      triggerRipple(finalPt.nx * w, finalPt.ny * h);
-    }
-
-    seatRef.current = curSeat === nextSeat ? nextSeat : "none";
-
-    let walkStarted = false;
-    const runStep = (idx: number) => {
-      if (tokenRef.current !== myToken) return;
-      if (idx >= chain.length) {
-        stopWalkCycle(walkTimerRef);
-        seatRef.current = nextSeat;
-        setAction(opts?.finalAction ?? "idle");
-        if (typeof opts?.finalFacingLeft === "boolean") {
-          setFacingLeft(opts.finalFacingLeft);
-        }
-        opts?.onArrive?.();
-        return;
-      }
-
-      const pt = chain[idx];
-      const px = pt.nx * w;
-      const py = pt.ny * h;
-      const cx = normRef.current.nx * w;
-      const cy = normRef.current.ny * h;
-      const dx = px - cx;
-      const dy = py - cy;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist < 2) {
-        runStep(idx + 1);
-        return;
-      }
-
-      if (Math.abs(dx) > 2) setFacingLeft(dx < 0);
-      if (!walkStarted && dist > 6) { walkStarted = true; startWalkCycle(walkTimerRef, setAction); }
-
-      const dur = Math.max(180, Math.min(1150, Math.round(dist * 5.6)));
-      animRef.current = Animated.parallel([
-        Animated.timing(animX, {
-          toValue: px,
-          duration: dur,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }),
-        Animated.timing(animY, {
-          toValue: py,
-          duration: dur,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }),
-      ]);
-      animRef.current.start(({ finished }) => {
-        if (!finished || tokenRef.current !== myToken) return;
-        runStep(idx + 1);
+    fade.setValue(1);
+    const current = () => tokenRef.current === token;
+    const play = (animation: Animated.CompositeAnimation, done: () => void) => {
+      animRef.current = animation;
+      animation.start(({ finished }) => {
+        if (finished && current()) done();
       });
     };
+    const place = (point: RoomPoint) => {
+      normRef.current = { ...point };
+      x.setValue(point.nx * stageRef.current.w);
+      y.setValue(point.ny * stageRef.current.h);
+      (isUser ? setUserSortY : setCompSortY)(point.ny);
+    };
+    const pose = (point: RoomPoint, destination: SeatKind, done: () => void) => {
+      stopWalkCycle(walkTimerRef);
+      play(Animated.timing(fade, { toValue: 0, duration: 100, useNativeDriver: true }), () => {
+        place(point);
+        seatRef.current = destination;
+        setAction(actionForSeat(destination));
+        setFacing(destination === "sofa" && isUser);
+        // The sleeping sprite and foreground mask are committed together while hidden.
+        requestAnimationFrame(() => {
+          if (current()) play(Animated.timing(fade, { toValue: 1, duration: 160, useNativeDriver: true }), done);
+        });
+      });
+    };
+    const finalPoint = path.at(-1) ?? end;
+    if (feedback === "ripple") triggerRipple(finalPoint.nx * stage.w, finalPoint.ny * stage.h);
+    const finish = () => {
+      if (feedback === "heart") spawnHeart(target.nx * stage.w, target.ny * stage.h - stage.h * 0.14);
+    };
 
-    runStep(0);
+    if (sameSeat) {
+      pose(target, seat, finish);
+      return;
+    }
+
+    let walking = false;
+    const walk = (index: number) => {
+      const next = path[index];
+      if (!next) {
+        stopWalkCycle(walkTimerRef);
+        if (seat === "none") {
+          setAction("idle");
+          finish();
+        } else {
+          setAction("idle");
+          pose(target, seat, finish);
+        }
+        return;
+      }
+      const { w, h } = stageRef.current;
+      const dx = (next.nx - normRef.current.nx) * w;
+      const dy = (next.ny - normRef.current.ny) * h;
+      const distance = Math.hypot(dx, dy);
+      if (distance < 1) {
+        walk(index + 1);
+        return;
+      }
+      if (Math.abs(dx) > 1) setFacing(dx < 0);
+      if (!walking) {
+        walking = true;
+        startWalkCycle(walkTimerRef, setAction);
+      }
+      const duration = Math.max(85, Math.round(distance * 5.6));
+      play(Animated.parallel([
+        Animated.timing(x, { toValue: next.nx * w, duration, easing: Easing.linear, useNativeDriver: true }),
+        Animated.timing(y, { toValue: next.ny * h, duration, easing: Easing.linear, useNativeDriver: true }),
+      ]), () => {
+        place(next);
+        walk(index + 1);
+      });
+    };
+    if (currentSeat === "none") walk(0);
+    else pose(start, "none", () => walk(0));
   }
 
   function handleFloorPress(e: GestureResponderEvent) {
-    if (bedMenuOpen) setBedMenuOpen(false);
-    const nx = e.nativeEvent.locationX / Math.max(1, stage.w);
-    const ny = e.nativeEvent.locationY / Math.max(1, stage.h);
-    moveCharacterAlong("user", nx, ny, {
-      finalAction: "idle",
-      seat: "none",
-      showRipple: true,
-      onArrive: () => {
-        const dist = Math.hypot(
-          (userNormRef.current.nx - compNormRef.current.nx) * stage.w,
-          (userNormRef.current.ny - compNormRef.current.ny) * stage.h,
-        );
-        if (dist < 64) popCompanionWhisper();
-      },
-    });
+    moveCharacterAlong("user", {
+      nx: e.nativeEvent.locationX / Math.max(1, stage.w),
+      ny: e.nativeEvent.locationY / Math.max(1, stage.h),
+    }, "none", "ripple");
   }
 
-  function handleWave() {
-    if (bedMenuOpen) setBedMenuOpen(false);
-    if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
-    const needFloor = userSeatRef.current !== "none" || compSeatRef.current !== "none";
+  function handleCompanionPress() {
+    companionReact.stopAnimation();
+    companionReact.setValue(0);
+    Animated.sequence([
+      Animated.timing(companionReact, { toValue: 1, duration: 110, useNativeDriver: true }),
+      Animated.timing(companionReact, { toValue: 0, duration: 190, useNativeDriver: true }),
+    ]).start();
+  }
 
-    if (needFloor) {
-      moveCharacterAlong("companion", 0.46, 0.46, {
-        finalAction: "wave",
-        finalFacingLeft: false,
-        seat: "none",
-      });
-      moveCharacterAlong("user", 0.59, 0.46, {
-        finalAction: "wave",
-        finalFacingLeft: true,
-        seat: "none",
-        onArrive: () => {
-          showSpeech("嗨～回来啦", "companion", 0.52, 0.46);
-          spawnHeart(stage.w * 0.525, stage.h * 0.31);
-          actionResetTimerRef.current = setTimeout(() => {
-            setUserAction("idle");
-            setCompAction("idle");
-          }, 1800);
-        },
-      });
-    } else {
-      setUserAction("wave");
-      setCompAction("wave");
-      setCompFacingLeft(false);
-      setUserFacingLeft(true);
-      showSpeech("嗨～回来啦", "companion", compNormRef.current.nx, compNormRef.current.ny);
-      spawnHeart(compNormRef.current.nx * stage.w, compNormRef.current.ny * stage.h - stage.h * 0.14);
-      actionResetTimerRef.current = setTimeout(() => {
-        setUserAction("idle");
-        setCompAction("idle");
-      }, 1800);
-    }
-    onActionTriggered?.("wave");
+  function moveTogether(companion: RoomPoint, user: RoomPoint, seat: SeatKind, showHeart = false) {
+    const companionPlan = planMove("companion", companion, seat);
+    const userPlan = planMove("user", user, seat);
+    if (!companionPlan || !userPlan) return;
+    moveCharacterAlong("companion", companion, seat, undefined, companionPlan);
+    moveCharacterAlong("user", user, seat, showHeart ? "heart" : undefined, userPlan);
   }
 
   function handleSitTogether() {
-    if (bedMenuOpen) setBedMenuOpen(false);
-    if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
-    // Grounded cleanly on sofa cushions (10% apart: zero head overlap, zero floating)
-    moveCharacterAlong("companion", 0.525, 0.678, {
-      finalAction: "sit",
-      finalFacingLeft: false,
-      seat: "sofa",
-      approachPoint: { nx: 0.38, ny: 0.56 },
-    });
-    moveCharacterAlong("user", 0.625, 0.678, {
-      finalAction: "sit",
-      finalFacingLeft: true,
-      seat: "sofa",
-      approachPoint: { nx: 0.77, ny: 0.56 },
-      onArrive: () => {
-        showSpeech("靠枕换软了，过来坐会儿。", "companion", 0.575, 0.65);
-        spawnHeart(stage.w * 0.575, stage.h * 0.52);
-      },
-    });
-    onActionTriggered?.("sit");
+    moveTogether({ nx: 0.525, ny: 0.678 }, { nx: 0.625, ny: 0.678 }, "sofa");
   }
 
   function handleSnuggle() {
-    if (bedMenuOpen) setBedMenuOpen(false);
-    if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
-
-    if (userSeatRef.current === "sofa" && compSeatRef.current === "sofa") {
-      // Scoot gently closer on the sofa (7.6% apart — shoulders close, faces clear)
-      moveCharacterAlong("companion", 0.538, 0.678, {
-        finalAction: "sit",
-        finalFacingLeft: false,
-        seat: "sofa",
-      });
-      moveCharacterAlong("user", 0.614, 0.678, {
-        finalAction: "sit",
-        finalFacingLeft: true,
-        seat: "sofa",
-        onArrive: () => {
-          showSpeech("贴贴～今天辛苦啦。", "companion", 0.576, 0.65);
-          spawnHeart(stage.w * 0.568, stage.h * 0.52);
-          setTimeout(() => spawnHeart(stage.w * 0.588, stage.h * 0.54), 220);
-        },
-      });
+    const seatedTogether = userSeatRef.current === "sofa" && compSeatRef.current === "sofa";
+    if (seatedTogether) {
+      moveTogether({ nx: 0.538, ny: 0.678 }, { nx: 0.614, ny: 0.678 }, "sofa", true);
     } else {
-      // Snuggle on the open wooden floor area (works cleanly even if previously sitting on bed!)
-      moveCharacterAlong("companion", 0.475, 0.46, {
-        finalAction: "wave",
-        finalFacingLeft: false,
-        seat: "none",
-      });
-      moveCharacterAlong("user", 0.575, 0.46, {
-        finalAction: "wave",
-        finalFacingLeft: true,
-        seat: "none",
-        onArrive: () => {
-          setCompAction("wave");
-          setCompFacingLeft(false);
-          showSpeech("贴贴～今天辛苦啦。", "companion", 0.525, 0.46);
-          spawnHeart(stage.w * 0.515, stage.h * 0.30);
-          setTimeout(() => spawnHeart(stage.w * 0.538, stage.h * 0.32), 220);
-          actionResetTimerRef.current = setTimeout(() => {
-            setUserAction("idle");
-            setCompAction("idle");
-          }, 1600);
-        },
-      });
+      moveTogether({ nx: 0.475, ny: 0.46 }, { nx: 0.575, ny: 0.46 }, "none", true);
     }
-    onActionTriggered?.("snuggle");
-  }
-
-  function handleRestSolo() {
-    setBedMenuOpen(false);
-    if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
-    // Walk to bedside, change into pajamas, tuck under quilt on right pillow
-    moveCharacterAlong("user", 0.222, 0.432, {
-      finalAction: "sleep",
-      finalFacingLeft: false,
-      seat: "bed",
-      approachPoint: { nx: 0.40, ny: 0.48 },
-    });
   }
 
   function handleRestTogether() {
-    setBedMenuOpen(false);
-    if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
-    moveCharacterAlong("companion", 0.125, 0.432, {
-      finalAction: "sleep",
-      finalFacingLeft: false,
-      seat: "bed",
-      approachPoint: { nx: 0.39, ny: 0.47 },
-    });
-    moveCharacterAlong("user", 0.222, 0.432, {
-      finalAction: "sleep",
-      finalFacingLeft: false,
-      seat: "bed",
-      approachPoint: { nx: 0.42, ny: 0.49 },
-    });
+    moveTogether({ nx: 0.125, ny: 0.432 }, { nx: 0.222, ny: 0.432 }, "bed");
   }
 
   function handleWakeUp() {
-    setBedMenuOpen(false);
-    if (actionResetTimerRef.current) clearTimeout(actionResetTimerRef.current);
-    if (userSeatRef.current === "bed") {
-      moveCharacterAlong("user", 0.56, 0.46, {
-        finalAction: "idle",
-        finalFacingLeft: false,
-        seat: "none",
-      });
-    }
-    if (compSeatRef.current === "bed") {
-      moveCharacterAlong("companion", 0.45, 0.46, {
-        finalAction: "idle",
-        finalFacingLeft: false,
-        seat: "none",
-      });
-    }
+    if (userSeatRef.current === "bed") moveCharacterAlong("user", { nx: 0.56, ny: 0.46 });
+    if (compSeatRef.current === "bed") moveCharacterAlong("companion", { nx: 0.45, ny: 0.46 });
   }
 
-  function handleSlotPress(interactive?: "sofa" | "bed" | "diary" | "pet") {
-    if (interactive === "sofa") {
-      setBedMenuOpen(false);
-      handleSitTogether();
-    } else if (interactive === "bed") {
-      setBedMenuOpen((v) => !v);
-    } else if (interactive === "pet") {
+  function handleSlotPress(interactive: "diary" | "pet") {
+    if (interactive === "pet") {
       bounceAnim(petBounce);
-      showSpeech("嘘，小猫在晒太阳打盹呢～", "companion", 0.56, 0.36);
       spawnHeart(stage.w * 0.57, stage.h * 0.24);
-    } else if (interactive === "diary") {
+    } else {
       bounceAnim(diaryBounce);
-      showSpeech("桌上的小日记本很快就能翻看啦", "companion", 0.58, 0.68);
-      onActionTriggered?.("diary");
     }
   }
 
@@ -907,14 +541,6 @@ export function PearlInteractiveRoom({
   const zFromY = (yFrac: number) => Math.round(yFrac * 100);
   const revealScale = roomReveal.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] });
   const modeRotate = modeSpin.interpolate({ inputRange: [0, 1], outputRange: ["-24deg", "0deg"] });
-
-  // Unified bubble clamped cleanly inside frame bounds
-  const speechLeft = roomSpeech
-    ? Math.max(14, Math.min(stage.w - 178, roomSpeech.nx * stage.w - 82))
-    : 0;
-  const speechTop = roomSpeech
-    ? Math.max(16, Math.min(stage.h - 102, roomSpeech.ny * stage.h - charH - 42))
-    : 0;
 
   return (
     <View style={styles.frame} onLayout={onLayout}>
@@ -955,7 +581,39 @@ export function PearlInteractiveRoom({
             zIndex,
           };
 
+          if (slot.id === "slot_sofa") {
+            const w = boxStyle.width;
+            const h = boxStyle.height;
+            const strips = [
+              { x: 0, y: 0, width: 1, height: 0.24, foreground: false },
+              { x: 0.13, y: 0.24, width: 0.74, height: 0.66, foreground: false },
+              { x: 0, y: 0.24, width: 0.13, height: 0.66, foreground: true },
+              { x: 0.87, y: 0.24, width: 0.13, height: 0.66, foreground: true },
+              { x: 0, y: 0.90, width: 1, height: 0.10, foreground: true },
+            ];
+            return strips.map((strip, index) => (
+              <View key={`sofa-${index}`} pointerEvents="none" style={{
+                position: "absolute",
+                overflow: "hidden",
+                left: boxStyle.left + w * strip.x,
+                top: boxStyle.top + h * strip.y,
+                width: w * strip.width,
+                height: h * strip.height,
+                zIndex: strip.foreground ? zFromY(slot.top + slot.height) : zIndex,
+              }}>
+                <Image
+                  source={slot.source}
+                  style={{ position: "absolute", left: -w * strip.x, top: -h * strip.y, width: w, height: h }}
+                  resizeMode="contain"
+                  fadeDuration={0}
+                  onLoad={index === 0 ? () => markAssetLoaded(slot.id) : undefined}
+                />
+              </View>
+            ));
+          }
+
           if (slot.interactive) {
+            const interactive = slot.interactive;
             const scaleAnim =
               slot.interactive === "pet"
                 ? petBounce
@@ -967,7 +625,7 @@ export function PearlInteractiveRoom({
               <Pressable
                 key={slot.id}
                 style={boxStyle}
-                onPress={() => handleSlotPress(slot.interactive)}
+                onPress={() => handleSlotPress(interactive)}
                 accessibilityRole="button"
                 accessibilityLabel={slot.name}
               >
@@ -1029,17 +687,19 @@ export function PearlInteractiveRoom({
             {
               width: charW,
               height: charH,
+              opacity: compFade,
               zIndex: compAction === "sleep" ? 54 : compAction === "sit" ? 66 : zFromY(compSortY) + 1,
               transform: [
                 { translateX: Animated.subtract(compX, charW / 2) },
                 { translateY: Animated.subtract(compY, charH) },
                 { translateY: idleFloatB },
+                { scaleY: companionReact.interpolate({ inputRange: [0, 1], outputRange: [1, 0.98] }) },
               ],
             },
           ]}
         >
           <Pressable
-            onPress={handleWave}
+            onPress={handleCompanionPress}
             style={styles.charHit}
             accessibilityRole="button"
             accessibilityLabel={`与 ${companionName} 互动`}
@@ -1063,6 +723,7 @@ export function PearlInteractiveRoom({
             {
               width: charW,
               height: charH,
+              opacity: userFade,
               zIndex: userAction === "sleep" ? 55 : userAction === "sit" ? 67 : zFromY(userSortY) + 2,
               transform: [
                 { translateX: Animated.subtract(userX, charW / 2) },
@@ -1081,28 +742,6 @@ export function PearlInteractiveRoom({
             onLoad={userAction === "idle" ? () => markAssetLoaded("user_idle") : undefined}
           />
         </Animated.View>
-
-        {/* Unified non-overlapping speech bubble overlay */}
-        {roomSpeech && (
-          <View
-            pointerEvents="none"
-            style={[
-              styles.unifiedBubble,
-              roomSpeech.sender === "user" && styles.unifiedBubbleUser,
-              { left: speechLeft, top: speechTop },
-            ]}
-          >
-            <Text
-              style={[
-                styles.speechText,
-                roomSpeech.sender === "user" && styles.speechTextUser,
-              ]}
-              numberOfLines={2}
-            >
-              {roomSpeech.text}
-            </Text>
-          </View>
-        )}
 
         {/* Bed Quilt Foreground Overlay (tucks sleeping characters cleanly under the blanket) */}
         {someoneSleeping && (
@@ -1139,51 +778,6 @@ export function PearlInteractiveRoom({
           >
             <Text style={styles.zzzText}>Zzz</Text>
           </Animated.View>
-        )}
-
-        {/* Contextual Glass Menu above the bed when tapped */}
-        {bedMenuOpen && (
-          <View
-            style={[
-              styles.bedMenuWrap,
-              {
-                left: Math.max(12, stage.w * 0.06),
-                top: Math.max(14, stage.h * 0.145),
-              },
-            ]}
-          >
-            <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
-              <View style={styles.bedMenuRow}>
-                {someoneSleeping ? (
-                  <Pressable
-                    onPress={handleWakeUp}
-                    style={({ pressed }) => [styles.actionItem, pressed && { opacity: 0.7 }]}
-                  >
-                    <Ionicons name="sunny-outline" size={13} color={PEARL_UI.accentInk} />
-                    <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>起身</Text>
-                  </Pressable>
-                ) : (
-                  <>
-                    <Pressable
-                      onPress={handleRestSolo}
-                      style={({ pressed }) => [styles.actionItem, pressed && { opacity: 0.7 }]}
-                    >
-                      <Ionicons name="moon-outline" size={13} color={PEARL_UI.accentInk} />
-                      <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>休息一下</Text>
-                    </Pressable>
-                    <View style={styles.actionDivider} />
-                    <Pressable
-                      onPress={handleRestTogether}
-                      style={({ pressed }) => [styles.actionItem, pressed && { opacity: 0.7 }]}
-                    >
-                      <Ionicons name="bed-outline" size={13} color={PEARL_UI.accentInk} />
-                      <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>一起睡</Text>
-                    </Pressable>
-                  </>
-                )}
-              </View>
-            </LiquidGlassSurface>
-          </View>
         )}
 
         {/* Night Ambient Veil */}
@@ -1242,19 +836,19 @@ export function PearlInteractiveRoom({
           <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
             <View style={styles.actionBar}>
               <Pressable
-                onPress={handleWave}
-                style={({ pressed }) => [styles.actionItem, pressed && { transform: [{ scale: 0.90 }], opacity: 0.72 }]}
-              >
-                <Ionicons name="hand-left-outline" size={13} color={nightMode ? "#F8FAFC" : PEARL_UI.ink} />
-                <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>打招呼</Text>
-              </Pressable>
-              <View style={styles.actionDivider} />
-              <Pressable
                 onPress={handleSitTogether}
                 style={({ pressed }) => [styles.actionItem, pressed && { transform: [{ scale: 0.90 }], opacity: 0.72 }]}
               >
                 <Ionicons name="bed-outline" size={13} color={nightMode ? "#F8FAFC" : PEARL_UI.ink} />
                 <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>一起坐</Text>
+              </Pressable>
+              <View style={styles.actionDivider} />
+              <Pressable
+                onPress={someoneSleeping ? handleWakeUp : handleRestTogether}
+                style={({ pressed }) => [styles.actionItem, pressed && { transform: [{ scale: 0.90 }], opacity: 0.72 }]}
+              >
+                <Ionicons name={someoneSleeping ? "sunny-outline" : "moon-outline"} size={13} color={nightMode ? "#F8FAFC" : PEARL_UI.ink} />
+                <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>{someoneSleeping ? "起身" : "一起睡"}</Text>
               </Pressable>
               <View style={styles.actionDivider} />
               <Pressable
@@ -1337,34 +931,6 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: "rgba(56, 44, 38, 0.16)",
   },
-  unifiedBubble: {
-    position: "absolute",
-    zIndex: 120,
-    width: 164,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 14,
-    backgroundColor: "rgba(255, 255, 255, 0.94)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.98)",
-    shadowColor: "#5C544B",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.11,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  unifiedBubbleUser: {
-    backgroundColor: "rgba(180, 192, 212, 0.92)",
-    borderColor: "rgba(255, 255, 255, 0.85)",
-  },
-  speechText: {
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: "600",
-    color: PEARL_UI.ink,
-    textAlign: "center",
-  },
-  speechTextUser: { color: PEARL_UI.accentInk },
   heartWrap: { position: "absolute", zIndex: 130 },
   topRightOverlay: { position: "absolute", top: 12, right: 12, zIndex: 125 },
   modeBtn: {
@@ -1399,14 +965,6 @@ const styles = StyleSheet.create({
   actionDivider: { width: 1, height: 12, backgroundColor: "rgba(122, 118, 114, 0.25)" },
   actionText: { fontSize: 11.5, fontWeight: "600", color: PEARL_UI.ink },
   actionTextDark: { color: "#F8FAFC" },
-  bedMenuWrap: { position: "absolute", zIndex: 132 },
-  bedMenuRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    gap: 8,
-  },
   zzzText: {
     fontSize: 13,
     fontWeight: "700",

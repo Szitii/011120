@@ -21,6 +21,13 @@ import { PEARL_UI } from "../theme/skinTokens";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { safeClientMessage } from "../adapters/real-api";
 
+const replyFailureMessages = {
+  UNAVAILABLE: "即将推出",
+  DISABLED: "平台模型暂时关闭",
+  QUOTA: "今天的免费回复用完了，明天再来",
+  ERROR: "这条回复没发出来，可以重试",
+};
+
 function mergeLatestMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
   const byId = new Map<string, ChatMessage>();
   for (const m of existing) byId.set(m.id, m);
@@ -316,12 +323,14 @@ export function ChatScreen({
                     <Text style={styles.senderLabel}>{senderName}</Text>
                   ) : null}
                   <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther]}>
-                    {item.status === "FAILED" ? (
+                    {item.status === "BLOCKED" ? (
+                      <Text style={styles.failedText}>这条回复没有通过安全检查</Text>
+                    ) : item.status === "FAILED" ? (
                       <View style={styles.failedWrap}>
                         <Text style={styles.failedText}>
-                          {item.failure === "UNAVAILABLE" ? "回复服务即将上线" : "这条回复没有成功发出"}
+                          {replyFailureMessages[item.failure ?? "ERROR"]}
                         </Text>
-                        {item.retryable && (
+                        {item.failure === "ERROR" && item.retryable && (
                           <Pressable onPress={() => void handleRetry(item.id)} style={styles.retryBtn}>
                             <Text style={styles.retryText}>重试</Text>
                           </Pressable>
