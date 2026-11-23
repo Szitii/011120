@@ -18,10 +18,10 @@ export function FloatingGlassTabs({
   const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    pulse.setValue(0.94);
+    pulse.setValue(0.92);
     Animated.spring(pulse, {
       toValue: 1,
-      speed: 24,
+      speed: 22,
       bounciness: 8,
       useNativeDriver: true,
     }).start();
@@ -33,14 +33,9 @@ export function FloatingGlassTabs({
     icon: keyof typeof Ionicons.glyphMap;
     activeIcon: keyof typeof Ionicons.glyphMap;
   }> = [
-    { key: "world", label: "公共社区", icon: "compass-outline", activeIcon: "compass" },
-    { key: "home", label: "私人小家", icon: "home-outline", activeIcon: "home" },
-    {
-      key: "my",
-      label: "我的",
-      icon: "person-outline",
-      activeIcon: "person",
-    },
+    { key: "world", label: "社区", icon: "people-outline", activeIcon: "people" },
+    { key: "home", label: "小家", icon: "home-outline", activeIcon: "home" },
+    { key: "my", label: "我的", icon: "person-outline", activeIcon: "person" },
   ];
 
   return (
@@ -60,7 +55,7 @@ export function FloatingGlassTabs({
           {items.map((item) => {
             const active = current === item.key;
             const color = skin.id === "default"
-              ? (active ? PEARL_UI.accentInk : PEARL_UI.muted)
+              ? (active ? PEARL_UI.accentInk : "#5E5A56")
               : (active ? skin.colors.tabActive : skin.colors.tabInactive);
             return (
               <Pressable
@@ -70,17 +65,17 @@ export function FloatingGlassTabs({
                 onPress={() => onSelect(item.key)}
                 style={({ pressed }) => [
                   styles.tab,
-                  active && {
+                  active && styles.activeLens,
+                  active && skin.id !== "default" && {
                     backgroundColor: skin.glass.activePillFill,
                     borderColor: skin.glass.border,
-                    borderWidth: 1,
                   },
                   pressed && { transform: [{ scale: 0.94 }] },
                 ]}
               >
                 <Animated.View style={[styles.tabInner, active && { transform: [{ scale: pulse }] }]}>
                   <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
-                  <Text style={[styles.label, { color, fontWeight: active ? "600" : "500" }]}>
+                  <Text style={[styles.label, { color, fontWeight: active ? "700" : "500" }]}>
                     {item.label}
                   </Text>
                 </Animated.View>
@@ -95,17 +90,27 @@ export function FloatingGlassTabs({
 
 const styles = StyleSheet.create({
   wrapper: { position: "absolute", zIndex: 30 },
-  row: { flexDirection: "row", alignItems: "center", padding: 4, gap: 4 },
+  row: { flexDirection: "row", alignItems: "center", padding: 5, gap: 5 },
   tab: {
     flex: 1,
-    minHeight: 48,
+    minHeight: 50,
     borderRadius: RADIUS.pill,
     alignItems: "center",
     justifyContent: "center",
+  },
+  activeLens: {
+    backgroundColor: "rgba(180, 192, 212, 0.46)",
+    borderColor: "rgba(255, 255, 255, 0.90)",
+    borderWidth: 1,
+    shadowColor: "#7B90AC",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 2,
   },
   tabInner: {
     alignItems: "center",
     justifyContent: "center",
   },
-  label: { fontSize: 10, marginTop: 1.5 },
+  label: { fontSize: 10.5, marginTop: 2 },
 });

@@ -19,6 +19,7 @@ import type {
   WorldCollection,
 } from "../contracts.ts";
 import { createCommunityClient, type CommunityClient } from "../community/client.ts";
+import { createChatClient, type ChatClient } from "../chat/client.ts";
 
 export class ApiProblemError extends Error {
   readonly status: number;
@@ -43,10 +44,14 @@ type RealApiConfig = { baseUrl: string } & ({ bearerToken: string } | { session:
 export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
   readonly community: CommunityClient;
+  readonly chat: ChatClient;
 
   constructor(config: RealApiConfig) {
     this.config = config;
     this.community = createCommunityClient((method, path, body, key) => method === "GET"
+      ? this.get(path)
+      : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}));
+    this.chat = createChatClient((method, path, body, key) => method === "GET"
       ? this.get(path)
       : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}));
   }

@@ -92,11 +92,6 @@ export function ActorLine({
       <View style={communityStyles.actorTextWrap}>
         <View style={communityStyles.actorNameLine}>
           <Text style={communityStyles.author} numberOfLines={1}>{actor.displayName}</Text>
-          <View style={[communityStyles.roleTag, isAi && communityStyles.roleTagAi]}>
-            <Text style={[communityStyles.roleTagText, isAi && communityStyles.roleTagAiText]}>
-              {isAi ? "AI" : "人类"}
-            </Text>
-          </View>
         </View>
         {subtitle ? <Text style={communityStyles.meta}>{subtitle}</Text> : null}
       </View>
@@ -118,7 +113,7 @@ export function ContentCard({
   onReport?: () => void;
 }) {
   const timeText = formatRelativeTime(item.createdAt);
-  const subtitle = item.source === "OWNER_PROXY" ? `${timeText} · Owner 代发` : timeText;
+  const subtitle = item.source === "OWNER_PROXY" ? `${timeText} · 由主人代发` : timeText;
 
   return (
     <View style={communityStyles.card}>

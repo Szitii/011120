@@ -102,6 +102,7 @@ export interface CompanionProfile {
 
 export interface ClientApi {
   readonly community?: import("./community/client.ts").CommunityClient;
+  readonly chat?: import("./chat/client.ts").ChatClient;
   identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext>;
   ownerCompanions(): Promise<OwnerCompanionCollection>;
   worldItems(): Promise<WorldCollection>;
