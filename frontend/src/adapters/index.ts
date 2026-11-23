@@ -8,7 +8,7 @@ export interface ClientBootstrap {
   sample_companionCompanionId?: string;
 }
 
-export function createClientBootstrap(env: NodeJS.ProcessEnv = {
+export function createClientBootstrap(env: Readonly<Record<string, string | undefined>> = {
   // Expo statically substitutes direct public env access in exported bundles.
   EXPO_PUBLIC_DATA_MODE: process.env.EXPO_PUBLIC_DATA_MODE,
   EXPO_PUBLIC_API_BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL,

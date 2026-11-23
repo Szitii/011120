@@ -24,6 +24,7 @@ export interface RoomSlotSpec {
   interactive?: "diary" | "pet";
 }
 
+export const DIARY_SLOT_IMAGE: ImageSourcePropType = require("../../assets/room_v2/slot_diary.png");
 export const ROOM_BASE_IMAGE: ImageSourcePropType = require("../../assets/room_v2/room_base.png");
 export const BED_QUILT_OVERLAY: ImageSourcePropType = require("../../assets/room_v2/slot_bed_quilt.png");
 
@@ -157,7 +158,7 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
     id: "slot_diary",
     name: "粉色日记本",
     layer: "dynamic_y",
-    source: require("../../assets/room_v2/slot_diary.png"),
+    source: DIARY_SLOT_IMAGE,
     left: 0.60,
     top: 0.70,
     width: 0.09,

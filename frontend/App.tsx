@@ -53,20 +53,23 @@ import {
   scrollKey,
   selectTab,
   type NavigationState,
+  type RootTab,
+  type Route,
 } from "./src/state/navigation";
 import { SkinProvider, useSkin } from "./src/theme/SkinProvider";
-import { CHROME, RADIUS } from "./src/theme/layoutTokens";
+import { CHROME } from "./src/theme/layoutTokens";
 import { PEARL_UI } from "./src/theme/skinTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
 import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
-import { PearlInteractiveRoom } from "./src/components/PearlInteractiveRoom";
+import { PrivateHomeScreen } from "./src/home/PrivateHomeScreen";
+import { MessagesScreen } from "./src/messages/MessagesScreen";
+import { AlbumScreen } from "./src/album/AlbumScreen";
+import { addAlbumQuote } from "./src/album/store";
 import { BottomSheet } from "./src/components/BottomSheet";
 import { GlassChatBubble } from "./src/components/GlassChatBubble";
 import { DiaryScreen } from "./src/diary/DiaryScreen";
 import { ChatScreen } from "./src/chat/ChatScreen";
-import type { ChatClient } from "./src/chat/client";
-import { useHomeChat } from "./src/chat/useHomeChat";
 
 type LoadState<T> =
   | { kind: "idle" | "loading" }
@@ -173,6 +176,8 @@ function WorldApp({ client, account, isMockMode }: {
   const agentViewer = isAgentViewer(viewer) ? viewer : undefined;
   const canUseChat = viewer?.kind === "OWNER" && !identitySwitchPending && !!client.api.chat;
   const homeCompanion = ownerCompanions.kind === "success" ? ownerCompanions.value.items[0] : undefined;
+  const ownerId = viewer?.kind === "OWNER" && !identitySwitchPending ? identityValue?.viewer.ownerId : undefined;
+  const homeScope = ownerId && homeCompanion ? { ownerId, companionId: homeCompanion.companionId } : undefined;
   const diaryClient = viewer?.kind === "OWNER" && !identitySwitchPending ? client.api.diary : undefined;
   const profileId = route.type === "profile" ? route.companionId
     : route.type === "root" && route.tab === "my" && viewer?.kind === "COMPANION" ? viewer.id
@@ -386,7 +391,7 @@ function WorldApp({ client, account, isMockMode }: {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
-    if (target.kind !== "OWNER" && (route.type === "chat" || route.type === "diary")) {
+    if (target.kind !== "OWNER" && (route.type === "chat" || route.type === "diary" || route.type === "album")) {
       setNav((current) => selectTab(current, current.rootTab));
     }
     setIdentitySwitchPending(true);
@@ -468,6 +473,19 @@ function WorldApp({ client, account, isMockMode }: {
     }
   }
 
+  function openFromTab(tab: RootTab, next: Route) {
+    setNav(current => {
+      const top = current.stack.at(-1);
+      return top?.type === "root" && top.tab === tab ? pushRoute(current, next) : current;
+    });
+  }
+
+  function openDiary(companionId: string) {
+    if (!diaryClient || !homeCompanion || companionId !== homeCompanion.companionId) return;
+    openFromTab("home", { type: "diary", companionId, companionName: homeCompanion.displayName });
+  }
+
+  const messagesVisible = route.type === "root" && route.tab === "messages";
   const isMoment = route.type === "encounter" && momentMode && encounter.kind === "success";
   const currentKind = identityValue?.activeSubject.kind ?? "OWNER";
   const isSampleCompanion = currentKind !== "OWNER";
@@ -517,6 +535,9 @@ function WorldApp({ client, account, isMockMode }: {
 
       <View
         pointerEvents={route.type === "root" && route.tab === "home" ? "auto" : "none"}
+        aria-hidden={route.type !== "root" || route.tab !== "home"}
+        accessibilityElementsHidden={route.type !== "root" || route.tab !== "home"}
+        importantForAccessibility={route.type === "root" && route.tab === "home" ? "auto" : "no-hide-descendants"}
         style={
           route.type === "root" && route.tab === "home"
             ? { flex: 1 }
@@ -524,35 +545,54 @@ function WorldApp({ client, account, isMockMode }: {
         }
       >
         <PrivateHomeScreen
-          key={`${currentKind}:${identityId}`}
+          key={JSON.stringify([viewerKey, homeScope?.ownerId, homeCompanion?.companionId])}
           chatClient={canUseChat ? client.api.chat : undefined}
-          companionId={homeCompanion?.companionId}
+          scope={homeScope}
           isCompanion={isSampleCompanion}
-          isMockMode={isMockMode}
           isActive={route.type === "root" && route.tab === "home"}
-          userName={identityLabel(identityValue)}
           companionName={homeCompanion?.displayName ?? companionDisplayName}
-          onOpenDiary={diaryClient && homeCompanion ? () => setNav(current => {
-            const top = current.stack.at(-1);
-            if (top?.type !== "root" || top.tab !== "home") return current;
-            return pushRoute(current, {
-              type: "diary", companionId: homeCompanion.companionId, companionName: homeCompanion.displayName,
-            });
-          }) : undefined}
-          onOpenChat={(chatId, compId, compName, autoFocus) =>
-            setNav((current) =>
-              pushRoute(current, {
-                type: "chat",
-                chatId,
-                companionId: compId,
-                companionName: compName,
-                autoFocus,
-                fromTab: "home",
-              }),
-            )
-          }
+          onOpenDiary={diaryClient && homeScope ? () => openDiary(homeScope.companionId) : undefined}
+          onOpenAlbum={homeScope ? () => openFromTab("home", { type: "album", companionId: homeScope.companionId }) : undefined}
         />
       </View>
+
+      {viewer && (
+        <View
+          pointerEvents={messagesVisible ? "auto" : "none"}
+          aria-hidden={!messagesVisible}
+          accessibilityElementsHidden={!messagesVisible}
+          importantForAccessibility={messagesVisible ? "auto" : "no-hide-descendants"}
+          style={messagesVisible ? { flex: 1 } : styles.inactiveRoot}
+        >
+          <MessagesScreen
+            key={viewerKey}
+            api={client.api}
+            viewer={viewer}
+            chatClient={canUseChat ? client.api.chat : undefined}
+            companions={ownerCompanions.kind === "success" ? ownerCompanions.value.items : []}
+            visible={messagesVisible}
+            onChat={chat => openFromTab("messages", {
+              type: "chat", chatId: chat.id, companionId: chat.direct ? chat.members[0]?.companionId : undefined,
+              companionName: chat.title ?? chat.members.map(member => member.displayName).join("、"),
+              fromTab: "messages",
+            })}
+            onStartChat={companion => openFromTab("messages", {
+              type: "chat", companionId: companion.companionId, companionName: companion.displayName, fromTab: "messages",
+            })}
+            onCommunityTarget={target => openFromTab("messages", { type: "community-target", target })}
+            onLife={() => openFromTab("messages", { type: "life-archive" })}
+          />
+        </View>
+      )}
+
+      {route.type === "community-target" && viewer && client.api.community && (
+        <CommunityScreen key={JSON.stringify([viewerKey, route.target])} client={client.api.community}
+          viewer={viewer} initialTarget={route.target} onScroll={() => {}} />
+      )}
+
+      {route.type === "album" && homeScope && route.companionId === homeScope.companionId && (
+        <AlbumScreen key={JSON.stringify(homeScope)} scope={homeScope} />
+      )}
 
       {route.type === "chat" && canUseChat && client.api.chat && (
         <ChatScreen
@@ -563,7 +603,8 @@ function WorldApp({ client, account, isMockMode }: {
           companionName={route.companionName ?? companionDisplayName}
           ownerName={identityLabel(identityValue)}
           autoFocus={route.autoFocus === true}
-          backLabel={route.fromTab === "my" ? "返回" : "返回小家"}
+          backLabel={route.fromTab === "messages" ? "返回消息" : route.fromTab === "my" ? "返回" : "返回小家"}
+          onSaveQuote={homeScope ? quote => addAlbumQuote(homeScope, quote) : undefined}
           onBackToHome={goBack}
         />
       )}
@@ -586,6 +627,7 @@ function WorldApp({ client, account, isMockMode }: {
       {route.type === "root" && (
         <View
           pointerEvents={route.tab === "my" ? "auto" : "none"}
+          aria-hidden={route.tab !== "my"}
           style={
             route.tab === "my"
               ? { flex: 1 }
@@ -748,7 +790,7 @@ function AppHeader({
   onOpenSettings,
 }: {
   routeIsRoot: boolean;
-  rootTab: "world" | "home" | "my";
+  rootTab: RootTab;
   identityTitle: string;
   isSampleCompanion: boolean;
   identity: LoadState<ActiveIdentityContext>;
@@ -1168,100 +1210,6 @@ function ProfileScreen({
   );
 }
 
-function PrivateHomeScreen({
-  chatClient,
-  companionId,
-  userName,
-  companionName,
-  isCompanion,
-  isMockMode,
-  isActive,
-  onOpenChat,
-  onOpenDiary,
-}: {
-  chatClient?: ChatClient;
-  companionId?: string;
-  userName: string;
-  companionName: string;
-  isCompanion: boolean;
-  isMockMode: boolean;
-  isActive: boolean;
-  onOpenDiary?: () => void;
-  onOpenChat: (chatId?: string, companionId?: string, companionName?: string, autoFocus?: boolean) => void;
-}) {
-  const { chatId: activeChatId, messages: latestMessages, submit } = useHomeChat(chatClient, companionId, isActive);
-  const previewBubbles = !chatClient ? [] : latestMessages.length > 0
-    ? latestMessages
-    : isMockMode
-      ? [
-          { id: "fallback-1", companionId: companionId ?? "comp", body: "今晚风大，回来喝杯热的。", mentions: [], status: "SENT" as const, failure: null, retryable: false, sentAt: "" },
-          { id: "fallback-2", companionId: null, body: "马上到家啦。", mentions: [], status: "SENT" as const, failure: null, retryable: false, sentAt: "" },
-        ]
-      : [];
-
-  return (
-    <ScrollView
-      style={styles.rootContent}
-      contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance + 8 }]}
-      showsVerticalScrollIndicator={false}
-    >
-      <PearlInteractiveRoom
-        companionName={companionName}
-        isCompanionView={isCompanion}
-        isActive={isActive}
-        onOpenDiary={onOpenDiary}
-        onAction={action => submit.current?.(action)}
-      />
-
-      {/* Light Chat Preview Bubbles (tap to open full-screen chat) */}
-      {previewBubbles.length > 0 && (
-        <Pressable
-          onPress={() => onOpenChat(activeChatId, companionId, companionName, false)}
-          style={styles.homeChatPreviewWrap}
-          accessibilityRole="button"
-          accessibilityLabel={`打开与 ${companionName} 的聊天`}
-        >
-          {previewBubbles.map((msg) => {
-            const isMine = msg.companionId === null;
-            return (
-              <View key={msg.id} style={[styles.homeMsgRow, isMine && styles.homeMsgRowMine]}>
-                <PixelAvatar
-                  name={isMine ? userName : companionName}
-                  role={isMine ? "owner" : "companion"}
-                  size={30}
-                />
-                <View style={[styles.homeMsgBubble, isMine ? styles.homeMsgBubbleMine : styles.homeMsgBubbleOther]}>
-                  <Text style={[styles.homeMsgText, isMine && styles.homeMsgTextMine]} numberOfLines={2}>
-                    {msg.body ?? "（消息暂不可显示）"}
-                  </Text>
-                </View>
-              </View>
-            );
-          })}
-        </Pressable>
-      )}
-
-      {/* Clean Liquid Glass Input Bar (tapping auto-focuses keyboard in ChatScreen) */}
-      {chatClient && (
-        <Pressable
-          onPress={() => onOpenChat(activeChatId, companionId, companionName, true)}
-          style={({ pressed }) => [styles.homeComposerWrap, pressed && { transform: [{ scale: 0.99 }] }]}
-          accessibilityRole="button"
-          accessibilityLabel={`和 ${companionName} 说点什么`}
-        >
-          <LiquidGlassSurface glass borderRadius={RADIUS.pill}>
-            <View style={styles.homeComposerInner}>
-              <Text style={styles.homeComposerPlaceholder}>和 {companionName} 说点什么…</Text>
-              <View style={styles.homeComposerSendBtn}>
-                <Ionicons name="paper-plane-outline" size={15} color="#FFFFFF" />
-              </View>
-            </View>
-          </LiquidGlassSurface>
-        </Pressable>
-      )}
-    </ScrollView>
-  );
-}
 function LifeScreen({
   state,
   isCompanion,
@@ -1734,6 +1682,7 @@ const styles = StyleSheet.create({
   content: { flex: 1, backgroundColor: colors.canvas },
 
   rootContent: { flex: 1 },
+  inactiveRoot: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, opacity: 0, zIndex: -1 },
   topBar: {
     minHeight: 58,
     paddingHorizontal: CHROME.screenInset,
@@ -1754,7 +1703,6 @@ const styles = StyleSheet.create({
   brand: { flexShrink: 1, fontSize: 14, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
   chevron: { color: colors.tertiary, fontSize: 15, marginTop: -3 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
-  privateHomePage: { paddingHorizontal: CHROME.screenInset, paddingTop: 10, paddingBottom: 44 },
   privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
   privateHomeRecordList: { marginTop: 12, gap: 9 },
   privateHomeEmpty: { minHeight: 74, marginTop: 10, paddingHorizontal: 16, backgroundColor: "rgba(255,255,255,0.72)", borderWidth: 1, borderColor: PEARL_UI.highlight, borderRadius: 20, alignItems: "center", justifyContent: "center", gap: 8 },
@@ -2083,67 +2031,5 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  homeChatPreviewWrap: {
-    marginTop: 14,
-    gap: 10,
-  },
-  homeMsgRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  homeMsgRowMine: {
-    flexDirection: "row-reverse",
-  },
-  homeMsgBubble: {
-    maxWidth: "74%",
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 18,
-    borderWidth: 1,
-  },
-  homeMsgBubbleOther: {
-    backgroundColor: "rgba(255,255,255,0.90)",
-    borderColor: PEARL_UI.highlight,
-    borderBottomLeftRadius: 6,
-  },
-  homeMsgBubbleMine: {
-    backgroundColor: PEARL_UI.iceBlue,
-    borderColor: "rgba(255,255,255,0.78)",
-    borderBottomRightRadius: 6,
-  },
-  homeMsgText: {
-    fontSize: 13.5,
-    lineHeight: 19,
-    color: PEARL_UI.ink,
-  },
-  homeMsgTextMine: {
-    color: "#FFFFFF",
-    fontWeight: "500",
-  },
-  homeComposerWrap: {
-    marginTop: 12,
-  },
-  homeComposerInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingLeft: 16,
-    paddingRight: 6,
-    paddingVertical: 6,
-  },
-  homeComposerPlaceholder: {
-    fontSize: 13.5,
-    color: PEARL_UI.muted,
-  },
-  homeComposerSendBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: PEARL_UI.iceBlue,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.82)",
-  },
+
 });

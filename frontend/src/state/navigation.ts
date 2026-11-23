@@ -1,7 +1,12 @@
-export type RootTab = "world" | "home" | "my";
+export const ROOT_TABS = ["world", "home", "messages", "my"] as const;
+export type RootTab = typeof ROOT_TABS[number];
+
+export type CommunityTarget = { type: "detail" | "profile"; id: string };
 export type Route =
   | { type: "root"; tab: RootTab }
-  | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: "home" | "my" }
+  | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: RootTab }
+  | { type: "community-target"; target: CommunityTarget }
+  | { type: "album"; companionId: string }
   | { type: "diary"; companionId: string; companionName: string }
   | { type: "life-archive" }
   | { type: "edit-human-profile" }

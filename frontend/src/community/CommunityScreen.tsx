@@ -19,13 +19,13 @@ import type {
   CommunityBlock,
   ReportTarget,
   CommunityPage,
-  CommunityNotification,
   CommunityFeedMode,
   CommunityActorFilter,
 } from "../../../contracts/community.ts";
 import { communityWriteMessage, safeClientMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
 import { CommunityFollowList, type FollowDirection } from "./CommunityFollowList.tsx";
 import { communityRequestKey, type CommunityClient } from "./client.ts";
+import type { CommunityTarget } from "../state/navigation";
 import { CommunityRequestScope } from "./request-scope.ts";
 import { ActorLine, CommunityButton as Button, ContentCard, communityStyles as s } from "./components.tsx";
 import { ReportForm } from "./ReportForm.tsx";
@@ -40,14 +40,12 @@ type Page =
   | { type: "feed" }
   | { type: "profile"; id?: string }
   | { type: "detail"; id: string }
-  | { type: "notifications" }
   | { type: "blocks" };
 
 type Data =
   | { type: "feed"; value: CommunityPage<CommunityPost> }
   | { type: "profile"; profile: CommunityProfile; value: CommunityPage<CommunityPost> }
   | { type: "detail"; value: CommunityDetail }
-  | { type: "notifications"; value: CommunityPage<CommunityNotification> }
   | { type: "blocks"; value: CommunityPage<CommunityBlock> };
 
 export function CommunityScreen({
@@ -57,6 +55,7 @@ export function CommunityScreen({
   initialPostDraft,
   onPostDraftChange,
   onScroll,
+  initialTarget,
 }: {
   client: CommunityClient;
   viewer: ActorContext;
@@ -64,12 +63,13 @@ export function CommunityScreen({
   initialPostDraft?: { text: string; key: string };
   onPostDraftChange?: (draft: { text: string; key: string }) => void;
   onScroll: (y: number) => void;
+  initialTarget?: CommunityTarget;
 }) {
   const { skin } = useSkin();
   const [followDirection, setFollowDirection] = useState<FollowDirection>();
   const [reportTarget, setReportTarget] = useState<ReportTarget>();
   const [blockTarget, setBlockTarget] = useState<CommunityProfile>();
-  const [page, setPage] = useState<Page>({ type: "feed" });
+  const [page, setPage] = useState<Page>(initialTarget ?? { type: "feed" });
   const [mode, setMode] = useState<CommunityFeedMode>("LATEST");
   const [filter, setFilter] = useState<CommunityActorFilter>("ALL");
   const [data, setData] = useState<Data>();
@@ -141,8 +141,6 @@ export function CommunityScreen({
         next = { type: "detail", value: await client.detail(viewer, page.id, cursor) };
       } else if (page.type === "blocks") {
         next = { type: "blocks", value: await client.blocks(viewer, cursor) };
-      } else if (page.type === "notifications") {
-        next = { type: "notifications", value: await client.notifications(viewer, cursor) };
       } else {
         next = {
           type: "feed",
@@ -169,9 +167,6 @@ export function CommunityScreen({
           return { ...next, value: { ...next.value, items: [...previous.value.items, ...next.value.items] } };
         }
         if (next.type === "profile" && previous.type === "profile") {
-          return { ...next, value: { ...next.value, items: [...previous.value.items, ...next.value.items] } };
-        }
-        if (next.type === "notifications" && previous.type === "notifications") {
           return { ...next, value: { ...next.value, items: [...previous.value.items, ...next.value.items] } };
         }
         if (next.type === "blocks" && previous.type === "blocks") {
@@ -276,7 +271,7 @@ export function CommunityScreen({
         ? "动态详情"
         : page.type === "blocks"
           ? "屏蔽管理"
-          : "通知";
+          : "社区";
 
   return (
     <View style={skin.id === "default" ? s.communityPage : s.page}>
@@ -329,16 +324,6 @@ export function CommunityScreen({
               </View>
 
               <View style={localStyles.headerActions}>
-                <Pressable
-                  disabled={busy}
-                  accessibilityRole="button"
-                  accessibilityLabel="当前身份通知"
-                  onPress={() => navigate({ type: "notifications" })}
-                  style={({ pressed }) => [localStyles.glassIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
-                >
-                  <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-                  <Ionicons name="notifications-outline" size={17} color={PEARL_UI.ink} />
-                </Pressable>
                 <Pressable
                   disabled={busy}
                   accessibilityRole="button"
@@ -402,16 +387,18 @@ export function CommunityScreen({
         ) : (
           /* Clean Modern Sub-page Header: Back + Title + Contextual Action */
           <View style={localStyles.subHeader}>
-            <Pressable
-              disabled={busy}
-              accessibilityRole="button"
-              onPress={() => navigate({ type: "feed" })}
-              style={({ pressed }) => [localStyles.backPill, pressed && { transform: [{ scale: 0.94 }] }]}
-            >
-              <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-              <Ionicons name="chevron-back" size={16} color={PEARL_UI.ink} />
-              <Text style={localStyles.backText}>返回</Text>
-            </Pressable>
+            {!initialTarget && (
+              <Pressable
+                disabled={busy}
+                accessibilityRole="button"
+                onPress={() => navigate({ type: "feed" })}
+                style={({ pressed }) => [localStyles.backPill, pressed && { transform: [{ scale: 0.94 }] }]}
+              >
+                <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
+                <Ionicons name="chevron-back" size={16} color={PEARL_UI.ink} />
+                <Text style={localStyles.backText}>返回</Text>
+              </Pressable>
+            )}
             <Text style={localStyles.subTitle}>{pageTitle}</Text>
             <View style={localStyles.subHeaderRight}>
               {page.type === "profile" && data?.type === "profile" && data.profile.isSelf && (
@@ -619,49 +606,12 @@ export function CommunityScreen({
           </>
         )}
 
-        {/* Notifications */}
-        {data?.type === "notifications" &&
-          data.value.items.map((note) => (
-            <View key={note.id} style={s.card}>
-              <ActorLine
-                actor={note.actor}
-                onPress={() => openActor(note.actor.id)}
-                subtitle={note.kind === "FOLLOW" ? "关注了你" : "评论了你的动态"}
-              />
-              <View style={s.row}>
-                <Button
-                  primary={!note.readAt}
-                  disabled={busy}
-                  label="查看"
-                  onPress={() =>
-                    void mutate(() => client.readNotification(viewer, note.id, communityRequestKey())).then((ok) => {
-                      if (ok && active.current) {
-                        navigate(note.postId ? { type: "detail", id: note.postId } : { type: "profile", id: note.actor.id });
-                      }
-                    })
-                  }
-                />
-                {!note.readAt && (
-                  <Button
-                    disabled={busy}
-                    label="标为已读"
-                    onPress={() => void mutate(() => client.readNotification(viewer, note.id, communityRequestKey()))}
-                  />
-                )}
-              </View>
-            </View>
-          ))}
-
         {/* Empty State */}
         {!loading && data?.type !== "detail" && data?.value.items.length === 0 && (
           <View style={localStyles.emptyCard}>
             <Ionicons
               name={
-                page.type === "notifications"
-                  ? "notifications-off-outline"
-                  : page.type === "blocks"
-                    ? "shield-checkmark-outline"
-                    : "chatbubbles-outline"
+                page.type === "blocks" ? "shield-checkmark-outline" : "chatbubbles-outline"
               }
               size={22}
               color={PEARL_UI.accent}
@@ -669,9 +619,7 @@ export function CommunityScreen({
             <Text style={localStyles.emptyText}>
               {page.type === "blocks"
                 ? "当前身份没有屏蔽其他居民。"
-                : page.type === "notifications"
-                  ? "当前身份暂时没有通知。"
-                  : mode === "FOLLOWING" && page.type === "feed"
+                : mode === "FOLLOWING" && page.type === "feed"
                     ? "关注一些居民后，他们的动态会出现在这里。"
                     : "还没有动态，点右上角「发动态」写下第一条吧。"}
             </Text>

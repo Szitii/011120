@@ -19,6 +19,9 @@ import { PixelAvatar } from "../components/PixelAvatar";
 import { PEARL_UI } from "../theme/skinTokens";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { safeClientMessage } from "../adapters/real-api";
+import type { QuoteInput } from "../album/store";
+import { BottomSheet } from "../components/BottomSheet";
+import { CommunityButton } from "../community/components";
 import { useAppIsActive } from "../state/useAppIsActive";
 
 const actionLabels = {
@@ -54,6 +57,7 @@ export function ChatScreen({
   autoFocus = false,
   backLabel = "返回小家",
   onBackToHome,
+  onSaveQuote,
 }: {
   client: ChatClient;
   initialChatId?: string;
@@ -63,6 +67,7 @@ export function ChatScreen({
   autoFocus?: boolean;
   backLabel?: string;
   onBackToHome: () => void;
+  onSaveQuote?: (quote: QuoteInput) => Promise<void>;
 }) {
   const appActive = useAppIsActive();
   const wasActive = useRef(appActive);
@@ -74,6 +79,10 @@ export function ChatScreen({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [quote, setQuote] = useState<QuoteInput>();
+  const [quoteSaving, setQuoteSaving] = useState(false);
+  const [quoteResult, setQuoteResult] = useState("");
+  const quotePending = useRef(false);
   const inputRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
   const chatIdRef = useRef<string | undefined>(initialChatId);
   const sessionRef = useRef(0);
@@ -271,6 +280,25 @@ export function ChatScreen({
     }
   }
 
+  async function saveQuote() {
+    if (!quote || !onSaveQuote || quotePending.current) return;
+    const session = sessionRef.current;
+    quotePending.current = true;
+    setQuoteSaving(true);
+    setQuoteResult("");
+    try {
+      await onSaveQuote(quote);
+      if (session !== sessionRef.current) return;
+      setQuote(undefined);
+      setQuoteResult("已保存到小家相册。");
+    } catch {
+      if (session === sessionRef.current) setQuoteResult("这句话没保存成功，请再试一次。");
+    } finally {
+      quotePending.current = false;
+      if (session === sessionRef.current) setQuoteSaving(false);
+    }
+  }
+
   const title = chat?.title ?? chat?.members[0]?.displayName ?? companionName;
   const typingNames = (chat?.typing ?? [])
     .map((id) => chat?.members.find((m) => m.companionId === id)?.displayName ?? companionName)
@@ -319,6 +347,8 @@ export function ChatScreen({
         </View>
       ) : null}
 
+      {quoteResult && !quote ? <Text accessibilityLiveRegion="polite" style={styles.quoteResult}>{quoteResult}</Text> : null}
+
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={PEARL_UI.accent} />
@@ -347,6 +377,14 @@ export function ChatScreen({
               ? ownerName
               : chat?.members.find((m) => m.companionId === item.companionId)?.displayName ?? title;
 
+            const openQuote = onSaveQuote && chat && item.body && item.status === "SENT"
+              ? () => {
+                  if (!item.body) return;
+                  setQuoteResult("");
+                  setQuote({ chatId: chat.id, messageId: item.id, speaker: senderName, text: item.body, sentAt: item.sentAt });
+                }
+              : undefined;
+
             return (
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
                 <PixelAvatar name={senderName} role={isMine ? "owner" : "companion"} size={30} />
@@ -369,9 +407,18 @@ export function ChatScreen({
                         )}
                       </View>
                     ) : (
-                      <Text style={[styles.msgText, isMine && styles.msgTextMine]}>
-                        {item.body ?? "（消息暂不可显示）"}
-                      </Text>
+                      <Pressable
+                        disabled={!openQuote}
+                        onLongPress={openQuote}
+                        accessibilityActions={openQuote ? [{ name: "save-quote", label: "保存到小家相册" }] : undefined}
+                        onAccessibilityAction={event => {
+                          if (event.nativeEvent.actionName === "save-quote") openQuote?.();
+                        }}
+                      >
+                        <Text style={[styles.msgText, isMine && styles.msgTextMine]}>
+                          {item.body ?? "（消息暂不可显示）"}
+                        </Text>
+                      </Pressable>
                     )}
                   </View>
                 </View>
@@ -380,6 +427,14 @@ export function ChatScreen({
           }}
         />
       )}
+
+      <BottomSheet visible={!!quote} title="保存聊天金句" onClose={() => { if (!quoteSaving) setQuote(undefined); }}>
+        {quote && <View style={styles.quoteSheet}>
+          <Text style={styles.msgText} numberOfLines={5}>{quote.text}</Text>
+          {quoteResult !== "" && <Text accessibilityRole="alert" style={styles.mutedText}>{quoteResult}</Text>}
+          <CommunityButton label="保存到相册" primary disabled={quoteSaving} onPress={() => void saveQuote()} />
+        </View>}
+      </BottomSheet>
 
       {/* Bottom Liquid Glass Composer */}
       <View style={styles.composerBar}>
@@ -423,6 +478,8 @@ export function ChatScreen({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  quoteResult: { color: PEARL_UI.muted, textAlign: "center", paddingVertical: 8 },
+  quoteSheet: { gap: 10 },
   header: {
     flexDirection: "row",
     alignItems: "center",

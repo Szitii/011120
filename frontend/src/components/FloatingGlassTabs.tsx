@@ -5,7 +5,7 @@ import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { PEARL_UI } from "../theme/skinTokens";
-import type { RootTab } from "../state/navigation";
+import { ROOT_TABS, type RootTab } from "../state/navigation";
 
 export function FloatingGlassTabs({
   current,
@@ -27,16 +27,16 @@ export function FloatingGlassTabs({
     }).start();
   }, [current, pulse]);
 
-  const items: Array<{
-    key: RootTab;
+  const items: Record<RootTab, {
     label: string;
     icon: keyof typeof Ionicons.glyphMap;
     activeIcon: keyof typeof Ionicons.glyphMap;
-  }> = [
-    { key: "world", label: "社区", icon: "people-outline", activeIcon: "people" },
-    { key: "home", label: "小家", icon: "home-outline", activeIcon: "home" },
-    { key: "my", label: "我的", icon: "person-outline", activeIcon: "person" },
-  ];
+  }> = {
+    world: { label: "社区", icon: "people-outline", activeIcon: "people" },
+    home: { label: "小家", icon: "home-outline", activeIcon: "home" },
+    messages: { label: "消息", icon: "chatbubbles-outline", activeIcon: "chatbubbles" },
+    my: { label: "我的", icon: "person-outline", activeIcon: "person" },
+  };
 
   return (
     <View
@@ -52,17 +52,19 @@ export function FloatingGlassTabs({
     >
       <LiquidGlassSurface glass>
         <View style={styles.row}>
-          {items.map((item) => {
-            const active = current === item.key;
+          {ROOT_TABS.map((key) => {
+            const item = items[key];
+            const active = current === key;
             const color = skin.id === "default"
               ? (active ? PEARL_UI.accentInk : "#5E5A56")
               : (active ? skin.colors.tabActive : skin.colors.tabInactive);
             return (
               <Pressable
-                key={item.key}
+                key={key}
                 accessibilityRole="tab"
+                accessibilityLabel={item.label}
                 accessibilityState={{ selected: active }}
-                onPress={() => onSelect(item.key)}
+                onPress={() => onSelect(key)}
                 style={({ pressed }) => [
                   styles.tab,
                   active && styles.activeLens,

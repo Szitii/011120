@@ -7,7 +7,16 @@
     "userInterfaceStyle": "automatic",
     "plugins": [
       "expo-status-bar",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-image",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许从系统相册选择照片，保存到你的小家相册。",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
     ]
   }
 }

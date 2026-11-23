@@ -58,16 +58,22 @@ export function PearlInteractiveRoom({
   isActive = true,
   onAction,
   onOpenDiary,
+  onCapture,
+  capturing = false,
 }: {
   companionName: string;
   isCompanionView: boolean;
   isActive?: boolean;
   onAction?: (action: CompanionAction) => void;
   onOpenDiary?: () => void;
+  onCapture?: (scene: React.ComponentRef<typeof View>) => void;
+  capturing?: boolean;
 }) {
   const [stage, setStage] = useState({ w: 344, h: 430 });
   const [nightMode, setNightMode] = useState(false);
   const [roomReady, setRoomReady] = useState(false);
+  const [captureReady, setCaptureReady] = useState(false);
+  const sceneRef = useRef<React.ComponentRef<typeof View>>(null);
   const [userFacingLeft, setUserFacingLeft] = useState(false);
   const [compFacingLeft, setCompFacingLeft] = useState(false);
   const [userAction, setUserAction] = useState<CharacterAction>("idle");
@@ -163,6 +169,7 @@ export function PearlInteractiveRoom({
   function markAssetLoaded(assetId: string) {
     if (loadedIdsRef.current.has(assetId)) return;
     loadedIdsRef.current.add(assetId);
+    if (loadedIdsRef.current.size >= TOTAL_ROOM_ASSETS) setCaptureReady(true);
     if (loadedIdsRef.current.size >= TOTAL_ROOM_ASSETS && !roomReady) {
       const elapsed = Date.now() - mountedAtRef.current;
       const wait = Math.max(0, 200 - elapsed);
@@ -636,305 +643,323 @@ export function PearlInteractiveRoom({
           { opacity: roomReveal, transform: [{ scale: revealScale }] },
         ]}
       >
-        {/* Base empty 4:5 room */}
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          accessibilityRole="button"
-          accessibilityLabel="点击小家木地板走动"
-          onPress={handleFloorPress}
-        >
-          <Image
-            source={ROOM_BASE_IMAGE}
-            style={styles.roomImg}
-            resizeMode="cover"
-            fadeDuration={0}
-            onLoad={() => markAssetLoaded("base")}
-          />
-        </Pressable>
-
-        {/* 10 Swappable Furniture & Wall Slots */}
-        {ROOM_SLOTS.map((slot) => {
-          const zIndex =
-            slot.layer === "floor_base" ? 2 :
-            slot.layer === "wall_back" ? 6 :
-            zFromY(slot.sortY);
-
-          const boxStyle = {
-            position: "absolute" as const,
-            left: stage.w * slot.left,
-            top: stage.h * slot.top,
-            width: stage.w * slot.width,
-            height: stage.h * slot.height,
-            zIndex,
-          };
-
-          if (slot.id === "slot_sofa") {
-            const w = boxStyle.width;
-            const h = boxStyle.height;
-            const strips = [
-              { x: 0, y: 0, width: 1, height: 0.24, foreground: false },
-              { x: 0.13, y: 0.24, width: 0.74, height: 0.66, foreground: false },
-              { x: 0, y: 0.24, width: 0.13, height: 0.66, foreground: true },
-              { x: 0.87, y: 0.24, width: 0.13, height: 0.66, foreground: true },
-              { x: 0, y: 0.90, width: 1, height: 0.10, foreground: true },
-            ];
-            return [
-              <Pressable
-                key={slot.id}
-                style={[boxStyle, { zIndex: 65 }]}
-                onPress={handleSitTogether}
-                accessibilityRole="button"
-                accessibilityLabel="在沙发一起坐"
-              />,
-              ...strips.map((strip, index) => (
-                <View key={`sofa-${index}`} pointerEvents="none" style={{
-                  position: "absolute",
-                  overflow: "hidden",
-                  left: boxStyle.left + w * strip.x,
-                  top: boxStyle.top + h * strip.y,
-                  width: w * strip.width,
-                  height: h * strip.height,
-                  zIndex: strip.foreground ? zFromY(slot.top + slot.height) : zIndex,
-                }}>
-                  <Image
-                    source={slot.source}
-                    style={{ position: "absolute", left: -w * strip.x, top: -h * strip.y, width: w, height: h }}
-                    resizeMode="contain"
-                    fadeDuration={0}
-                    onLoad={index === 0 ? () => markAssetLoaded(slot.id) : undefined}
-                  />
-                </View>
-              )),
-            ];
-          }
-
-          if (slot.id === "slot_bed") {
-            return (
-              <Pressable
-                key={slot.id}
-                style={boxStyle}
-                onPress={someoneSleeping ? handleWakeUp : handleRestTogether}
-                accessibilityRole="button"
-                accessibilityLabel={someoneSleeping ? "从床上起身" : "在床上休息"}
-              >
-                <Image source={slot.source} style={styles.fillImg} resizeMode="contain" fadeDuration={0}
-                  onLoad={() => markAssetLoaded(slot.id)} />
-              </Pressable>
-            );
-          }
-
-          if (slot.interactive) {
-            const interactive = slot.interactive;
-            const scaleAnim = interactive === "pet" ? petBounce : diaryBounce;
-
-            return (
-              <Pressable
-                key={slot.id}
-                style={boxStyle}
-                onPress={() => handleSlotPress(interactive)}
-                accessibilityRole="button"
-                accessibilityLabel={slot.name}
-              >
-                <Animated.View style={[styles.fillImg, { transform: [{ scale: scaleAnim }] }]}>
-                  <Image
-                    source={slot.source}
-                    style={styles.fillImg}
-                    resizeMode="contain"
-                    fadeDuration={0}
-                    onLoad={() => markAssetLoaded(slot.id)}
-                  />
-                </Animated.View>
-              </Pressable>
-            );
-          }
-          return (
-            <View key={slot.id} pointerEvents="none" style={boxStyle}>
-              <Image
-                source={slot.source}
-                style={styles.fillImg}
-                resizeMode="contain"
-                fadeDuration={0}
-                onLoad={() => markAssetLoaded(slot.id)}
-              />
-            </View>
-          );
-        })}
-
-        {/* Double concentric pearl ripple on floor tap */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.rippleOuter,
-            {
-              left: ripplePos.x - 16,
-              top: ripplePos.y - 9,
-              opacity: rippleOuterOpacity,
-              transform: [{ scale: rippleOuterScale }],
-            },
-          ]}
-        />
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.ripple,
-            {
-              left: ripplePos.x - 14,
-              top: ripplePos.y - 8,
-              opacity: rippleOpacity,
-              transform: [{ scale: rippleScale }],
-            },
-          ]}
-        />
-
-        <View pointerEvents="none" style={{
-          position: "absolute",
-          width: duoWidth,
-          height: charH,
-          left: stage.w * DUO_CENTER - duoWidth / 2,
-          top: stage.h * DUO_BASELINE - charH,
-          zIndex: zFromY(DUO_BASELINE) + 3,
-        }}>
-          {DUO_ACTIONS.flatMap(action => DUO_SPRITES[action].map((source, frame) => (
-            <Image
-              key={`${action}:${frame}`}
-              source={source}
-              style={[StyleSheet.absoluteFill, styles.fillImg, { opacity: duo?.action === action && duo.frame === frame ? 1 : 0 }]}
-              resizeMode="contain"
-              fadeDuration={0}
-            />
-          )))}
-        </View>
-
-        {/* Companion Pixel Character */}
-        <Animated.View
-          style={[
-            styles.spriteWrap,
-            {
-              width: charW,
-              height: charH,
-              opacity: duo ? 0 : compFade,
-              zIndex: compAction === "sleep" ? 54 : compAction === "sit" ? 66 : zFromY(compSortY) + 1,
-              transform: [
-                { translateX: Animated.subtract(compX, charW / 2) },
-                { translateY: Animated.subtract(compY, charH) },
-                { translateY: idleFloatB },
-                { scaleY: companionReact.interpolate({ inputRange: [0, 1], outputRange: [1, 0.98] }) },
-              ],
-            },
-          ]}
-        >
+        <View ref={sceneRef} collapsable={false} testID="home-room-scene" style={StyleSheet.absoluteFill}>
+          {/* Base empty 4:5 room */}
           <Pressable
-            disabled={isCompanionView || someoneSleeping || !!duo}
-            onPress={toggleCompanionMenu}
-            accessibilityState={{ expanded: companionMenuOpen }}
-            style={styles.charHit}
+            style={StyleSheet.absoluteFill}
             accessibilityRole="button"
-            accessibilityLabel={`与 ${companionName} 互动`}
+            accessibilityLabel="点击小家木地板走动"
+            onPress={handleFloorPress}
           >
-            {compAction !== "sit" && compAction !== "sleep" && <View style={[styles.spriteShadow, { width: charW * 0.56 }]} />}
             <Image
-              source={compSprites[compAction]}
-              style={[styles.fillImg, compFacingLeft && { transform: [{ scaleX: -1 }] }]}
-              resizeMode="contain"
+              source={ROOM_BASE_IMAGE}
+              style={styles.roomImg}
+              resizeMode="cover"
               fadeDuration={0}
-              onLoad={compAction === "idle" ? () => markAssetLoaded("comp_idle") : undefined}
+              onLoad={() => markAssetLoaded("base")}
             />
           </Pressable>
-        </Animated.View>
 
-        {/* Walkable User Pixel Character */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.spriteWrap,
-            {
-              width: charW,
-              height: charH,
-              opacity: duo ? 0 : userFade,
-              zIndex: userAction === "sleep" ? 55 : userAction === "sit" ? 67 : zFromY(userSortY) + 2,
-              transform: [
-                { translateX: Animated.subtract(userX, charW / 2) },
-                { translateY: Animated.subtract(userY, charH) },
-                { translateY: idleFloatA },
-              ],
-            },
-          ]}
-        >
-          {userAction !== "sit" && userAction !== "sleep" && <View style={[styles.spriteShadow, { width: charW * 0.56 }]} />}
-          <Image
-            source={userSprites[userAction]}
-            style={[styles.fillImg, userFacingLeft && { transform: [{ scaleX: -1 }] }]}
-            resizeMode="contain"
-            fadeDuration={0}
-            onLoad={userAction === "idle" ? () => markAssetLoaded("user_idle") : undefined}
-          />
-        </Animated.View>
+          {/* 10 Swappable Furniture & Wall Slots */}
+          {ROOM_SLOTS.map((slot) => {
+            const zIndex =
+              slot.layer === "floor_base" ? 2 :
+              slot.layer === "wall_back" ? 6 :
+              zFromY(slot.sortY);
 
-        {/* Bed Quilt Foreground Overlay (tucks sleeping characters cleanly under the blanket) */}
-        {someoneSleeping && (
-          <View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              left: stage.w * 0.025,
-              top: stage.h * 0.23,
-              width: stage.w * 0.42,
-              height: stage.h * 0.31,
-              zIndex: 56,
-            }}
-          >
-            <Image source={BED_QUILT_OVERLAY} style={styles.fillImg} resizeMode="contain" fadeDuration={0} />
-          </View>
-        )}
+            const boxStyle = {
+              position: "absolute" as const,
+              left: stage.w * slot.left,
+              top: stage.h * slot.top,
+              width: stage.w * slot.width,
+              height: stage.h * slot.height,
+              zIndex,
+            };
 
-        {/* Gentle Floating Zzz when resting in bed */}
-        {someoneSleeping && (
+            if (slot.id === "slot_sofa") {
+              const w = boxStyle.width;
+              const h = boxStyle.height;
+              const strips = [
+                { x: 0, y: 0, width: 1, height: 0.24, foreground: false },
+                { x: 0.13, y: 0.24, width: 0.74, height: 0.66, foreground: false },
+                { x: 0, y: 0.24, width: 0.13, height: 0.66, foreground: true },
+                { x: 0.87, y: 0.24, width: 0.13, height: 0.66, foreground: true },
+                { x: 0, y: 0.90, width: 1, height: 0.10, foreground: true },
+              ];
+              return [
+                <Pressable
+                  key={slot.id}
+                  style={[boxStyle, { zIndex: 65 }]}
+                  onPress={handleSitTogether}
+                  accessibilityRole="button"
+                  accessibilityLabel="在沙发一起坐"
+                />,
+                ...strips.map((strip, index) => (
+                  <View key={`sofa-${index}`} pointerEvents="none" style={{
+                    position: "absolute",
+                    overflow: "hidden",
+                    left: boxStyle.left + w * strip.x,
+                    top: boxStyle.top + h * strip.y,
+                    width: w * strip.width,
+                    height: h * strip.height,
+                    zIndex: strip.foreground ? zFromY(slot.top + slot.height) : zIndex,
+                  }}>
+                    <Image
+                      source={slot.source}
+                      style={{ position: "absolute", left: -w * strip.x, top: -h * strip.y, width: w, height: h }}
+                      resizeMode="contain"
+                      fadeDuration={0}
+                      onLoad={index === 0 ? () => markAssetLoaded(slot.id) : undefined}
+                    />
+                  </View>
+                )),
+              ];
+            }
+
+            if (slot.id === "slot_bed") {
+              return (
+                <Pressable
+                  key={slot.id}
+                  style={boxStyle}
+                  onPress={someoneSleeping ? handleWakeUp : handleRestTogether}
+                  accessibilityRole="button"
+                  accessibilityLabel={someoneSleeping ? "从床上起身" : "在床上休息"}
+                >
+                  <Image source={slot.source} style={styles.fillImg} resizeMode="contain" fadeDuration={0}
+                    onLoad={() => markAssetLoaded(slot.id)} />
+                </Pressable>
+              );
+            }
+
+            if (slot.interactive) {
+              const interactive = slot.interactive;
+              const scaleAnim = interactive === "pet" ? petBounce : diaryBounce;
+
+              return (
+                <Pressable
+                  key={slot.id}
+                  style={boxStyle}
+                  onPress={() => handleSlotPress(interactive)}
+                  accessibilityRole="button"
+                  accessibilityLabel={slot.name}
+                >
+                  <Animated.View style={[styles.fillImg, { transform: [{ scale: scaleAnim }] }]}>
+                    <Image
+                      source={slot.source}
+                      style={styles.fillImg}
+                      resizeMode="contain"
+                      fadeDuration={0}
+                      onLoad={() => markAssetLoaded(slot.id)}
+                    />
+                  </Animated.View>
+                </Pressable>
+              );
+            }
+            return (
+              <View key={slot.id} pointerEvents="none" style={boxStyle}>
+                <Image
+                  source={slot.source}
+                  style={styles.fillImg}
+                  resizeMode="contain"
+                  fadeDuration={0}
+                  onLoad={() => markAssetLoaded(slot.id)}
+                />
+              </View>
+            );
+          })}
+
+          {/* Double concentric pearl ripple on floor tap */}
           <Animated.View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              left: stage.w * 0.25,
-              top: stage.h * 0.23,
-              zIndex: 122,
-              opacity: zzzAnim.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0, 0.9, 0.7, 0] }),
-              transform: [
-                { translateY: zzzAnim.interpolate({ inputRange: [0, 1], outputRange: [6, -22] }) },
-                { translateX: zzzAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 8] }) },
-              ],
-            }}
-          >
-            <Text style={styles.zzzText}>Zzz</Text>
-          </Animated.View>
-        )}
-
-        {/* Night Ambient Veil */}
-        {nightMode && (
-          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { zIndex: 110 }]}>
-            <View style={styles.nightVeil} />
-          </View>
-        )}
-
-        {/* Floating Hearts */}
-        {hearts.map((h) => (
-          <Animated.View
-            key={h.id}
             pointerEvents="none"
             style={[
-              styles.heartWrap,
+              styles.rippleOuter,
               {
-                left: h.x - 8,
-                top: h.y,
-                opacity: h.anim.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1, 0] }),
+                left: ripplePos.x - 16,
+                top: ripplePos.y - 9,
+                opacity: rippleOuterOpacity,
+                transform: [{ scale: rippleOuterScale }],
+              },
+            ]}
+          />
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.ripple,
+              {
+                left: ripplePos.x - 14,
+                top: ripplePos.y - 8,
+                opacity: rippleOpacity,
+                transform: [{ scale: rippleScale }],
+              },
+            ]}
+          />
+
+          <View pointerEvents="none" style={{
+            position: "absolute",
+            width: duoWidth,
+            height: charH,
+            left: stage.w * DUO_CENTER - duoWidth / 2,
+            top: stage.h * DUO_BASELINE - charH,
+            zIndex: zFromY(DUO_BASELINE) + 3,
+          }}>
+            {DUO_ACTIONS.flatMap(action => DUO_SPRITES[action].map((source, frame) => (
+              <Image
+                key={`${action}:${frame}`}
+                source={source}
+                style={[StyleSheet.absoluteFill, styles.fillImg, { opacity: duo?.action === action && duo.frame === frame ? 1 : 0 }]}
+                resizeMode="contain"
+                fadeDuration={0}
+              />
+            )))}
+          </View>
+
+          {/* Companion Pixel Character */}
+          <Animated.View
+            style={[
+              styles.spriteWrap,
+              {
+                width: charW,
+                height: charH,
+                opacity: duo ? 0 : compFade,
+                zIndex: compAction === "sleep" ? 54 : compAction === "sit" ? 66 : zFromY(compSortY) + 1,
                 transform: [
-                  { translateY: h.anim.interpolate({ inputRange: [0, 1], outputRange: [0, -34] }) },
-                  { scale: h.anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.6, 1.18, 0.9] }) },
+                  { translateX: Animated.subtract(compX, charW / 2) },
+                  { translateY: Animated.subtract(compY, charH) },
+                  { translateY: idleFloatB },
+                  { scaleY: companionReact.interpolate({ inputRange: [0, 1], outputRange: [1, 0.98] }) },
                 ],
               },
             ]}
           >
-            <Ionicons name="heart" size={14} color="#C87D87" />
+            <Pressable
+              disabled={isCompanionView || someoneSleeping || !!duo}
+              onPress={toggleCompanionMenu}
+              accessibilityState={{ expanded: companionMenuOpen }}
+              style={styles.charHit}
+              accessibilityRole="button"
+              accessibilityLabel={`与 ${companionName} 互动`}
+            >
+              {compAction !== "sit" && compAction !== "sleep" && <View style={[styles.spriteShadow, { width: charW * 0.56 }]} />}
+              <Image
+                source={compSprites[compAction]}
+                style={[styles.fillImg, compFacingLeft && { transform: [{ scaleX: -1 }] }]}
+                resizeMode="contain"
+                fadeDuration={0}
+                onLoad={compAction === "idle" ? () => markAssetLoaded("comp_idle") : undefined}
+              />
+            </Pressable>
           </Animated.View>
-        ))}
+
+          {/* Walkable User Pixel Character */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.spriteWrap,
+              {
+                width: charW,
+                height: charH,
+                opacity: duo ? 0 : userFade,
+                zIndex: userAction === "sleep" ? 55 : userAction === "sit" ? 67 : zFromY(userSortY) + 2,
+                transform: [
+                  { translateX: Animated.subtract(userX, charW / 2) },
+                  { translateY: Animated.subtract(userY, charH) },
+                  { translateY: idleFloatA },
+                ],
+              },
+            ]}
+          >
+            {userAction !== "sit" && userAction !== "sleep" && <View style={[styles.spriteShadow, { width: charW * 0.56 }]} />}
+            <Image
+              source={userSprites[userAction]}
+              style={[styles.fillImg, userFacingLeft && { transform: [{ scaleX: -1 }] }]}
+              resizeMode="contain"
+              fadeDuration={0}
+              onLoad={userAction === "idle" ? () => markAssetLoaded("user_idle") : undefined}
+            />
+          </Animated.View>
+
+          {/* Bed Quilt Foreground Overlay (tucks sleeping characters cleanly under the blanket) */}
+          {someoneSleeping && (
+            <View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                left: stage.w * 0.025,
+                top: stage.h * 0.23,
+                width: stage.w * 0.42,
+                height: stage.h * 0.31,
+                zIndex: 56,
+              }}
+            >
+              <Image source={BED_QUILT_OVERLAY} style={styles.fillImg} resizeMode="contain" fadeDuration={0} />
+            </View>
+          )}
+
+          {/* Gentle Floating Zzz when resting in bed */}
+          {someoneSleeping && (
+            <Animated.View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                left: stage.w * 0.25,
+                top: stage.h * 0.23,
+                zIndex: 122,
+                opacity: zzzAnim.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0, 0.9, 0.7, 0] }),
+                transform: [
+                  { translateY: zzzAnim.interpolate({ inputRange: [0, 1], outputRange: [6, -22] }) },
+                  { translateX: zzzAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 8] }) },
+                ],
+              }}
+            >
+              <Text style={styles.zzzText}>Zzz</Text>
+            </Animated.View>
+          )}
+
+          {/* Night Ambient Veil */}
+          {nightMode && (
+            <View pointerEvents="none" style={[StyleSheet.absoluteFill, { zIndex: 110 }]}>
+              <View style={styles.nightVeil} />
+            </View>
+          )}
+
+          {/* Floating Hearts */}
+          {hearts.map((h) => (
+            <Animated.View
+              key={h.id}
+              pointerEvents="none"
+              style={[
+                styles.heartWrap,
+                {
+                  left: h.x - 8,
+                  top: h.y,
+                  opacity: h.anim.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1, 0] }),
+                  transform: [
+                    { translateY: h.anim.interpolate({ inputRange: [0, 1], outputRange: [0, -34] }) },
+                    { scale: h.anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.6, 1.18, 0.9] }) },
+                  ],
+                },
+              ]}
+            >
+              <Ionicons name="heart" size={14} color="#C87D87" />
+            </Animated.View>
+          ))}
+        </View>
+
+        {onCapture && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="拍一张小家照片"
+            disabled={!roomReady || !captureReady || capturing || !isActive || !appActive}
+            onPress={() => { if (sceneRef.current) onCapture(sceneRef.current); }}
+            style={styles.cameraOverlay}
+          >
+            <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
+              <View style={styles.cameraIcon}>
+                <Ionicons name="camera-outline" size={19} color={nightMode ? "#F8FAFC" : PEARL_UI.accentInk} />
+              </View>
+            </LiquidGlassSurface>
+          </Pressable>
+        )}
 
         {/* Top-right Day/Night ambient toggle */}
         <Pressable
@@ -1084,6 +1109,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(30, 38, 56, 0.72)",
     borderColor: "rgba(255, 255, 255, 0.28)",
   },
+  cameraOverlay: { position: "absolute", top: 12, right: 58, zIndex: 125 },
+  cameraIcon: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   actionBarWrap: { position: "absolute", bottom: 12, right: 12, zIndex: 125 },
   actionBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4 },
   actionItem: { minHeight: 44, justifyContent: "center", paddingHorizontal: 8 },
