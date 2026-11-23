@@ -54,11 +54,15 @@ export function CommunityScreen({
   client,
   viewer,
   initialScrollY = 0,
+  initialPostDraft,
+  onPostDraftChange,
   onScroll,
 }: {
   client: CommunityClient;
   viewer: ActorContext;
   initialScrollY?: number;
+  initialPostDraft?: { text: string; key: string };
+  onPostDraftChange?: (draft: { text: string; key: string }) => void;
   onScroll: (y: number) => void;
 }) {
   const { skin } = useSkin();
@@ -75,9 +79,16 @@ export function CommunityScreen({
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState("");
-  const [draft, setDraft] = useState("");
+  const [postDraft, setPostDraft] = useState(() => initialPostDraft ?? { text: "", key: communityRequestKey() });
+  const [commentDraft, setCommentDraft] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
-  const draftKey = useRef(communityRequestKey());
+  const commentKey = useRef(communityRequestKey());
+
+  function updatePostDraft(text: string) {
+    const next = { text, key: communityRequestKey() };
+    setPostDraft(next);
+    onPostDraftChange?.(next);
+  }
   const [editingProfile, setEditingProfile] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "posts" | "comments"; id: string }>();
   const scope = useMemo(() => new CommunityRequestScope(), []);
@@ -178,7 +189,7 @@ export function CommunityScreen({
     return () => scope.invalidate();
   }, [load, scope]);
 
-  async function mutate(action: () => Promise<unknown>, success?: () => void, write?: CommunityWriteAction) {
+  async function mutate(action: () => Promise<unknown>, success?: () => void, write?: CommunityWriteAction, nextPage?: Page) {
     if (busyRef.current) return false;
     busyRef.current = true;
     setBusy(true);
@@ -187,7 +198,8 @@ export function CommunityScreen({
       await action();
       if (!active.current) return false;
       success?.();
-      await load();
+      if (nextPage) showPage(nextPage);
+      else await load();
       return true;
     } catch (e) {
       if (active.current) setError(communityWriteMessage(e, viewer.kind, write));
@@ -200,11 +212,13 @@ export function CommunityScreen({
 
   function navigate(next: Page) {
     if (busyRef.current) return;
+    showPage(next);
+  }
+
+  function showPage(next: Page) {
     scope.invalidate();
-    if (next.type !== "feed") {
-      setDraft("");
-      draftKey.current = communityRequestKey();
-    }
+    setCommentDraft("");
+    commentKey.current = communityRequestKey();
     setBlockTarget(undefined);
     setDeleteTarget(undefined);
     setComposeOpen(false);
@@ -222,7 +236,7 @@ export function CommunityScreen({
   const posts = data?.type === "feed" || data?.type === "profile" ? data.value.items : [];
   const nextCursor = data?.type === "detail" ? data.value.comments.nextCursor : data?.value.nextCursor;
   const draftLimit = page.type === "detail" ? 2000 : 4000;
-  const draftLength = Array.from(draft.trim()).length;
+  const draftLength = Array.from((page.type === "detail" ? commentDraft : postDraft.text).trim()).length;
   const canSubmit = draftLength > 0 && draftLength <= draftLimit;
   const canCompose = own?.canPublish === true;
   const openActor = (id: string) => navigate({ type: "profile", id });
@@ -552,11 +566,11 @@ export function CommunityScreen({
                   editable={!busy}
                   placeholder="写下你的回应…"
                   placeholderTextColor="#9A968F"
-                  value={draft}
+                  value={commentDraft}
                   style={[s.input, { minHeight: 74 }]}
                   onChangeText={(text) => {
-                    setDraft(text);
-                    draftKey.current = communityRequestKey();
+                    setCommentDraft(text);
+                    commentKey.current = communityRequestKey();
                   }}
                 />
                 <Text style={draftLength > draftLimit ? s.error : s.meta}>{draftLength} / {draftLimit}</Text>
@@ -567,10 +581,10 @@ export function CommunityScreen({
                     label={busy ? "正在提交…" : "发表评论"}
                     onPress={() =>
                       void mutate(
-                        () => client.comment(viewer, data.value.post.id, draft, draftKey.current),
+                        () => client.comment(viewer, data.value.post.id, commentDraft, commentKey.current),
                         () => {
-                          setDraft("");
-                          draftKey.current = communityRequestKey();
+                          setCommentDraft("");
+                          commentKey.current = communityRequestKey();
                         },
                         "评论",
                       )
@@ -678,12 +692,9 @@ export function CommunityScreen({
           editable={!busy}
           placeholder="写下今天的小事或心情…"
           placeholderTextColor="#9A968F"
-          value={draft}
+          value={postDraft.text}
           style={[s.input, { marginBottom: 12 }]}
-          onChangeText={(text) => {
-            setDraft(text);
-            draftKey.current = communityRequestKey();
-          }}
+          onChangeText={updatePostDraft}
         />
         <Text style={draftLength > draftLimit ? s.error : s.meta}>{draftLength} / {draftLimit}</Text>
         {error !== "" && (
@@ -699,10 +710,9 @@ export function CommunityScreen({
             label={busy ? "正在发布…" : "发布动态"}
             onPress={() =>
               void mutate(
-                () => client.publish(viewer, draft, draftKey.current),
+                () => client.publish(viewer, postDraft.text, postDraft.key),
                 () => {
-                  setDraft("");
-                  draftKey.current = communityRequestKey();
+                  updatePostDraft("");
                   setComposeOpen(false);
                 },
                 "发帖",
@@ -731,9 +741,10 @@ export function CommunityScreen({
                 disabled={busy}
                 onPress={() => {
                   const target = blockTarget;
-                  void mutate(() => client.block(viewer, target.id, true, communityRequestKey())).then((ok) => {
-                    if (ok && active.current) navigate({ type: "blocks" });
-                  });
+                  void mutate(
+                    () => client.block(viewer, target.id, true, communityRequestKey()),
+                    undefined, undefined, { type: "blocks" },
+                  );
                 }}
               />
             </View>
@@ -752,11 +763,12 @@ export function CommunityScreen({
                 disabled={busy}
                 onPress={() => {
                   const target = deleteTarget;
-                  void mutate(() => client.remove(viewer, target.kind, target.id, communityRequestKey())).then((ok) => {
-                    if (!ok || !active.current) return;
-                    setDeleteTarget(undefined);
-                    if (target.kind === "posts" && page.type === "detail") navigate({ type: "feed" });
-                  });
+                  void mutate(
+                    () => client.remove(viewer, target.kind, target.id, communityRequestKey()),
+                    () => setDeleteTarget(undefined),
+                    undefined,
+                    target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined,
+                  );
                 }}
               />
             </View>

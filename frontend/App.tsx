@@ -60,7 +60,6 @@ import { PEARL_UI } from "./src/theme/skinTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
 import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
-import { InteractiveFullRoom } from "./src/components/InteractiveFullRoom";
 import { PearlInteractiveRoom } from "./src/components/PearlInteractiveRoom";
 import { BottomSheet } from "./src/components/BottomSheet";
 import { GlassChatBubble } from "./src/components/GlassChatBubble";
@@ -148,8 +147,8 @@ function WorldApp({ client, account, isMockMode }: {
   const [nav, setNav] = useState<NavigationState>(initialNavigationState);
   const [identity, setIdentity] = useState<LoadState<ActiveIdentityContext>>({ kind: "loading" });
   const [world, setWorld] = useState<LoadState<WorldCollection>>({ kind: "idle" });
-  const [encounter, setEncounter] = useState<LoadState<EncounterDetail>>({ kind: "idle" });
-  const [profile, setProfile] = useState<LoadState<CompanionProfile>>({ kind: "idle" });
+  const [encounterResult, setEncounterResult] = useState<{ key: string; state: LoadState<EncounterDetail> }>();
+  const [profileResult, setProfileResult] = useState<{ key: string; state: LoadState<CompanionProfile> }>();
   const [life, setLife] = useState<LoadState<LifeContinuityCollection>>({ kind: "idle" });
   const [ownerCompanions, setOwnerCompanions] = useState<LoadState<OwnerCompanionCollection>>({ kind: "idle" });
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -158,6 +157,7 @@ function WorldApp({ client, account, isMockMode }: {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [mySettingsOpen, setMySettingsOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
+  const communityDraft = useRef<{ text: string; key: string } | undefined>(undefined);
   const worldScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   const route = nav.stack[nav.stack.length - 1] ?? {
@@ -169,6 +169,28 @@ function WorldApp({ client, account, isMockMode }: {
   const subject = identityValue?.activeSubject;
   const viewer = subject && { kind: subject.kind, id: subject.id };
   const agentViewer = isAgentViewer(viewer) ? viewer : undefined;
+  const canUseChat = viewer?.kind === "OWNER" && !identitySwitchPending && !!client.api.chat;
+  const profileId = route.type === "profile" ? route.companionId
+    : route.type === "root" && route.tab === "my" && viewer?.kind === "COMPANION" ? viewer.id
+    : undefined;
+  const encounterId = route.type === "encounter" ? route.encounterId : undefined;
+  const viewerKey = `${viewer?.kind}:${identityId}`;
+  const profileKey = profileId ? `${viewerKey}:${profileId}` : undefined;
+  const encounterKey = encounterId ? `${viewerKey}:${encounterId}` : undefined;
+  const detailScope = useRef({ profileKey, encounterKey, profileRequest: 0, encounterRequest: 0 });
+  if (detailScope.current.profileKey !== profileKey) {
+    detailScope.current.profileKey = profileKey;
+    detailScope.current.profileRequest++;
+  }
+  if (detailScope.current.encounterKey !== encounterKey) {
+    detailScope.current.encounterKey = encounterKey;
+    detailScope.current.encounterRequest++;
+  }
+  const profile: LoadState<CompanionProfile> = profileResult && profileResult.key === profileKey
+    ? profileResult.state : { kind: "idle" };
+  const encounter: LoadState<EncounterDetail> = encounterResult && encounterResult.key === encounterKey
+    ? encounterResult.state : { kind: "idle" };
+
 
   useEffect(() => {
     void AccessibilityInfo.isReduceMotionEnabled().then(setReducedMotion);
@@ -185,7 +207,7 @@ function WorldApp({ client, account, isMockMode }: {
 
   useEffect(() => {
     if (identity.kind !== "success") return;
-    if (route.type === "root" && route.tab === "world") void loadWorld();
+    if (route.type === "root" && route.tab === "world" && !client.api.community) void loadWorld();
     if (route.type === "life-archive") void loadLife();
     if (
       route.type === "root" &&
@@ -201,13 +223,14 @@ function WorldApp({ client, account, isMockMode }: {
     route.type === "root" ? route.tab : "",
     route.type === "encounter" ? route.encounterId : "",
     route.type === "profile" ? route.companionId : "",
-    identity.kind === "success" ? identity.value.activeSubject.id : "",
+    viewerKey,
+    client.api.community,
     cache.epoch,
   ]);
 
   function invalidateCompanionViews() {
     cache.purgeViewerSensitive();
-    setProfile({ kind: "idle" });
+    setProfileResult(undefined);
   }
 
   async function loadIdentityOwner() {
@@ -296,24 +319,36 @@ function WorldApp({ client, account, isMockMode }: {
 
   async function loadEncounter(id: string) {
     const epoch = cache.epoch;
-    setEncounter({ kind: "loading" });
+    const resultKey = `${viewerKey}:${id}`;
+    if (detailScope.current.encounterKey !== resultKey) return;
+    const version = ++detailScope.current.encounterRequest;
+    const current = () => epoch === cache.epoch && detailScope.current.encounterKey === resultKey
+      && detailScope.current.encounterRequest === version;
+    const save = (state: LoadState<EncounterDetail>) => setEncounterResult({ key: resultKey, state });
+    save({ kind: "loading" });
     try {
       const key = `encounter:${id}`;
       const value =
         cache.get<EncounterDetail>(key) ?? (await client.api.encounterDetail(id));
-      if (epoch !== cache.epoch) return;
+      if (!current()) return;
       cache.set(key, value);
-      setEncounter({ kind: "success", value });
+      save({ kind: "success", value });
     } catch (error) {
-      if (epoch !== cache.epoch) return;
+      if (!current()) return;
       const safe = safeClientMessage(error);
-      setEncounter({ kind: "error", ...safe });
+      save({ kind: "error", ...safe });
     }
   }
 
   async function loadProfile(id: string) {
     const epoch = cache.epoch;
-    setProfile({ kind: "loading" });
+    const resultKey = `${viewerKey}:${id}`;
+    if (detailScope.current.profileKey !== resultKey) return;
+    const version = ++detailScope.current.profileRequest;
+    const current = () => epoch === cache.epoch && detailScope.current.profileKey === resultKey
+      && detailScope.current.profileRequest === version;
+    const save = (state: LoadState<CompanionProfile>) => setProfileResult({ key: resultKey, state });
+    save({ kind: "loading" });
     try {
       const viewer =
         identityValue && identityValue.activeSubject.kind !== "OWNER"
@@ -323,13 +358,13 @@ function WorldApp({ client, account, isMockMode }: {
       const key = `profile:${viewerKey}:${id}`;
       const value =
         cache.get<CompanionProfile>(key) ?? (await client.api.companionProfile(id, viewer));
-      if (epoch !== cache.epoch) return;
+      if (!current()) return;
       cache.set(key, value);
-      setProfile({ kind: "success", value });
+      save({ kind: "success", value });
     } catch (error) {
-      if (epoch !== cache.epoch) return;
+      if (!current()) return;
       const safe = safeClientMessage(error);
-      setProfile({ kind: "error", ...safe });
+      save({ kind: "error", ...safe });
     }
   }
 
@@ -341,12 +376,16 @@ function WorldApp({ client, account, isMockMode }: {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
+    if (target.kind !== "OWNER" && route.type === "chat") {
+      setNav((current) => selectTab(current, current.rootTab));
+    }
     setIdentitySwitchPending(true);
+    communityDraft.current = undefined;
     setIdentity({ kind: "loading" });
     setWorld({ kind: "idle" });
     setLife({ kind: "idle" });
-    setEncounter({ kind: "idle" });
-    setProfile({ kind: "idle" });
+    setEncounterResult(undefined);
+    setProfileResult(undefined);
     cache.purgeViewerSensitive();
 
     try {
@@ -448,6 +487,8 @@ function WorldApp({ client, account, isMockMode }: {
           key={`${identityValue.activeSubject.kind}:${identityId}`}
           client={client.api.community}
           viewer={{ kind: identityValue.activeSubject.kind, id: identityId }}
+          initialPostDraft={communityDraft.current}
+          onPostDraftChange={(draft) => { communityDraft.current = draft; }}
           initialScrollY={nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0}
           onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))}
         /> : identitySwitchPending ? <ActivityIndicator accessibilityLabel="正在切换身份" /> :
@@ -474,7 +515,7 @@ function WorldApp({ client, account, isMockMode }: {
       >
         <PrivateHomeScreen
           key={`${currentKind}:${identityId}`}
-          chatClient={client.api.chat}
+          chatClient={canUseChat ? client.api.chat : undefined}
           companionId={ownerCompanions.kind === "success" ? ownerCompanions.value.items[0]?.companionId : undefined}
           isCompanion={isSampleCompanion}
           isMockMode={isMockMode}
@@ -496,7 +537,7 @@ function WorldApp({ client, account, isMockMode }: {
         />
       </View>
 
-      {route.type === "chat" && client.api.chat && (
+      {route.type === "chat" && canUseChat && client.api.chat && (
         <ChatScreen
           client={client.api.chat}
           initialChatId={route.chatId}
@@ -541,7 +582,7 @@ function WorldApp({ client, account, isMockMode }: {
           settingsOpen={mySettingsOpen}
           onCloseSettings={() => setMySettingsOpen(false)}
           onOpenCompanionProfile={(item) => openProfile(item.companionId)}
-          onOpenCompanionChat={(item) => setNav((current) => pushRoute(current, { type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my" }))}
+          onOpenCompanionChat={canUseChat ? (item) => setNav((current) => pushRoute(current, { type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my" })) : undefined}
           onControls={(item) => {
             setCompanionDisplayName(item.displayName);
             setNav((current) => pushRoute(current, {
@@ -1160,7 +1201,7 @@ function PrivateHomeScreen({
     return () => { active = false; };
   }, [chatClient, companionId, isActive]);
 
-  const previewBubbles = latestMessages.length > 0
+  const previewBubbles = !chatClient ? [] : latestMessages.length > 0
     ? latestMessages
     : isMockMode
       ? [
@@ -1211,21 +1252,23 @@ function PrivateHomeScreen({
       )}
 
       {/* Clean Liquid Glass Input Bar (tapping auto-focuses keyboard in ChatScreen) */}
-      <Pressable
-        onPress={() => onOpenChat(activeChatId, companionId, companionName, true)}
-        style={({ pressed }) => [styles.homeComposerWrap, pressed && { transform: [{ scale: 0.99 }] }]}
-        accessibilityRole="button"
-        accessibilityLabel={`和 ${companionName} 说点什么`}
-      >
-        <LiquidGlassSurface glass borderRadius={RADIUS.pill}>
-          <View style={styles.homeComposerInner}>
-            <Text style={styles.homeComposerPlaceholder}>和 {companionName} 说点什么…</Text>
-            <View style={styles.homeComposerSendBtn}>
-              <Ionicons name="paper-plane-outline" size={15} color="#FFFFFF" />
+      {chatClient && (
+        <Pressable
+          onPress={() => onOpenChat(activeChatId, companionId, companionName, true)}
+          style={({ pressed }) => [styles.homeComposerWrap, pressed && { transform: [{ scale: 0.99 }] }]}
+          accessibilityRole="button"
+          accessibilityLabel={`和 ${companionName} 说点什么`}
+        >
+          <LiquidGlassSurface glass borderRadius={RADIUS.pill}>
+            <View style={styles.homeComposerInner}>
+              <Text style={styles.homeComposerPlaceholder}>和 {companionName} 说点什么…</Text>
+              <View style={styles.homeComposerSendBtn}>
+                <Ionicons name="paper-plane-outline" size={15} color="#FFFFFF" />
+              </View>
             </View>
-          </View>
-        </LiquidGlassSurface>
-      </Pressable>
+          </LiquidGlassSurface>
+        </Pressable>
+      )}
     </ScrollView>
   );
 }

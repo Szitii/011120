@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
@@ -16,36 +16,44 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState("");
-  const active = useRef(false);
-  const requestPending = useRef(false);
   const ownerId = viewer.id;
   const viewerKind = viewer.kind;
+  const scope = useMemo(() => ({ active: false, pending: false, version: 0 }), [client, ownerId, viewerKind]);
 
   async function load() {
-    if (requestPending.current) return;
-    requestPending.current = true;
+    if (scope.pending) return;
+    scope.pending = true;
+    const version = scope.version;
     setLoading(true);
     setError("");
     try {
       const current = await client.humanProfileSettings({ kind: viewerKind, id: ownerId });
-      if (!active.current) return;
+      if (!scope.active || scope.version !== version) return;
       setSettings(current);
       setDisplayName(current.displayName);
       setBio(current.bio);
       setConflict(false);
     } catch (err) {
-      if (active.current) setError(safeClientMessage(err).title);
+      if (scope.active && scope.version === version) setError(safeClientMessage(err).title);
     } finally {
-      requestPending.current = false;
-      if (active.current) setLoading(false);
+      if (scope.active && scope.version === version) {
+        scope.pending = false;
+        setLoading(false);
+      }
     }
   }
 
-  useEffect(() => {
-    active.current = true;
+  useLayoutEffect(() => {
+    scope.active = true;
+    scope.pending = false;
+    setSettings(undefined);
+    setDisplayName("");
+    setBio("");
+    setSaving(false);
+    setConflict(false);
     void load();
-    return () => { active.current = false; };
-  }, [client, ownerId, viewerKind]);
+    return () => { scope.active = false; scope.version++; };
+  }, [scope]);
 
   const name = displayName.trim();
   const description = bio.trim();
@@ -55,15 +63,16 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
     && (name !== settings.displayName || description !== settings.bio);
 
   async function save() {
-    if (!settings || !canSave || requestPending.current) return;
-    requestPending.current = true;
+    if (!settings || !canSave || scope.pending) return;
+    scope.pending = true;
+    const version = scope.version;
     setSaving(true);
     setError("");
     try {
       await client.saveHumanProfile(viewer, { displayName: name, bio: description, revision: settings.revision });
-      if (active.current) onClose(true);
+      if (scope.active && scope.version === version) onClose(true);
     } catch (err) {
-      if (!active.current) return;
+      if (!scope.active || scope.version !== version) return;
       if (err instanceof ApiProblemError && err.status === 409) {
         setConflict(true);
         setError("资料已在其他地方更新。载入最新版本后再编辑。");
@@ -73,8 +82,10 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
         setError(safeClientMessage(err).title);
       }
     } finally {
-      requestPending.current = false;
-      if (active.current) setSaving(false);
+      if (scope.active && scope.version === version) {
+        scope.pending = false;
+        setSaving(false);
+      }
     }
   }
 
