@@ -21,7 +21,7 @@ ANTHROPIC_API_KEY=... npm run chat:try -- claude-haiku-5-5 "今天好累啊"
 
 ## 关掉(总开关)
 
-用数据库管理员账号连库(`DATABASE_URL`),改动立刻对所有服务器生效,每次都有记录:
+用运营人员的数据库账号连库(`DATABASE_URL`;账号要属于 `companion_admin`,数据库管理员账号也可以)。改动立刻对所有服务器生效,每次都连同原因和操作账号记进管理日志:
 
 ```
 npm run chat:admin -- status
@@ -43,7 +43,7 @@ npm run chat:admin -- on all|provider X|model X
 每个家机每个自然日(UTC)自动有一份:默认 200 次模型调用、1 美元(占位数值)。改:
 
 ```
-npm run chat:admin -- quota 100 50   # 每天 100 次、50 美分;从新建的额度开始生效
+npm run chat:admin -- quota 100 50 "原因"   # 每天 100 次、50 美分;从新建的额度开始生效
 ```
 
 用完后回复显示"今天的额度用完了"。每次调用都记在算力账本里(回复:`OWNER_DIRECT_RESPONSE`;判断要不要开口:`CHAT_TURN_DECISION`)。token 数按实际记录;费用以美分记账,调用前按上限预占(向上取整),调用后按实际用量结算(四舍五入),所以很便宜的调用不会每次都扣掉 1 美分。厂商没报用量、调用失败或服务器中途停掉的,按预占的上限扣。
