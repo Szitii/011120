@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { PostgresChatAdapter } from "../chat/postgres.ts";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import { PostgresOwnerAdapter } from "../persistence/postgres/adapter.ts";
 import { PgOwnerExecutor } from "../persistence/postgres/client.ts";
@@ -37,6 +38,7 @@ export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
       ownerId,
       owner: new PostgresOwnerAdapter(executor),
       community: new PostgresCommunityAdapter(executor),
+      chat: new PostgresChatAdapter(executor),
     };
   }
 

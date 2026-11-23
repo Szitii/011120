@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { handleChatRequest } from "../chat/http.ts";
+import { ChatReplies } from "../chat/replies.ts";
 import { handleCommunityRequest } from "../community/http.ts";
 import { canonicalJson, contentHash, sha256 } from "../companion-import/canonical.ts";
 import { parseCharacterCard, parserMetadata } from "../companion-import/parser.ts";
@@ -547,15 +549,19 @@ export class MvpApiBoundary {
   readonly #sessions: OwnerSessionResolver;
   readonly #encounters: EncounterCommandPort;
   readonly #id: () => string;
+  readonly #replies: ChatReplies;
 
   constructor(input: {
     readonly sessions: OwnerSessionResolver;
     readonly encounters: EncounterCommandPort;
     readonly id?: () => string;
+    /** Writes Companion chat replies; without one, replies end as UNAVAILABLE. */
+    readonly replies?: ChatReplies;
   }) {
     this.#sessions = input.sessions;
     this.#encounters = input.encounters;
     this.#id = input.id ?? randomUUID;
+    this.#replies = input.replies ?? new ChatReplies();
   }
 
   async handle(request: MvpHttpRequest): Promise<MvpHttpResponse> {
@@ -567,6 +573,8 @@ export class MvpApiBoundary {
       const session = await authenticate(request, this.#sessions);
       const community = await handleCommunityRequest(request, session, traceId);
       if (community) return community;
+      const chat = await handleChatRequest(request, session, traceId, this.#replies);
+      if (chat) return chat;
 
       for (const [routeMethod, path, handler] of ROUTES) {
         const match = routeMethod === method ? path.exec(pathname) : null;

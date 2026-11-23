@@ -7,6 +7,7 @@ import {
   type OwnerSessionResolver,
 } from "../http/types.ts";
 import { createMobileHttpServer } from "../http/mobile-server.ts";
+import { PostgresChatAdapter } from "../chat/postgres.ts";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import {
   createPgPool,
@@ -19,6 +20,7 @@ class DevOwnerSessionResolver implements OwnerSessionResolver {
   readonly #ownerId: string;
   readonly #owner: PostgresOwnerAdapter;
   readonly #community: PostgresCommunityAdapter;
+  readonly #chat: PostgresChatAdapter;
 
   constructor(input: {
     readonly pool: pg.Pool;
@@ -31,13 +33,14 @@ class DevOwnerSessionResolver implements OwnerSessionResolver {
     const executor = new PgOwnerExecutor(input.pool, input.ownerSubject);
     this.#owner = new PostgresOwnerAdapter(executor);
     this.#community = new PostgresCommunityAdapter(executor);
+    this.#chat = new PostgresChatAdapter(executor);
   }
 
   async resolve(bearerToken: string): Promise<AuthenticatedOwnerSession> {
     if (bearerToken !== this.#token) {
       throw new ApiAuthenticationError("INVALID_TOKEN");
     }
-    return { ownerId: this.#ownerId, owner: this.#owner, community: this.#community };
+    return { ownerId: this.#ownerId, owner: this.#owner, community: this.#community, chat: this.#chat };
   }
 }
 

@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MAX_IMPORT_BYTES } from "../companion-import/policy.ts";
+import { ChatReplies, devChatModel } from "../chat/replies.ts";
 import { MvpApiBoundary } from "./mvp-api.ts";
 import type { MvpHttpRequest, OwnerSessionResolver } from "./types.ts";
 
@@ -69,7 +70,11 @@ const writeTransportProblem = (response: ServerResponse, error: unknown): void =
   }, { "content-type": "application/problem+json" });
 };
 
-/** One HTTP host for both the dev token resolver and the Supabase resolver; only `sessions` differs. */
+/**
+ * One HTTP host for both the dev token resolver and the Supabase resolver. Chat replies: the dev
+ * host answers with a fixed fake reply; the Supabase host has no model yet, so replies end as
+ * UNAVAILABLE ("coming soon") until a model is connected.
+ */
 export const createMobileHttpServer = (sessions: OwnerSessionResolver, mode: "stage1-mobile-dev" | "supabase-auth") => {
   const api = new MvpApiBoundary({
     sessions,
@@ -78,6 +83,7 @@ export const createMobileHttpServer = (sessions: OwnerSessionResolver, mode: "st
         throw new Error("Encounter creation is unavailable on the mobile HTTP host.");
       },
     },
+    replies: new ChatReplies(mode === "stage1-mobile-dev" ? devChatModel : undefined),
   });
 
   return createServer(async (request, response) => {
