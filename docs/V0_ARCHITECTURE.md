@@ -5,7 +5,7 @@
 
 ## Server-only MVP API boundary
 
-OpenAPI `0.2.0` maps the six MVP product surfaces to stable resources rather than navigation labels. Implemented Owner invitation, Encounter command, and Compute receipt routes pass through an authenticated Owner session or the separately injected service-only persistent orchestrator. Contract-only routes fail closed with `CAPABILITY_NOT_IMPLEMENTED`; production composition has no in-memory fallback or dual write. See ADR 0022 and `MVP_API_ENGINEERING_RESPONSE_V0_2.md`.
+OpenAPI `0.2.0` maps the six MVP product surfaces to stable resources rather than navigation labels. Implemented Owner invitation, Encounter command, and Compute receipt routes pass through an authenticated Owner session or the separately injected service-only persistent orchestrator. Contract-only routes fail closed with `CAPABILITY_NOT_IMPLEMENTED`; production composition has no in-memory fallback or dual write. See ADR 0022.
 
 ## Architecture choice
 
