@@ -8,7 +8,7 @@ import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import type { ChatClaim } from "../src/chat/port.ts";
-import type { Chat, ChatPage, ChatSendResult, ChatSettings } from "../../contracts/chat.ts";
+import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult } from "../../contracts/chat.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");
@@ -331,6 +331,33 @@ try {
   assert.deepEqual(spent.rows, [{ status: "SUCCEEDED", input_tokens: "300", output_tokens: "12" }]);
   passed("platform models: a daily budget, booking and settling, kill switches, quota, abandoned and orphaned calls, end to end");
 
+  const actions = `companions/${A.companion}/actions`;
+  const pat = await call<CompanionActionResult>(0, actions, "POST", { action: "PAT_HEAD" }, "action-key-000000001");
+  assert.equal(pat.status, 201, JSON.stringify(pat.data));
+  assert.equal(pat.data.chatId, direct.data.id, "kept in the one-to-one chat");
+  assert.deepEqual([pat.data.message.action, pat.data.message.body, pat.data.message.companionId, pat.data.typing, pat.data.replying],
+    ["PAT_HEAD", null, null, [], true], "an optional turn shows no typing while it decides");
+  page = await settle(direct.data.id);
+  assert.deepEqual(page.items.slice(0, 2).map(m => [m.action, m.body]),
+    [[null, "（开发环境假回复）SampleCompanion知道你在小家里摸了摸你的头"], ["PAT_HEAD", null]], "the Companion saw the action");
+  assert.equal(page.chat.lastMessage?.action, null);
+  const replayed = await call<CompanionActionResult>(0, actions, "POST", { action: "PAT_HEAD" }, "action-key-000000001");
+  assert.equal(replayed.data.message.id, pat.data.message.id);
+  assert.equal((await call(0, actions, "POST", { action: "HUG" }, "action-key-000000001")).status, 409);
+  assert.equal((await call(0, `chats/${direct.data.id}/messages`, "POST", { body: "hi" }, "action-key-000000001")).status, 409);
+  const hug = await call<CompanionActionResult>(0, actions, "POST", { action: "HUG" });
+  assert.deepEqual([hug.status, hug.data.message.action, hug.data.replying], [201, "HUG", false], "a burst gets one reply");
+  await pool.query("update companion_private.chat_messages set created_at = created_at - interval '4 minutes' where chat_id = $1", [direct.data.id]);
+  const wave = await call<CompanionActionResult>(0, actions, "POST", { action: "WAVE" });
+  assert.equal(wave.data.replying, true, "3 minutes later it may answer again");
+  assert.equal((await settle(direct.data.id)).items[0]!.body, "（开发环境假回复）SampleCompanion知道你在小家里向你挥了挥手");
+  assert.equal((await call(0, actions, "POST", { action: "KISS" })).status, 400);
+  assert.equal((await call(1, actions, "POST", { action: "WAVE" })).status, 404, "only the Owner's own Companion");
+  const secondChat = (await call<Chat>(0, "chats", "POST", { companionIds: [second] })).data;
+  assert.equal((await call<CompanionActionResult>(0, `companions/${second}/actions`, "POST", { action: "WAVE" })).data.chatId, secondChat.id);
+  await settle(secondChat.id);
+  passed("home-room actions: kept in the one-to-one chat, seen by the Companion, one reply per burst");
+
   const pageChat = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-0000000003")).data;
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
     select $1, 'message ' || n, 'SENT', encode(public.digest('k' || n, 'sha256'), 'hex'), now() - (40 - n) * interval '1 second'
@@ -345,7 +372,7 @@ try {
   passed("messages page newest first with a cursor");
 
   const list = await call<{ items: Chat[] }>(0, "chats");
-  assert.equal(list.data.items.length, 5);
+  assert.equal(list.data.items.length, 6);
   assert.equal(list.data.items[0]!.id, pageChat.id); // most recently active first
   assert.equal((await call<{ items: Chat[] }>(1, "chats")).data.items.length, 0);
   assert.equal((await call(1, `chats/${group.data.id}`, "DELETE")).status, 404);

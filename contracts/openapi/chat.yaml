@@ -266,6 +266,55 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /companions/{companionId}/actions:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      operationId: doCompanionAction
+      summary: A home-room action (wave, pat, hug, cuddle), kept in the one-to-one chat with the Companion
+      description: |
+        Play the animation at once; this only records it. The action becomes a message in the
+        one-to-one chat (created on first use) with `action` set and no body, so the Companion sees
+        it among the recent messages it reads before replying. The first action of a burst lets the
+        Companion answer with a line or stay quiet; actions less than 3 minutes after the previous
+        one, or while a reply is on the way, queue nothing (`replying` false). To show the answer,
+        GET /chats/{chatId} while `replying` is true. The same Idempotency-Key returns the first
+        result; with another action, or a key used for a message, it is a 409. Counts toward the
+        300 Owner messages per hour.
+      x-capability-status: implemented
+      parameters:
+      - *idempotency
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action]
+              properties:
+                action: {$ref: '#/components/schemas/CompanionAction'}
+      responses:
+        '201':
+          description: The action as a chat message, the chat it is in, and whether a reply is on the way
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chatId, message, typing, replying]
+                properties:
+                  chatId: {type: string, format: uuid}
+                  message: {$ref: '#/components/schemas/ChatMessage'}
+                  typing: {$ref: '#/components/schemas/Typing'}
+                  replying: {$ref: '#/components/schemas/Replying'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
 components:
   securitySchemes:
     ownerBearer:
@@ -279,6 +328,10 @@ components:
     Replying:
       type: boolean
       description: More replies are on the way; keep refreshing every 1-2 s while true, even when typing is empty.
+    CompanionAction:
+      type: string
+      enum: [WAVE, PAT_HEAD, HUG, CUDDLE]
+      description: 挥手 / 摸头 / 抱抱 / 贴贴. Same names as contracts/companion-actions.ts.
     ChatMember:
       type: object
       required: [companionId, displayName]
@@ -287,11 +340,16 @@ components:
         displayName: {type: string}
     ChatMessage:
       type: object
-      required: [id, companionId, body, mentions, status, failure, retryable, sentAt]
+      required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt]
       properties:
         id: {type: string, format: uuid}
         companionId: {type: [string, 'null'], format: uuid, description: null when the Owner wrote it.}
-        body: {type: [string, 'null'], description: null when the reply failed or was blocked.}
+        body: {type: [string, 'null'], description: 'null when the reply failed or was blocked, and for an action.'}
+        action:
+          oneOf:
+          - $ref: '#/components/schemas/CompanionAction'
+          - type: 'null'
+          description: Set when the Owner did a home-room action (show it as a grey line); then body is null.
         mentions: {type: array, items: {type: string, format: uuid}}
         status: {type: string, enum: [SENT, FAILED, BLOCKED]}
         failure:

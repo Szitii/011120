@@ -10,18 +10,22 @@
  *   POST   /v0/chats/{id}/messages/{messageId}/retry   try a failed reply again
  *   GET|PUT /v0/companions/{id}/chat-settings          how a Companion takes part, and its model
  *   GET    /v0/chat-models                             the models an Owner can pick
+ *   POST   /v0/companions/{id}/actions                 { action }  a home-room action, kept in the one-to-one chat
  *
- * POST /v0/chats and POST .../messages need an Idempotency-Key. After a send, a retry, or a read
+ * POST /v0/chats, POST .../messages and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { ChatModelList, ChatSettings } from "../../../contracts/chat.ts";
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import type { ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 
+// Same names as contracts/companion-actions.ts (checked again by the database).
+const ACTIONS: readonly CompanionAction[] = ["WAVE", "PAT_HEAD", "HUG", "CUDDLE"];
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid chat request."); };
 const notFound = (): never => { throw new PostgresPersistenceError("NOT_FOUND", "Chat route not found."); };
@@ -98,7 +102,8 @@ export async function handleChatRequest(
   const path = url.pathname.replace(/\/$/, "").split("/").slice(1); // ["v0", ...]
   const settingsRoute = path[1] === "companions" && path[3] === "chat-settings" && path.length === 4;
   const modelsRoute = path[1] === "chat-models" && path.length === 2;
-  if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute)) return undefined;
+  const actionsRoute = path[1] === "companions" && path[3] === "actions" && path.length === 4;
+  if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -112,6 +117,16 @@ export async function handleChatRequest(
     if (method === "GET") return response(200, await port.settings(companionId));
     if (method === "PUT") return response(200, await port.saveSettings(companionId, settings(request, catalog)));
     return notFound();
+  }
+  if (actionsRoute) {
+    if (method !== "POST") return notFound();
+    const companionId = id(path[2]);
+    const { action } = body(request, ["action"]);
+    if (!ACTIONS.includes(action as CompanionAction)) return invalid();
+    const result = await port.act(companionId, action as CompanionAction, retryKey(request, session.ownerId));
+    const chatId = (result as { chatId?: unknown }).chatId;
+    if (replying(result) && typeof chatId === "string") replies.kick(chatId, port);
+    return response(201, result);
   }
   const [, , chatId, part, messageId, action] = path;
   if (chatId === undefined) {

@@ -42,6 +42,7 @@ const fixtures = {
     items: [{ id: id(81), companionId: id(99), body: null, status: "FAILED", failure: "QUOTA", createdAt: AT },
       { id: id(82), companionId: COMPANION, body: "second line", status: "SENT", failure: null, createdAt: AT },
       { id: id(83), companionId: null, body: NASTY, status: "SENT", failure: null, createdAt: AT },
+      { id: id(85), companionId: null, body: null, action: "HUG", status: "SENT", failure: null, createdAt: AT },
       { id: id(84), companionId: COMPANION, body: null, status: "PENDING", failure: null, createdAt: AT }],
     next: { at: AT, id: id(81) },
   } satisfies ChatPage as ChatPage,
@@ -303,8 +304,9 @@ it("shows a private chat only after a reason is given", async () => {
   assert.deepEqual(calls, [["chat_read", CHAT, "Checking a report", null, null]]);
   assert.ok(!shown.body.includes("<script>alert"));
   const speakers = [...shown.body.matchAll(/<div class="msg"><b>([^<]+)<\/b>/g)].map(m => m[1]);
-  assert.deepEqual(speakers, ["Mochi", "主人", "Mochi", "(已离开的家机)"], "oldest first");
+  assert.deepEqual(speakers, ["Mochi", "主人", "主人", "Mochi", "(已离开的家机)"], "oldest first");
   assert.match(shown.body, /\(正在回复\)/);
+  assert.match(shown.body, /\(小家动作:抱抱\)/);
   assert.match(shown.body, /\(回复失败\) QUOTA/);
   assert.match(shown.body, /本次查看已记入日志,原因:Checking a report/);
   assert.match(shown.body, new RegExp(`name="back" value="/chats/${CHAT}"><input type="hidden" name="reason" value="Checking a report">\\s*` +
