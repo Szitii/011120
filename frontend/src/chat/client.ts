@@ -4,7 +4,10 @@ import type {
   ChatPage,
   ChatSendResult,
   ChatSettings,
+  CompanionActionResult,
 } from "../../../contracts/chat.ts";
+
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 
 export interface ChatRetryResult {
   typing: string[];
@@ -27,6 +30,7 @@ export interface ChatClient {
   retryMessage(chatId: string, messageId: string): Promise<ChatRetryResult>;
   getChatSettings(companionId: string): Promise<ChatSettings>;
   updateChatSettings(companionId: string, settings: ChatSettings): Promise<ChatSettings>;
+  sendAction(companionId: string, action: CompanionAction, key: string): Promise<CompanionActionResult>;
   listModels?(): Promise<ChatModelList>;
 }
 
@@ -82,6 +86,9 @@ export function createChatClient(send: SendFn): ChatClient {
     },
     updateChatSettings(companionId: string, settings: ChatSettings) {
       return send("PUT", `/v0/companions/${encodeURIComponent(companionId)}/chat-settings`, settings);
+    },
+    sendAction(companionId, action, key) {
+      return send("POST", `/v0/companions/${encodeURIComponent(companionId)}/actions`, { action }, key);
     },
     listModels() {
       return send("GET", "/v0/chat-models");

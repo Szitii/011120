@@ -1,4 +1,11 @@
 import type { ImageSourcePropType } from "react-native";
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+
+export const DUO_SPRITES = {
+  PAT_HEAD: [require("../../assets/room_v2/duo_pat_1.png"), require("../../assets/room_v2/duo_pat_2.png")],
+  HUG: [require("../../assets/room_v2/duo_hug_1.png"), require("../../assets/room_v2/duo_hug_2.png")],
+  CUDDLE: [require("../../assets/room_v2/duo_cuddle_1.png"), require("../../assets/room_v2/duo_cuddle_2.png")],
+} satisfies Record<Exclude<CompanionAction, "WAVE">, readonly [ImageSourcePropType, ImageSourcePropType]>;
 
 export type RoomLayerKind = "floor_base" | "wall_back" | "dynamic_y";
 

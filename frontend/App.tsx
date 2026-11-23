@@ -65,7 +65,7 @@ import { BottomSheet } from "./src/components/BottomSheet";
 import { GlassChatBubble } from "./src/components/GlassChatBubble";
 import { ChatScreen } from "./src/chat/ChatScreen";
 import type { ChatClient } from "./src/chat/client";
-import type { ChatMessage } from "../contracts/chat";
+import { useHomeChat } from "./src/chat/useHomeChat";
 
 type LoadState<T> =
   | { kind: "idle" | "loading" }
@@ -1174,33 +1174,7 @@ function PrivateHomeScreen({
   isActive: boolean;
   onOpenChat: (chatId?: string, companionId?: string, companionName?: string, autoFocus?: boolean) => void;
 }) {
-  const [latestMessages, setLatestMessages] = useState<ChatMessage[]>([]);
-  const [activeChatId, setActiveChatId] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    setActiveChatId(undefined);
-    if (!chatClient || !isActive) return;
-    if (!companionId && !isMockMode) return;
-    let active = true;
-    void chatClient.listChats().then(async (res) => {
-      if (!active) return;
-      const target = companionId
-        ? res.items.find((c) => c.direct && c.members.some((m) => m.companionId === companionId))
-        : res.items.find((c) => c.direct);
-      if (!target) {
-        setActiveChatId(undefined);
-        setLatestMessages([]);
-        return;
-      }
-      setActiveChatId(target.id);
-      const page = await chatClient.getChat(target.id);
-      if (active) setLatestMessages(page.items.slice(0, 2).reverse());
-    }).catch(() => {
-      // Quietly preserve current state on transient error
-    });
-    return () => { active = false; };
-  }, [chatClient, companionId, isActive]);
-
+  const { chatId: activeChatId, messages: latestMessages, submit } = useHomeChat(chatClient, companionId, isActive);
   const previewBubbles = !chatClient ? [] : latestMessages.length > 0
     ? latestMessages
     : isMockMode
@@ -1221,6 +1195,7 @@ function PrivateHomeScreen({
         companionName={companionName}
         isCompanionView={isCompanion}
         isActive={isActive}
+        onAction={action => submit.current?.(action)}
       />
 
       {/* Light Chat Preview Bubbles (tap to open full-screen chat) */}

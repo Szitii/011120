@@ -21,6 +21,13 @@ import { PEARL_UI } from "../theme/skinTokens";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { safeClientMessage } from "../adapters/real-api";
 
+const actionLabels = {
+  WAVE: "你向 TA 挥了挥手",
+  PAT_HEAD: "你摸了摸 TA 的头",
+  HUG: "你抱了抱 TA",
+  CUDDLE: "你和 TA 贴了贴",
+} satisfies Record<NonNullable<ChatMessage["action"]>, string>;
+
 const replyFailureMessages = {
   UNAVAILABLE: "即将推出",
   DISABLED: "平台模型暂时关闭",
@@ -273,9 +280,9 @@ export function ChatScreen({
           <PixelAvatar name={title} role="companion" size={28} />
           <View>
             <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
-            {(chat?.replying || typingNames) ? (
+            {typingNames ? (
               <Text style={styles.typingText}>
-                {typingNames ? `${typingNames} 正在输入…` : "正在回复…"}
+                {`${typingNames} 正在输入…`}
               </Text>
             ) : null}
           </View>
@@ -295,7 +302,7 @@ export function ChatScreen({
         </View>
       ) : (
         <FlatList
-          data={messages}
+          data={messages.filter((item, index) => !item.action || !messages[index - 1]?.action)}
           inverted
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
@@ -310,6 +317,7 @@ export function ChatScreen({
             loadingOlder ? <ActivityIndicator size="small" color={PEARL_UI.accent} style={{ marginVertical: 12 }} /> : undefined
           }
           renderItem={({ item }) => {
+            if (item.action) return <Text style={styles.actionEvent}>{actionLabels[item.action]}</Text>;
             const isMine = item.companionId === null;
             const senderName = isMine
               ? ownerName
@@ -427,6 +435,7 @@ const styles = StyleSheet.create({
   emptyWrap: { paddingVertical: 48, alignItems: "center" },
   mutedText: { fontSize: 13.5, color: PEARL_UI.muted },
   listContent: { paddingHorizontal: CHROME.screenInset, paddingVertical: 14, gap: 12 },
+  actionEvent: { textAlign: "center", color: PEARL_UI.muted, fontSize: 12, paddingVertical: 7 },
   msgRow: { flexDirection: "row", alignItems: "flex-end", gap: 8, marginBottom: 4 },
   msgRowMine: { flexDirection: "row-reverse" },
   bubbleWrap: { maxWidth: "74%" },

@@ -19,6 +19,7 @@ import { RADIUS } from "../theme/layoutTokens";
 import {
   BED_QUILT_OVERLAY,
   BOY_SPRITES,
+  DUO_SPRITES,
   GIRL_SPRITES,
   ROOM_BASE_IMAGE,
   ROOM_SLOTS,
@@ -26,6 +27,13 @@ import {
 } from "../room/roomSlots";
 
 import { findSafePath, type RoomPoint } from "../room/pathfinding";
+
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+
+const DUO_BASELINE = 0.84;
+const DUO_CENTER = 0.525;
+const DUO_ACTIONS = ["PAT_HEAD", "HUG", "CUDDLE"] as const;
+const COMPANION_MENU = [["WAVE", "挥手"], ["PAT_HEAD", "摸头"], ["HUG", "抱抱"]] as const;
 
 interface FloatingHeart {
   id: number;
@@ -49,11 +57,13 @@ export function PearlInteractiveRoom({
   companionName,
   isCompanionView,
   isActive = true,
+  onAction,
 }: {
   userName: string;
   companionName: string;
   isCompanionView: boolean;
   isActive?: boolean;
+  onAction?: (action: CompanionAction) => void;
 }) {
   const [stage, setStage] = useState({ w: 344, h: 430 });
   const [nightMode, setNightMode] = useState(false);
@@ -65,6 +75,12 @@ export function PearlInteractiveRoom({
   const [userSortY, setUserSortY] = useState(0.46);
   const [compSortY, setCompSortY] = useState(0.46);
   const [hearts, setHearts] = useState<FloatingHeart[]>([]);
+  const [companionMenuOpen, setCompanionMenuOpen] = useState(false);
+  const [duo, setDuo] = useState<{ action: keyof typeof DUO_SPRITES; frame: number }>();
+  const duoEpoch = useRef(0);
+  const duoActive = useRef(false);
+  const duoTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const waveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const zzzAnim = useRef(new Animated.Value(0)).current;
 
   // Persistent normalized positions (preserved across onLayout & tab switches!)
@@ -189,6 +205,12 @@ export function PearlInteractiveRoom({
   }, [isActive, appActive, someoneSleeping, zzzAnim]);
 
   function stopRoomMotion() {
+    duoEpoch.current++;
+    duoActive.current = false;
+    clearInterval(duoTimer.current);
+    clearTimeout(waveTimer.current);
+    setDuo(undefined);
+    setCompanionMenuOpen(false);
     userTokenRef.current++;
     compTokenRef.current++;
     userAnimRef.current?.stop();
@@ -251,6 +273,9 @@ export function PearlInteractiveRoom({
 
   useEffect(() => {
     return () => {
+      duoEpoch.current++;
+      clearInterval(duoTimer.current);
+      clearTimeout(waveTimer.current);
       userAnimRef.current?.stop();
       compAnimRef.current?.stop();
       if (userWalkTimerRef.current) clearInterval(userWalkTimerRef.current);
@@ -357,7 +382,7 @@ export function PearlInteractiveRoom({
     return { nx: who === "user" ? 0.78 : 0.38, ny: 0.71 };
   }
 
-  function planMove(who: Actor, target: RoomPoint, seat: SeatKind) {
+  function planMove(who: Actor, target: RoomPoint, seat: SeatKind, exact = false) {
     const isUser = who === "user";
     const currentSeat = (isUser ? userSeatRef : compSeatRef).current;
     const start = currentSeat === "none"
@@ -365,13 +390,13 @@ export function PearlInteractiveRoom({
       : furnitureEntrance(who, currentSeat);
     const end = seat === "none" ? target : furnitureEntrance(who, seat);
     const sameSeat = currentSeat === seat && seat !== "none";
-    const path = sameSeat ? [] : findSafePath(start, end, seat !== "none");
+    const path = sameSeat ? [] : findSafePath(start, end, exact || seat !== "none");
     return path ? { currentSeat, start, end, sameSeat, path } : undefined;
   }
 
   function moveCharacterAlong(
     who: Actor, target: RoomPoint, seat: SeatKind = "none",
-    feedback?: "ripple" | "heart", plan = planMove(who, target, seat),
+    feedback?: "ripple", plan = planMove(who, target, seat), onArrival?: () => void,
   ) {
     if (!plan) return;
     const { currentSeat, start, end, sameSeat, path } = plan;
@@ -418,9 +443,7 @@ export function PearlInteractiveRoom({
     };
     const finalPoint = path.at(-1) ?? end;
     if (feedback === "ripple") triggerRipple(finalPoint.nx * stage.w, finalPoint.ny * stage.h);
-    const finish = () => {
-      if (feedback === "heart") spawnHeart(target.nx * stage.w, target.ny * stage.h - stage.h * 0.14);
-    };
+    const finish = () => onArrival?.();
 
     if (sameSeat) {
       pose(target, seat, finish);
@@ -468,6 +491,10 @@ export function PearlInteractiveRoom({
   }
 
   function handleFloorPress(e: GestureResponderEvent) {
+    // A floor tap never gives the Companion a new destination.
+    if (duoActive.current) stopRoomMotion();
+    setCompanionMenuOpen(false);
+    clearTimeout(waveTimer.current);
     moveCharacterAlong("user", {
       nx: e.nativeEvent.locationX / Math.max(1, stage.w),
       ny: e.nativeEvent.locationY / Math.max(1, stage.h),
@@ -475,6 +502,11 @@ export function PearlInteractiveRoom({
   }
 
   function handleCompanionPress() {
+    if (!isCompanionView && !duoActive.current) setCompanionMenuOpen(open => !open);
+    reactInPlace();
+  }
+
+  function reactInPlace() {
     companionReact.stopAnimation();
     companionReact.setValue(0);
     Animated.sequence([
@@ -483,25 +515,59 @@ export function PearlInteractiveRoom({
     ]).start();
   }
 
-  function moveTogether(companion: RoomPoint, user: RoomPoint, seat: SeatKind, showHeart = false) {
+  function moveTogether(companion: RoomPoint, user: RoomPoint, seat: SeatKind) {
+    stopRoomMotion();
     const companionPlan = planMove("companion", companion, seat);
     const userPlan = planMove("user", user, seat);
     if (!companionPlan || !userPlan) return;
     moveCharacterAlong("companion", companion, seat, undefined, companionPlan);
-    moveCharacterAlong("user", user, seat, showHeart ? "heart" : undefined, userPlan);
+    moveCharacterAlong("user", user, seat, undefined, userPlan);
   }
 
   function handleSitTogether() {
     moveTogether({ nx: 0.525, ny: 0.678 }, { nx: 0.625, ny: 0.678 }, "sofa");
   }
 
-  function handleSnuggle() {
-    const seatedTogether = userSeatRef.current === "sofa" && compSeatRef.current === "sofa";
-    if (seatedTogether) {
-      moveTogether({ nx: 0.538, ny: 0.678 }, { nx: 0.614, ny: 0.678 }, "sofa", true);
-    } else {
-      moveTogether({ nx: 0.475, ny: 0.46 }, { nx: 0.575, ny: 0.46 }, "none", true);
+  function playSocialAction(action: CompanionAction) {
+    if (!isActive || !appActive || isCompanionView) return;
+    stopRoomMotion();
+    if (action === "WAVE") {
+      if (userSeatRef.current === "none") {
+        setUserAction("wave");
+        waveTimer.current = setTimeout(() => setUserAction(actionForSeat(userSeatRef.current)), 850);
+      }
+      reactInPlace();
+      onAction?.(action);
+      return;
     }
+
+    const companion = { nx: 0.48, ny: DUO_BASELINE };
+    const user = { nx: 0.57, ny: DUO_BASELINE };
+    const companionPlan = planMove("companion", companion, "none", true);
+    const userPlan = planMove("user", user, "none", true);
+    if (!companionPlan || !userPlan) return;
+
+    const epoch = duoEpoch.current;
+    duoActive.current = true;
+    let arrivals = 0;
+    const arrived = () => {
+      if (epoch !== duoEpoch.current || ++arrivals !== 2) return;
+      setDuo({ action, frame: 0 });
+      spawnHeart(DUO_CENTER * stage.w, DUO_BASELINE * stage.h - charH);
+      let frame = 0;
+      duoTimer.current = setInterval(() => {
+        if (++frame === 6) {
+          clearInterval(duoTimer.current);
+          duoActive.current = false;
+          setDuo(undefined);
+        } else {
+          setDuo({ action, frame: frame % 2 });
+        }
+      }, 280);
+    };
+    moveCharacterAlong("companion", companion, "none", undefined, companionPlan, arrived);
+    moveCharacterAlong("user", user, "none", undefined, userPlan, arrived);
+    onAction?.(action);
   }
 
   function handleRestTogether() {
@@ -509,6 +575,7 @@ export function PearlInteractiveRoom({
   }
 
   function handleWakeUp() {
+    stopRoomMotion();
     if (userSeatRef.current === "bed") moveCharacterAlong("user", { nx: 0.56, ny: 0.46 });
     if (compSeatRef.current === "bed") moveCharacterAlong("companion", { nx: 0.45, ny: 0.46 });
   }
@@ -535,6 +602,7 @@ export function PearlInteractiveRoom({
 
   const charH = Math.round(stage.h * 0.175);
   const charW = Math.round(charH * 0.8);
+  const duoWidth = charH * 280 / 230;
   const compSprites = isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
   const userSprites = isCompanionView ? BOY_SPRITES : GIRL_SPRITES;
 
@@ -680,6 +748,47 @@ export function PearlInteractiveRoom({
           ]}
         />
 
+        <View pointerEvents="none" style={{
+          position: "absolute",
+          width: duoWidth,
+          height: charH,
+          left: stage.w * DUO_CENTER - duoWidth / 2,
+          top: stage.h * DUO_BASELINE - charH,
+          zIndex: zFromY(DUO_BASELINE) + 3,
+        }}>
+          {DUO_ACTIONS.flatMap(action => DUO_SPRITES[action].map((source, frame) => (
+            <Image
+              key={`${action}:${frame}`}
+              source={source}
+              style={[StyleSheet.absoluteFill, styles.fillImg, { opacity: duo?.action === action && duo.frame === frame ? 1 : 0 }]}
+              resizeMode="contain"
+              fadeDuration={0}
+            />
+          )))}
+        </View>
+
+        {companionMenuOpen && !isCompanionView && (
+          <Animated.View style={{
+            position: "absolute", zIndex: 145, width: 156,
+            transform: [
+              { translateX: compX.interpolate({
+                inputRange: [86, stage.w - 86], outputRange: [8, stage.w - 164], extrapolate: "clamp",
+              }) },
+              { translateY: Animated.subtract(compY, charH + 52) },
+            ],
+          }}>
+            <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
+              <View style={styles.actionBar}>
+                {COMPANION_MENU.map(([action, label]) => (
+                  <Pressable key={action} accessibilityRole="button" onPress={() => playSocialAction(action)} style={styles.menuItem}>
+                    <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>{label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </LiquidGlassSurface>
+          </Animated.View>
+        )}
+
         {/* Companion Pixel Character */}
         <Animated.View
           style={[
@@ -687,7 +796,7 @@ export function PearlInteractiveRoom({
             {
               width: charW,
               height: charH,
-              opacity: compFade,
+              opacity: duo ? 0 : compFade,
               zIndex: compAction === "sleep" ? 54 : compAction === "sit" ? 66 : zFromY(compSortY) + 1,
               transform: [
                 { translateX: Animated.subtract(compX, charW / 2) },
@@ -699,6 +808,7 @@ export function PearlInteractiveRoom({
           ]}
         >
           <Pressable
+            disabled={!!duo}
             onPress={handleCompanionPress}
             style={styles.charHit}
             accessibilityRole="button"
@@ -723,7 +833,7 @@ export function PearlInteractiveRoom({
             {
               width: charW,
               height: charH,
-              opacity: userFade,
+              opacity: duo ? 0 : userFade,
               zIndex: userAction === "sleep" ? 55 : userAction === "sit" ? 67 : zFromY(userSortY) + 2,
               transform: [
                 { translateX: Animated.subtract(userX, charW / 2) },
@@ -852,7 +962,8 @@ export function PearlInteractiveRoom({
               </Pressable>
               <View style={styles.actionDivider} />
               <Pressable
-                onPress={handleSnuggle}
+                disabled={isCompanionView}
+                onPress={() => playSocialAction("CUDDLE")}
                 style={({ pressed }) => [styles.actionItem, pressed && { transform: [{ scale: 0.90 }], opacity: 0.72 }]}
               >
                 <Ionicons name="heart-outline" size={13} color={nightMode ? "#F9A8D4" : "#C87D87"} />
@@ -918,6 +1029,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "flex-end",
   },
+  menuItem: { minHeight: 44, flex: 1, alignItems: "center", justifyContent: "center" },
   charHit: {
     width: "100%",
     height: "100%",
