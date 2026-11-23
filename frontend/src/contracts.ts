@@ -114,8 +114,8 @@ export interface ClientApi {
   ): Promise<CompanionProfile>;
   lifeEventInbox(): Promise<LifeEventInboxCollection>;
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem>;
-  createCompanionImport(payload: Record<string, unknown>): Promise<ImportReview>;
-  approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string): Promise<CompanionIdentity>;
+  createCompanionImport(payload: Record<string, unknown>, idempotencyKey?: string): Promise<ImportReview>;
+  approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string, idempotencyKey?: string): Promise<CompanionIdentity>;
   projectSocialPersona(
     companionId: string,
     input: {
@@ -125,9 +125,10 @@ export interface ClientApi {
       autonomyMode: "QUIET" | "NORMAL" | "ACTIVE" | "CUSTOM";
       selections: ProjectionSelection[];
     },
+    idempotencyKey?: string,
   ): Promise<ProjectionResult>;
   controls(companionId: string): Promise<ControlsResource>;
-  updateControls(companionId: string, revision: number, patch: ControlsPatch): Promise<ControlsResource>;
+  updateControls(companionId: string, revision: number, patch: ControlsPatch, idempotencyKey?: string): Promise<ControlsResource>;
 }
 
 

@@ -41,6 +41,10 @@ export class ApiProblemError extends Error {
 
 type RealApiConfig = { baseUrl: string } & ({ bearerToken: string } | { session: SessionTokenSource });
 
+export function createCommandKey(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
 export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
   readonly community: CommunityClient;
@@ -80,15 +84,15 @@ export class RealApiAdapter implements ClientApi {
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem> {
     return this.send("PUT", `/v0/life-event-inbox/${encodeURIComponent(itemId)}/read`);
   }
-  createCompanionImport(payload: Record<string, unknown>): Promise<ImportReview> {
-    return this.send("POST", "/v0/companion-imports", payload, { "Idempotency-Key": this.idempotencyKey("import") });
+  createCompanionImport(payload: Record<string, unknown>, idempotencyKey?: string): Promise<ImportReview> {
+    return this.send("POST", "/v0/companion-imports", payload, { "Idempotency-Key": idempotencyKey ?? createCommandKey("import") });
   }
-  approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string): Promise<CompanionIdentity> {
+  approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string, idempotencyKey?: string): Promise<CompanionIdentity> {
     return this.send(
       "POST",
       `/v0/companion-imports/${encodeURIComponent(importId)}/approve`,
       { approvedCandidateIds, ...(companionId ? { companionId } : {}) },
-      { "Idempotency-Key": this.idempotencyKey("approve") },
+      { "Idempotency-Key": idempotencyKey ?? createCommandKey("approve") },
     );
   }
   projectSocialPersona(
@@ -100,29 +104,26 @@ export class RealApiAdapter implements ClientApi {
       autonomyMode: "QUIET" | "NORMAL" | "ACTIVE" | "CUSTOM";
       selections: ProjectionSelection[];
     },
+    idempotencyKey?: string,
   ): Promise<ProjectionResult> {
     return this.send(
       "PUT",
       `/v0/companions/${encodeURIComponent(companionId)}/social-persona`,
       input,
-      { "Idempotency-Key": this.idempotencyKey("social-persona") },
+      { "Idempotency-Key": idempotencyKey ?? createCommandKey("social-persona") },
     );
   }
 
   controls(companionId: string): Promise<ControlsResource> {
     return this.get(`/v0/controls?companionId=${encodeURIComponent(companionId)}`);
   }
-  updateControls(companionId: string, revision: number, patch: ControlsPatch): Promise<ControlsResource> {
+  updateControls(companionId: string, revision: number, patch: ControlsPatch, idempotencyKey?: string): Promise<ControlsResource> {
     return this.send(
       "PATCH",
       `/v0/controls?companionId=${encodeURIComponent(companionId)}`,
       patch,
-      { "If-Match": String(revision), "Idempotency-Key": this.idempotencyKey("controls") },
+      { "If-Match": String(revision), "Idempotency-Key": idempotencyKey ?? createCommandKey("controls") },
     );
-  }
-
-  private idempotencyKey(prefix: string): string {
-    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
   }
 
   private get<T>(path: string): Promise<T> {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -18,13 +18,27 @@ import type {
 } from "./contracts.ts";
 import { SecondaryHeading, communityStyles } from "./community/components.tsx";
 import { PEARL_UI } from "./theme/skinTokens";
-import { safeClientMessage } from "./adapters/real-api.ts";
+import { createCommandKey, safeClientMessage } from "./adapters/real-api.ts";
 
 type AsyncState<T> =
   | { kind: "loading" }
   | { kind: "success"; value: T }
   | { kind: "empty" }
   | { kind: "error"; title: string; retry: boolean };
+
+function useCommandKeys() {
+  const keys = useRef(new Map<string, { payload: string; key: string }>());
+  const forRequest = (kind: string, payload: unknown) => {
+    const serialized = JSON.stringify(payload);
+    const previous = keys.current.get(kind);
+    if (previous?.payload === serialized) return previous.key;
+    const key = createCommandKey(kind);
+    keys.current.set(kind, { payload: serialized, key });
+    return key;
+  };
+  const complete = (kind: string) => { keys.current.delete(kind); };
+  return { forRequest, complete };
+}
 
 function ErrorBlock({
   title,
@@ -60,9 +74,13 @@ export function ControlsScreen({
 }) {
   const [state, setState] = useState<AsyncState<ControlsResource>>({ kind: "loading" });
   const [pending, setPending] = useState(false);
+  const busyRef = useRef(false);
+  const commandKeys = useCommandKeys();
+  const [saveError, setSaveError] = useState<string>();
   const [showAutonomyHelp, setShowAutonomyHelp] = useState(false);
 
   async function load() {
+    setSaveError(undefined);
     setState({ kind: "loading" });
     try {
       const value = await api.controls(companionId);
@@ -77,26 +95,31 @@ export function ControlsScreen({
   }, [api, companionId]);
 
   async function patch(next: ControlsPatch) {
-    if (state.kind !== "success" || pending) return;
+    if (state.kind !== "success" || busyRef.current) return;
+    busyRef.current = true;
     setPending(true);
+    setSaveError(undefined);
     try {
-      const value = await api.updateControls(companionId, state.value.revision, next);
+      const revision = state.value.revision;
+      const key = commandKeys.forRequest("controls", [companionId, revision, next]);
+      const value = await api.updateControls(companionId, revision, next, key);
+      commandKeys.complete("controls");
       setState({ kind: "success", value });
       if (next.socialTwinVisibility !== undefined) onVisibilitySaved();
     } catch (error) {
       const safe = safeClientMessage(error);
+      setSaveError(`保存未确认。${safe.title}`);
       if (safe.retry) {
         try {
           const refreshed = await api.controls(companionId);
           setState({ kind: "success", value: refreshed });
           if (refreshed.settings.socialTwinVisibility !== state.value.settings.socialTwinVisibility) onVisibilitySaved();
         } catch {
-          setState({ kind: "error", ...safe });
+          // Keep the last confirmed settings visible and allow retry.
         }
-      } else {
-        setState({ kind: "error", ...safe });
       }
     } finally {
+      busyRef.current = false;
       setPending(false);
     }
   }
@@ -114,6 +137,7 @@ export function ControlsScreen({
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.page}>
       <SecondaryHeading title={companionName} />
+      {saveError && <Text accessibilityRole="alert" style={styles.bodyMuted}>{saveError}</Text>}
       <Text style={styles.bodyMuted}>能动的都在这儿。不能动的，先别动。</Text>
 
       <ControlSection title="谁能看到">
@@ -248,6 +272,8 @@ export function BringCompanionScreen({
   const [autonomy, setAutonomy] = useState<"QUIET" | "NORMAL" | "ACTIVE">("QUIET");
   const [selectedSocialFields, setSelectedSocialFields] = useState<string[]>(["displayName"]);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const commandKeys = useCommandKeys();
   const [message, setMessage] = useState<string | null>(null);
 
   const approvable = useMemo(
@@ -256,6 +282,7 @@ export function BringCompanionScreen({
   );
 
   async function inspect() {
+    if (busyRef.current) return;
     setMessage(null);
     let parsed: unknown;
     try {
@@ -269,9 +296,12 @@ export function BringCompanionScreen({
       return;
     }
 
+    busyRef.current = true;
     setBusy(true);
     try {
-      const result = await api.createCompanionImport(parsed as Record<string, unknown>);
+      const key = commandKeys.forRequest("import", parsed);
+      const result = await api.createCompanionImport(parsed as Record<string, unknown>, key);
+      commandKeys.complete("import");
       setReview(result);
       const displayCandidate = result.draft?.candidates?.find(
         (candidate) => candidate.approvable && candidate.field === "displayName",
@@ -280,12 +310,14 @@ export function BringCompanionScreen({
     } catch (error) {
       setMessage(safeClientMessage(error).title);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
 
   async function approve() {
-    if (!review || approvedCandidateIds.length === 0 || busy) return;
+    if (!review || approvedCandidateIds.length === 0 || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setMessage(null);
     try {
@@ -293,7 +325,9 @@ export function BringCompanionScreen({
         review.id,
         approvedCandidateIds,
         existingCompanionId,
+        commandKeys.forRequest("approve", [review.id, approvedCandidateIds, existingCompanionId]),
       );
+      commandKeys.complete("approve");
       setApprovedIdentity(result);
       const base = result.displayName.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
       const suffix = result.companionId.replaceAll("-", "").slice(-4);
@@ -304,12 +338,13 @@ export function BringCompanionScreen({
     } catch (error) {
       setMessage(safeClientMessage(error).title);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
 
   async function activateSocialIdentity() {
-    if (!approvedIdentity || busy) return;
+    if (!approvedIdentity || busyRef.current) return;
     const normalized = handle.trim().toLowerCase();
     if (!/^[a-z0-9_]{3,30}$/.test(normalized)) {
       setMessage("这个名字牌不太行。只能用小写字母、数字和下划线。");
@@ -340,22 +375,27 @@ export function BringCompanionScreen({
       selections.unshift({ sourceField: "displayName", targetField: "displayName" });
     }
 
+    busyRef.current = true;
     setBusy(true);
     setMessage(null);
     try {
-      await api.projectSocialPersona(approvedIdentity.companionId, {
+      const payload = {
         sourceIdentityVersionId: approvedIdentity.id,
         handle: normalized,
         profileVisibility: visibility,
         autonomyMode: autonomy,
         selections,
-      });
+      };
+      const key = commandKeys.forRequest("social-persona", [approvedIdentity.companionId, payload]);
+      await api.projectSocialPersona(approvedIdentity.companionId, payload, key);
+      commandKeys.complete("social-persona");
       setActivated(true);
       setMessage(`${approvedIdentity.displayName} 可以出门了。`);
       onResidencyChanged?.();
     } catch (error) {
       setMessage(safeClientMessage(error).title);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
@@ -620,6 +660,8 @@ export function SocialActivationScreen({
   const [autonomy, setAutonomy] = useState<"QUIET" | "NORMAL" | "ACTIVE">("QUIET");
   const [selectedFields, setSelectedFields] = useState<string[]>(["displayName"]);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const commandKeys = useCommandKeys();
   const [activated, setActivated] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -641,7 +683,7 @@ export function SocialActivationScreen({
   const availableFields = companion.approvedFields.filter((field) => projectionTargets[field] !== undefined);
 
   async function activate() {
-    if (busy) return;
+    if (busyRef.current) return;
     const normalized = handle.trim().toLowerCase();
     if (!/^[a-z0-9_]{3,30}$/.test(normalized)) {
       setMessage("这个名字牌不太行。只能用小写字母、数字和下划线。");
@@ -658,22 +700,27 @@ export function SocialActivationScreen({
       selections.unshift({ sourceField: "displayName", targetField: "displayName" });
     }
 
+    busyRef.current = true;
     setBusy(true);
     setMessage(null);
     try {
-      await api.projectSocialPersona(companion.companionId, {
+      const payload = {
         sourceIdentityVersionId: companion.identityId,
         handle: normalized,
         profileVisibility: visibility,
         autonomyMode: autonomy,
         selections,
-      });
+      };
+      const key = commandKeys.forRequest("social-persona", [companion.companionId, payload]);
+      await api.projectSocialPersona(companion.companionId, payload, key);
+      commandKeys.complete("social-persona");
       setActivated(true);
       setMessage(`${companion.displayName} 可以出门了。`);
       onActivated?.();
     } catch (error) {
       setMessage(safeClientMessage(error).title);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }

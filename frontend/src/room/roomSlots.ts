@@ -14,7 +14,7 @@ export interface RoomSlotSpec {
   height: number;
   /** Baseline Y fraction used for Y-axis zIndex sorting with characters */
   sortY: number;
-  interactive?: "sofa" | "bed" | "diary" | "pet";
+  interactive?: "diary" | "pet";
 }
 
 export const ROOM_BASE_IMAGE: ImageSourcePropType = require("../../assets/room_v2/room_base.png");
@@ -89,7 +89,6 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
     width: 0.42,
     height: 0.31,
     sortY: 0.48,
-    interactive: "bed",
   },
   {
     id: "slot_cabinet",
@@ -135,7 +134,6 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
     width: 0.34,
     height: 0.18,
     sortY: 0.58,
-    interactive: "sofa",
   },
   {
     id: "slot_table",
