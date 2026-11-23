@@ -64,6 +64,11 @@ export function hasCredential(value: string): boolean {
   return credentialPatterns.some((pattern) => pattern.test(value));
 }
 
+/** The text with every credential replaced, e.g. before it is sent to an outside model. */
+export function maskCredentials(value: string): string {
+  return credentialPatterns.reduce((text, pattern) => text.replace(new RegExp(pattern.source, `${pattern.flags}g`), "[REDACTED_CREDENTIAL]"), value);
+}
+
 export function hasPii(value: string): boolean {
   return piiPatterns.some((pattern) => pattern.test(value));
 }

@@ -1,6 +1,6 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
 import type { ChatSettings } from "../../../contracts/chat.ts";
-import type { ChatClaim, ChatOutcome, ChatPort } from "./port.ts";
+import type { ChatClaim, ChatOutcome, ChatPort, ChatReservation, ReservationDecision } from "./port.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
 export class PostgresChatAdapter implements ChatPort {
@@ -36,8 +36,8 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown> {
-    return this.#object("select public.chat_update_settings($1,$2,$3,$4) as payload",
-      [companionId, settings.groupActivity, settings.companionInteraction, settings.revision]);
+    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5) as payload",
+      [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.revision]);
   }
 
   async claim(chatId: string): Promise<ChatClaim | null> {
@@ -48,6 +48,26 @@ export class PostgresChatAdapter implements ChatPort {
   async finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null): Promise<boolean> {
     const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[]) as payload", [replyId, claimId, outcome, bodies]);
     return (payload as { accepted?: unknown }).accepted === true;
+  }
+
+  async reserve(input: ChatReservation): Promise<ReservationDecision> {
+    return await this.#object("select public.chat_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) as payload", [
+      input.replyId, input.claimId, input.purpose, input.provider, input.model, input.pricingVersion,
+      input.inputTokens, input.outputTokens, input.costMinor, input.traceId,
+    ]) as ReservationDecision;
+  }
+
+  async settle(transactionId: string, inputTokens: number, outputTokens: number, costMinor: number, ok: boolean): Promise<void> {
+    await this.#object("select public.chat_settle($1,$2,$3,$4,$5) as payload", [transactionId, inputTokens, outputTokens, costMinor, ok]);
+  }
+
+  async modelsEnabled(models: readonly { provider: string; model: string }[]): Promise<boolean[]> {
+    const payload = await this.#payload("select public.chat_models_enabled($1::text[],$2::text[]) as payload",
+      [models.map(m => m.provider), models.map(m => m.model)]);
+    if (!Array.isArray(payload) || payload.some(value => typeof value !== "boolean")) {
+      throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid chat response.");
+    }
+    return payload as boolean[];
   }
 
   async #object(sql: string, values: readonly unknown[]): Promise<unknown> {

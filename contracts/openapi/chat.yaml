@@ -15,8 +15,9 @@ info:
        send 1 to 3 short messages in a row, and Companions take turns. A Companion that may stay
        quiet shows no "typing…" while deciding, so `replying` can be true with `typing` empty.
     3. A reply that failed shows `status: FAILED`. `retryable: true` (failure ERROR) may be retried
-       with POST .../retry. failure UNAVAILABLE means no model can answer yet ("coming soon").
-       `status: BLOCKED` was stopped by the safety scan and is final.
+       with POST .../retry. failure UNAVAILABLE: no model can answer yet ("coming soon"). DISABLED:
+       the platform switched its models off for now. QUOTA: today's free replies are used up.
+       `status: BLOCKED` was stopped by the safety scan (or declined by the model) and is final.
     The Owner may keep sending while Companions reply.
 
     Who answers: in a one-to-one chat, the Companion always. In a group, the @mentioned Companions
@@ -207,6 +208,23 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /chat-models:
+    get:
+      operationId: listChatModels
+      summary: The models an Owner can pick for a Companion
+      description: |
+        The platform's catalog. `available: false` means listed but not usable right now (no API key
+        configured on the server, or switched off by the platform); a Companion set to such a model
+        answers with the platform default. Empty when the server has no catalog.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Models
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChatModelList'}
+        '401': *problem
+        '403': *problem
   /companions/{companionId}/chat-settings:
     parameters:
     - name: companionId
@@ -278,8 +296,10 @@ components:
         status: {type: string, enum: [SENT, FAILED, BLOCKED]}
         failure:
           type: [string, 'null']
-          enum: [UNAVAILABLE, ERROR, null]
-          description: FAILED only. UNAVAILABLE - no model can answer yet ("coming soon"). ERROR - something went wrong.
+          enum: [UNAVAILABLE, DISABLED, QUOTA, ERROR, null]
+          description: |
+            FAILED only. UNAVAILABLE - no model can answer yet ("coming soon"). DISABLED - the platform
+            switched its models off for now. QUOTA - today's free replies are used up. ERROR - something went wrong.
         retryable: {type: boolean}
         sentAt: {type: string, format: date-time}
     Chat:
@@ -307,7 +327,7 @@ components:
     ChatSettings:
       type: object
       description: How a Companion takes part in group chats. One-to-one chats always answer. Defaults NORMAL / NORMAL.
-      required: [groupActivity, companionInteraction, revision]
+      required: [groupActivity, companionInteraction, model, revision]
       properties:
         groupActivity:
           type: string
@@ -322,4 +342,24 @@ components:
           description: |
             家机互动倾向 - joining in when other Companions talk, at most 0 / 1 / 2 / 4 times per Owner
             message: NONE (不互动), RARE (偶尔), NORMAL (适中), LIVELY (热络). It may still stay quiet.
+        model:
+          type: [string, 'null']
+          description: An id from GET /chat-models; null - the platform default. Any listed id may be saved.
         revision: {type: integer, minimum: 1}
+    ChatModelInfo:
+      type: object
+      required: [id, name, provider, tier, inputPerMTok, outputPerMTok, available]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        provider: {type: string}
+        tier: {type: string, enum: [ECONOMY, STANDARD, PREMIUM], description: '经济 / 均衡 / 高级'}
+        inputPerMTok: {type: number, description: USD per million input tokens.}
+        outputPerMTok: {type: number, description: USD per million output tokens.}
+        available: {type: boolean}
+    ChatModelList:
+      type: object
+      required: [items, defaultModel]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ChatModelInfo'}}
+        defaultModel: {type: [string, 'null'], description: What a Companion with model null uses; null when none is usable.}

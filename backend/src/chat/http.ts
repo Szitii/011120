@@ -8,7 +8,8 @@
  *   DELETE /v0/chats/{id}                              delete the chat and its messages
  *   POST   /v0/chats/{id}/messages                     { body, mentions? }       send
  *   POST   /v0/chats/{id}/messages/{messageId}/retry   try a failed reply again
- *   GET|PUT /v0/companions/{id}/chat-settings          how a Companion takes part in groups
+ *   GET|PUT /v0/companions/{id}/chat-settings          how a Companion takes part, and its model
+ *   GET    /v0/chat-models                             the models an Owner can pick
  *
  * POST /v0/chats and POST .../messages need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
@@ -16,7 +17,9 @@
 import { sha256 } from "../companion-import/canonical.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
-import type { ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatModelList, ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatCatalog } from "./models.ts";
+import type { ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -51,12 +54,27 @@ function text(value: unknown, max: number): string {
   return length >= 1 && length <= max ? trimmed : invalid();
 }
 
-function settings(request: MvpHttpRequest): ChatSettings {
-  const { groupActivity, companionInteraction, revision } = body(request, ["groupActivity", "companionInteraction", "revision"]);
+/** Every setting is required; `model` is null (platform default) or an id from the catalog. */
+function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined): ChatSettings {
+  const { groupActivity, companionInteraction, model, revision } =
+    body(request, ["groupActivity", "companionInteraction", "model", "revision"]);
   if (!["QUIET", "NORMAL", "ACTIVE"].includes(groupActivity as string)
     || !["NONE", "RARE", "NORMAL", "LIVELY"].includes(companionInteraction as string)
+    || !(model === null || (typeof model === "string" && catalog?.has(model)))
     || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
-  return { groupActivity, companionInteraction, revision } as ChatSettings;
+  return { groupActivity, companionInteraction, model, revision } as ChatSettings;
+}
+
+/** The catalog with what can be used right now: enabled, key configured, not switched off. */
+async function models(port: ChatPort, catalog: ChatCatalog | undefined): Promise<ChatModelList> {
+  if (catalog === undefined) return { items: [], defaultModel: null };
+  const switchedOn = await port.modelsEnabled(catalog.models);
+  const items = catalog.models.map((m, i) => ({
+    id: m.id, name: m.name, provider: m.provider, tier: m.tier, inputPerMTok: m.inputPerMTok, outputPerMTok: m.outputPerMTok,
+    available: catalog.usable(m) && switchedOn[i] === true,
+  }));
+  const fallback = catalog.defaultModel();
+  return { items, defaultModel: items.find(item => item.id === fallback?.id && item.available)?.id ?? null };
 }
 
 function cursor(url: URL): [string | null, string | null] {
@@ -74,12 +92,13 @@ const replying = (payload: unknown): boolean => {
 };
 
 export async function handleChatRequest(
-  request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string, replies: ChatReplies,
+  request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string, replies: ChatReplies, catalog?: ChatCatalog,
 ): Promise<MvpHttpResponse | undefined> {
   const url = new URL(request.url, "https://chat.invalid");
   const path = url.pathname.replace(/\/$/, "").split("/").slice(1); // ["v0", ...]
   const settingsRoute = path[1] === "companions" && path[3] === "chat-settings" && path.length === 4;
-  if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute)) return undefined;
+  const modelsRoute = path[1] === "chat-models" && path.length === 2;
+  if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -87,10 +106,11 @@ export async function handleChatRequest(
   if (!port) return response(501, { code: "CHAT_UNAVAILABLE" });
   const method = request.method.toUpperCase();
 
+  if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
   if (settingsRoute) {
     const companionId = id(path[2]);
     if (method === "GET") return response(200, await port.settings(companionId));
-    if (method === "PUT") return response(200, await port.saveSettings(companionId, settings(request)));
+    if (method === "PUT") return response(200, await port.saveSettings(companionId, settings(request, catalog)));
     return notFound();
   }
   const [, , chatId, part, messageId, action] = path;

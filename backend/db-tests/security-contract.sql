@@ -1884,5 +1884,23 @@ select public.test_assert(
   and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE'),
   'Companion chat replies can only be written by the API server'
 );
+select public.test_assert(
+  not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.model_switch_log'),
+      ('companion_private.chat_quota')) t(name)
+    cross join (values ('anon'), ('authenticated'), ('companion_api')) r(role)
+    where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
+      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE'))
+  and not has_function_privilege('companion_api', 'companion_private.admin_set_model_switch(text,text,boolean,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('companion_api', 'companion_private.admin_set_chat_quota(integer,bigint)'::regprocedure, 'EXECUTE'),
+  'only a database administrator can switch platform models or change the chat quota'
+);
+select public.test_assert(
+  not has_function_privilege('authenticated', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_settle(uuid,bigint,bigint,bigint,boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_settle(uuid,bigint,bigint,bigint,boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_models_enabled(text[],text[])'::regprocedure, 'EXECUTE'),
+  'chat model calls are booked and settled only by the API server'
+);
 
 drop function public.test_assert(boolean, text);
