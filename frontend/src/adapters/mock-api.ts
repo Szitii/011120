@@ -18,7 +18,7 @@ import type {
 } from "../contracts.ts";
 
 import type { ChatClient } from "../chat/client.ts";
-import type { Chat, ChatMessage, ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatMessage, ChatSettings } from "../../../contracts/chat.ts";
 
 export class MockApiAdapter implements ClientApi {
   private mockChatMessages: ChatMessage[] = [
@@ -95,6 +95,22 @@ export class MockApiAdapter implements ClientApi {
       };
       this.mockChatMessages = [msg, ...this.mockChatMessages];
       return { message: msg, typing: [], replying: false };
+    },
+    sendAction: async (_companionId, action, key) => {
+      const existing = this.mockChatMessages.find(message => message.id === key);
+      const message: ChatMessage = existing ?? {
+        id: key,
+        companionId: null,
+        body: null,
+        action,
+        mentions: [],
+        status: "SENT",
+        failure: null,
+        retryable: false,
+        sentAt: new Date().toISOString(),
+      };
+      if (!existing) this.mockChatMessages = [message, ...this.mockChatMessages];
+      return { chatId: "chat-preview-1", message, typing: [], replying: false };
     },
     retryMessage: async () => ({
       typing: [],

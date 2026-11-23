@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
-  AppState,
   Easing,
   Image,
   Pressable,
@@ -19,6 +18,7 @@ import { RADIUS } from "../theme/layoutTokens";
 import {
   BED_QUILT_OVERLAY,
   BOY_SPRITES,
+  DUO_SPRITES,
   GIRL_SPRITES,
   ROOM_BASE_IMAGE,
   ROOM_SLOTS,
@@ -26,6 +26,14 @@ import {
 } from "../room/roomSlots";
 
 import { findSafePath, type RoomPoint } from "../room/pathfinding";
+import { useAppIsActive } from "../state/useAppIsActive";
+
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+
+const DUO_BASELINE = 0.84;
+const DUO_CENTER = 0.525;
+const DUO_ACTIONS = ["PAT_HEAD", "HUG", "CUDDLE"] as const;
+const COMPANION_MENU = [["WAVE", "挥手"], ["PAT_HEAD", "摸头"], ["HUG", "抱抱"], ["CUDDLE", "贴贴"]] as const;
 
 interface FloatingHeart {
   id: number;
@@ -45,15 +53,17 @@ const WALK_FRAMES: CharacterAction[] = ["walk_1", "walk_2", "walk_3", "walk_4"];
 const TOTAL_ROOM_ASSETS = 1 + ROOM_SLOTS.length + 2;
 
 export function PearlInteractiveRoom({
-  userName,
   companionName,
   isCompanionView,
   isActive = true,
+  onAction,
+  onOpenDiary,
 }: {
-  userName: string;
   companionName: string;
   isCompanionView: boolean;
   isActive?: boolean;
+  onAction?: (action: CompanionAction) => void;
+  onOpenDiary?: () => void;
 }) {
   const [stage, setStage] = useState({ w: 344, h: 430 });
   const [nightMode, setNightMode] = useState(false);
@@ -65,6 +75,12 @@ export function PearlInteractiveRoom({
   const [userSortY, setUserSortY] = useState(0.46);
   const [compSortY, setCompSortY] = useState(0.46);
   const [hearts, setHearts] = useState<FloatingHeart[]>([]);
+  const [companionMenuOpen, setCompanionMenuOpen] = useState(false);
+  const [duo, setDuo] = useState<{ action: keyof typeof DUO_SPRITES; frame: number }>();
+  const duoEpoch = useRef(0);
+  const duoActive = useRef(false);
+  const duoTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const waveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const zzzAnim = useRef(new Animated.Value(0)).current;
 
   // Persistent normalized positions (preserved across onLayout & tab switches!)
@@ -98,7 +114,9 @@ export function PearlInteractiveRoom({
   const loadedIdsRef = useRef<Set<string>>(new Set());
   const lastUserZRef = useRef(46);
   const lastCompZRef = useRef(46);
-  const [appActive, setAppActive] = useState(true);
+  const appActive = useAppIsActive();
+  const readyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const heartAnimations = useRef(new Map<number, Animated.CompositeAnimation>()).current;
   const mountedAtRef = useRef(Date.now());
   const heartIdRef = useRef(0);
   const userTokenRef = useRef(0);
@@ -148,28 +166,26 @@ export function PearlInteractiveRoom({
     if (loadedIdsRef.current.size >= TOTAL_ROOM_ASSETS && !roomReady) {
       const elapsed = Date.now() - mountedAtRef.current;
       const wait = Math.max(0, 200 - elapsed);
-      setTimeout(() => setRoomReady(true), wait);
+      clearTimeout(readyTimer.current);
+      readyTimer.current = setTimeout(() => setRoomReady(true), wait);
     }
   }
 
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (s) => setAppActive(s === "active"));
-    return () => sub.remove();
-  }, []);
-
-  useEffect(() => {
-    const fallback = setTimeout(() => setRoomReady(true), 760);
-    return () => clearTimeout(fallback);
+    readyTimer.current = setTimeout(() => setRoomReady(true), 760);
+    return () => clearTimeout(readyTimer.current);
   }, []);
 
   useEffect(() => {
     if (!roomReady) return;
-    Animated.timing(roomReveal, {
+    const reveal = Animated.timing(roomReveal, {
       toValue: 1,
       duration: 260,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start();
+    });
+    reveal.start();
+    return () => reveal.stop();
   }, [roomReady, roomReveal]);
 
   const someoneSleeping = userAction === "sleep" || compAction === "sleep";
@@ -189,6 +205,12 @@ export function PearlInteractiveRoom({
   }, [isActive, appActive, someoneSleeping, zzzAnim]);
 
   function stopRoomMotion() {
+    duoEpoch.current++;
+    duoActive.current = false;
+    clearInterval(duoTimer.current);
+    clearTimeout(waveTimer.current);
+    setDuo(undefined);
+    setCompanionMenuOpen(false);
     userTokenRef.current++;
     compTokenRef.current++;
     userAnimRef.current?.stop();
@@ -207,6 +229,8 @@ export function PearlInteractiveRoom({
   useEffect(() => {
     if (!isActive || !appActive) {
       stopRoomMotion();
+      stopHearts();
+      setHearts([]);
       return;
     }
     const loopA = Animated.loop(
@@ -251,6 +275,12 @@ export function PearlInteractiveRoom({
 
   useEffect(() => {
     return () => {
+      stopHearts();
+      userTokenRef.current++;
+      compTokenRef.current++;
+      duoEpoch.current++;
+      clearInterval(duoTimer.current);
+      clearTimeout(waveTimer.current);
       userAnimRef.current?.stop();
       compAnimRef.current?.stop();
       if (userWalkTimerRef.current) clearInterval(userWalkTimerRef.current);
@@ -271,17 +301,25 @@ export function PearlInteractiveRoom({
     userY.setValue(userNormRef.current.ny * height);
   }
 
+  function stopHearts() {
+    const animations = [...heartAnimations.values()];
+    heartAnimations.clear();
+    animations.forEach(animation => animation.stop());
+  }
+
   function spawnHeart(x: number, y: number) {
     const id = ++heartIdRef.current;
     const anim = new Animated.Value(0);
     setHearts((prev) => [...prev.slice(-5), { id, x, y, anim }]);
-    Animated.timing(anim, {
+    const animation = Animated.timing(anim, {
       toValue: 1,
       duration: 950,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start(() => {
-      setHearts((prev) => prev.filter((h) => h.id !== id));
+    });
+    heartAnimations.set(id, animation);
+    animation.start(() => {
+      if (heartAnimations.delete(id)) setHearts((prev) => prev.filter((h) => h.id !== id));
     });
   }
 
@@ -357,7 +395,7 @@ export function PearlInteractiveRoom({
     return { nx: who === "user" ? 0.78 : 0.38, ny: 0.71 };
   }
 
-  function planMove(who: Actor, target: RoomPoint, seat: SeatKind) {
+  function planMove(who: Actor, target: RoomPoint, seat: SeatKind, exact = false) {
     const isUser = who === "user";
     const currentSeat = (isUser ? userSeatRef : compSeatRef).current;
     const start = currentSeat === "none"
@@ -365,13 +403,13 @@ export function PearlInteractiveRoom({
       : furnitureEntrance(who, currentSeat);
     const end = seat === "none" ? target : furnitureEntrance(who, seat);
     const sameSeat = currentSeat === seat && seat !== "none";
-    const path = sameSeat ? [] : findSafePath(start, end, seat !== "none");
+    const path = sameSeat ? [] : findSafePath(start, end, exact || seat !== "none");
     return path ? { currentSeat, start, end, sameSeat, path } : undefined;
   }
 
   function moveCharacterAlong(
     who: Actor, target: RoomPoint, seat: SeatKind = "none",
-    feedback?: "ripple" | "heart", plan = planMove(who, target, seat),
+    feedback?: "ripple", plan = planMove(who, target, seat), onArrival?: () => void,
   ) {
     if (!plan) return;
     const { currentSeat, start, end, sameSeat, path } = plan;
@@ -418,9 +456,7 @@ export function PearlInteractiveRoom({
     };
     const finalPoint = path.at(-1) ?? end;
     if (feedback === "ripple") triggerRipple(finalPoint.nx * stage.w, finalPoint.ny * stage.h);
-    const finish = () => {
-      if (feedback === "heart") spawnHeart(target.nx * stage.w, target.ny * stage.h - stage.h * 0.14);
-    };
+    const finish = () => onArrival?.();
 
     if (sameSeat) {
       pose(target, seat, finish);
@@ -468,13 +504,26 @@ export function PearlInteractiveRoom({
   }
 
   function handleFloorPress(e: GestureResponderEvent) {
-    moveCharacterAlong("user", {
+    // A floor tap never gives the Companion a new destination.
+    if (duoActive.current) stopRoomMotion();
+    setCompanionMenuOpen(false);
+    const target = {
       nx: e.nativeEvent.locationX / Math.max(1, stage.w),
       ny: e.nativeEvent.locationY / Math.max(1, stage.h),
-    }, "none", "ripple");
+    };
+    const plan = planMove("user", target, "none");
+    if (!plan) return;
+    clearTimeout(waveTimer.current);
+    moveCharacterAlong("user", target, "none", "ripple", plan);
   }
 
-  function handleCompanionPress() {
+  function toggleCompanionMenu() {
+    if (isActive && appActive && !isCompanionView && !someoneSleeping && !duoActive.current) {
+      setCompanionMenuOpen(open => !open);
+    }
+  }
+
+  function reactInPlace() {
     companionReact.stopAnimation();
     companionReact.setValue(0);
     Animated.sequence([
@@ -483,25 +532,59 @@ export function PearlInteractiveRoom({
     ]).start();
   }
 
-  function moveTogether(companion: RoomPoint, user: RoomPoint, seat: SeatKind, showHeart = false) {
+  function moveTogether(companion: RoomPoint, user: RoomPoint, seat: SeatKind) {
+    stopRoomMotion();
     const companionPlan = planMove("companion", companion, seat);
     const userPlan = planMove("user", user, seat);
     if (!companionPlan || !userPlan) return;
     moveCharacterAlong("companion", companion, seat, undefined, companionPlan);
-    moveCharacterAlong("user", user, seat, showHeart ? "heart" : undefined, userPlan);
+    moveCharacterAlong("user", user, seat, undefined, userPlan);
   }
 
   function handleSitTogether() {
     moveTogether({ nx: 0.525, ny: 0.678 }, { nx: 0.625, ny: 0.678 }, "sofa");
   }
 
-  function handleSnuggle() {
-    const seatedTogether = userSeatRef.current === "sofa" && compSeatRef.current === "sofa";
-    if (seatedTogether) {
-      moveTogether({ nx: 0.538, ny: 0.678 }, { nx: 0.614, ny: 0.678 }, "sofa", true);
-    } else {
-      moveTogether({ nx: 0.475, ny: 0.46 }, { nx: 0.575, ny: 0.46 }, "none", true);
+  function playSocialAction(action: CompanionAction) {
+    if (!isActive || !appActive || isCompanionView) return;
+    stopRoomMotion();
+    if (action === "WAVE") {
+      if (userSeatRef.current === "none") {
+        setUserAction("wave");
+        waveTimer.current = setTimeout(() => setUserAction(actionForSeat(userSeatRef.current)), 850);
+      }
+      reactInPlace();
+      onAction?.(action);
+      return;
     }
+
+    const companion = { nx: 0.48, ny: DUO_BASELINE };
+    const user = { nx: 0.57, ny: DUO_BASELINE };
+    const companionPlan = planMove("companion", companion, "none", true);
+    const userPlan = planMove("user", user, "none", true);
+    if (!companionPlan || !userPlan) return;
+
+    const epoch = duoEpoch.current;
+    duoActive.current = true;
+    let arrivals = 0;
+    const arrived = () => {
+      if (epoch !== duoEpoch.current || ++arrivals !== 2) return;
+      setDuo({ action, frame: 0 });
+      spawnHeart(DUO_CENTER * stage.w, DUO_BASELINE * stage.h - charH);
+      let frame = 0;
+      duoTimer.current = setInterval(() => {
+        if (++frame === 6) {
+          clearInterval(duoTimer.current);
+          duoActive.current = false;
+          setDuo(undefined);
+        } else {
+          setDuo({ action, frame: frame % 2 });
+        }
+      }, 280);
+    };
+    moveCharacterAlong("companion", companion, "none", undefined, companionPlan, arrived);
+    moveCharacterAlong("user", user, "none", undefined, userPlan, arrived);
+    onAction?.(action);
   }
 
   function handleRestTogether() {
@@ -509,6 +592,7 @@ export function PearlInteractiveRoom({
   }
 
   function handleWakeUp() {
+    stopRoomMotion();
     if (userSeatRef.current === "bed") moveCharacterAlong("user", { nx: 0.56, ny: 0.46 });
     if (compSeatRef.current === "bed") moveCharacterAlong("companion", { nx: 0.45, ny: 0.46 });
   }
@@ -519,6 +603,7 @@ export function PearlInteractiveRoom({
       spawnHeart(stage.w * 0.57, stage.h * 0.24);
     } else {
       bounceAnim(diaryBounce);
+      onOpenDiary?.();
     }
   }
 
@@ -535,6 +620,7 @@ export function PearlInteractiveRoom({
 
   const charH = Math.round(stage.h * 0.175);
   const charW = Math.round(charH * 0.8);
+  const duoWidth = charH * 280 / 230;
   const compSprites = isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
   const userSprites = isCompanionView ? BOY_SPRITES : GIRL_SPRITES;
 
@@ -553,6 +639,7 @@ export function PearlInteractiveRoom({
         {/* Base empty 4:5 room */}
         <Pressable
           style={StyleSheet.absoluteFill}
+          accessibilityRole="button"
           accessibilityLabel="点击小家木地板走动"
           onPress={handleFloorPress}
         >
@@ -591,35 +678,54 @@ export function PearlInteractiveRoom({
               { x: 0.87, y: 0.24, width: 0.13, height: 0.66, foreground: true },
               { x: 0, y: 0.90, width: 1, height: 0.10, foreground: true },
             ];
-            return strips.map((strip, index) => (
-              <View key={`sofa-${index}`} pointerEvents="none" style={{
-                position: "absolute",
-                overflow: "hidden",
-                left: boxStyle.left + w * strip.x,
-                top: boxStyle.top + h * strip.y,
-                width: w * strip.width,
-                height: h * strip.height,
-                zIndex: strip.foreground ? zFromY(slot.top + slot.height) : zIndex,
-              }}>
-                <Image
-                  source={slot.source}
-                  style={{ position: "absolute", left: -w * strip.x, top: -h * strip.y, width: w, height: h }}
-                  resizeMode="contain"
-                  fadeDuration={0}
-                  onLoad={index === 0 ? () => markAssetLoaded(slot.id) : undefined}
-                />
-              </View>
-            ));
+            return [
+              <Pressable
+                key={slot.id}
+                style={[boxStyle, { zIndex: 65 }]}
+                onPress={handleSitTogether}
+                accessibilityRole="button"
+                accessibilityLabel="在沙发一起坐"
+              />,
+              ...strips.map((strip, index) => (
+                <View key={`sofa-${index}`} pointerEvents="none" style={{
+                  position: "absolute",
+                  overflow: "hidden",
+                  left: boxStyle.left + w * strip.x,
+                  top: boxStyle.top + h * strip.y,
+                  width: w * strip.width,
+                  height: h * strip.height,
+                  zIndex: strip.foreground ? zFromY(slot.top + slot.height) : zIndex,
+                }}>
+                  <Image
+                    source={slot.source}
+                    style={{ position: "absolute", left: -w * strip.x, top: -h * strip.y, width: w, height: h }}
+                    resizeMode="contain"
+                    fadeDuration={0}
+                    onLoad={index === 0 ? () => markAssetLoaded(slot.id) : undefined}
+                  />
+                </View>
+              )),
+            ];
+          }
+
+          if (slot.id === "slot_bed") {
+            return (
+              <Pressable
+                key={slot.id}
+                style={boxStyle}
+                onPress={someoneSleeping ? handleWakeUp : handleRestTogether}
+                accessibilityRole="button"
+                accessibilityLabel={someoneSleeping ? "从床上起身" : "在床上休息"}
+              >
+                <Image source={slot.source} style={styles.fillImg} resizeMode="contain" fadeDuration={0}
+                  onLoad={() => markAssetLoaded(slot.id)} />
+              </Pressable>
+            );
           }
 
           if (slot.interactive) {
             const interactive = slot.interactive;
-            const scaleAnim =
-              slot.interactive === "pet"
-                ? petBounce
-                : slot.interactive === "diary"
-                  ? diaryBounce
-                  : undefined;
+            const scaleAnim = interactive === "pet" ? petBounce : diaryBounce;
 
             return (
               <Pressable
@@ -629,7 +735,7 @@ export function PearlInteractiveRoom({
                 accessibilityRole="button"
                 accessibilityLabel={slot.name}
               >
-                <Animated.View style={[styles.fillImg, scaleAnim ? { transform: [{ scale: scaleAnim }] } : undefined]}>
+                <Animated.View style={[styles.fillImg, { transform: [{ scale: scaleAnim }] }]}>
                   <Image
                     source={slot.source}
                     style={styles.fillImg}
@@ -680,6 +786,25 @@ export function PearlInteractiveRoom({
           ]}
         />
 
+        <View pointerEvents="none" style={{
+          position: "absolute",
+          width: duoWidth,
+          height: charH,
+          left: stage.w * DUO_CENTER - duoWidth / 2,
+          top: stage.h * DUO_BASELINE - charH,
+          zIndex: zFromY(DUO_BASELINE) + 3,
+        }}>
+          {DUO_ACTIONS.flatMap(action => DUO_SPRITES[action].map((source, frame) => (
+            <Image
+              key={`${action}:${frame}`}
+              source={source}
+              style={[StyleSheet.absoluteFill, styles.fillImg, { opacity: duo?.action === action && duo.frame === frame ? 1 : 0 }]}
+              resizeMode="contain"
+              fadeDuration={0}
+            />
+          )))}
+        </View>
+
         {/* Companion Pixel Character */}
         <Animated.View
           style={[
@@ -687,7 +812,7 @@ export function PearlInteractiveRoom({
             {
               width: charW,
               height: charH,
-              opacity: compFade,
+              opacity: duo ? 0 : compFade,
               zIndex: compAction === "sleep" ? 54 : compAction === "sit" ? 66 : zFromY(compSortY) + 1,
               transform: [
                 { translateX: Animated.subtract(compX, charW / 2) },
@@ -699,7 +824,9 @@ export function PearlInteractiveRoom({
           ]}
         >
           <Pressable
-            onPress={handleCompanionPress}
+            disabled={isCompanionView || someoneSleeping || !!duo}
+            onPress={toggleCompanionMenu}
+            accessibilityState={{ expanded: companionMenuOpen }}
             style={styles.charHit}
             accessibilityRole="button"
             accessibilityLabel={`与 ${companionName} 互动`}
@@ -723,7 +850,7 @@ export function PearlInteractiveRoom({
             {
               width: charW,
               height: charH,
-              opacity: userFade,
+              opacity: duo ? 0 : userFade,
               zIndex: userAction === "sleep" ? 55 : userAction === "sit" ? 67 : zFromY(userSortY) + 2,
               transform: [
                 { translateX: Animated.subtract(userX, charW / 2) },
@@ -831,36 +958,40 @@ export function PearlInteractiveRoom({
           </Animated.View>
         </Pressable>
 
-        {/* Bottom-right Liquid Glass Action Bar */}
-        <View style={styles.actionBarWrap}>
-          <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
-            <View style={styles.actionBar}>
-              <Pressable
-                onPress={handleSitTogether}
-                style={({ pressed }) => [styles.actionItem, pressed && { transform: [{ scale: 0.90 }], opacity: 0.72 }]}
-              >
-                <Ionicons name="bed-outline" size={13} color={nightMode ? "#F8FAFC" : PEARL_UI.ink} />
-                <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>一起坐</Text>
-              </Pressable>
-              <View style={styles.actionDivider} />
-              <Pressable
-                onPress={someoneSleeping ? handleWakeUp : handleRestTogether}
-                style={({ pressed }) => [styles.actionItem, pressed && { transform: [{ scale: 0.90 }], opacity: 0.72 }]}
-              >
-                <Ionicons name={someoneSleeping ? "sunny-outline" : "moon-outline"} size={13} color={nightMode ? "#F8FAFC" : PEARL_UI.ink} />
-                <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>{someoneSleeping ? "起身" : "一起睡"}</Text>
-              </Pressable>
-              <View style={styles.actionDivider} />
-              <Pressable
-                onPress={handleSnuggle}
-                style={({ pressed }) => [styles.actionItem, pressed && { transform: [{ scale: 0.90 }], opacity: 0.72 }]}
-              >
-                <Ionicons name="heart-outline" size={13} color={nightMode ? "#F9A8D4" : "#C87D87"} />
-                <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>贴贴</Text>
-              </Pressable>
-            </View>
-          </LiquidGlassSurface>
-        </View>
+        {(someoneSleeping || !isCompanionView) && (
+          <View style={styles.actionBarWrap}>
+            <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
+              <View style={styles.actionBar}>
+                {companionMenuOpen && !someoneSleeping && COMPANION_MENU.map(([action, label]) => (
+                  <Pressable
+                    key={action}
+                    accessibilityRole="button"
+                    onPress={() => playSocialAction(action)}
+                    style={styles.actionItem}
+                  >
+                    <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>{label}</Text>
+                  </Pressable>
+                ))}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={someoneSleeping ? "起身" : "互动"}
+                  accessibilityState={someoneSleeping ? undefined : { expanded: companionMenuOpen }}
+                  onPress={someoneSleeping ? handleWakeUp : toggleCompanionMenu}
+                  style={[styles.actionItem, styles.actionToggle]}
+                >
+                  <Ionicons
+                    name={someoneSleeping ? "sunny-outline" : "heart-outline"}
+                    size={14}
+                    color={nightMode ? "#F8FAFC" : PEARL_UI.ink}
+                  />
+                  <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>
+                    {someoneSleeping ? "起身" : "互动"}
+                  </Text>
+                </Pressable>
+              </View>
+            </LiquidGlassSurface>
+          </View>
+        )}
       </Animated.View>
 
       {/* Silky Liquid Pearl Loader until base room + slots + idle sprites are all loaded */}
@@ -954,15 +1085,9 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255, 255, 255, 0.28)",
   },
   actionBarWrap: { position: "absolute", bottom: 12, right: 12, zIndex: 125 },
-  actionBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    gap: 8,
-  },
-  actionItem: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 2 },
-  actionDivider: { width: 1, height: 12, backgroundColor: "rgba(122, 118, 114, 0.25)" },
+  actionBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4 },
+  actionItem: { minHeight: 44, justifyContent: "center", paddingHorizontal: 8 },
+  actionToggle: { flexDirection: "row", alignItems: "center", gap: 4 },
   actionText: { fontSize: 11.5, fontWeight: "600", color: PEARL_UI.ink },
   actionTextDark: { color: "#F8FAFC" },
   zzzText: {

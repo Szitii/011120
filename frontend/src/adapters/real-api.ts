@@ -21,6 +21,8 @@ import type {
 import { createCommunityClient, type CommunityClient } from "../community/client.ts";
 import { createChatClient, type ChatClient } from "../chat/client.ts";
 
+import { createDiaryClient, type DiaryClient } from "../diary/client.ts";
+
 export class ApiProblemError extends Error {
   readonly status: number;
   readonly code: string;
@@ -49,9 +51,12 @@ export class RealApiAdapter implements ClientApi {
   private readonly config: RealApiConfig;
   readonly community: CommunityClient;
   readonly chat: ChatClient;
+  readonly diary: DiaryClient;
 
   constructor(config: RealApiConfig) {
     this.config = config;
+    this.diary = createDiaryClient((method, path, body) => method === "GET"
+      ? this.get(path) : this.send(method, path, body));
     this.community = createCommunityClient((method, path, body, key) => method === "GET"
       ? this.get(path)
       : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}));

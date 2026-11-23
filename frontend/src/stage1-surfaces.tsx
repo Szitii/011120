@@ -20,6 +20,9 @@ import { SecondaryHeading, communityStyles } from "./community/components.tsx";
 import { PEARL_UI } from "./theme/skinTokens";
 import { createCommandKey, safeClientMessage } from "./adapters/real-api.ts";
 
+import { DiaryFrequency } from "./diary/DiaryFrequency";
+import type { DiaryClient } from "./diary/client";
+
 type AsyncState<T> =
   | { kind: "loading" }
   | { kind: "success"; value: T }
@@ -66,11 +69,13 @@ export function ControlsScreen({
   companionId,
   companionName,
   onVisibilitySaved,
+  diaryClient,
 }: {
   api: ClientApi;
   companionId: string;
   companionName: string;
   onVisibilitySaved: () => void;
+  diaryClient?: DiaryClient;
 }) {
   const [state, setState] = useState<AsyncState<ControlsResource>>({ kind: "loading" });
   const [pending, setPending] = useState(false);
@@ -194,6 +199,8 @@ export function ControlsScreen({
           </View>
         </Pressable>
       </ControlSection>
+
+      {diaryClient && <DiaryFrequency key={companionId} client={diaryClient} companionId={companionId} />}
 
       <ControlSection title="记忆">
         <View style={styles.card}>
