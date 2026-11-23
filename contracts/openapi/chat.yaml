@@ -280,7 +280,7 @@ paths:
         one-to-one chat (created on first use) with `action` set and no body, so the Companion sees
         it among the recent messages it reads before replying. The first action of a burst lets the
         Companion answer with a line or stay quiet; actions less than 3 minutes after the previous
-        one, or while a reply is on the way, queue nothing (`replying` false). To show the answer,
+        one, or while a reply is on the way, queue nothing (`replying` may still be true for that earlier reply). To show the answer,
         GET /chats/{chatId} while `replying` is true. The same Idempotency-Key returns the first
         result; with another action, or a key used for a message, it is a 409. Counts toward the
         300 Owner messages per hour.

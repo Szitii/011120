@@ -84,7 +84,8 @@ export class ChatReplies {
     let written = 0;
     for (let turn = await port.claim(chatId); turn !== null; turn = await port.claim(chatId)) {
       const [outcome, bodies] = await this.#answer(turn, port);
-      await port.finish(turn.replyId, turn.claimId, outcome, bodies);
+      // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
+      await port.finish(turn.replyId, turn.claimId, outcome === "ERROR" && answersAction(turn) ? "PASSED" : outcome, bodies);
       written += 1;
     }
     return written;

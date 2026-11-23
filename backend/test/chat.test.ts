@@ -181,6 +181,8 @@ it("writes queued replies through the model and the safety scan", async () => {
     [devChatModel, turn({ direct: true, optional: true, history: [{ companionId: null, body: null, action: "HUG", mentions: [], sentAt: "t" }] }),
       "SENT", ["（开发环境假回复）小光知道你在小家里抱了抱你"]],
     [devChatModel, turn({ direct: true, optional: true, history: [] }), "SENT", ["（开发环境假回复）小光知道你来过"]],
+    [model(new Error("down")), turn({ direct: true, optional: true }), "PASSED", null],
+    [model(new Error("down")), turn({ optional: true }), "ERROR", null],
     [model({ messages: ["  好的 ", "", "联系我 13800138000 吧"] }), turn(), "SENT", ["好的", "联系我 [REDACTED_PII] 吧"]],
     [model({ messages: ["一", "二", "三", "四"] }), turn(), "SENT", ["一", "二", "三\n四"]],
     [model({ messages: ["没事", "password: hunter2"] }), turn(), "BLOCKED", null],

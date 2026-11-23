@@ -15,8 +15,11 @@ export interface ChatMessage {
   companionId: string | null;
   /** null when the reply failed or was blocked, and for an action. */
   body: string | null;
-  /** Set when the Owner did a home-room action (show it as a grey line, e.g. "你摸了摸 TA 的头"); then body is null. */
-  action: CompanionAction | null;
+  /**
+   * Set when the Owner did a home-room action (show it as a grey line, e.g. "你摸了摸 TA 的头"); then body is null.
+   * The server always sends it (null for ordinary messages); optional here so app code written before it still compiles.
+   */
+  action?: CompanionAction | null;
   /** Companions the Owner @mentioned. */
   mentions: string[];
   status: "SENT" | "FAILED" | "BLOCKED";
