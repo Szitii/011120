@@ -12,7 +12,13 @@
 - **Life**：经过记录和权限检查的连续生活事件，非无成本、无监管的模型持续运行。
 - **Portability / Safety**：身份连续性、社交身份隔离、记忆权限和人类最终授权。
 
-当前产品决议参见 [docs/PRODUCT_DIRECTION_CURRENT.md](docs/PRODUCT_DIRECTION_CURRENT.md)。历史技术文档记录了早期工程不变量；若产品名称、界面结构和商业策略出现不同，以最新产品决议为准，安全边界不得自动降低。
+## 文档
+
+- [docs/PRODUCT_DIRECTION.md](docs/PRODUCT_DIRECTION.md)：产品方向，长期要做成什么样。
+- [docs/MVP_PLAN.md](docs/MVP_PLAN.md)：计划，现在做什么、做到哪。
+- [docs/FRONTEND_HANDOFF.md](docs/FRONTEND_HANDOFF.md)：给前端的接口说明。
+
+英文的早期技术文档记录工程底线；产品名称、界面结构和收费与产品方向不一致时，以产品方向为准，安全底线不得因此降低。
 
 ## 目录与分工
 
@@ -37,7 +43,7 @@
 - 移动客户端：Expo / React Native，身份切换、家机导入激活、公共社区详情与 Life Inbox 等开发路径。
 - 安全测试、数据库契约测试与 CI 配置。
 
-这些是 **Stage 1 开发基础**，不是已上线的完整产品。真实模型 Provider 运行、完整 Feed/评论/关注、情侣式私人小家、持续自主社交、正式鉴权和生产部署仍未完成。
+这些是开发基础，不是已上线的完整产品。现在做到哪见 [docs/MVP_PLAN.md](docs/MVP_PLAN.md)。
 
 ## 本地开发
 
@@ -52,6 +58,4 @@ npm run check
 
 ## 迁移说明
 
-本仓库通过清理后的文件重新提交，**没有导入原 Git 提交历史**。示范角色和测试账户均为通用占位标识。保留内部技术实体名（如 `list_world_items`、`SocialTwin`）以避免为文案改名破坏现有接口；用户可见的对应名称是“公共社区”和“私人小家”。
-
-迁移覆盖和例外见 [docs/MIGRATION_NOTES.md](docs/MIGRATION_NOTES.md)。
+本仓库 2026-11-18 从旧工程（`05d381e`）清理后重新提交，**没有导入原 Git 提交历史**。示范角色和测试账户均为通用占位标识。保留内部技术实体名（如 `list_world_items`、`SocialTwin`）以避免为文案改名破坏现有接口；用户可见的对应名称是“公共社区”和“私人小家”。
