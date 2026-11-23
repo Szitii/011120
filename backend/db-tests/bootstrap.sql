@@ -5,7 +5,8 @@ create schema auth;
 create schema storage;
 
 create table auth.users (
-  id uuid primary key
+  id uuid primary key,
+  email text
 );
 
 create or replace function auth.uid()

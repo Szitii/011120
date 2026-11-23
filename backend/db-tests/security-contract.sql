@@ -1885,14 +1885,41 @@ select public.test_assert(
   'Companion chat replies can only be written by the API server'
 );
 select public.test_assert(
-  not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.model_switch_log'),
+  not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.admin_log'),
       ('companion_private.chat_quota')) t(name)
-    cross join (values ('anon'), ('authenticated'), ('companion_api')) r(role)
+    cross join (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
     where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
-      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE'))
-  and not has_function_privilege('companion_api', 'companion_private.admin_set_model_switch(text,text,boolean,text)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('companion_api', 'companion_private.admin_set_chat_quota(integer,bigint)'::regprocedure, 'EXECUTE'),
-  'only a database administrator can switch platform models or change the chat quota'
+      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
+  'model switches, the chat quota and the admin log are reachable only through functions'
+);
+-- The admin console: its functions are for companion_admin alone, and companion_admin has nothing else.
+select public.test_assert(
+  exists(select 1 from pg_proc p where p.pronamespace = 'companion_admin'::regnamespace)
+  and not exists(select 1 from pg_proc p cross join (values ('anon'), ('authenticated'), ('companion_api'), ('service_role')) r(role)
+    where p.pronamespace = 'companion_admin'::regnamespace
+      and (has_function_privilege(r.role, p.oid, 'EXECUTE') or has_schema_privilege(r.role, 'companion_admin', 'USAGE')))
+  and not exists(select 1 from pg_proc p where p.pronamespace = 'companion_admin'::regnamespace
+    and not (has_function_privilege('companion_admin', p.oid, 'EXECUTE') and p.prosecdef
+      and p.proconfig @> array['search_path=""'])),
+  'admin functions run with a fixed search path and only companion_admin may call them'
+);
+select public.test_assert(
+  not exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname in ('public', 'companion_private', 'auth', 'storage') and c.relkind in ('r', 'p', 'v', 'm')
+      and (has_table_privilege('companion_admin', c.oid, 'SELECT') or has_table_privilege('companion_admin', c.oid, 'INSERT')
+        or has_table_privilege('companion_admin', c.oid, 'UPDATE') or has_table_privilege('companion_admin', c.oid, 'DELETE')))
+  and not exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'companion_private', 'auth', 'storage')
+      and not exists(select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+      and has_schema_privilege('companion_admin', n.oid, 'USAGE') and has_function_privilege('companion_admin', p.oid, 'EXECUTE'))
+  and not exists(select 1 from pg_roles r where r.rolname in ('anon', 'authenticated', 'service_role', 'companion_api')
+    and pg_has_role('companion_admin', r.oid, 'MEMBER')),
+  'companion_admin can read no table and call no function outside its own schema'
+);
+select public.test_assert(
+  exists(select 1 from pg_trigger t where t.tgrelid = 'companion_private.admin_log'::regclass and not t.tgisinternal
+    and t.tgfoid = 'companion_private.reject_immutable_mutation()'::regprocedure and (t.tgtype & 8) <> 0 and (t.tgtype & 16) <> 0),
+  'the admin log cannot be edited or deleted'
 );
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')

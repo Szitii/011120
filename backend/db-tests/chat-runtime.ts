@@ -270,7 +270,7 @@ try {
   await assert.rejects(new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).settle(tx, 1, 1, 1, true), { code: "NOT_FOUND" });
 
   const switchModel = (scope: string, key: string, on: boolean) =>
-    pool.query("select companion_private.admin_set_model_switch($1, $2, $3, 'chat test')", [scope, key, on]);
+    pool.query("select companion_admin.model_switch_set($1, $2, $3, 'chat test')", [scope, key, on]);
   const pair = [{ provider: "test-provider", model: "m-test" }, { provider: "test-provider", model: "m-other" }, { provider: "elsewhere", model: "m" }];
   await switchModel("MODEL", "test-provider/m-test", false);
   assert.deepEqual(await portA.modelsEnabled(pair), [false, true, true]);
@@ -284,7 +284,7 @@ try {
   assert.equal(await lastFailure(), "DISABLED");
   for (const [scope, key] of [["ALL", "*"], ["PROVIDER", "test-provider"], ["MODEL", "test-provider/m-test"]] as const) await switchModel(scope, key, true);
   assert.deepEqual(await portA.modelsEnabled(pair), [true, true, true]);
-  assert.equal((await pool.query("select count(*)::int as n from companion_private.model_switch_log where note = 'chat test'")).rows[0]!.n, 6);
+  assert.equal((await pool.query("select count(*)::int as n from companion_private.admin_log where action = 'MODEL_SWITCH' and reason = 'chat test'")).rows[0]!.n, 6);
 
   await pool.query("update public.compute_budgets set max_model_calls = settled_calls where companion_id = $1", [second]);
   t = await ask("额度用完");
