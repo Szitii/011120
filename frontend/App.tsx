@@ -64,6 +64,9 @@ import { InteractiveFullRoom } from "./src/components/InteractiveFullRoom";
 import { PearlInteractiveRoom } from "./src/components/PearlInteractiveRoom";
 import { BottomSheet } from "./src/components/BottomSheet";
 import { GlassChatBubble } from "./src/components/GlassChatBubble";
+import { ChatScreen } from "./src/chat/ChatScreen";
+import type { ChatClient } from "./src/chat/client";
+import type { ChatMessage } from "../contracts/chat";
 
 type LoadState<T> =
   | { kind: "idle" | "loading" }
@@ -183,7 +186,7 @@ function WorldApp({ client, account, isMockMode }: {
   useEffect(() => {
     if (identity.kind !== "success") return;
     if (route.type === "root" && route.tab === "world") void loadWorld();
-    if (route.type === "life-archive" || (route.type === "root" && route.tab === "home")) void loadLife();
+    if (route.type === "life-archive") void loadLife();
     if (
       route.type === "root" &&
       route.tab === "my" &&
@@ -427,7 +430,7 @@ function WorldApp({ client, account, isMockMode }: {
         <LinearGradient pointerEvents="none" colors={PEARL_UI.background} style={StyleSheet.absoluteFill} />
       )}
 
-      {!isMoment && (
+      {!isMoment && route.type !== "chat" && (
         <AppHeader
           routeIsRoot={route.type === "root"}
           rootTab={nav.rootTab}
@@ -461,16 +464,48 @@ function WorldApp({ client, account, isMockMode }: {
         />
       )}
 
-      {route.type === "root" && route.tab === "home" && (
+      <View
+        pointerEvents={route.type === "root" && route.tab === "home" ? "auto" : "none"}
+        style={
+          route.type === "root" && route.tab === "home"
+            ? { flex: 1 }
+            : { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, opacity: 0, zIndex: -1 }
+        }
+      >
         <PrivateHomeScreen
           key={`${currentKind}:${identityId}`}
-          state={life}
+          chatClient={client.api.chat}
+          companionId={ownerCompanions.kind === "success" ? ownerCompanions.value.items[0]?.companionId : undefined}
           isCompanion={isSampleCompanion}
-          userName={identityLabel(identityValue)}
-          companionName={companionDisplayName}
           isMockMode={isMockMode}
-          onOpenTimeline={() => setNav((current) => pushRoute(current, { type: "life-archive" }))}
-          onOpenEncounter={openLifeEncounter}
+          isActive={route.type === "root" && route.tab === "home"}
+          userName={identityLabel(identityValue)}
+          companionName={ownerCompanions.kind === "success" ? (ownerCompanions.value.items[0]?.displayName ?? companionDisplayName) : companionDisplayName}
+          onOpenChat={(chatId, compId, compName, autoFocus) =>
+            setNav((current) =>
+              pushRoute(current, {
+                type: "chat",
+                chatId,
+                companionId: compId,
+                companionName: compName,
+                autoFocus,
+                fromTab: "home",
+              }),
+            )
+          }
+        />
+      </View>
+
+      {route.type === "chat" && client.api.chat && (
+        <ChatScreen
+          client={client.api.chat}
+          initialChatId={route.chatId}
+          companionId={route.companionId ?? (ownerCompanions.kind === "success" ? ownerCompanions.value.items[0]?.companionId : undefined)}
+          companionName={route.companionName ?? companionDisplayName}
+          ownerName={identityLabel(identityValue)}
+          autoFocus={route.autoFocus === true}
+          backLabel={route.fromTab === "my" ? "返回" : "返回小家"}
+          onBackToHome={goBack}
         />
       )}
 
@@ -484,7 +519,15 @@ function WorldApp({ client, account, isMockMode }: {
         />
       )}
 
-      {route.type === "root" && route.tab === "my" && (
+      {route.type === "root" && (
+        <View
+          pointerEvents={route.tab === "my" ? "auto" : "none"}
+          style={
+            route.tab === "my"
+              ? { flex: 1 }
+              : { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, opacity: 0, zIndex: -2 }
+          }
+        >
         <MyScreen
           key={`${currentKind}:${identityId}`}
           community={client.api.community}
@@ -498,6 +541,7 @@ function WorldApp({ client, account, isMockMode }: {
           settingsOpen={mySettingsOpen}
           onCloseSettings={() => setMySettingsOpen(false)}
           onOpenCompanionProfile={(item) => openProfile(item.companionId)}
+          onOpenCompanionChat={(item) => setNav((current) => pushRoute(current, { type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my" }))}
           onControls={(item) => {
             setCompanionDisplayName(item.displayName);
             setNav((current) => pushRoute(current, {
@@ -520,6 +564,7 @@ function WorldApp({ client, account, isMockMode }: {
           onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && client.api.community
             ? () => setNav(current => pushRoute(current, { type: "edit-human-profile" })) : undefined}
         />
+        </View>
       )}
 
       {route.type === "agent-settings" && agentViewer && client.api.community && (
@@ -618,6 +663,19 @@ function WorldApp({ client, account, isMockMode }: {
         onOwner={() => void switchIdentity({ kind: "OWNER" })}
         onCompanion={(item) => void switchCompanionFromUi(item)}
       />
+
+      <AppSettingsSheet
+        visible={mySettingsOpen}
+        isSampleCompanion={isSampleCompanion}
+        account={account}
+        onClose={() => setMySettingsOpen(false)}
+        onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
+        onAgentSettings={
+          agentViewer && client.api.community
+            ? () => setNav((current) => pushRoute(current, { type: "agent-settings" }))
+            : undefined
+        }
+      />
     </SafeAreaView>
   );
 }
@@ -657,15 +715,9 @@ function AppHeader({
             accessibilityLabel="切换当前身份"
           >
             <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-            {rootTab !== "my" && (
-              <PixelAvatar name={identityTitle} role={isSampleCompanion ? "companion" : "owner"} uri={avatar} size={28} />
-            )}
+            <PixelAvatar name={identityTitle} role={isSampleCompanion ? "companion" : "owner"} uri={avatar} size={28} />
             <Text style={[styles.brand, { color: ink }]} numberOfLines={1}>{identityTitle}</Text>
-            <View style={[styles.headerRoleChip, { backgroundColor: defaultSkin ? PEARL_UI.accentWash : skin.colors.accentSoft }]}>
-              <Text style={[styles.headerRoleChipText, { color: defaultSkin ? PEARL_UI.accentInk : skin.colors.accentSoftFg }]}>
-                {isSampleCompanion ? "家机" : "本人"}
-              </Text>
-            </View>
+
             <Text style={[styles.chevron, { color: skin.colors.inkMute }]}>⌄</Text>
           </Pressable>
         ) : (
@@ -676,7 +728,7 @@ function AppHeader({
         )}
 
         <View style={styles.headerRight}>
-          {routeIsRoot && rootTab === "my" && (
+          {routeIsRoot && (rootTab === "my" || rootTab === "home") && (
             <Pressable
               onPress={onOpenSettings}
               style={({ pressed }) => [styles.headerIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
@@ -731,32 +783,14 @@ function WorldScreen({
       scrollEventThrottle={100}
     >
       <View style={styles.feedHeading}>
-        <Text style={styles.feedTitle}>公共社区</Text>
-        <Text style={styles.feedDisclaimer}>当前展示已授权的社区记录；发布和互动请返回社区动态。</Text>
-        <View style={styles.feedFilterRow} accessibilityLabel="按作者身份筛选当前记录">
-          {([
-            { key: "ALL" as const, label: "全部" },
-            { key: "OWNER" as const, label: "人类" },
-            { key: "SOCIAL_TWIN" as const, label: "家机" },
-          ]).map((filter) => (
-            <Pressable
-              key={filter.key}
-              onPress={() => setActorFilter(filter.key)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: actorFilter === filter.key }}
-              style={[styles.feedFilterPill, actorFilter === filter.key && styles.feedFilterPillActive]}
-            >
-              <Text style={[styles.feedFilterText, actorFilter === filter.key && styles.feedFilterTextActive]}>{filter.label}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <Text style={styles.feedTitle}>社区动态</Text>
       </View>
 
-      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).length === 0 && (
+      {state.value.items.filter((item) => item.kind !== "ENCOUNTER_EXCERPT" && (actorFilter === "ALL" || item.author.subjectKind === actorFilter)).length === 0 && (
         <View style={styles.feedEnd}><Text style={styles.tinyMuted}>当前加载的记录里没有这一类内容。</Text></View>
       )}
 
-      {state.value.items.filter((item) => actorFilter === "ALL" || item.author.subjectKind === actorFilter).map((item) => (
+      {state.value.items.filter((item) => item.kind !== "ENCOUNTER_EXCERPT" && (actorFilter === "ALL" || item.author.subjectKind === actorFilter)).map((item) => (
         <FeedItem
           key={item.id}
           item={item}
@@ -794,22 +828,31 @@ function FeedItem({
   return (
     <View style={styles.feedItem}>
       <Pressable style={styles.feedAuthorRow} disabled={!onOpenActor} onPress={onOpenActor}>
-        <View style={styles.feedAvatar}>
-          <Text style={styles.feedAvatarText}>{item.author.displayName.slice(0, 1).toUpperCase()}</Text>
-        </View>
+        <PixelAvatar
+          name={item.author.displayName}
+          role={item.author.subjectKind === "OWNER" ? "owner" : "companion"}
+          size={38}
+        />
         <View style={styles.feedAuthorText}>
           <View style={styles.feedAuthorLine}>
             <Text style={styles.feedAuthorName} numberOfLines={1}>{item.author.displayName}</Text>
-            <Text style={styles.feedActorTag}>{item.author.subjectKind === "OWNER" ? "人类" : "AI 家机"}</Text>
-            {item.author.handle && <Text style={styles.feedAuthorHandle}>@{item.author.handle}</Text>}
           </View>
           <Text style={styles.feedMeta}>{formatDate(item.publishedAt)}</Text>
         </View>
         {item.viewerCapabilities.more === true && <Text style={styles.more}>•••</Text>}
       </Pressable>
 
-      <Text style={styles.sectionLabel}>{eventType}</Text>
-      {item.body && <Text style={styles.feedBody}>{item.body}</Text>}
+      {item.body && (
+        <Text style={styles.feedBody}>
+          {item.body.split(/(#[^\s#]+)/g).map((seg, i) =>
+            seg.startsWith("#") ? (
+              <Text key={i} style={{ color: PEARL_UI.accent, fontWeight: "600" }}>{seg}</Text>
+            ) : (
+              <Text key={i}>{seg}</Text>
+            ),
+          )}
+        </Text>
+      )}
 
       {item.completeness === "PARTIAL" && (
         <View style={styles.inlineNotice}>
@@ -821,7 +864,7 @@ function FeedItem({
         <View style={styles.mediaStack}>
           {item.media!.map((media, index) => {
             if (isMockMode && media.type === "LOCAL_PREVIEW_IMAGE" && typeof media.key === "string" && LOCAL_PREVIEW_IMAGES[media.key]) {
-              return <Image key={index} source={LOCAL_PREVIEW_IMAGES[media.key]} style={styles.feedMediaImage} />;
+              return <Image key={index} source={LOCAL_PREVIEW_IMAGES[media.key]} resizeMode="cover" style={styles.feedMediaImage} />;
             }
             const presentation = toStage1MediaPresentation(media);
             if (presentation.kind === "IMAGE") {
@@ -852,18 +895,13 @@ function FeedItem({
         )
       )}
 
-      <View style={styles.feedActions}>
-        <View style={styles.feedActionCluster}>
-          {item.viewerCapabilities.react === true && <Text style={styles.feedAction}>♡</Text>}
-          {item.viewerCapabilities.reply === true && <Text style={styles.feedAction}>▢</Text>}
-          {item.viewerCapabilities.share === true && <Text style={styles.feedAction}>⌑</Text>}
-        </View>
-        {canOpen && (
+      {canOpen && (
+        <View style={styles.feedActions}>
           <Pressable onPress={onOpen}>
-            <Text style={styles.accentLink}>看看怎么回事 →</Text>
+            <Text style={styles.accentLink}>查看详情 →</Text>
           </Pressable>
-        )}
-      </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1077,110 +1115,117 @@ function ProfileScreen({
 }
 
 function PrivateHomeScreen({
-  state,
-  isMockMode,
+  chatClient,
+  companionId,
   userName,
   companionName,
   isCompanion,
-  onOpenTimeline,
-  onOpenEncounter,
+  isMockMode,
+  isActive,
+  onOpenChat,
 }: {
-  state: LoadState<LifeContinuityCollection>;
-  isMockMode: boolean;
+  chatClient?: ChatClient;
+  companionId?: string;
   userName: string;
   companionName: string;
   isCompanion: boolean;
-  onOpenTimeline: () => void;
-  onOpenEncounter: (item: LifeContinuityItem) => void;
+  isMockMode: boolean;
+  isActive: boolean;
+  onOpenChat: (chatId?: string, companionId?: string, companionName?: string, autoFocus?: boolean) => void;
 }) {
-  const recentItems = state.kind === "success"
-    ? state.value.items.slice(0, 3)
-    : [];
+  const [latestMessages, setLatestMessages] = useState<ChatMessage[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | undefined>(undefined);
 
-  const { skin } = useSkin();
-  const defaultSkin = skin.id === "default";
-  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
-  const muted = defaultSkin ? PEARL_UI.muted : skin.colors.inkSub;
-  const accent = defaultSkin ? PEARL_UI.accentInk : skin.colors.accent;
-  if (isMockMode) {
-    return <InteractiveFullRoom userName={userName} companionName={companionName}
-      recordCount={recentItems.length} onOpenTimeline={onOpenTimeline} />;
-  }
+  useEffect(() => {
+    setActiveChatId(undefined);
+    if (!chatClient || !isActive) return;
+    if (!companionId && !isMockMode) return;
+    let active = true;
+    void chatClient.listChats().then(async (res) => {
+      if (!active) return;
+      const target = companionId
+        ? res.items.find((c) => c.direct && c.members.some((m) => m.companionId === companionId))
+        : res.items.find((c) => c.direct);
+      if (!target) {
+        setActiveChatId(undefined);
+        setLatestMessages([]);
+        return;
+      }
+      setActiveChatId(target.id);
+      const page = await chatClient.getChat(target.id);
+      if (active) setLatestMessages(page.items.slice(0, 2).reverse());
+    }).catch(() => {
+      // Quietly preserve current state on transient error
+    });
+    return () => { active = false; };
+  }, [chatClient, companionId, isActive]);
+
+  const previewBubbles = latestMessages.length > 0
+    ? latestMessages
+    : isMockMode
+      ? [
+          { id: "fallback-1", companionId: companionId ?? "comp", body: "今晚风大，回来喝杯热的。", mentions: [], status: "SENT" as const, failure: null, retryable: false, sentAt: "" },
+          { id: "fallback-2", companionId: null, body: "马上到家啦。", mentions: [], status: "SENT" as const, failure: null, retryable: false, sentAt: "" },
+        ]
+      : [];
 
   return (
     <ScrollView
       style={styles.rootContent}
-      contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance }]}
+      contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance + 8 }]}
+      showsVerticalScrollIndicator={false}
     >
       <PearlInteractiveRoom
         userName={userName}
         companionName={companionName}
         isCompanionView={isCompanion}
+        isActive={isActive}
       />
 
-      <View style={styles.privateHomeSectionHeader}>
-        <Text style={[styles.privateHomeSectionTitle, { color: ink, marginTop: 0 }]}>最近的小事</Text>
-        <Pressable accessibilityRole="button" onPress={onOpenTimeline} style={styles.privateHomeMoreBtn}>
-          <Text style={[styles.privateHomeArchiveText, { color: accent }]}>全部记录</Text>
-          <Ionicons name="chevron-forward" size={14} color={accent} />
-        </Pressable>
-      </View>
-
-      {state.kind === "loading" || state.kind === "idle" ? (
-        <View style={styles.privateHomeEmpty}>
-          <ActivityIndicator size="small" color={PEARL_UI.accent} />
-          <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>正在查看已授权的记录…</Text>
-        </View>
-      ) : state.kind === "error" ? (
-        <View style={styles.privateHomeEmpty}>
-          <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>记录暂时无法加载，请在全部记录页重试。</Text>
-        </View>
-      ) : recentItems.length === 0 ? (
-        <View style={styles.privateHomeEmpty}>
-          <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>这里暂时没有可显示的记录。</Text>
-        </View>
-      ) : (
-        <View style={styles.privateHomeRecordList}>
-          {recentItems.map((item) => {
-            const canOpen = item.kind === "ENCOUNTER" && item.viewerCapabilities.openDetail === true;
-            const statusLabel = item.status === "DELIVERED" ? "已记录"
-              : item.status === "BLOCKED" ? "受限／未展示"
-              : item.status === "FAILED" ? "执行失败"
-              : item.status === "REDACTED" ? "已隐藏"
-              : item.status;
-            const content = (
-              <>
-                <View style={styles.privateHomeRecordText}>
-                  <Text style={[styles.privateHomeRecordTitle, { color: ink }]} numberOfLines={2}>
-                    {item.companion.displayName} · {item.title}
+      {/* Light Chat Preview Bubbles (tap to open full-screen chat) */}
+      {previewBubbles.length > 0 && (
+        <Pressable
+          onPress={() => onOpenChat(activeChatId, companionId, companionName, false)}
+          style={styles.homeChatPreviewWrap}
+          accessibilityRole="button"
+          accessibilityLabel={`打开与 ${companionName} 的聊天`}
+        >
+          {previewBubbles.map((msg) => {
+            const isMine = msg.companionId === null;
+            return (
+              <View key={msg.id} style={[styles.homeMsgRow, isMine && styles.homeMsgRowMine]}>
+                <PixelAvatar
+                  name={isMine ? userName : companionName}
+                  role={isMine ? "owner" : "companion"}
+                  size={30}
+                />
+                <View style={[styles.homeMsgBubble, isMine ? styles.homeMsgBubbleMine : styles.homeMsgBubbleOther]}>
+                  <Text style={[styles.homeMsgText, isMine && styles.homeMsgTextMine]} numberOfLines={2}>
+                    {msg.body ?? "（消息暂不可显示）"}
                   </Text>
-                  <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>
-                    {formatDate(item.occurredAt)} · {statusLabel}
-                  </Text>
-                  {item.summary ? (
-                    <Text style={[styles.privateHomeRecordCaption, { color: muted }]} numberOfLines={2}>
-                      {item.summary}
-                    </Text>
-                  ) : null}
                 </View>
-                {canOpen && <Ionicons name="chevron-forward" size={16} color={muted} />}
-              </>
-            );
-            return canOpen ? (
-              <Pressable
-                key={item.id}
-                style={({ pressed }) => [styles.privateHomeRecordRow, pressed && { transform: [{ scale: 0.98 }] }]}
-                accessibilityRole="button"
-                onPress={() => onOpenEncounter(item)}
-              >
-                {content}
-              </Pressable>
-            ) : (
-              <View key={item.id} style={styles.privateHomeRecordRow}>{content}</View>
+              </View>
             );
           })}
-        </View>
+        </Pressable>
       )}
+
+      {/* Clean Liquid Glass Input Bar (tapping auto-focuses keyboard in ChatScreen) */}
+      <Pressable
+        onPress={() => onOpenChat(activeChatId, companionId, companionName, true)}
+        style={({ pressed }) => [styles.homeComposerWrap, pressed && { transform: [{ scale: 0.99 }] }]}
+        accessibilityRole="button"
+        accessibilityLabel={`和 ${companionName} 说点什么`}
+      >
+        <LiquidGlassSurface glass borderRadius={RADIUS.pill}>
+          <View style={styles.homeComposerInner}>
+            <Text style={styles.homeComposerPlaceholder}>和 {companionName} 说点什么…</Text>
+            <View style={styles.homeComposerSendBtn}>
+              <Ionicons name="paper-plane-outline" size={15} color="#FFFFFF" />
+            </View>
+          </View>
+        </LiquidGlassSurface>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -1257,6 +1302,7 @@ function MyScreen({
   settingsOpen,
   onCloseSettings,
   onOpenCompanionProfile,
+  onOpenCompanionChat,
   onControls,
   onResumeCompanion,
   onBringCompanion,
@@ -1274,6 +1320,7 @@ function MyScreen({
   settingsOpen: boolean;
   onCloseSettings: () => void;
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
+  onOpenCompanionChat?: (item: OwnerCompanionSummary) => void;
   onControls: (item: OwnerCompanionSummary) => void;
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
   onBringCompanion: () => void;
@@ -1318,15 +1365,14 @@ function MyScreen({
       style={styles.rootContent}
       contentContainerStyle={[styles.mySocialPage, { paddingBottom: CHROME.scrollBottomClearance }]}
     >
-      {/* Centered Modern Social Profile Header */}
-      <View style={styles.profileHero}>
-        <View>
-          <PixelAvatar name={displayName} role={isSampleCompanion ? "companion" : "owner"}
-            uri={ownProfile?.avatar ?? subject?.presentation.avatar} size={78} />
-          <View style={[styles.heroBadgeDot, { backgroundColor: isSampleCompanion ? "#2563EB" : "#10B981" }]}>
-            <Ionicons name={isSampleCompanion ? "heart" : "checkmark"} size={11} color="#FFFFFF" />
-          </View>
-        </View>
+      {/* Compact Refined Social Profile Header (no empty cover gap, no green badge) */}
+      <View style={[styles.profileHero, { marginTop: 10 }]}>
+        <PixelAvatar
+          name={displayName}
+          role={isSampleCompanion ? "companion" : "owner"}
+          uri={ownProfile?.avatar ?? subject?.presentation.avatar}
+          size={80}
+        />
 
         <Text style={[styles.heroName, { color: ink }]}>{displayName}</Text>
         {bio ? <Text style={[styles.heroBio, { color: muted }]}>{bio}</Text> : null}
@@ -1373,24 +1419,33 @@ function MyScreen({
           >
             <PixelAvatar name={item.displayName} role="companion" size={38} />
             <View style={{ flex: 1 }}>
-              <Text style={[styles.relTitle, { color: ink }]}>我的家机 · {item.displayName}</Text>
+              <Text style={[styles.relTitle, { color: ink }]}>{item.displayName}</Text>
               <Text style={[styles.relSub, { color: muted }]}>
-                {item.socialReady ? "查看 TA 的主页" : "待完成激活"}
+                {item.socialReady ? "专属陪伴 · 查看主页" : "待完成激活"}
               </Text>
             </View>
           </Pressable>
-          {item.socialReady && (
-            <Pressable
-              onPress={() => onControls(item)}
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            {onOpenCompanionChat && (
+              <Pressable
+                onPress={() => onOpenCompanionChat(item)}
+                style={[styles.relControlBtn, { backgroundColor: PEARL_UI.iceBlue, borderColor: "#FFFFFF" }]}
+              >
+                <Text style={[styles.relControlText, { color: "#FFFFFF" }]}>聊天</Text>
+              </Pressable>
+            )}
+            {item.socialReady && (
+              <Pressable
+                onPress={() => onControls(item)}
               style={[styles.relControlBtn, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border }]}
             >
               <Text style={[styles.relControlText, { color: ink }]}>权限</Text>
-            </Pressable>
-          )}
+              </Pressable>
+            )}
+          </View>
         </View>
       ))}
 
-      {isMockMode ? <Text style={[styles.heroBio, { color: muted }]}>演示模式</Text> : null}
       <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近动态</Text>
       {communityData.kind === "loading" ? <ActivityIndicator /> : null}
       {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: muted }]}>{communityData.title}</Text> : null}
@@ -1420,63 +1475,90 @@ function MyScreen({
           }} />
       )}
 
-      {/* Top-right Settings Gear Modal */}
-      <BottomSheet visible={settingsOpen} title="设置" onClose={onCloseSettings}>
+    </ScrollView>
+  );
+}
+
+function AppSettingsSheet({
+  visible,
+  isSampleCompanion,
+  account,
+  onClose,
+  onBringCompanion,
+  onAgentSettings,
+}: {
+  visible: boolean;
+  isSampleCompanion: boolean;
+  account?: { email?: string; signOut: () => void };
+  onClose: () => void;
+  onBringCompanion: () => void;
+  onAgentSettings?: () => void;
+}) {
+  const { skin, setSkinById, availableSkins } = useSkin();
+  const [colorModalOpen, setColorModalOpen] = useState(false);
+  const defaultSkin = skin.id === "default";
+  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
+  const muted = defaultSkin ? PEARL_UI.muted : skin.colors.inkSub;
+
+  return (
+    <>
+      <BottomSheet visible={visible} title="设置" onClose={onClose}>
         <View style={[styles.cleanCardGroup, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
-        {onAgentSettings && (
-          <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={() => {
-            onCloseSettings();
-            onAgentSettings();
-          }}>
-            <Text style={[styles.cleanRowTitle, { color: ink }]}>家机活动设置</Text>
-            <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
-          </Pressable>
-        )}
-        {!isSampleCompanion && (
+          {onAgentSettings && (
+            <Pressable
+              accessibilityRole="button"
+              style={styles.cleanRow}
+              onPress={() => {
+                onClose();
+                onAgentSettings();
+              }}
+            >
+              <Text style={[styles.cleanRowTitle, { color: ink }]}>互动与活动设置</Text>
+              <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
+            </Pressable>
+          )}
+          {!isSampleCompanion && (
+            <Pressable
+              style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
+              onPress={() => {
+                onClose();
+                onBringCompanion();
+              }}
+            >
+              <View style={styles.cleanRowLeft}>
+                <Ionicons name="add-circle-outline" size={20} color={skin.colors.ink} />
+                <Text style={[styles.cleanRowTitle, { color: ink }]}>添加陪伴成员</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
+            </Pressable>
+          )}
           <Pressable
             style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
             onPress={() => {
-              onCloseSettings();
-              onBringCompanion();
+              onClose();
+              setColorModalOpen(true);
             }}
           >
             <View style={styles.cleanRowLeft}>
-              <Ionicons name="add-circle-outline" size={20} color={skin.colors.ink} />
-              <Text style={[styles.cleanRowTitle, { color: ink }]}>添加家机</Text>
+              <Ionicons name="color-palette-outline" size={20} color={skin.glass.iconTint} />
+              <Text style={[styles.cleanRowTitle, { color: ink }]}>基础外观配色</Text>
             </View>
-            <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
-          </Pressable>
-        )}
-
-        <Pressable
-          style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
-          onPress={() => {
-            onCloseSettings();
-            setColorModalOpen(true);
-          }}
-        >
-          <View style={styles.cleanRowLeft}>
-            <Ionicons name="color-palette-outline" size={20} color={skin.glass.iconTint} />
-            <Text style={[styles.cleanRowTitle, { color: ink }]}>基础外观配色</Text>
-          </View>
-          <View style={styles.cleanRowRight}>
-            <Text style={[styles.cleanRowValue, { color: muted }]}>{skin.name}</Text>
-            <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
-          </View>
-        </Pressable>
-
-        {account && (
-          <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={account.signOut}>
-            <View style={styles.cleanRowLeft}>
-              <Text style={[styles.cleanRowTitle, { color: ink }]}>退出登录或切换账号</Text>
-              {account.email ? <Text style={[styles.cleanRowValue, { color: muted }]}>{account.email}</Text> : null}
+            <View style={styles.cleanRowRight}>
+              <Text style={[styles.cleanRowValue, { color: muted }]}>{skin.name}</Text>
+              <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
             </View>
           </Pressable>
-        )}
-      </View>
+          {account && (
+            <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={account.signOut}>
+              <View style={styles.cleanRowLeft}>
+                <Text style={[styles.cleanRowTitle, { color: ink }]}>退出登录或切换账号</Text>
+                {account.email ? <Text style={[styles.cleanRowValue, { color: muted }]}>{account.email}</Text> : null}
+              </View>
+            </Pressable>
+          )}
+        </View>
       </BottomSheet>
 
-      {/* Base Color Appearance Modal */}
       <BottomSheet visible={colorModalOpen} title="基础外观配色" onClose={() => setColorModalOpen(false)}>
         <Text style={[styles.heroBio, { color: muted }]}>聊天样式预览</Text>
         <View style={[styles.skinPreviewBox, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
@@ -1506,7 +1588,7 @@ function MyScreen({
           })}
         </View>
       </BottomSheet>
-    </ScrollView>
+    </>
   );
 }
 
@@ -1550,12 +1632,11 @@ function IdentitySwitcher({
             <PixelAvatar name={ownerName} role="owner" uri={ownerPresentation?.avatar} size={42} />
             <View style={styles.switchAccountText}>
               <Text style={styles.switchAccountName}>{ownerName}</Text>
-              <Text style={styles.accountHandle}>本人</Text>
             </View>
             <Text style={styles.checkmark}>{ownerActive ? "●" : "○"}</Text>
           </Pressable>
 
-          <Text style={styles.sheetLabel}>我的家机</Text>
+          <Text style={styles.sheetLabel}>切换成员</Text>
 
           {companions.kind === "loading" && <Text style={styles.tinyMuted}>稍等。</Text>}
           {companions.kind === "empty" && <Text style={styles.tinyMuted}>这里还没有家机。</Text>}
@@ -1573,9 +1654,9 @@ function IdentitySwitcher({
                 <PixelAvatar name={item.displayName} role="companion" size={42} />
                 <View style={styles.switchAccountText}>
                   <Text style={styles.switchAccountName}>{item.displayName}</Text>
-                  <Text style={styles.accountHandle}>
-                    {item.socialReady ? (item.handle ? `@${item.handle}` : "家机") : "还没出门"}
-                  </Text>
+                  {!item.socialReady && (
+                    <Text style={styles.accountHandle}>还没出门</Text>
+                  )}
                 </View>
                 <Text style={styles.checkmark}>{active ? "●" : "○"}</Text>
               </Pressable>
@@ -1691,11 +1772,18 @@ const styles = StyleSheet.create({
   feedFilterTextActive: { fontWeight: "700", color: colors.roseDark },
   feedActorTag: { color: colors.roseDark, backgroundColor: colors.roseWash, paddingVertical: 2, paddingHorizontal: 6, fontSize: 10, borderRadius: 6, overflow: "hidden" },
   feedItem: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
+    backgroundColor: PEARL_UI.white,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: PEARL_UI.line,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    shadowColor: "#8A857C",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 1,
   },
   feedAuthorRow: { flexDirection: "row", alignItems: "center" },
   feedAvatar: {
@@ -1715,7 +1803,7 @@ const styles = StyleSheet.create({
   more: { fontSize: 15, color: colors.tertiary, letterSpacing: 1.5 },
   feedBody: { marginTop: 12, fontSize: 15, lineHeight: 22, color: colors.text },
   mediaStack: { gap: 8, marginTop: 4 },
-  feedMediaImage: { width: "100%", aspectRatio: 4 / 3, borderRadius: 16, backgroundColor: "#F2F2F7" },
+  feedMediaImage: { width: "100%", height: 196, borderRadius: 16, backgroundColor: "#F2F2F7" },
   mediaUnavailable: { minHeight: 120, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "#F7F7FA", gap: 6, padding: 16 },
   noMedia: {
     height: 150,
@@ -2067,5 +2155,76 @@ const styles = StyleSheet.create({
   relControlText: {
     fontSize: 12,
     fontWeight: "600",
+  },
+
+  homeChatPreviewWrap: {
+    marginTop: 14,
+    gap: 10,
+  },
+  homeMsgRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  homeMsgRowMine: {
+    flexDirection: "row-reverse",
+  },
+  homeMsgBubble: {
+    maxWidth: "74%",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  homeMsgBubbleOther: {
+    backgroundColor: "rgba(255,255,255,0.90)",
+    borderColor: PEARL_UI.highlight,
+    borderBottomLeftRadius: 6,
+  },
+  homeMsgBubbleMine: {
+    backgroundColor: PEARL_UI.iceBlue,
+    borderColor: "rgba(255,255,255,0.78)",
+    borderBottomRightRadius: 6,
+  },
+  homeMsgText: {
+    fontSize: 13.5,
+    lineHeight: 19,
+    color: PEARL_UI.ink,
+  },
+  homeMsgTextMine: {
+    color: "#FFFFFF",
+    fontWeight: "500",
+  },
+  homeComposerWrap: {
+    marginTop: 12,
+  },
+  homeComposerInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingLeft: 16,
+    paddingRight: 6,
+    paddingVertical: 6,
+  },
+  homeComposerPlaceholder: {
+    fontSize: 13.5,
+    color: PEARL_UI.muted,
+  },
+  homeComposerSendBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: PEARL_UI.iceBlue,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.82)",
+  },
+  myCoverBanner: {
+    width: "100%",
+    height: 112,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.92)",
   },
 });

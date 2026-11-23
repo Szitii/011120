@@ -1,10 +1,26 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
-import { colors } from "../theme";
+import { PEARL_UI } from "../theme/skinTokens";
+import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
+import { RADIUS } from "../theme/layoutTokens";
 import type { AccountBinding, AccountView } from "./account-session";
 import type { SupabaseConfig } from "./config";
 import { createSupabaseAccount } from "./supabase";
+
+const AVATAR_BOY = require("../../assets/avatar-companion-pixel.png");
+const AVATAR_GIRL = require("../../assets/avatar-owner-pixel.png");
 
 export function AccountGate({ config, children }: {
   config: SupabaseConfig;
@@ -36,51 +52,144 @@ function SignInScreen({ state, onSignIn, onRetrySignOut }: {
     setPassword("");
   }
 
-  return <SafeAreaView style={styles.safe}>
-    <StatusBar style="dark" />
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.layout}>
-      {formVisible ? <>
-        <Text accessibilityRole="header" style={styles.title}>登录家机社区</Text>
-        <Text style={styles.label}>邮箱</Text>
-        <TextInput accessibilityLabel="邮箱" autoCapitalize="none" autoCorrect={false}
-          autoComplete="email" keyboardType="email-address" editable={state.kind === "signed-out"}
-          value={email} onChangeText={setEmail} style={styles.input} />
-        <Text style={styles.label}>密码</Text>
-        <TextInput accessibilityLabel="密码" autoCapitalize="none" autoComplete="current-password"
-          secureTextEntry editable={state.kind === "signed-out"} onSubmitEditing={submit}
-          value={password} onChangeText={setPassword} style={styles.input} />
-        {state.kind === "signed-out" && state.message && (
-          <Text accessibilityRole="alert" style={styles.message}>{state.message}</Text>
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar style="dark" />
+      <LinearGradient pointerEvents="none" colors={PEARL_UI.background} style={StyleSheet.absoluteFill} />
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.layout}>
+        {formVisible ? (
+          <>
+            <LiquidGlassSurface glass borderRadius={28} style={styles.heroCard}>
+              <View style={styles.heroInner}>
+                <View style={styles.avatarPair}>
+                  <Image source={AVATAR_BOY} style={styles.heroAvatar} />
+                  <Image source={AVATAR_GIRL} style={[styles.heroAvatar, { marginLeft: -10 }]} />
+                </View>
+                <Text accessibilityRole="header" style={styles.title}>欢迎回家</Text>
+                <Text style={styles.subtitle}>登录你的专属小家与社区</Text>
+              </View>
+            </LiquidGlassSurface>
+
+            <View style={styles.formCard}>
+              <Text style={styles.label}>邮箱</Text>
+              <TextInput
+                accessibilityLabel="邮箱"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                keyboardType="email-address"
+                placeholder="输入登录邮箱"
+                placeholderTextColor={PEARL_UI.muted}
+                editable={state.kind === "signed-out"}
+                value={email}
+                onChangeText={setEmail}
+                style={styles.input}
+              />
+              <Text style={styles.label}>密码</Text>
+              <TextInput
+                accessibilityLabel="密码"
+                autoCapitalize="none"
+                autoComplete="current-password"
+                placeholder="输入密码"
+                placeholderTextColor={PEARL_UI.muted}
+                secureTextEntry
+                editable={state.kind === "signed-out"}
+                onSubmitEditing={submit}
+                value={password}
+                onChangeText={setPassword}
+                style={styles.input}
+              />
+              {state.kind === "signed-out" && state.message && (
+                <Text accessibilityRole="alert" style={styles.message}>{state.message}</Text>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canSubmit }}
+                disabled={!canSubmit}
+                style={({ pressed }) => [
+                  styles.button,
+                  !canSubmit && styles.disabled,
+                  pressed && canSubmit && { transform: [{ scale: 0.98 }] },
+                ]}
+                onPress={submit}
+              >
+                <Text style={styles.buttonText}>{state.kind === "signing-in" ? "正在登录…" : "登录"}</Text>
+              </Pressable>
+            </View>
+          </>
+        ) : state.kind === "logout-error" ? (
+          <View style={styles.formCard}>
+            <Text accessibilityRole="alert" style={styles.message}>{state.message}</Text>
+            <Pressable accessibilityRole="button" style={styles.button} onPress={onRetrySignOut}>
+              <Text style={styles.buttonText}>重试退出</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <ActivityIndicator
+            accessibilityLabel={state.kind === "restoring" ? "正在恢复登录" : "正在退出"}
+            color={PEARL_UI.accent}
+          />
         )}
-        <Pressable accessibilityRole="button" accessibilityState={{ disabled: !canSubmit }}
-          disabled={!canSubmit} style={[styles.button, !canSubmit && styles.disabled]} onPress={submit}>
-          <Text style={styles.buttonText}>{state.kind === "signing-in" ? "正在登录…" : "登录"}</Text>
-        </Pressable>
-      </> : state.kind === "logout-error" ? <>
-        <Text accessibilityRole="alert" style={styles.message}>{state.message}</Text>
-        <Pressable accessibilityRole="button" style={styles.button} onPress={onRetrySignOut}>
-          <Text style={styles.buttonText}>重试退出</Text>
-        </Pressable>
-      </> : <ActivityIndicator accessibilityLabel={state.kind === "restoring" ? "正在恢复登录" : "正在退出"}
-        color={colors.roseDark} />}
-    </ScrollView>
-  </SafeAreaView>;
+      </ScrollView>
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.canvas },
-  layout: { flexGrow: 1, justifyContent: "center", alignSelf: "center", width: "100%", maxWidth: 400, padding: 24, gap: 10 },
-  title: { fontSize: 26, fontWeight: "700", color: colors.ink, marginBottom: 14 },
-  label: { fontSize: 14, color: colors.text },
+  safe: { flex: 1, backgroundColor: PEARL_UI.background[0] },
+  layout: {
+    flexGrow: 1,
+    justifyContent: "center",
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 400,
+    padding: 22,
+    gap: 16,
+  },
+  heroCard: { width: "100%" },
+  heroInner: { alignItems: "center", paddingVertical: 26, paddingHorizontal: 20 },
+  avatarPair: { flexDirection: "row", alignItems: "center", marginBottom: 14 },
+  heroAvatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 2.5,
+    borderColor: "#FFFFFF",
+    backgroundColor: "#F6F5F0",
+  },
+  title: { fontSize: 24, fontWeight: "700", color: PEARL_UI.ink, marginBottom: 4 },
+  subtitle: { fontSize: 13, color: PEARL_UI.muted },
+  formCard: {
+    backgroundColor: PEARL_UI.white,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: PEARL_UI.line,
+    padding: 20,
+    gap: 8,
+  },
+  label: { fontSize: 13, fontWeight: "600", color: PEARL_UI.ink, marginTop: 4 },
   input: {
-    minHeight: 48, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1,
-    borderColor: colors.line, color: colors.text, backgroundColor: colors.paper, marginBottom: 8,
+    minHeight: 46,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: PEARL_UI.line,
+    color: PEARL_UI.ink,
+    backgroundColor: "#FAF9F7",
+    marginBottom: 6,
+    fontSize: 14.5,
   },
-  message: { color: colors.muted, lineHeight: 20 },
+  message: { color: PEARL_UI.muted, fontSize: 13, lineHeight: 19, marginVertical: 4 },
   button: {
-    alignItems: "center", justifyContent: "center", minHeight: 48, borderRadius: 12,
-    backgroundColor: colors.roseWash, marginTop: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 48,
+    borderRadius: RADIUS.pill,
+    backgroundColor: PEARL_UI.iceBlue,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.85)",
+    marginTop: 8,
   },
-  disabled: { opacity: 0.7 },
-  buttonText: { color: colors.text, fontSize: 15, fontWeight: "600" },
+  disabled: { opacity: 0.5 },
+  buttonText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
 });

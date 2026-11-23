@@ -17,7 +17,107 @@ import type {
   WorldCollection,
 } from "../contracts.ts";
 
+import type { ChatClient } from "../chat/client.ts";
+import type { Chat, ChatMessage, ChatSettings } from "../../../contracts/chat.ts";
+
 export class MockApiAdapter implements ClientApi {
+  private mockChatMessages: ChatMessage[] = [
+    {
+      id: "m-2",
+      companionId: null,
+      body: "马上到家啦。",
+      mentions: [],
+      status: "SENT",
+      failure: null,
+      retryable: false,
+      sentAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    },
+    {
+      id: "m-1",
+      companionId: "companion-preview-1",
+      body: "今晚风大，回来喝杯热的。",
+      mentions: [],
+      status: "SENT",
+      failure: null,
+      retryable: false,
+      sentAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    },
+  ];
+  private mockChatSettings: ChatSettings = { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, revision: 1 };
+  readonly chat: ChatClient = {
+    listChats: async () => ({
+      items: [{
+        id: "chat-preview-1",
+        title: null,
+        direct: true,
+        members: [{ companionId: "companion-preview-1", displayName: "沈砚" }],
+        lastMessage: this.mockChatMessages[0] ?? null,
+        typing: [],
+        replying: false,
+        activeAt: new Date().toISOString(),
+      }],
+    }),
+    openChat: async (companionIds, title) => ({
+      id: "chat-preview-1",
+      title: title ?? null,
+      direct: companionIds.length === 1,
+      members: companionIds.map((id) => ({ companionId: id, displayName: "沈砚" })),
+      lastMessage: this.mockChatMessages[0] ?? null,
+      typing: [],
+      replying: false,
+      activeAt: new Date().toISOString(),
+    }),
+    getChat: async () => ({
+      chat: {
+        id: "chat-preview-1",
+        title: null,
+        direct: true,
+        members: [{ companionId: "companion-preview-1", displayName: "沈砚" }],
+        lastMessage: this.mockChatMessages[0] ?? null,
+        typing: [],
+        replying: false,
+        activeAt: new Date().toISOString(),
+      },
+      items: [...this.mockChatMessages],
+      nextCursor: null,
+    }),
+    deleteChat: async () => ({ deleted: true }),
+    sendMessage: async (_chatId, body, mentions = []) => {
+      const msg: ChatMessage = {
+        id: `m-${Date.now()}`,
+        companionId: null,
+        body,
+        mentions,
+        status: "SENT",
+        failure: null,
+        retryable: false,
+        sentAt: new Date().toISOString(),
+      };
+      this.mockChatMessages = [msg, ...this.mockChatMessages];
+      return { message: msg, typing: [], replying: false };
+    },
+    retryMessage: async () => ({
+      typing: [],
+      replying: false,
+    }),
+    getChatSettings: async () => ({ ...this.mockChatSettings }),
+    listModels: async () => ({
+      items: [{
+        id: "platform-default",
+        name: "平台默认模型",
+        provider: "mock",
+        tier: "ECONOMY",
+        inputPerMTok: 0,
+        outputPerMTok: 0,
+        available: true,
+      }],
+      defaultModel: "platform-default",
+    }),
+    updateChatSettings: async (_id, next) => {
+      this.mockChatSettings = { ...next, revision: next.revision + 1 };
+      return { ...this.mockChatSettings };
+    },
+  };
   private controlsRevision = 1;
   private controlsState: ControlsResource["settings"] = {
     socialTwinVisibility: "FRIENDS",
