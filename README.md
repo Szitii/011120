@@ -25,7 +25,7 @@
 | `backend/scripts` | 初始化开发库、跑数据库测试、冒烟测试 | 后端 |
 | `contracts/` | 前后端的交界：`openapi/` 接口说明和 `community.ts` 共用类型。改这里要两边都同意 | 共同 |
 | `scripts/` | CI 脚本和 Windows 一键启动脚本，前后端都会用到 | 共同 |
-| `docs/`、`spikes/` | 文档和实验代码 | 共同 |
+| `docs/` | 文档 | 共同 |
 
 根目录的 `package.json` 是后端的依赖和命令（`npm run check`、`npm run test:postgres` 等）；前端命令在 `frontend/` 下运行，或用 `npm run <命令> --prefix frontend`。
 

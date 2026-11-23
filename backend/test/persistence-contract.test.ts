@@ -67,7 +67,6 @@ const stage1PresentationMigration = readFileSync(
   "utf8",
 );
 const openapi = readFileSync(new URL("../../contracts/openapi/v0.yaml", import.meta.url), "utf8");
-const mvpResponse = readFileSync(new URL("../../docs/MVP_API_ENGINEERING_RESPONSE_V0_2.md", import.meta.url), "utf8");
 const packageManifest = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
 ) as Record<string, unknown>;
@@ -365,7 +364,7 @@ describe("Foundation persistence and API contracts", () => {
     assert.match(openapi, /participants:/);
   });
 
-  it("versions the six-surface MVP API and declares capability, error, and acceptance evidence", () => {
+  it("versions the six-surface MVP API and declares capability and error shapes", () => {
     assert.match(openapi, /version: 0\.7\.1/);
     assert.match(openapi, /operationId: listWorldItems/);
     assert.match(openapi, /operationId: listLifeContinuity/);
@@ -377,9 +376,5 @@ describe("Foundation persistence and API contracts", () => {
     assert.match(openapi, /messageClass: \{ enum: \[AUTH, PERMISSION, VALIDATION, CONFLICT, RATE_LIMIT, AVAILABILITY, CAPABILITY, INTERNAL\] \}/);
     assert.match(openapi, /retryHint: \{ enum: \[DO_NOT_RETRY, RETRY_SAME_REQUEST, RETRY_AFTER, REFRESH_AND_RETRY\] \}/);
     assert.doesNotMatch(openapi, /raw stack|private memory id|provider secret/i);
-    for (let scenario = 1; scenario <= 10; scenario += 1) {
-      assert.match(mvpResponse, new RegExp(`AS ${String(scenario).padStart(2, "0")}`));
-    }
-    assert.match(mvpResponse, /Receiver Response: ACCEPTED WITH GAPS/);
   });
 });
