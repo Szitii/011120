@@ -1,7 +1,7 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import type { ChatClaim, ChatOutcome, ChatPort, ChatReservation, ReservationDecision } from "./port.ts";
+import type { Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, ReservationDecision } from "./port.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
 export class PostgresChatAdapter implements ChatPort {
@@ -73,6 +73,37 @@ export class PostgresChatAdapter implements ChatPort {
       throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid chat response.");
     }
     return payload as boolean[];
+  }
+
+  diary(companionId: string, beforeAt: string | null, beforeId: string | null): Promise<unknown> {
+    return this.#object("select public.diary_list($1,$2,$3) as payload", [companionId, beforeAt, beforeId]);
+  }
+
+  deleteDiary(companionId: string, entryId: string): Promise<unknown> {
+    return this.#object("select public.diary_delete($1,$2) as payload", [companionId, entryId]);
+  }
+
+  diarySettings(companionId: string): Promise<unknown> {
+    return this.#object("select public.diary_get_settings($1) as payload", [companionId]);
+  }
+
+  saveDiarySettings(companionId: string, settings: DiarySettings): Promise<unknown> {
+    return this.#object("select public.diary_update_settings($1,$2,$3) as payload", [companionId, settings.frequency, settings.revision]);
+  }
+
+  async diaryBegin(companionId: string): Promise<DiaryStart> {
+    return await this.#object("select public.diary_begin($1) as payload", [companionId]) as DiaryStart;
+  }
+
+  async diaryReserve(entryId: string, claimId: string, b: Booking): Promise<ReservationDecision> {
+    return await this.#object("select public.diary_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9) as payload", [
+      entryId, claimId, b.provider, b.model, b.pricingVersion, b.inputTokens, b.outputTokens, b.costMinor, entryId,
+    ]) as ReservationDecision;
+  }
+
+  async diaryFinish(entryId: string, claimId: string, body: string | null): Promise<DiaryEntry | null> {
+    const payload = await this.#object("select public.diary_finish($1,$2,$3) as payload", [entryId, claimId, body]);
+    return (payload as { entry?: DiaryEntry | null }).entry ?? null;
   }
 
   async #object(sql: string, values: readonly unknown[]): Promise<unknown> {

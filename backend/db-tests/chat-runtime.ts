@@ -7,8 +7,9 @@ import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
-import type { ChatClaim } from "../src/chat/port.ts";
-import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult } from "../../contracts/chat.ts";
+import type { ChatClaim, DiaryJob } from "../src/chat/port.ts";
+import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, DiaryPage, DiarySettings, DiaryWriteResult }
+  from "../../contracts/chat.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");
@@ -389,7 +390,85 @@ try {
   assert.equal(leftovers.rows[0]!.n, 0);
   passed("chat list per Owner; deleting a chat removes every message");
 
+  // ---- diary (家机日记) ----
+  const diary = `companions/${A.companion}/diary`;
+  const diarySettings = `companions/${A.companion}/diary-settings`;
+  assert.deepEqual((await call<DiarySettings>(0, diarySettings)).data, { frequency: "DAILY", revision: 1 });
+  for (const [path, method] of [[diarySettings, "GET"], [diary, "GET"], [diary, "POST"]] as const) {
+    assert.equal((await call(1, path, method)).status, 404, `${method} ${path} is the Owner's alone`);
+  }
+  // Community material: the Companion's own post counts; a deleted post and another Companion's post do not.
+  const actorOf = async (twin: string, owner: string) => {
+    await pool.query("insert into public.community_actors(owner_id, kind, social_twin_id) values ($1, 'AI', $2) on conflict do nothing", [owner, twin]);
+    return (await pool.query<{ id: string }>("select id from public.community_actors where social_twin_id = $1", [twin])).rows[0]!.id;
+  };
+  const [actorA, actorB] = [await actorOf("00000000-0000-0000-0000-0000000005a1", A.owner), await actorOf("00000000-0000-0000-0000-0000000005b1", B.owner)];
+  const diaryPosts = (await pool.query<{ id: string }>(`insert into public.community_posts(actor_id, body, source, deleted_at)
+    values ($1, '日记测试：我的帖子', 'OWNER_PROXY', null), ($1, '日记测试：删掉的帖子', 'OWNER_PROXY', now()), ($2, '日记测试：别人的帖子', 'OWNER_PROXY', null)
+    returning id`, [actorA, actorB])).rows.map(r => r.id);
+  let seen: DiaryJob | undefined;
+  const capturing = new ChatReplies({ reply: async () => ({ pass: true }), diary: async job => { seen = job; return { text: " 今天主人抱了抱我。 " }; } });
+  const firstEntry = await capturing.writeDiary(A.companion, portA);
+  assert.deepEqual([firstEntry.status, firstEntry.entry?.body, firstEntry.entry?.companionId], ["WRITTEN", "今天主人抱了抱我。", A.companion]);
+  assert.equal(seen!.companion.displayName, "SampleCompanion");
+  assert.ok(seen!.messages.some(m => m.companionId === null && m.body === "你好呀"), "the one-to-one chat");
+  assert.ok(seen!.messages.some(m => m.action === "WAVE"), "home-room actions");
+  assert.ok(!seen!.messages.some(m => m.body === "记账测试"), "not group chats");
+  const postBodies = seen!.posts.map(p => p.body);
+  assert.ok(postBodies.includes("日记测试：我的帖子") && !postBodies.some(b => b.includes("删掉") || b.includes("别人")), postBodies.join("|"));
+  const again = await call<DiaryWriteResult>(0, diary, "POST");
+  assert.equal(again.data.status, "NOT_DUE");
+  assert.equal(Date.parse(again.data.nextAt!) - Date.parse(firstEntry.entry!.writtenAt), 20 * 3600 * 1000, "DAILY: 20 hours later");
+  passed("diary: written from the one-to-one chat and own posts, then not again until due");
+
+  assert.deepEqual((await call<DiarySettings>(0, diarySettings, "PUT", { frequency: "OFTEN", revision: 1 })).data, { frequency: "OFTEN", revision: 2 });
+  assert.equal((await call(0, diarySettings, "PUT", { frequency: "RARE", revision: 1 })).status, 409);
+  const ago = (what: string) => pool.query(`update companion_private.diary_entries set created_at = created_at - interval '${what}' where companion_id = $1`, [A.companion]);
+  await ago("7 hours");
+  assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "NOTHING_NEW", "nothing happened since");
+  await call(0, `chats/${direct.data.id}/messages`, "POST", { body: "今天去爬山了" });
+  await settle(direct.data.id);
+  const secondEntry = await call<DiaryWriteResult>(0, diary, "POST");
+  assert.equal(secondEntry.data.status, "WRITTEN", JSON.stringify(secondEntry.data));
+  assert.match(secondEntry.data.entry!.body, /^（开发环境假日记）主人和我说了 1 句话。主人说：「今天去爬山了」$/, "only what is new");
+  const diaryPage = await call<DiaryPage>(0, diary);
+  assert.deepEqual([diaryPage.data.items.map(e => e.id), diaryPage.data.nextCursor, diaryPage.data.writing],
+    [[secondEntry.data.entry!.id, firstEntry.entry!.id], null, false]);
+  assert.equal((await call(1, `${diary}/${firstEntry.entry!.id}`, "DELETE")).status, 404);
+  assert.deepEqual((await call(0, `${diary}/${firstEntry.entry!.id}`, "DELETE")).data, { deleted: true });
+  assert.equal((await call(0, `${diary}/${firstEntry.entry!.id}`, "DELETE")).status, 404);
+  assert.deepEqual((await call<DiaryPage>(0, diary)).data.items.map(e => e.id), [secondEntry.data.entry!.id]);
+  const erased = await pool.query("select status, body from companion_private.diary_entries where id = $1", [firstEntry.entry!.id]);
+  assert.deepEqual(erased.rows, [{ status: "DELETED", body: null }], "the text is gone, the covered days stay covered");
+  passed("diary: frequency, nothing new, only new material, paging and deleting");
+
+  await ago("7 hours");
+  await pool.query(`insert into companion_private.diary_entries(companion_id, status, covers_from, covers_until, claim_id)
+    values ($1, 'WRITING', now(), now(), gen_random_uuid())`, [A.companion]);
+  assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "WRITING", "one at a time");
+  assert.equal((await call<DiaryPage>(0, diary)).data.writing, true);
+  await pool.query("update companion_private.diary_entries set created_at = now() - interval '3 minutes' where status = 'WRITING' and companion_id = $1", [A.companion]);
+  assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "NOT_DUE", "an abandoned attempt counts as failed");
+  assert.equal((await pool.query("select count(*)::int as n from companion_private.diary_entries where companion_id = $1 and status = 'FAILED'", [A.companion])).rows[0]!.n, 1);
+  assert.equal((await call(0, diarySettings, "PUT", { frequency: "OFF", revision: 2 })).status, 200);
+  assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "OFF");
+  passed("diary: one attempt at a time, abandoned attempts fail, and OFF writes nothing");
+
+  const diaryEngine = new PlatformChatModel(catalog, async () => ({ text: "今天被抱了很多次。", inputTokens: 200, outputTokens: 30, refused: false, cutOff: false }));
+  const paid = await new ChatReplies(diaryEngine).writeDiary(second, portA);
+  assert.equal(paid.status, "WRITTEN", JSON.stringify(paid));
+  const diaryLedger = await pool.query(`select x.reason_code, x.trigger_event_type, string_agg(e.status, '>' order by e.sequence) as s
+    from public.compute_transactions x join public.compute_ledger_entries e on e.transaction_id = x.id
+    where x.trigger_event_id = $1 group by 1, 2`, [paid.entry!.id]);
+  assert.deepEqual(diaryLedger.rows, [{ reason_code: "DIARY_ENTRY", trigger_event_type: "DIARY_ENTRY", s: "RESERVED>STARTED>SUCCEEDED" }]);
+  assert.deepEqual(await portA.diaryReserve(paid.entry!.id, randomUUID(), { provider: "fakep", model: "fake-1", pricingVersion: "t", inputTokens: 1,
+    outputTokens: 1, costMinor: 1 }), { decision: "STALE" }, "a finished entry cannot book again");
+  passed("diary model calls are booked as DIARY_ENTRY and settled");
+  await pool.query("delete from public.community_posts where id = any($1::uuid[])", [diaryPosts]);
+
   // Leave the shared development database as other suites expect it.
+  await pool.query("delete from companion_private.diary_entries where companion_id in ($1, $2)", [A.companion, second]);
+  await pool.query("delete from companion_private.diary_settings");
   await pool.query("delete from companion_private.chats where owner_id = $1", [A.owner]);
   await pool.query("delete from companion_private.chat_settings");
   await pool.query("update public.companions set status = 'DELETED' where id = $1", [second]);

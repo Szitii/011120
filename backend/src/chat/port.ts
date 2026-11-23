@@ -1,4 +1,4 @@
-import type { ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 
 /** What the server needs to write one Companion reply (from chat_claim). */
@@ -38,6 +38,24 @@ export interface ChatReservation {
 /** RESERVED: go ahead. STALE: the turn moved on. DISABLED: switched off. QUOTA: today's budget is used up. */
 export type ReservationDecision = { decision: "RESERVED"; transactionId: string } | { decision: "STALE" | "DISABLED" | "QUOTA" };
 
+/** A diary entry to write (diary_begin said WRITE): the Companion and what happened since its last entry. */
+export interface DiaryJob {
+  status: "WRITE";
+  entryId: string;
+  claimId: string;
+  companion: ChatClaim["companion"];
+  /** The one-to-one chat, oldest first; companionId null is the Owner. An action has no body. */
+  messages: { companionId: string | null; body: string | null; action: CompanionAction | null; sentAt: string }[];
+  /** Its own community posts and comments, oldest first. */
+  posts: { kind: "POST" | "COMMENT"; body: string; at: string }[];
+}
+
+/** diary_begin: a job, or why nothing is written now. */
+export type DiaryStart = DiaryJob | { status: "OFF" | "WRITING" | "NOTHING_NEW" } | { status: "NOT_DUE"; nextAt: string };
+
+/** What a model call costs, before it starts; the caller adds which turn or entry it is for. */
+export type Booking = Pick<ChatReservation, "provider" | "model" | "pricingVersion" | "inputTokens" | "outputTokens" | "costMinor">;
+
 /** Every call runs as the signed-in Owner; the database checks ownership. */
 export interface ChatPort {
   open(companionIds: string[], title: string | null, keyHash: string): Promise<unknown>;
@@ -60,4 +78,15 @@ export interface ChatPort {
   settle(transactionId: string, inputTokens: number, outputTokens: number, costMinor: number, ok: boolean): Promise<void>;
   /** Whether each provider/model is switched on, in order. */
   modelsEnabled(models: readonly { provider: string; model: string }[]): Promise<boolean[]>;
+  /** A page of the Companion's diary, newest first. */
+  diary(companionId: string, beforeAt: string | null, beforeId: string | null): Promise<unknown>;
+  deleteDiary(companionId: string, entryId: string): Promise<unknown>;
+  diarySettings(companionId: string): Promise<unknown>;
+  saveDiarySettings(companionId: string, settings: DiarySettings): Promise<unknown>;
+  /** Server only: start an entry if one is due. */
+  diaryBegin(companionId: string): Promise<DiaryStart>;
+  /** Server only: book the model call for an entry (like reserve). */
+  diaryReserve(entryId: string, claimId: string, booking: Booking): Promise<ReservationDecision>;
+  /** Server only: keep the entry (body) or mark the attempt failed (null). The entry, or null if not kept. */
+  diaryFinish(entryId: string, claimId: string, body: string | null): Promise<DiaryEntry | null>;
 }

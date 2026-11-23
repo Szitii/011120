@@ -11,6 +11,10 @@
  *   GET|PUT /v0/companions/{id}/chat-settings          how a Companion takes part, and its model
  *   GET    /v0/chat-models                             the models an Owner can pick
  *   POST   /v0/companions/{id}/actions                 { action }  a home-room action, kept in the one-to-one chat
+ *   GET    /v0/companions/{id}/diary?cursor=           the Companion's diary, newest first
+ *   POST   /v0/companions/{id}/diary                   write an entry if one is due (waits for the model)
+ *   DELETE /v0/companions/{id}/diary/{entryId}         erase an entry
+ *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *
  * POST /v0/chats, POST .../messages and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
@@ -18,7 +22,7 @@
 import { sha256 } from "../companion-import/canonical.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
-import type { ChatModelList, ChatSettings } from "../../../contracts/chat.ts";
+import type { ChatModelList, ChatSettings, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import type { ChatPort } from "./port.ts";
@@ -69,6 +73,13 @@ function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined): Ch
   return { groupActivity, companionInteraction, model, revision } as ChatSettings;
 }
 
+function diarySettings(request: MvpHttpRequest): DiarySettings {
+  const { frequency, revision } = body(request, ["frequency", "revision"]);
+  if (!["OFF", "RARE", "DAILY", "OFTEN"].includes(frequency as string)
+    || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
+  return { frequency, revision } as DiarySettings;
+}
+
 /** The catalog with what can be used right now: enabled, key configured, not switched off. */
 async function models(port: ChatPort, catalog: ChatCatalog | undefined): Promise<ChatModelList> {
   if (catalog === undefined) return { items: [], defaultModel: null };
@@ -103,7 +114,10 @@ export async function handleChatRequest(
   const settingsRoute = path[1] === "companions" && path[3] === "chat-settings" && path.length === 4;
   const modelsRoute = path[1] === "chat-models" && path.length === 2;
   const actionsRoute = path[1] === "companions" && path[3] === "actions" && path.length === 4;
-  if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute)) return undefined;
+  const diaryRoute = path[1] === "companions" && path[3] === "diary" && (path.length === 4 || path.length === 5);
+  const diarySettingsRoute = path[1] === "companions" && path[3] === "diary-settings" && path.length === 4;
+  if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute && !diaryRoute
+    && !diarySettingsRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -127,6 +141,19 @@ export async function handleChatRequest(
     const chatId = (result as { chatId?: unknown }).chatId;
     if (replying(result) && typeof chatId === "string") replies.kick(chatId, port);
     return response(201, result);
+  }
+  if (diarySettingsRoute) {
+    const companionId = id(path[2]);
+    if (method === "GET") return response(200, await port.diarySettings(companionId));
+    if (method === "PUT") return response(200, await port.saveDiarySettings(companionId, diarySettings(request)));
+    return notFound();
+  }
+  if (diaryRoute) {
+    const companionId = id(path[2]);
+    if (path.length === 5) return method === "DELETE" ? response(200, await port.deleteDiary(companionId, id(path[4]))) : notFound();
+    if (method === "GET") return response(200, await port.diary(companionId, ...cursor(url)));
+    if (method === "POST") return response(200, await replies.writeDiary(companionId, port));
+    return notFound();
   }
   const [, , chatId, part, messageId, action] = path;
   if (chatId === undefined) {

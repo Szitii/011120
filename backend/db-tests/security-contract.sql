@@ -1931,5 +1931,18 @@ select public.test_assert(
   and has_function_privilege('authenticated', 'public.chat_models_enabled(text[],text[])'::regprocedure, 'EXECUTE'),
   'chat model calls are booked and settled only by the API server'
 );
+select public.test_assert(
+  not exists(select 1 from (values ('companion_private.diary_entries'), ('companion_private.diary_settings')) t(name)
+    cross join (values ('anon'), ('authenticated'), ('companion_api')) r(role)
+    where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
+      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE'))
+  and not has_function_privilege('authenticated', 'public.diary_begin(uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.diary_reserve(uuid,uuid,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.diary_finish(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.diary_finish(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.diary_list(uuid,timestamptz,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.diary_list(uuid,timestamptz,uuid)'::regprocedure, 'EXECUTE'),
+  'diary entries are reachable only through the diary functions, and only the API server writes them'
+);
 
 drop function public.test_assert(boolean, text);
