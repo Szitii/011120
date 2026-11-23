@@ -447,11 +447,16 @@ try {
     values ($1, 'WRITING', now(), now(), gen_random_uuid())`, [A.companion]);
   assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "WRITING", "one at a time");
   assert.equal((await call<DiaryPage>(0, diary)).data.writing, true);
-  await pool.query("update companion_private.diary_entries set created_at = now() - interval '3 minutes' where status = 'WRITING' and companion_id = $1", [A.companion]);
+  await pool.query("update companion_private.diary_entries set created_at = now() - interval '4 minutes' where status = 'WRITING' and companion_id = $1", [A.companion]);
   assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "NOT_DUE", "an abandoned attempt counts as failed");
   assert.equal((await pool.query("select count(*)::int as n from companion_private.diary_entries where companion_id = $1 and status = 'FAILED'", [A.companion])).rows[0]!.n, 1);
   assert.equal((await call(0, diarySettings, "PUT", { frequency: "OFF", revision: 2 })).status, 200);
   assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "OFF");
+  await pool.query(`insert into companion_private.diary_entries(companion_id, status, covers_from, covers_until, claim_id, created_at)
+    values ($1, 'WRITING', now(), now(), gen_random_uuid(), now() - interval '4 minutes')`, [A.companion]);
+  assert.equal((await call<DiaryWriteResult>(0, diary, "POST")).data.status, "OFF");
+  assert.equal((await pool.query("select count(*)::int as n from companion_private.diary_entries where companion_id = $1 and status = 'WRITING'",
+    [A.companion])).rows[0]!.n, 0, "an abandoned attempt is closed even with the diary off");
   passed("diary: one attempt at a time, abandoned attempts fail, and OFF writes nothing");
 
   const diaryEngine = new PlatformChatModel(catalog, async () => ({ text: "今天被抱了很多次。", inputTokens: 200, outputTokens: 30, refused: false, cutOff: false }));

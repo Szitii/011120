@@ -13,7 +13,7 @@ begin;
 --  * Writing is the API server's job (diary_begin / diary_reserve / diary_finish, companion_api
 --    only), one at a time per Companion. A model call is booked in the compute ledger under the
 --    new reason DIARY_ENTRY and counts toward the Companion's free daily budget. A failed attempt
---    blocks another for 10 minutes; an attempt older than 2 minutes counts as failed.
+--    blocks another for 10 minutes; an attempt older than 3 minutes counts as failed.
 --  * The Owner may delete an entry. Its text is erased, but the row keeps the window it covered,
 --    so the next entry does not retell the same days.
 --  * Private by structure, like chat: tables in companion_private without grants, reached only
@@ -159,7 +159,7 @@ begin
     'nextCursor', case when n > 20 then to_char((last_item->>'writtenAt')::timestamptz at time zone 'UTC',
       'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') || '|' || (last_item->>'id') end,
     'writing', exists(select 1 from companion_private.diary_entries e where e.companion_id = p_companion
-      and e.status = 'WRITING' and e.created_at > now() - interval '2 minutes'));
+      and e.status = 'WRITING' and e.created_at > now() - interval '3 minutes'));
 end $$;
 
 -- Erases an entry's text. The row stays (as DELETED) so the next entry starts after it.
@@ -193,13 +193,14 @@ declare s companion_private.diary_settings%rowtype; o uuid := companion_private.
   v_from timestamptz; v_until timestamptz := now(); next_at timestamptz; messages jsonb; posts jsonb;
 begin
   s := companion_private.diary_settings_for(p_companion); -- checks the Companion and locks its diary
-  if s.frequency = 'OFF' then return jsonb_build_object('status', 'OFF'); end if;
-  -- An attempt older than 2 minutes was abandoned (the server stopped or the model hung).
-  for e in select * from companion_private.diary_entries where companion_id = p_companion and status = 'WRITING' loop
-    if e.created_at > now() - interval '2 minutes' then return jsonb_build_object('status', 'WRITING'); end if;
+  -- An attempt older than 3 minutes was abandoned (the server stopped or the model hung). Its call
+  -- is closed even when the diary was turned off meanwhile. Locked, so a finish racing this wins or waits.
+  for e in select * from companion_private.diary_entries where companion_id = p_companion and status = 'WRITING' for update loop
+    if e.created_at > now() - interval '3 minutes' then return jsonb_build_object('status', 'WRITING'); end if;
     perform companion_private.chat_abandon_compute(o, e.compute_tx);
     update companion_private.diary_entries set status = 'FAILED', claim_id = null, compute_tx = null where id = e.id;
   end loop;
+  if s.frequency = 'OFF' then return jsonb_build_object('status', 'OFF'); end if;
   select max(created_at) filter (where status in ('DONE', 'DELETED')), max(created_at) filter (where status = 'FAILED'),
       max(covers_until) filter (where status in ('DONE', 'DELETED'))
     into last_done, last_failed, v_from
