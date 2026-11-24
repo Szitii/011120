@@ -38,8 +38,9 @@ ADMIN_DATABASE_URL="postgresql://admin_tianwei:密码@数据库地址:5432/数�
 
 1. **Tailscale 后台**(login.tailscale.com/admin):
    - DNS 页面:确认 MagicDNS 是开着的。
-   - Access controls 页面:在最外层大括号里加 `"tagOwners": {"tag:admin-console": ["autogroup:admin"]},`(已有 `tagOwners` 就只加中间一行),保存。这样服务器不会因为登录过期而掉线。
-   - Settings → Keys → Generate auth key:Reusable 关、Ephemeral 关、Tags 选 `tag:admin-console`。复制生成的 `tskey-auth-...`。
+   - Settings → Keys → Generate auth key:Reusable 关、Ephemeral 关、Tags 不选。复制生成的 `tskey-auth-...`。
+   - 服务器第一次上线后:Machines 页面找到 `companion-admin`,右边 `…` → **Disable key expiry**。不做的话大约半年后服务器会掉线。
+   - (可选)如果你的 Tailscale 定义了标签 `tag:admin-console`,生成钥匙时选它,并 `fly secrets set -a companion-social-admin ADMIN_TS_TAG=tag:admin-console`;这样就不用关过期。
 2. **建应用和存储**(仓库根目录):
    ```sh
    fly apps create companion-social-admin
