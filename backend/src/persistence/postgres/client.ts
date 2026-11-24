@@ -21,9 +21,10 @@ export class PgPoolExecutor implements SqlExecutor {
  */
 export class PgOwnerExecutor implements SqlExecutor {
   readonly #pool: pg.Pool;
-  readonly #subject: string;
+  readonly #subject: string | null;
 
-  constructor(pool: pg.Pool, subject: string) {
+  /** subject null: the API server itself, for its own jobs (no Owner; Owner functions refuse). */
+  constructor(pool: pg.Pool, subject: string | null) {
     this.#pool = pool;
     this.#subject = subject;
   }
@@ -35,7 +36,7 @@ export class PgOwnerExecutor implements SqlExecutor {
     try {
       await client.query("begin");
       await client.query("set local role companion_api");
-      await client.query("select set_config('request.jwt.claim.sub',$1,true)", [this.#subject]);
+      if (this.#subject !== null) await client.query("select set_config('request.jwt.claim.sub',$1,true)", [this.#subject]);
       const result = await client.query<Row>(text, [...values]);
       await client.query("commit");
       return { rows: result.rows };

@@ -2,7 +2,9 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type pg from "pg";
 import { chatFromEnvironment } from "../chat/setup.ts";
-import { createPgPool } from "../persistence/postgres/client.ts";
+import { DiaryScheduler } from "../chat/diary-scheduler.ts";
+import { PostgresChatAdapter } from "../chat/postgres.ts";
+import { createPgPool, PgOwnerExecutor } from "../persistence/postgres/client.ts";
 import { createMobileHttpServer } from "./mobile-server.ts";
 import { SupabaseOwnerSessionResolver } from "./supabase-owner-session.ts";
 
@@ -20,6 +22,8 @@ async function main() {
     SUPABASE_PUBLISHABLE_KEY: publishableKey,
     MOBILE_API_HOST: host = "127.0.0.1",
     MOBILE_API_PORT: rawPort = "8787",
+    // How often background diaries are checked; 0 turns them off.
+    DIARY_SCHEDULER_MINUTES: diaryMinutes = "5",
   } = process.env;
   if (!connectionString || !supabaseUrl || !publishableKey) {
     throw new Error("Set DATABASE_URL, SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.");
@@ -29,8 +33,14 @@ async function main() {
     throw new Error("MOBILE_API_PORT must be a valid TCP port.");
   }
   const pool = createPgPool(connectionString);
-  const server = createSupabaseMobileHttpServer({ pool, supabaseUrl, publishableKey, chat: chatFromEnvironment("supabase-auth") });
-  const shutdown = () => server.close(() => { void pool.end(); });
+  const chat = chatFromEnvironment("supabase-auth");
+  const server = createSupabaseMobileHttpServer({ pool, supabaseUrl, publishableKey, chat });
+  const every = Number(diaryMinutes);
+  const stopDiaries = chat.background !== undefined && Number.isFinite(every) && every > 0
+    ? new DiaryScheduler({ server: new PgOwnerExecutor(pool, null), portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
+      replies: chat.replies, platform: chat.background.platform }).start(every * 60_000)
+    : () => undefined;
+  const shutdown = () => { stopDiaries(); server.close(() => { void pool.end(); }); };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
   await new Promise<void>((resolve, reject) => {

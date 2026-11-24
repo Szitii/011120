@@ -66,6 +66,8 @@ it("routes diary requests to the database as the signed-in Owner", async () => {
   assert.equal((await handle(port, request(`companions/${companion}/diary/${entryId}`, "DELETE")))?.status, 200);
   assert.equal((await handle(port, request(`companions/${companion}/diary-settings`)))?.status, 200);
   assert.equal((await handle(port, request(`companions/${companion}/diary-settings`, "PUT", { frequency: "OFF", revision: 3 })))?.status, 200);
+  assert.equal((await handle(port, request(`companions/${companion}/diary-settings`, "PUT",
+    { frequency: "DAILY", autoWrite: true, revision: 4 })))?.status, 200);
   const written = await handle(port, request(`companions/${companion}/diary`, "POST"));
   assert.equal(written?.status, 200);
   assert.equal((written?.body as DiaryWriteResult).status, "WRITTEN");
@@ -75,6 +77,7 @@ it("routes diary requests to the database as the signed-in Owner", async () => {
     ["deleteDiary", companion, entryId],
     ["diarySettings", companion],
     ["saveDiarySettings", companion, { frequency: "OFF", revision: 3 }],
+    ["saveDiarySettings", companion, { frequency: "DAILY", autoWrite: true, revision: 4 }],
     ["diaryBegin", companion],
   ]);
 });
@@ -89,6 +92,7 @@ it("refuses malformed diary requests before they reach the database", async () =
     request(`companions/${companion}/diary-settings`, "PUT", { frequency: "DAILY", revision: 0 }),
     request(`companions/${companion}/diary-settings`, "PUT", { frequency: "DAILY" }),
     request(`companions/${companion}/diary-settings`, "PUT", { frequency: "DAILY", revision: 1, extra: true }),
+    request(`companions/${companion}/diary-settings`, "PUT", { frequency: "DAILY", autoWrite: "yes", revision: 1 }),
   ]) assert.equal(await refusal(port, req), "INVALID_INPUT", `${req.method} ${req.url}`);
   for (const req of [
     request(`companions/${companion}/diary`, "PUT"),
@@ -195,7 +199,9 @@ it("maps diary payloads in the Postgres adapter", async () => {
   await adapter.deleteDiary(companion, entryId);
   await adapter.diarySettings(companion);
   await adapter.saveDiarySettings(companion, { frequency: "RARE", revision: 2 });
-  assert.deepEqual(seen.at(-1)![1], [companion, "RARE", 2]);
+  assert.deepEqual(seen.at(-1)![1], [companion, "RARE", null, 2], "autoWrite left out: keep the current value");
+  await adapter.saveDiarySettings(companion, { frequency: "RARE", autoWrite: false, revision: 3 });
+  assert.deepEqual(seen.at(-1)![1], [companion, "RARE", false, 3]);
   rows = [{ payload: { status: "NOTHING_NEW" } }];
   assert.deepEqual(await adapter.diaryBegin(companion), { status: "NOTHING_NEW" });
   rows = [{ payload: { decision: "RESERVED", transactionId: "tx" } }];
@@ -209,5 +215,5 @@ it("maps diary payloads in the Postgres adapter", async () => {
   rows = [{ payload: { accepted: true } }];
   assert.equal(await adapter.diaryFinish(entryId, "c", null), null);
   assert.deepEqual(seen.map(([sql]) => sql.match(/public\.(\w+)/)![1]), ["diary_list", "diary_delete", "diary_get_settings",
-    "diary_update_settings", "diary_begin", "diary_reserve", "diary_finish", "diary_finish", "diary_finish"]);
+    "diary_update_settings", "diary_update_settings", "diary_begin", "diary_reserve", "diary_finish", "diary_finish", "diary_finish"]);
 });
