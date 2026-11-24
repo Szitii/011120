@@ -14,8 +14,8 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import type { Chat, ChatMessage } from "../../../contracts/chat";
-import { makeIdempotencyKey, type ChatClient } from "./client";
+import type { ChatMessage, ChatSendResult } from "../../../contracts/chat";
+import { makeIdempotencyKey, type ChatClient, type ChatVoiceInput, type VoiceChat, type VoiceMessage } from "./client";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
@@ -23,6 +23,8 @@ import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import type { QuoteInput } from "../album/store";
 import { BottomSheet } from "../components/BottomSheet";
 import { CommunityButton } from "../community/components";
+import { VoiceComposer } from "./VoiceComposer";
+import { useVoicePlayback } from "./useVoicePlayback";
 import { useAppIsActive } from "../state/useAppIsActive";
 
 const actionLabels = {
@@ -39,8 +41,8 @@ const replyFailureMessages = {
   ERROR: "这条回复没发出来，可以重试",
 };
 
-function mergeLatestMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-  const byId = new Map<string, ChatMessage>();
+function mergeLatestMessages(existing: VoiceMessage[], incoming: VoiceMessage[]): VoiceMessage[] {
+  const byId = new Map<string, VoiceMessage>();
   for (const m of existing) byId.set(m.id, m);
   for (const m of incoming) byId.set(m.id, m);
   // Keep incoming newest order first, then any older paginated items not in incoming
@@ -80,18 +82,29 @@ export function ChatScreen({
 }) {
   const { ui } = useSkin();
   const styles = useThemedStyles(createStyles);
+  const { playback, toggle, stop: stopPlayback } = useVoicePlayback();
   const appActive = useAppIsActive();
   const wasActive = useRef(appActive);
-  const [chat, setChat] = useState<Chat | null>(null);
+  const [chat, setChat] = useState<VoiceChat | null>(null);
   const isGroup = chat?.direct === false;
   const groupReadOnly = isGroup && !groupSendEnabled;
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<VoiceMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [bootstrapRevision, setBootstrapRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [voiceInput, setVoiceInput] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  useEffect(() => {
+    if (Platform.OS === "web" || !appActive || !client.sendVoice) return;
+    let current = true;
+    void client.listVoices?.().then(result => {
+      if (current) setVoiceInput(result.input === true);
+    }).catch(() => { if (current) setVoiceInput(false); });
+    return () => { current = false; };
+  }, [appActive, client]);
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -253,7 +266,7 @@ export function ChatScreen({
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (groupReadOnly || !text || !targetId || sendingRef.current || deletingRef.current) return;
+    if (groupReadOnly || voiceBusy || !text || !targetId || sendingRef.current || deletingRef.current) return;
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
@@ -271,16 +284,10 @@ export function ChatScreen({
     try {
       const res = await client.sendMessage(targetId, text, recipients, key);
       if (session !== sessionRef.current) return;
-      reqVersionRef.current += 1;
       pendingSendRef.current = null;
       setMentions([]);
       setMentionOpen(false);
-      setMessages((prev) => [res.message, ...prev.filter((m) => m.id !== res.message.id)]);
-      setChat((prev) => (prev ? { ...prev, typing: res.typing, replying: res.replying } : prev));
-      setError(null);
-      if (res.replying) {
-        void loadLatest(targetId, true);
-      }
+      acceptSent(res, targetId);
     } catch (e) {
       if (session !== sessionRef.current) return;
       setDraft(current => current || text);
@@ -288,6 +295,34 @@ export function ChatScreen({
     } finally {
       sendingRef.current = false;
       if (session === sessionRef.current) setSending(false);
+    }
+  }
+
+  function acceptSent(result: ChatSendResult, targetId: string) {
+    reqVersionRef.current++;
+    setMessages(previous => [result.message, ...previous.filter(message => message.id !== result.message.id)]);
+    setChat(previous => previous ? { ...previous, typing: result.typing, replying: result.replying } : previous);
+    setError(null);
+    if (result.replying) void loadLatest(targetId, true);
+  }
+
+  async function sendVoice(input: ChatVoiceInput, key: string) {
+    const targetId = chatIdRef.current;
+    if (!targetId || !client.sendVoice || groupReadOnly || sendingRef.current || deletingRef.current) {
+      throw new ApiProblemError(409, "INVALID_STATE", "CONFLICT", "DO_NOT_RETRY", "local");
+    }
+    const session = sessionRef.current;
+    sendingRef.current = true;
+    try {
+      const response = await client.sendVoice(targetId, input, key);
+      if (session === sessionRef.current) acceptSent(response, targetId);
+    } catch (error) {
+      if (session === sessionRef.current && isGroup && error instanceof ApiProblemError && error.status === 409) {
+        onAvailabilityChanged();
+      }
+      throw error;
+    } finally {
+      sendingRef.current = false;
     }
   }
 
@@ -372,9 +407,12 @@ export function ChatScreen({
   }
 
   const title = chat?.title ?? (chat?.members.map(member => member.displayName).join("、") || companionName);
-  const typingNames = (chat?.typing ?? [])
-    .map((id) => chat?.members.find((m) => m.companionId === id)?.displayName ?? companionName)
-    .join("、");
+  const nameFor = (id: string) => chat?.members.find(member => member.companionId === id)?.displayName ?? companionName;
+  const speakingIds = chat?.recording ?? [];
+  const speakingNames = speakingIds.map(nameFor).join("、");
+  const typingNames = (chat?.typing ?? []).filter(id => !speakingIds.includes(id)).map(nameFor).join("、");
+  const replyStatus = [speakingNames && `${speakingNames} 正在说话…`, typingNames && `${typingNames} 正在输入…`]
+    .filter(Boolean).join("  ");
 
   return (
     <KeyboardAvoidingView
@@ -404,9 +442,9 @@ export function ChatScreen({
           <PixelAvatar name={title} role="companion" size={28} />
           <View>
             <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
-            {typingNames ? (
+            {replyStatus ? (
               <Text style={styles.typingText}>
-                {`${typingNames} 正在输入…`}
+                {replyStatus}
               </Text>
             ) : null}
           </View>
@@ -454,6 +492,10 @@ export function ChatScreen({
               ? ownerName
               : chat?.members.find((m) => m.companionId === item.companionId)?.displayName ?? title;
 
+            const voiceStatus = playback?.id === item.id ? playback.status : undefined;
+            const audioLength = item.audio ? Math.max(1, Math.ceil(item.audio.durationMs / 1000)) : 0;
+            const voiceLabel = voiceStatus === "loading" ? "取消加载"
+              : voiceStatus === "playing" ? "停止播放" : "播放语音";
             const openQuote = onSaveQuote && chat && item.body && item.status === "SENT"
               ? () => {
                   if (!item.body) return;
@@ -483,7 +525,18 @@ export function ChatScreen({
                           </Pressable>
                         )}
                       </View>
-                    ) : (
+                    ) : (<>
+                      {audioLength > 0 && <View style={styles.voiceRow}>
+                        <Text style={styles.voiceMeta}>{isMine ? "语音" : "AI 语音"} · {audioLength} 秒</Text>
+                        {client.messageAudio && chat && voiceStatus !== "expired" &&
+                          <Pressable accessibilityRole="button" accessibilityLabel={voiceLabel} disabled={voiceBusy} style={styles.voiceButton}
+                            onPress={() => void toggle(item.id, () => client.messageAudio!(chat.id, item.id))}>
+                            <Ionicons name={voiceStatus === "playing" ? "stop-circle-outline" : "play-circle-outline"} size={21} color={ui.accentInk} />
+                            <Text style={styles.voiceMeta}>{voiceLabel}</Text>
+                          </Pressable>}
+                        {voiceStatus === "expired" && <Text style={styles.voiceMeta}>语音已过期</Text>}
+                        {voiceStatus === "error" && <Text accessibilityRole="alert" style={styles.voiceMeta}>播放失败，可重试</Text>}
+                      </View>}
                       <Pressable
                         disabled={!openQuote}
                         onLongPress={openQuote}
@@ -496,7 +549,7 @@ export function ChatScreen({
                           {item.body ?? "（消息暂不可显示）"}
                         </Text>
                       </Pressable>
-                    )}
+                    </>)}
                   </View>
                 </View>
               </View>
@@ -526,16 +579,18 @@ export function ChatScreen({
 
       {isGroup && !groupReadOnly && (mentionOpen || mentions.length > 0) && <View style={styles.mentionsBar}>
         {chat.members.map(member => <CommunityButton key={member.companionId}
-          label={`@${member.displayName}`} selected={mentions.includes(member.companionId)} disabled={sending || deleting}
+          label={`@${member.displayName}`} selected={mentions.includes(member.companionId)} disabled={sending || deleting || voiceBusy}
           onPress={() => setMentions(current => current.includes(member.companionId)
             ? current.filter(id => id !== member.companionId) : [...current, member.companionId])} />)}
       </View>}
+      {!groupReadOnly && voiceInput && chat && mentions.length === 0 && <VoiceComposer disabled={sending || deleting}
+        onRecord={stopPlayback} onChange={setVoiceBusy} onSend={sendVoice} />}
       {/* Bottom Liquid Glass Composer */}
       {groupReadOnly ? <Text style={styles.quoteResult}>群聊暂未开放发言，可以查看记录或删除会话。</Text> : <View style={styles.composerBar}>
         <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={styles.composerGlass}>
           <View style={styles.composerRow}>
             {chat?.direct === false && <Pressable accessibilityRole="button" accessibilityLabel="提及家机"
-              accessibilityState={{ expanded: mentionOpen }} onPress={() => setMentionOpen(value => !value)}>
+              accessibilityState={{ expanded: mentionOpen }} disabled={voiceBusy} onPress={() => setMentionOpen(value => !value)}>
               <Ionicons name="at-outline" size={22} color={ui.accentInk} />
             </Pressable>}
             <TextInput
@@ -546,19 +601,19 @@ export function ChatScreen({
               placeholderTextColor={ui.muted}
               style={styles.input}
               multiline
-              editable={!!chat && !deleting}
+              editable={!!chat && !deleting && !voiceBusy}
               maxLength={2000}
               returnKeyType="send"
               onSubmitEditing={() => void handleSend()}
             />
             <Pressable
               onPress={() => void handleSend()}
-              disabled={!draft.trim() || sending || deleting || !chat}
+              disabled={!draft.trim() || sending || deleting || voiceBusy || !chat}
               accessibilityRole="button"
               accessibilityLabel="发送消息"
               style={({ pressed }) => [
                 styles.sendBtn,
-                (!draft.trim() || sending || deleting || !chat) && styles.sendBtnDisabled,
+                (!draft.trim() || sending || deleting || voiceBusy || !chat) && styles.sendBtnDisabled,
                 pressed && { transform: [{ scale: 0.92 }] },
               ]}
             >
@@ -576,6 +631,9 @@ export function ChatScreen({
 }
 
 const createStyles = (ui: UiPalette) => StyleSheet.create({
+  voiceRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 7, marginBottom: 4 },
+  voiceMeta: { fontSize: 12, color: ui.accentInk },
+  voiceButton: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44, paddingHorizontal: 4 },
   mentionsBar: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 14, gap: 6, paddingBottom: 6 },
   root: { flex: 1 },
   quoteResult: { color: ui.muted, textAlign: "center", paddingVertical: 8 },

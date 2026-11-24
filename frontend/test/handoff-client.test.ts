@@ -46,3 +46,14 @@ test("platform feature flags require an explicit true value and use the authenti
   });
   assert.deepEqual(await client.features!(), { groupChatCreate: true, groupChatSend: false, connections: false });
 });
+
+test("owner voice sends the recording to the chat with the caller's retry key", async () => {
+  const calls: unknown[][] = [];
+  const client = createChatClient(async <T>(...args: unknown[]) => {
+    calls.push(args);
+    return {} as T;
+  });
+  const clip = { audio: "AQID", mime: "audio/mp4", durationMs: 700 } as const;
+  await client.sendVoice!("chat/id", clip, "chat-voice-fixture");
+  assert.deepEqual(calls, [["POST", "/v0/chats/chat%2Fid/voice", clip, "chat-voice-fixture"]]);
+});

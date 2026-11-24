@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
-import type { ChatModelList, ChatSettings } from "../../../contracts/chat";
+import type { ChatModelList } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
-import type { ChatClient } from "./client";
+import { VoicePicker } from "./VoicePicker";
+import type { ChatClient, VoiceList, VoiceSettings } from "./client";
 
 const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"]] as const;
 const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
@@ -16,7 +17,9 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
   connectionsEnabled: boolean; onAvailabilityChanged: () => void;
 }) {
   const s = useCommunityStyles();
-  const [form, setForm] = useState<ChatSettings>();
+  const [form, setForm] = useState<VoiceSettings>();
+  const [voices, setVoices] = useState<VoiceList>();
+  const [voiceChanged, setVoiceChanged] = useState(false);
   const [models, setModels] = useState<ChatModelList>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -30,6 +33,9 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
     mounted.current = true;
     setBusy(true);
     setNotice("");
+    setVoiceChanged(false);
+    setVoices(undefined);
+    void client.listVoices?.().then(value => { if (current) setVoices(value); }).catch(() => { /* Older servers omit voices. */ });
     void client.getChatSettings(companionId).then(value => { if (current) setForm(value); })
       .catch(problem => { if (current) setNotice(safeClientMessage(problem).title); })
       .finally(() => { if (current) setBusy(false); });
@@ -45,14 +51,19 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
     setBusy(true);
     setNotice("");
     try {
-      const saved = await client.updateChatSettings(companionId, form);
-      if (mounted.current) { setForm(saved); setNotice("聊天设置已保存。"); }
+      const { voice, ...settings } = form;
+      const saved = await client.updateChatSettings(companionId, voiceChanged && voices?.available ? { ...settings, voice } : settings);
+      if (mounted.current) {
+        setForm(saved);
+        setVoiceChanged(false);
+        setNotice("聊天设置已保存。");
+      }
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof ApiProblemError && error.status === 409) {
         try {
           const latest = await client.getChatSettings(companionId);
-          if (mounted.current) { setForm(latest); setNotice("设置已在另一台设备修改，请核对后再保存。"); }
+          if (mounted.current) { setForm(latest); setVoiceChanged(false); setNotice("设置已在另一台设备修改，请核对后再保存。"); }
         } catch {
           if (mounted.current) { setForm(undefined); setNotice("无法读取最新设置，请重新加载。"); }
         }
@@ -87,6 +98,11 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
             selected={model.id === form.model} disabled={busy || !model.available} onPress={() => setForm({ ...form, model: model.id })} />)}
           {modelError && <Text style={s.meta}>暂时无法读取模型列表，当前设置仍会保留。</Text>}
         </View>
+        {voices?.available && <VoicePicker voices={voices.items} sample={client.voiceSample}
+          selected={form.voice} disabled={busy} onSelect={voice => {
+            setVoiceChanged(true);
+            setForm({ ...form, voice });
+          }} />}
         <CommunityButton primary label={busy ? "正在处理…" : "保存设置"} disabled={busy} onPress={() => void save()} />
       </>}
   </ScrollView>;

@@ -1,6 +1,6 @@
 import type {
   Anniversary, Badges, CompanionMemory, MemoryList, CompanionConnection, ConnectionInput, ConnectionSaveResult,
-  Chat,
+  Chat, ChatMessage,
   ChatModelList,
   ChatPage,
   ChatSendResult,
@@ -9,6 +9,36 @@ import type {
 } from "../../../contracts/chat.ts";
 
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+
+export type VoiceChat = Chat & { recording?: string[] };
+export type VoiceMessage = ChatMessage & { audio?: { durationMs: number } | null };
+export type VoiceSettings = ChatSettings & { voice?: string | null };
+type VoicePage = Omit<ChatPage, "chat" | "items"> & { chat: VoiceChat; items: VoiceMessage[] };
+
+export interface VoiceInfo {
+  id: string;
+  name: string;
+  gender: "FEMALE" | "MALE";
+  description: string;
+}
+
+export interface VoiceList {
+  items: VoiceInfo[];
+  available: boolean;
+  input?: boolean;
+}
+
+export interface ChatVoiceInput {
+  audio: string;
+  mime: "audio/mp4" | "audio/aac" | "audio/mpeg" | "audio/wav" | "audio/ogg";
+  durationMs: number;
+}
+type VoiceSendResult = Omit<ChatSendResult, "message"> & { message: VoiceMessage };
+
+export interface AudioClip {
+  bytes: ArrayBuffer;
+  mime: ChatVoiceInput["mime"];
+}
 
 interface ChatRetryResult {
   typing: string[];
@@ -24,6 +54,10 @@ export interface PlatformFeatures {
 }
 
 export interface ChatClient {
+  listVoices?(): Promise<VoiceList>;
+  voiceSample?(voiceId: string): Promise<AudioClip>;
+  messageAudio?(chatId: string, messageId: string): Promise<AudioClip>;
+  sendVoice?(chatId: string, input: ChatVoiceInput, key: string): Promise<VoiceSendResult>;
   features?(): Promise<PlatformFeatures>;
   badges?(): Promise<Badges>;
   markRead?(chatId: string, messageId: string): Promise<Chat>;
@@ -37,7 +71,7 @@ export interface ChatClient {
   removeConnection?(id: string): Promise<CompanionConnection>;
   listChats(): Promise<{ items: Chat[] }>;
   openChat(companionIds: string[], title?: string, key?: string): Promise<Chat>;
-  getChat(chatId: string, cursor?: string): Promise<ChatPage>;
+  getChat(chatId: string, cursor?: string): Promise<VoicePage>;
   deleteChat(chatId: string): Promise<{ deleted: true }>;
   sendMessage(
     chatId: string,
@@ -46,8 +80,8 @@ export interface ChatClient {
     idempotencyKey?: string,
   ): Promise<ChatSendResult>;
   retryMessage(chatId: string, messageId: string): Promise<ChatRetryResult>;
-  getChatSettings(companionId: string): Promise<ChatSettings>;
-  updateChatSettings(companionId: string, settings: ChatSettings): Promise<ChatSettings>;
+  getChatSettings(companionId: string): Promise<VoiceSettings>;
+  updateChatSettings(companionId: string, settings: VoiceSettings): Promise<VoiceSettings>;
   sendAction(companionId: string, action: CompanionAction, key: string): Promise<CompanionActionResult>;
   listModels?(): Promise<ChatModelList>;
 }
@@ -63,9 +97,14 @@ export function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-export function createChatClient(send: SendFn): ChatClient {
+export function createChatClient(send: SendFn, getAudio?: (path: string) => Promise<AudioClip>): ChatClient {
   const companion = (id: string) => `/v0/companions/${encodeURIComponent(id)}`;
   return {
+    listVoices: () => send("GET", "/v0/voices"),
+    voiceSample: getAudio ? id => getAudio(`/v0/voices/${encodeURIComponent(id)}/sample`) : undefined,
+    messageAudio: getAudio ? (id, messageId) =>
+      getAudio(`/v0/chats/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageId)}/audio`) : undefined,
+    sendVoice: (chatId, input, key) => send("POST", `/v0/chats/${encodeURIComponent(chatId)}/voice`, input, key),
     async features() {
       const response = await send<Partial<PlatformFeatures> | null>("GET", "/v0/features");
       return {
@@ -121,7 +160,7 @@ export function createChatClient(send: SendFn): ChatClient {
     getChatSettings(companionId: string) {
       return send("GET", `/v0/companions/${encodeURIComponent(companionId)}/chat-settings`);
     },
-    updateChatSettings(companionId: string, settings: ChatSettings) {
+    updateChatSettings(companionId: string, settings: VoiceSettings) {
       return send("PUT", `/v0/companions/${encodeURIComponent(companionId)}/chat-settings`, settings);
     },
     sendAction(companionId, action, key) {
