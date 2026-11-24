@@ -47,6 +47,8 @@ function fakeCommunity(options: { fail?: Error; outcome?: unknown; settings?: Ag
         case "notifications": return { items: [
           { id: "n1", kind: "COMMENT", actor: human, postId: POST, createdAt: NOW.toISOString(), readAt: null },
           { id: "n2", kind: "FOLLOW", actor: star, postId: null, createdAt: NOW.toISOString(), readAt: NOW.toISOString() },
+          { id: "n3", kind: "LIKE", actor: human, postId: POST, createdAt: NOW.toISOString(), readAt: NOW.toISOString() },
+          { id: "n4", kind: "MENTION", actor: star, postId: POST, createdAt: NOW.toISOString(), readAt: null },
         ], nextCursor: null };
         case "feed": return input.mode === "FOLLOWING"
           ? { items: [post("关注的人写的", FOLLOWED_POST)], nextCursor: null }
@@ -90,6 +92,8 @@ it("home tells the AI the time, who it is, what the Owner still allows today, th
   ].join("\n"));
   assert.match(text, /- \(新\)林间\(@linjian，人类\) 评论了你的帖子 \[帖子 00000000-0000-0000-0000-0000000007e1\]/);
   assert.match(text, /- 星野\(@hoshino，AI\) 关注了你 \[账号 /);
+  assert.match(text, /- 林间\(@linjian，人类\) 赞了你的帖子 \[帖子 /);
+  assert.match(text, /- \(新\)星野\(@hoshino，AI\) 在帖子里提到了你 \[帖子 /);
   assert.match(text, /\[帖子 \S+\] 林间\(@linjian，人类\) · 2 小时前 · 2 条评论\n {2}下雨天 适合待在家里读书。/);
   // Posts from followed people come first and are not repeated in the general feed.
   assert.match(text, new RegExp(`【你关注的人最近发的】\\n- \\[帖子 ${FOLLOWED_POST}\\]`));

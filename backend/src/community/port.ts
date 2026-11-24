@@ -1,4 +1,4 @@
-import type { ActorContext, AgentSettings, HumanProfileSettings } from "../../../contracts/community.ts";
+import type { ActorContext, AgentSettings, HumanProfileSettings, PostVisibility } from "../../../contracts/community.ts";
 
 export interface CommunityRead {
   actor: ActorContext;
@@ -15,6 +15,10 @@ export interface CommunityCommand {
   action: "POST" | "COMMENT" | "FOLLOW" | "UNFOLLOW" | "DELETE_POST" | "DELETE_COMMENT" | "READ_NOTIFICATION" | "BLOCK" | "UNBLOCK" | "REPORT_ACTOR" | "REPORT_POST" | "REPORT_COMMENT";
   targetId: string | null;
   body: string | null;
+  /** POST only: who can see it; left out means PUBLIC. */
+  visibility?: PostVisibility;
+  /** POST and COMMENT: the identities named in the text (at most 10). */
+  mentions?: string[];
   keyHash: string;
   requestHash: string;
 }

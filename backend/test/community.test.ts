@@ -57,6 +57,26 @@ it("routes all mutations, hashes retry keys and refuses client-selected provenan
   assert.equal((await handleCommunityRequest(request("unsupported", "PATCH"), session, "t"))?.status, 404);
 });
 
+it("takes who can see a post and who is mentioned, and keeps a plain post's hash as it was", async () => {
+  const send = async (path: string, body: unknown) => {
+    const response = await handleCommunityRequest(request(path, "POST", body), session, "t");
+    assert.equal(response?.status, 201);
+    return commands.at(-1)!;
+  };
+  const plain = await send("posts", { body: "hi" });
+  assert.deepEqual([plain.visibility, plain.mentions], [undefined, undefined]);
+  const followers = await send("posts", { body: "hi", visibility: "FOLLOWERS", mentions: [target, target] });
+  assert.deepEqual([followers.visibility, followers.mentions], ["FOLLOWERS", [target]], "repeated mentions are sent once");
+  assert.notEqual(followers.requestHash, plain.requestHash, "the visibility and the mentions are part of the request");
+  assert.equal((await send("posts", { body: "hi", mentions: [] })).requestHash, plain.requestHash);
+  assert.deepEqual((await send(`posts/${target}/comments`, { body: "hi", mentions: [ownerId] })).mentions, [ownerId]);
+  for (const [path, body] of [["posts", { body: "x", visibility: "FRIENDS" }], ["posts", { body: "x", mentions: "everyone" }],
+    ["posts", { body: "x", mentions: ["not-a-uuid"] }], ["posts", { body: "x", mentions: Array(11).fill(target) }],
+    ["posts", { body: "x", mentions: [7] }], [`posts/${target}/comments`, { body: "x", visibility: "PRIVATE" }]] as const) {
+    await assert.rejects(handleCommunityRequest(request(path, "POST", body), session, "t"), { code: "INVALID_INPUT" }, JSON.stringify(body));
+  }
+});
+
 it("likes and unlikes a post as the chosen identity, without a retry key", async () => {
   const bare = (method: string, body?: unknown): MvpHttpRequest => ({ method, url: `/v0/community/posts/${target}/like?${query}`,
     headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body }) });
@@ -138,8 +158,15 @@ it("parameterizes all PostgreSQL community inputs and validates payload shape", 
   await adapter.read(reads[0]!); await adapter.command(commands[0]!);
   await adapter.like({ kind: "OWNER", id: ownerId }, target, true);
   assert.deepEqual([calls[2]!.text, calls[2]!.values], ["select public.community_like($1,$2,$3,$4) as payload", ["OWNER", ownerId, target, true]]);
-  assert.equal(calls[0]!.values[1], ownerId); assert.equal(calls[1]!.values[4], "hello");
+  assert.equal(calls[0]!.values[1], ownerId);
+  // A post goes through the wrapper that also takes the visibility and the mentions.
+  assert.deepEqual([calls[1]!.text, calls[1]!.values.slice(2, 6)],
+    ["select public.community_publish($1,$2,$3,$4,$5,$6::uuid[],$7,$8) as payload", [null, "hello", null, []]]);
   assert.ok(!calls[1]!.text.includes("hello"));
+  await adapter.command({ ...commands[0]!, action: "COMMENT", targetId: target, mentions: [ownerId] });
+  assert.deepEqual(calls.at(-1)!.values.slice(2, 6), [target, "hello", null, [ownerId]]);
+  await adapter.command({ ...commands[0]!, action: "FOLLOW", targetId: target, body: null });
+  assert.match(calls.at(-1)!.text, /community_command/);
   for (const payload of [null, 2, [], undefined]) {
     const bad = new PostgresCommunityAdapter({ query: async () => ({ rows: [{ payload }], rowCount: 1 }) } as SqlExecutor);
     await assert.rejects(bad.read(reads[0]!), e => e instanceof PostgresPersistenceError && e.code === "DATABASE_ERROR");

@@ -234,6 +234,73 @@ try {
   assert.equal((await like(1,humanB,liked.id,"DELETE")).status,404);
   passed("likes: one per identity, counted for the viewer, bound by agent settings, rate limited");
 
+  // ---- who can see a post ----
+  const publish = (who: 0 | 1, actor: ActorContext, body: unknown, key = randomUUID()) => call<CommunityPost>(who,actor,"posts","POST",body,key);
+  const sees = async (who: 0 | 1, actor: ActorContext, postId: string) => (await call(who,actor,`posts/${postId}`)).status === 200;
+  const inFeed = async (who: 0 | 1, actor: ActorContext, postId: string, author: string) =>
+    (await call<CommunityPage<CommunityPost>>(who,actor,`feed?authorId=${author}`)).data.items.some(p=>p.id===postId);
+  await call(1,humanB,`following/${ha.id}`,"DELETE"); await call(1,aiB,`following/${ha.id}`,"DELETE");
+  const countBefore = (await call<CommunityProfile>(1,humanB,`profile/${ha.id}`)).data.postsCount;
+  const privateKey = randomUUID();
+  const onlyMe = await publish(0,humanA,{ body:"只有我自己看", visibility:"PRIVATE" },privateKey);
+  const forFollowers = await publish(0,humanA,{ body:"给关注我的人", visibility:"FOLLOWERS" });
+  assert.deepEqual([onlyMe.status,onlyMe.data.visibility,forFollowers.data.visibility],[201,"PRIVATE","FOLLOWERS"]);
+  assert.equal((await publish(0,humanA,{ body:"只有我自己看", visibility:"PRIVATE" },privateKey)).data.id,onlyMe.data.id,"a retry returns the same post");
+  assert.equal((await publish(0,humanA,{ body:"只有我自己看", visibility:"PUBLIC" },privateKey)).status,409,"a retry cannot change who sees it");
+  assert.equal((await publish(0,humanA,{ body:"x", visibility:"EVERYONE" })).status,400);
+  assert.deepEqual([await sees(0,humanA,onlyMe.data.id),await sees(0,aiA,onlyMe.data.id),await sees(1,humanB,onlyMe.data.id)],[true,false,false],
+    "a private post is for the identity that wrote it, not even the Owner's other identity");
+  assert.deepEqual([await sees(1,humanB,forFollowers.data.id),await inFeed(1,humanB,forFollowers.data.id,ha.id)],[false,false]);
+  assert.equal((await call<CommunityProfile>(1,humanB,`profile/${ha.id}`)).data.postsCount,countBefore,"hidden posts are not counted");
+  assert.equal((await call(1,humanB,`posts/${forFollowers.data.id}/comments`,"POST",{ body:"看不到也想评论" })).status,404);
+  assert.equal((await call(1,humanB,`posts/${forFollowers.data.id}/like`,"PUT")).status,404);
+  assert.equal((await call(1,humanB,`following/${ha.id}`,"PUT")).status,200);
+  assert.deepEqual([await sees(1,humanB,forFollowers.data.id),await inFeed(1,humanB,forFollowers.data.id,ha.id),await sees(1,humanB,onlyMe.data.id)],[true,true,false],
+    "a follower sees followers-only posts, never private ones");
+  assert.equal((await call<CommunityProfile>(1,humanB,`profile/${ha.id}`)).data.postsCount,countBefore+1);
+  assert.equal((await call(1,humanB,`posts/${forFollowers.data.id}/comments`,"POST",{ body:"现在能评论了" })).status,201);
+  assert.deepEqual((await call<CommunityLike>(1,humanB,`posts/${forFollowers.data.id}/like`,"PUT")).data,{ liked:true, likeCount:1 });
+  assert.equal(await sees(1,aiB,forFollowers.data.id),false,"following is per identity");
+  await call(1,humanB,`following/${ha.id}`,"DELETE");
+  assert.equal(await sees(1,humanB,forFollowers.data.id),false,"unfollowing closes it again");
+  const notesA = async () => (await call<CommunityPage<CommunityNotification>>(0,humanA,"notifications")).data.items;
+  assert.ok((await notesA()).some(n=>n.kind==="LIKE"&&n.postId===forFollowers.data.id),"the author still sees the like on their own post");
+  passed("post visibility: public, followers only, private; feed, detail, counts, comments and likes agree");
+
+  // ---- mentions and like notices ----
+  const named = await publish(0,humanA,{ body:"@B 你看这个", mentions:[hb.id,hb.id,ha.id,randomUUID()] });
+  assert.deepEqual(named.data.mentions!.map(m=>m.id),[hb.id],"repeats, the author and unknown ids are dropped");
+  const notesB = async (actor: ActorContext = humanB) => (await call<CommunityPage<CommunityNotification>>(1,actor,"notifications")).data.items;
+  const mention = (await notesB()).find(n=>n.kind==="MENTION"&&n.postId===named.data.id)!;
+  assert.deepEqual([mention.actor.id,mention.commentId,mention.readAt],[ha.id,null,null]);
+  assert.ok(!(await notesB(aiB)).some(n=>n.kind==="MENTION"),"only the identity that was named is told");
+  const quiet = await publish(0,humanA,{ body:"@B 但你看不到", visibility:"PRIVATE", mentions:[hb.id] });
+  assert.ok(!(await notesB()).some(n=>n.postId===quiet.data.id),"no notice for a post the named identity cannot see");
+  const reply = await call<CommunityComment>(1,humanB,`posts/${named.data.id}/comments`,"POST",{ body:"@A @CB 收到", mentions:[ha.id,cb.id] });
+  assert.deepEqual([reply.status,reply.data.mentions!.map(m=>m.id)],[201,[ha.id,cb.id]]);
+  const afterReply = await notesA();
+  assert.equal(afterReply.filter(n=>n.postId===named.data.id&&n.kind==="COMMENT").length,1);
+  assert.ok(!afterReply.some(n=>n.postId===named.data.id&&n.kind==="MENTION"),"the post's author is told once, by the comment notice");
+  const inComment = (await notesB(aiB)).find(n=>n.kind==="MENTION")!;
+  assert.deepEqual([inComment.postId,inComment.commentId,inComment.actor.id],[named.data.id,reply.data.id,hb.id]);
+  assert.equal((await publish(0,humanA,{ body:"太多了", mentions:Array.from({ length:11 },()=>randomUUID()) })).status,400);
+  // Likes tell the author once; the notice shows only while the like stands.
+  const likeNotes = async () => (await notesA()).filter(n=>n.kind==="LIKE"&&n.postId===named.data.id);
+  assert.equal((await call(1,humanB,`posts/${named.data.id}/like`,"PUT")).status,200);
+  assert.deepEqual((await likeNotes()).map(n=>n.actor.id),[hb.id]);
+  assert.equal((await call(0,humanA,`posts/${named.data.id}/like`,"PUT")).status,200);
+  assert.equal((await likeNotes()).length,1,"liking your own post tells nobody");
+  assert.equal((await call(1,humanB,`posts/${named.data.id}/like`,"DELETE")).status,200);
+  assert.equal((await likeNotes()).length,0,"taken back: the notice is hidden");
+  assert.equal((await call(1,humanB,`posts/${named.data.id}/like`,"PUT")).status,200);
+  assert.equal((await likeNotes()).length,1,"liked again: the same notice, not a second one");
+  assert.equal((await pool.query("select count(*)::int n from public.community_notifications where kind='LIKE' and post_id=$1",[named.data.id])).rows[0]!.n,1);
+  // A withdrawn post takes its notices with it.
+  assert.equal((await call(0,humanA,`posts/${named.data.id}`,"DELETE")).status,200);
+  assert.ok(!(await notesB()).some(n=>n.postId===named.data.id) && !(await notesB(aiB)).some(n=>n.postId===named.data.id));
+  for (const id of [onlyMe.data.id,forFollowers.data.id,quiet.data.id]) assert.equal((await call(0,humanA,`posts/${id}`,"DELETE")).status,200);
+  passed("mentions tell each named identity that can see the post; a like tells the author once");
+
   await pool.query("delete from companion_private.agent_settings"); // later suites start from the defaults
   passed("AI text tools publish, read, comment and see notifications under the same rules, blocks included");
   console.log(`Community PostgreSQL/HTTP integration passed: ${groups} scenario groups.`);

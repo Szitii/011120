@@ -21,6 +21,13 @@ export class PostgresCommunityAdapter implements CommunityPort {
   }
 
   command(input: CommunityCommand): Promise<unknown> {
+    // Posts and comments go through the wrapper that also sets the visibility and the mentions.
+    if (input.action === "POST" || input.action === "COMMENT") {
+      return this.#query("select public.community_publish($1,$2,$3,$4,$5,$6::uuid[],$7,$8) as payload", [
+        input.actor.kind, input.actor.id, input.targetId, input.body, input.visibility ?? null, input.mentions ?? [],
+        input.keyHash, input.requestHash,
+      ]);
+    }
     return this.#query("select public.community_command($1,$2,$3,$4,$5,$6,$7) as payload", [
       input.actor.kind, input.actor.id, input.action, input.targetId,
       input.body, input.keyHash, input.requestHash,

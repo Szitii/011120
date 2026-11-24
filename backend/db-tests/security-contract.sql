@@ -2019,5 +2019,13 @@ select public.test_assert(
   and not companion_private.avatar_ok(E'preset:a\nb'),
   'an avatar is one of the app''s built-in ones, set only by a signed-in Owner'
 );
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.community_post_visible(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.community_mentions_json(uuid[],uuid)'::regprocedure, 'EXECUTE')
+  and exists(select 1 from pg_trigger where tgrelid = 'public.community_comments'::regclass and tgname = 'community_comments_visible_guard'),
+  'post visibility is decided by one private rule, and every comment is checked against it'
+);
 
 drop function public.test_assert(boolean, text);
