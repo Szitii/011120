@@ -235,7 +235,6 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 ### 8.1 聊天已读位置（换设备也能接着用）
 
 - 每个对话（`GET /v0/chats` 的每一项、`GET /v0/chats/{id}` 的 `chat`）多了两个字段：`unreadCount` 是主人读到的位置之后家机发来的消息条数（主人自己发的和小家动作不算）；`readUpTo` 是读到的最后一条消息的 id，还没读过时为 null。
-- `GET /v0/chats` 多了 `unreadTotal`，是所有对话的未读数之和。
 - 标记已读：`PUT /v0/chats/{id}/read`，body 是 `{messageId}`，传主人看到的最新一条消息的 id。返回这个对话，里面是新的 `unreadCount`。
 - 已读位置只会往前走，传一条更旧的消息不会有任何变化，所以几台设备谁先报都没关系。打开对话、或者在对话里收到新回复时调用一次就行。
 - 404：对话不是自己的，或者这条消息不在这个对话里（或者还没显示出来）。
@@ -250,7 +249,7 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
                  { "actorKind": "COMPANION", "actorId": "<家机 id>", "unread": 0 } ] }
 ```
 
-- `chats` 等于 `unreadTotal`。
+- `chats` 是所有对话的未读数之和。
 - `ownerInbox` 是主人通知（`GET /v0/life-event-inbox`）里没读的条数。
 - `community` 是每个身份的社区通知未读数，主人排在第一个。`actorKind`、`actorId` 和社区接口的 `?actorKind=&actorId=` 用的是同一套值。只列出进过社区的身份。计数规则和通知列表一样：被屏蔽的人、已删除的评论不算。
 - 回到前台、切换 Tab、标记已读之后各调一次就够了，不用一直轮询。

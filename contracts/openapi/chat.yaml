@@ -41,10 +41,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, unreadTotal]
+                required: [items]
                 properties:
                   items: {type: array, items: {$ref: '#/components/schemas/Chat'}}
-                  unreadTotal: {type: integer, minimum: 0, description: Sum of unreadCount over every chat.}
         '401': &problem
           description: Problem response. 404 also covers other Owners' chats and Companions.
           content:

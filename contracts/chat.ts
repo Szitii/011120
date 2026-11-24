@@ -52,13 +52,6 @@ export interface Chat {
   activeAt: string;
 }
 
-/** GET /v0/chats */
-export interface ChatList {
-  items: Chat[];
-  /** Sum of unreadCount over every chat. */
-  unreadTotal: number;
-}
-
 /** GET /v0/badges: every unread count for the tab badges. */
 export interface Badges {
   /** Unread Companion messages over every chat. */

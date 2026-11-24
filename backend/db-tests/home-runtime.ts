@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool } from "../src/persistence/postgres/index.ts";
-import type { Anniversary, Badges, Chat, ChatList, ChatPage } from "../../contracts/chat.ts";
+import type { Anniversary, Badges, Chat, ChatPage } from "../../contracts/chat.ts";
 import type { CommunityFollow, CommunityNotification, CommunityPage, CommunityProfile } from "../../contracts/community.ts";
 import type { LifeEventInboxItemView } from "../src/http/types.ts";
 
@@ -47,9 +47,8 @@ try {
   assert.ok(newest, "the dev host replied");
   const older = page!.items.filter(m => m.companionId !== null)[1];
   assert.ok(page!.chat.unreadCount >= 1, "the reply is unread");
-  const list = (await call<ChatList>(0, "chats")).data;
-  assert.equal(list.unreadTotal, list.items.reduce((n, c) => n + c.unreadCount, 0));
-  assert.equal((await badges()).chats, list.unreadTotal);
+  const list = (await call<{ items: Chat[] }>(0, "chats")).data;
+  assert.equal((await badges()).chats, list.items.reduce((n, c) => n + c.unreadCount, 0));
   const read = (await call<Chat>(0, `chats/${chat.id}/read`, "PUT", { messageId: newest.id })).data;
   assert.deepEqual([read.unreadCount, read.readUpTo], [0, newest.id]);
   if (older !== undefined) {
@@ -58,7 +57,7 @@ try {
   }
   assert.equal((await call(1, `chats/${chat.id}/read`, "PUT", { messageId: newest.id })).status, 404, "another Owner's chat");
   assert.equal((await call(0, `chats/${chat.id}/read`, "PUT", { messageId: randomUUID() })).status, 404);
-  assert.equal((await call<ChatList>(0, "chats")).data.items.find(c => c.id === chat.id)!.unreadCount, 0);
+  assert.equal((await call<{ items: Chat[] }>(0, "chats")).data.items.find(c => c.id === chat.id)!.unreadCount, 0);
   passed("chat read position: unread counts, moves only forward, Owner-scoped");
 
   // ---- Owner notifications for drafts ----

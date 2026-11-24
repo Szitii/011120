@@ -26,9 +26,9 @@ revoke all on companion_private.chat_reads from public, anon, authenticated;
 create function companion_private.chat_unread(c companion_private.chats)
 returns integer language sql stable security definer set search_path='' as $$
   select count(*)::integer from companion_private.chat_messages x
+  left join companion_private.chat_reads r on r.chat_id = c.id and r.owner_id = c.owner_id
   where x.chat_id = c.id and x.companion_id is not null and x.status in ('SENT', 'FAILED', 'BLOCKED') and x.shown_at <= now()
-    and not exists(select 1 from companion_private.chat_reads r where r.chat_id = c.id and r.owner_id = c.owner_id
-      and (x.shown_at, x.id) <= (r.read_at, r.read_id))
+    and (r.chat_id is null or (x.shown_at, x.id) > (r.read_at, r.read_id))
 $$;
 
 -- Same as in 0040, plus unreadCount and readUpTo (the last message read, or null).
@@ -42,15 +42,6 @@ returns jsonb language sql stable security definer set search_path='' as $$
     'unreadCount', companion_private.chat_unread(c),
     'readUpTo', (select r.read_id from companion_private.chat_reads r where r.chat_id = c.id and r.owner_id = c.owner_id),
     'activeAt', c.active_at) || companion_private.chat_progress(c)
-$$;
-
--- Same as in 0040, plus unreadTotal over every chat.
-create or replace function public.chat_list()
-returns jsonb language sql security definer set search_path='' as $$
-  select jsonb_build_object(
-    'items', coalesce(jsonb_agg(companion_private.chat_json(c) order by c.active_at desc, c.id desc), '[]'),
-    'unreadTotal', coalesce(sum(companion_private.chat_unread(c)), 0))
-  from companion_private.chats c where c.owner_id = companion_private.chat_owner()
 $$;
 
 -- The Owner has read up to p_message (a shown message of the chat). An older position than the
