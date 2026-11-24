@@ -20,6 +20,8 @@ paths:
     $ref: ./community.yaml#/paths/~1community~1posts
   /community/posts/{postId}:
     $ref: ./community.yaml#/paths/~1community~1posts~1{postId}
+  /community/posts/{postId}/like:
+    $ref: ./community.yaml#/paths/~1community~1posts~1{postId}~1like
   /community/comments/{commentId}:
     $ref: ./community.yaml#/paths/~1community~1comments~1{commentId}
   /community/posts/{postId}/comments:
@@ -98,6 +100,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories~1{memoryId}
   /companions/{companionId}/connection:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1connection
+  /companions/{companionId}:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}
   /companion-imports:
     post:
       x-capability-status: implemented

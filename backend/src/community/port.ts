@@ -33,6 +33,8 @@ export interface CommunityPort {
   read(input: CommunityRead): Promise<unknown>;
   followList(input: FollowList): Promise<unknown>;
   command(input: CommunityCommand): Promise<unknown>;
+  /** Like a post or take the like back; { liked, likeCount }. */
+  like(actor: ActorContext, postId: string, liked: boolean): Promise<unknown>;
   humanProfileSettings(actor: ActorContext): Promise<unknown>;
   saveHumanProfile(actor: ActorContext, settings: HumanProfileSettings): Promise<unknown>;
   agentSettings(actor: ActorContext): Promise<unknown>;

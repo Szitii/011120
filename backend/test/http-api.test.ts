@@ -401,4 +401,13 @@ describe("server-only MVP HTTP/API boundary", () => {
     assert.doesNotMatch(serialized, /sensitive|SELECT|private_memory/);
     assert.match(serialized, /RETRY_SAME_REQUEST/);
   });
+
+  it("gives the Companion limit its own code, so the app can lead the Owner to delete one first", async () => {
+    const { api, owner } = harness();
+    owner.failure = new PostgresPersistenceError("INVALID_STATE", "companion limit reached", "55000");
+    const full = await api.handle(request("GET", "/v0/identity-context"));
+    assert.deepEqual([full.status, (full.body as { code: string }).code], [409, "COMPANION_LIMIT"]);
+    owner.failure = new PostgresPersistenceError("INVALID_STATE", "memory limit reached", "55000");
+    assert.equal(((await api.handle(request("GET", "/v0/identity-context"))).body as { code: string }).code, "INVALID_STATE");
+  });
 });

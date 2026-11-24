@@ -191,7 +191,7 @@ export interface ChatModelInfo {
   /** USD per million tokens, for showing the relative cost. */
   inputPerMTok: number;
   outputPerMTok: number;
-  /** false: listed but not usable now (no key configured or switched off by the platform). */
+  /** false: switched off by the platform for now. Models the platform has no key for are not listed. */
   available: boolean;
 }
 
@@ -300,5 +300,10 @@ export type ConnectionTest = "CONNECTED" | "AUTH_FAILED" | "NOT_FOUND" | "UNREAC
 export interface ConnectionSaveResult {
   result: ConnectionTest;
   connection: CompanionConnection;
+  /**
+   * Only when not CONNECTED and the Owner's provider or agent answered: the HTTP status it answered
+   * with (e.g. 405 for ERROR when the address is not the full /chat/completions path).
+   */
+  httpStatus?: number;
 }
 

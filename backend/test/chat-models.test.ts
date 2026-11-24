@@ -286,8 +286,9 @@ it("lists models with availability and checks the Owner's choice", async () => {
     { id: "big", name: "Big", provider: "claude", tier: "PREMIUM", inputPerMTok: 4, outputPerMTok: 20, available: true },
     { id: "small", name: "Small", provider: "claude", tier: "ECONOMY", inputPerMTok: 0.1, outputPerMTok: 0.5, available: true },
     { id: "cheap", name: "Cheap", provider: "other", tier: "ECONOMY", inputPerMTok: 0.2, outputPerMTok: 0.8, available: false },
-    { id: "off", name: "Off", provider: "other", tier: "STANDARD", inputPerMTok: 1, outputPerMTok: 1, available: false },
-  ] });
+  ] }, "a model switched off for now is listed as unavailable; one not enabled in the catalog is not listed");
+  const keyless = await handleChatRequest({ method: "GET", url: "/v0/chat-models" }, session, "t", replies, new ChatCatalog(file, {}));
+  assert.deepEqual(keyless!.body, { items: [], defaultModel: null }, "models the platform has no key for are not listed");
   const allOff = { ...port, modelsEnabled: async (models: unknown[]) => models.map(() => false) } as ChatPort;
   const off = await handleChatRequest({ method: "GET", url: "/v0/chat-models" }, { ...session, chat: allOff }, "t", replies, catalog);
   assert.equal((off!.body as { defaultModel: unknown }).defaultModel, null);

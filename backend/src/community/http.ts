@@ -147,6 +147,12 @@ export async function handleCommunityRequest(
     return response(200, await port.read({ actor, resource, targetId, mode, filter, beforeAt, beforeId } as CommunityRead));
   }
 
+  // Setting a like twice changes nothing, so it needs no Idempotency-Key.
+  if ((method === "PUT" || method === "DELETE") && route[0] === "posts" && route[2] === "like" && route.length === 3) {
+    if (request.body !== undefined) invalid();
+    return response(200, await port.like(actor, id(route[1]!), method === "PUT"));
+  }
+
   let action: CommunityCommand["action"] | undefined;
   if (method === "POST" && route[0] === "posts" && route.length === 1) action = "POST";
   if (method === "POST" && route[0] === "posts" && route[2] === "comments" && route.length === 3) {

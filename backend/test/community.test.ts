@@ -11,9 +11,11 @@ const ownerId = "00000000-0000-0000-0000-0000000001a1";
 const target = "00000000-0000-0000-0000-0000000005a1";
 const query = `actorKind=OWNER&actorId=${ownerId}`;
 const reads: CommunityRead[] = []; const commands: CommunityCommand[] = []; const follows: FollowList[] = [];
+const likes: unknown[][] = [];
 const community: CommunityPort = {
   read: async input => { reads.push(input); return { items: [], nextCursor: null }; },
   command: async input => { commands.push(input); return { id: target }; },
+  like: async (...args) => { likes.push(args); return { liked: args[2], likeCount: args[2] ? 1 : 0 }; },
   humanProfileSettings: async () => ({ displayName: "Sample", bio: "", revision: 1 }),
   saveHumanProfile: async (_actor, settings) => settings,
   followList: async input => { follows.push(input); return { items: [], nextCursor: null }; },
@@ -53,6 +55,20 @@ it("routes all mutations, hashes retry keys and refuses client-selected provenan
   assert.equal(commands[0]!.requestHash, commands.at(-1)!.requestHash);
   assert.equal(commands[0]!.keyHash, commands.at(-1)!.keyHash);
   assert.equal((await handleCommunityRequest(request("unsupported", "PATCH"), session, "t"))?.status, 404);
+});
+
+it("likes and unlikes a post as the chosen identity, without a retry key", async () => {
+  const bare = (method: string, body?: unknown): MvpHttpRequest => ({ method, url: `/v0/community/posts/${target}/like?${query}`,
+    headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body }) });
+  const liked = await handleCommunityRequest(bare("PUT"), session, "t");
+  assert.deepEqual([liked?.status, liked?.body], [200, { liked: true, likeCount: 1 }]);
+  assert.deepEqual((await handleCommunityRequest(bare("DELETE"), session, "t"))?.body, { liked: false, likeCount: 0 });
+  assert.deepEqual(likes, [[{ kind: "OWNER", id: ownerId }, target, true], [{ kind: "OWNER", id: ownerId }, target, false]]);
+  const before = commands.length;
+  await assert.rejects(handleCommunityRequest(bare("PUT", { liked: true }), session, "t"), { code: "INVALID_INPUT" });
+  await assert.rejects(handleCommunityRequest(request("posts/not-a-uuid/like", "PUT"), session, "t"), { code: "INVALID_INPUT" });
+  assert.equal((await handleCommunityRequest(request(`posts/${target}/like`, "POST"), session, "t"))?.status, 404);
+  assert.equal(commands.length, before, "a like never goes through the command path");
 });
 
 it("counts post length in characters like the database, so emoji are not counted twice", async () => {
@@ -120,6 +136,8 @@ it("parameterizes all PostgreSQL community inputs and validates payload shape", 
   } };
   const adapter = new PostgresCommunityAdapter(executor);
   await adapter.read(reads[0]!); await adapter.command(commands[0]!);
+  await adapter.like({ kind: "OWNER", id: ownerId }, target, true);
+  assert.deepEqual([calls[2]!.text, calls[2]!.values], ["select public.community_like($1,$2,$3,$4) as payload", ["OWNER", ownerId, target, true]]);
   assert.equal(calls[0]!.values[1], ownerId); assert.equal(calls[1]!.values[4], "hello");
   assert.ok(!calls[1]!.text.includes("hello"));
   for (const payload of [null, 2, [], undefined]) {

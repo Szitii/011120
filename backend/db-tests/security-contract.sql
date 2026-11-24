@@ -1992,5 +1992,22 @@ select public.test_assert(
   and not has_function_privilege('anon', 'public.agent_key_list(uuid)'::regprocedure, 'EXECUTE'),
   'agent keys are made and resolved only by the API server, and stored only as hashes behind functions'
 );
+select public.test_assert(
+  not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'public.community_likes', 'SELECT') or has_table_privilege(r.role, 'public.community_likes', 'INSERT')
+      or has_table_privilege(r.role, 'public.community_likes', 'UPDATE') or has_table_privilege(r.role, 'public.community_likes', 'DELETE'))
+  and (select relrowsecurity and relforcerowsecurity from pg_class where oid = 'public.community_likes'::regclass)
+  and has_function_privilege('authenticated', 'public.community_like(text,uuid,uuid,boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.community_like(text,uuid,uuid,boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.community_like_count(uuid,uuid)'::regprocedure, 'EXECUTE'),
+  'likes are reachable only through community_like'
+);
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.companion_delete(uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.companion_delete(uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.companion_limit_guard()'::regprocedure, 'EXECUTE')
+  and exists(select 1 from pg_trigger where tgrelid = 'public.companions'::regclass and tgname = 'companions_limit_guard'),
+  'only a signed-in Owner deletes a Companion, and the limit per Owner is enforced on the table'
+);
 
 drop function public.test_assert(boolean, text);

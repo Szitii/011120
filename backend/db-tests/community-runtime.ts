@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool } from "../src/persistence/postgres/index.ts";
-import type { ActorContext, CommunityProfile, CommunityPost, CommunityComment, CommunityPage, CommunityNotification, CommunityDetail, HumanProfileSettings } from "../../contracts/community.ts";
+import type { ActorContext, CommunityProfile, CommunityPost, CommunityComment, CommunityPage, CommunityNotification, CommunityDetail, CommunityLike, HumanProfileSettings } from "../../contracts/community.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");
@@ -201,6 +201,39 @@ try {
   assert.equal((await call(0, aiA, `blocks/${cb.id}`, "DELETE")).status, 200);
   assert.equal((await agent(0, humanA, "home")).status, 400);
   assert.equal((await agent(0, aiB, "home")).status, 404);
+
+  // ---- likes ----
+  const liked = (await call<CommunityPost>(0,humanA,"posts","POST",{ body:"A post to like" })).data;
+  assert.deepEqual([liked.likeCount,liked.likedByMe],[0,false]);
+  const like = (who: 0 | 1, actor: ActorContext, postId: string, method = "PUT") => call<CommunityLike>(who,actor,`posts/${postId}/like`,method);
+  assert.deepEqual((await like(1,humanB,liked.id)).data,{ liked:true, likeCount:1 });
+  assert.deepEqual((await like(1,humanB,liked.id)).data,{ liked:true, likeCount:1 },"liking twice counts once");
+  assert.deepEqual((await like(1,aiB,liked.id)).data,{ liked:true, likeCount:2 },"each identity likes for itself");
+  assert.deepEqual((await like(0,humanA,liked.id)).data,{ liked:true, likeCount:3 },"an author may like their own post");
+  const seenByB = (await call<CommunityDetail>(1,humanB,`posts/${liked.id}`)).data.post;
+  const seenByAiA = (await call<CommunityPage<CommunityPost>>(0,aiA,"feed")).data.items.find(p=>p.id===liked.id)!;
+  assert.deepEqual([seenByB.likeCount,seenByB.likedByMe,seenByAiA.likeCount,seenByAiA.likedByMe],[3,true,3,false]);
+  assert.deepEqual((await like(1,humanB,liked.id,"DELETE")).data,{ liked:false, likeCount:2 });
+  assert.deepEqual((await like(1,humanB,liked.id,"DELETE")).data,{ liked:false, likeCount:2 },"taking back twice changes nothing");
+  assert.equal((await like(1,humanB,randomUUID())).status,404);
+  assert.equal((await like(1,humanA,liked.id)).status,404,"another Owner's identity");
+  assert.equal((await call(1,humanB,`posts/${liked.id}/like`,"PUT",{ liked:true })).status,400,"a like has no body");
+  // An AI identity obeys its agent settings here too.
+  await pool.query("update companion_private.agent_settings set paused=true where actor_id=$1",[cb.id]);
+  assert.equal((await like(1,aiB,liked.id,"DELETE")).status,403);
+  await pool.query("update companion_private.agent_settings set paused=false where actor_id=$1",[cb.id]);
+  // At most 300 new likes an hour per identity.
+  await pool.query(`insert into public.community_posts(id,actor_id,body,source,deleted_at) select gen_random_uuid(),$1,'filler','HUMAN_MANUAL',now() from generate_series(1,300)`,[ha.id]);
+  await pool.query(`insert into public.community_likes(post_id,actor_id) select id,$2 from public.community_posts where actor_id=$1 and body='filler'`,[ha.id,hb.id]);
+  assert.equal((await like(1,humanB,liked.id)).status,409);
+  await pool.query("delete from public.community_likes where post_id in (select id from public.community_posts where body='filler')");
+  await pool.query("delete from public.community_posts where body='filler'");
+  assert.equal((await like(1,humanB,liked.id)).status,200);
+  // A withdrawn post can no longer be liked.
+  assert.equal((await call(0,humanA,`posts/${liked.id}`,"DELETE")).status,200);
+  assert.equal((await like(1,humanB,liked.id,"DELETE")).status,404);
+  passed("likes: one per identity, counted for the viewer, bound by agent settings, rate limited");
+
   await pool.query("delete from companion_private.agent_settings"); // later suites start from the defaults
   passed("AI text tools publish, read, comment and see notifications under the same rules, blocks included");
   console.log(`Community PostgreSQL/HTTP integration passed: ${groups} scenario groups.`);

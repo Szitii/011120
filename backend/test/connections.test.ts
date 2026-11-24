@@ -5,7 +5,7 @@ import { handleChatRequest } from "../src/chat/http.ts";
 import type { ChatClaim, ChatPort, DiaryJob } from "../src/chat/port.ts";
 import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { checkUrl, createPostJson, isPublicAddress, publicLookup, type PostJson } from "../src/connections/guard.ts";
-import { checkConnection, ConnectedChatModel, Connections, testConnection, type Connection } from "../src/connections/model.ts";
+import { checkConnection, ConnectedChatModel, Connections, testConnection, type Connection, type ConnectionCheck } from "../src/connections/model.ts";
 import { SecretBox } from "../src/connections/secret-box.ts";
 import { chatFromEnvironment } from "../src/chat/setup.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
@@ -98,24 +98,24 @@ it("tests a connection with one tiny call and says why it failed", async () => {
   const connection = checkConnection({ kind: "BYOK", provider: "kimi", model: "moonshot-v1-8k", apiKey: "sk-kimi-123", consent: true }) as never;
   const seen: unknown[][] = [];
   const answer = (status: number, body: unknown): PostJson => async (...args) => { seen.push(args); return { status, body }; };
-  assert.equal(await testConnection(connection, answer(200, completion("你好呀"))), "CONNECTED");
+  assert.deepEqual(await testConnection(connection, answer(200, completion("你好呀"))), { result: "CONNECTED", httpStatus: 200 });
   const [url, headers, body] = seen[0]!;
   assert.equal(String(url), "https://api.moonshot.cn/v1/chat/completions");
   assert.deepEqual(headers, { authorization: "Bearer sk-kimi-123" });
   assert.equal((body as { model: string }).model, "moonshot-v1-8k");
-  assert.equal(await testConnection(connection, answer(200, completion("", "length"))), "CONNECTED");
-  assert.equal(await testConnection(connection, answer(401, {})), "AUTH_FAILED");
-  assert.equal(await testConnection(connection, answer(403, {})), "AUTH_FAILED");
-  assert.equal(await testConnection(connection, answer(404, {})), "NOT_FOUND");
-  assert.equal(await testConnection(connection, answer(500, {})), "ERROR");
-  assert.equal(await testConnection(connection, answer(200, { hello: 1 })), "BAD_ANSWER");
-  assert.equal(await testConnection(connection, async () => { throw new Error("ETIMEDOUT"); }), "UNREACHABLE");
+  assert.equal((await testConnection(connection, answer(200, completion("", "length")))).result, "CONNECTED");
+  assert.deepEqual(await testConnection(connection, answer(401, {})), { result: "AUTH_FAILED", httpStatus: 401 });
+  assert.equal((await testConnection(connection, answer(403, {}))).result, "AUTH_FAILED");
+  assert.deepEqual(await testConnection(connection, answer(404, {})), { result: "NOT_FOUND", httpStatus: 404 });
+  assert.deepEqual(await testConnection(connection, answer(405, {})), { result: "ERROR", httpStatus: 405 });
+  assert.deepEqual(await testConnection(connection, answer(200, { hello: 1 })), { result: "BAD_ANSWER", httpStatus: 200 });
+  assert.deepEqual(await testConnection(connection, async () => { throw new Error("ETIMEDOUT"); }), { result: "UNREACHABLE" });
   const blocked = createPostJson(((_h: string, _o: unknown, done: (e: Error | null, a: LookupAddress[]) => void) =>
     done(null, [{ address: "10.0.0.1", family: 4 }])) as never);
-  assert.equal(await testConnection(connection, blocked), "BLOCKED_ADDRESS");
+  assert.deepEqual(await testConnection(connection, blocked), { result: "BLOCKED_ADDRESS" });
   const external = checkConnection({ kind: "EXTERNAL", name: "本体", endpoint: "https://agent.example.com/run", bearerToken: "", consent: true }) as never;
   seen.length = 0;
-  assert.equal(await testConnection(external, answer(200, completion("在"))), "CONNECTED");
+  assert.equal((await testConnection(external, answer(200, completion("在")))).result, "CONNECTED");
   assert.deepEqual([String(seen[0]![0]), seen[0]![1], "model" in (seen[0]![2] as object)], ["https://agent.example.com/run", {}, false]);
 });
 
@@ -202,7 +202,7 @@ it("answers through the Owner's key or agent, and through the platform without a
 
 it("limits connection tests per Owner", () => {
   let now = 0;
-  const connections = new Connections(box, async () => "CONNECTED", () => now);
+  const connections = new Connections(box, async () => ({ result: "CONNECTED" }), () => now);
   for (let i = 0; i < 10; i += 1) assert.ok(connections.allow("a"));
   assert.equal(connections.allow("a"), false);
   assert.ok(connections.allow("b"), "per Owner");
@@ -221,16 +221,16 @@ it("routes connections: tests before saving, never returns the key, 501 without 
   const replies = new ChatReplies();
   const request = (method: string, body?: unknown): MvpHttpRequest => ({ method, url: `/v0/companions/${companion}/connection`,
     headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body }) });
-  let result: "CONNECTED" | "AUTH_FAILED" = "AUTH_FAILED";
+  let result: ConnectionCheck = { result: "AUTH_FAILED", httpStatus: 401 };
   const connections = new Connections(box, async () => result);
   const handle = (req: MvpHttpRequest, c: Connections | undefined = connections) => handleChatRequest(req, session, "t", replies, undefined, c);
   const byok = { kind: "BYOK", provider: "glm", model: "glm-4-flash", apiKey: "sk-glm-abcd1234", consent: true };
 
   assert.deepEqual((await handle(request("GET")))!.body, { kind: "PLATFORM" });
   assert.deepEqual((await handle(request("DELETE")))!.body, { kind: "PLATFORM" });
-  assert.deepEqual((await handle(request("PUT", byok)))!.body, { result: "AUTH_FAILED", connection: { kind: "PLATFORM" } });
+  assert.deepEqual((await handle(request("PUT", byok)))!.body, { result: "AUTH_FAILED", connection: { kind: "PLATFORM" }, httpStatus: 401 });
   assert.ok(!calls.some(c => c[0] === "save"), "a failed test saves nothing");
-  result = "CONNECTED";
+  result = { result: "CONNECTED", httpStatus: 200 };
   const saved = await handle(request("PUT", byok));
   assert.deepEqual(saved!.body, { result: "CONNECTED", connection: { kind: "BYOK", keyHint: "1234" } });
   const save = calls.find(c => c[0] === "save")!;
@@ -249,7 +249,7 @@ it("routes connections: tests before saving, never returns the key, 501 without 
     assert.equal(await refusal(request("PUT", bad)), "INVALID_INPUT", JSON.stringify(bad));
   }
   assert.equal(await refusal(request("POST", byok)), "NOT_FOUND");
-  const busy = new Connections(box, async () => "CONNECTED", () => 0);
+  const busy = new Connections(box, async () => ({ result: "CONNECTED" }), () => 0);
   for (let i = 0; i < 10; i += 1) busy.allow(ownerId);
   assert.equal((await handle(request("PUT", byok), busy))!.status, 429);
 });

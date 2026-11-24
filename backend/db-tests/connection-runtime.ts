@@ -26,7 +26,7 @@ const post: PostJson = async (url, headers) => {
   outside.push({ url: String(url), auth: headers.authorization });
   return { status: 200, body: { choices: [{ message: { content: "来自主人自己的模型" }, finish_reason: "stop" }] } };
 };
-const chat = () => ({ replies: new ChatReplies(new ConnectedChatModel(devChatModel, box, post)), connections: new Connections(box, async () => "CONNECTED") });
+const chat = () => ({ replies: new ChatReplies(new ConnectedChatModel(devChatModel, box, post)), connections: new Connections(box, async () => ({ result: "CONNECTED" })) });
 const servers = [A, B].map((v, i) => createMobileDevHttpServer({ pool, ownerId: v.owner, ownerSubject: v.subject, bearerToken: `conn-${i}`, chat: chat() }));
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let groups = 0;

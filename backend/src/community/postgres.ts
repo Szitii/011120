@@ -27,6 +27,10 @@ export class PostgresCommunityAdapter implements CommunityPort {
     ]);
   }
 
+  like(actor: ActorContext, postId: string, liked: boolean): Promise<unknown> {
+    return this.#query("select public.community_like($1,$2,$3,$4) as payload", [actor.kind, actor.id, postId, liked]);
+  }
+
   humanProfileSettings(actor: ActorContext): Promise<unknown> {
     return this.#query("select public.community_get_human_profile($1,$2) as payload", [actor.kind, actor.id]);
   }
