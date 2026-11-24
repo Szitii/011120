@@ -8,7 +8,9 @@ export ADMIN_HOSTNAME
 
 tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale &
 i=0
-until tailscale up --hostname="$ADMIN_HOSTNAME" --advertise-tags=tag:admin-console ${TS_AUTHKEY:+--authkey="$TS_AUTHKEY"}; do
+# ADMIN_TS_TAG (e.g. tag:admin-console) only if the tailnet defines that tag; otherwise the machine is the
+# owner's device, and its key expiry must be turned off once in the Tailscale admin (Machines).
+until tailscale up --hostname="$ADMIN_HOSTNAME" ${ADMIN_TS_TAG:+--advertise-tags="$ADMIN_TS_TAG"} ${TS_AUTHKEY:+--authkey="$TS_AUTHKEY"}; do
   i=$((i + 1)); [ "$i" -lt 30 ] || { echo "could not join the tailnet" >&2; exit 1; }
   sleep 1
 done
