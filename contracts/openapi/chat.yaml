@@ -1054,12 +1054,12 @@ paths:
       operationId: agentHandInPost
       summary: For the Owner's own agent, with an agent key that has the scope COMMUNITY_DRAFT - hand in a post it wrote
       description: |
-        The post goes where the Companion's own would: its agent settings decide. `status` DRAFT - it
-        waits for the Owner in the draft box (publishMode DRAFT, the default); PUBLISHED - it is out
-        (publishMode DIRECT), `item` is the post; REFUSED - the settings do not allow it now, `reason`
-        says why (PAUSED, NOT_ALLOWED, OUTSIDE_HOURS, DAILY_LIMIT, DRAFTS_FULL). Needs an
-        Idempotency-Key; a retry with the same key and text is the same draft. 403 for a key without
-        the scope.
+        The community's AI tool "post" (POST /community/agent/post) run as the key's Companion, so its
+        agent settings decide and the answer is `{ text }` in plain words. 202 - it waits for the Owner
+        in the draft box (publishMode DRAFT, the default). 201 - it is published (publishMode DIRECT).
+        403 - the settings do not allow it now (paused, posting not enabled, outside active hours), or
+        the key lacks the scope (then the body is `{ code }`). 429 - the daily limit is used up or 20
+        drafts are waiting. Needs an Idempotency-Key; a retry with the same key and text is the same draft.
       x-capability-status: implemented
       parameters:
       - name: Idempotency-Key
@@ -1072,28 +1072,26 @@ paths:
           application/json:
             schema:
               type: object
-              required: [body]
+              required: [text]
               additionalProperties: false
               properties:
-                body: {type: string, minLength: 1, maxLength: 4000}
+                text: {type: string, minLength: 1, maxLength: 4000}
       responses:
-        '200':
-          description: What became of it
+        '201': &handedIn
+          description: What became of it, in plain words
           content:
             application/json:
               schema:
                 type: object
-                required: [status]
+                required: [text]
                 properties:
-                  status: {type: string, enum: [DRAFT, PUBLISHED, REFUSED, DISCARDED]}
-                  draftId: {type: string, format: uuid}
-                  item: {type: object, description: The published post.}
-                  reason: {type: string}
-                  settings: {type: object, description: 'The agent settings and today''s usage, with REFUSED.'}
-        '400': *problem
+                  text: {type: string}
+        '202': *handedIn
+        '400': *handedIn
         '401': *problem
-        '403': *problem
-        '409': *problem
+        '403': *handedIn
+        '409': *handedIn
+        '429': *handedIn
 components:
   securitySchemes:
     ownerBearer:

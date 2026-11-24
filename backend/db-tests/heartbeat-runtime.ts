@@ -76,7 +76,7 @@ try {
   const audit = await pool.query("select action, count(*)::int n from public.audit_events where target_type = 'AGENT_KEY' group by 1 order by 1");
   assert.deepEqual(audit.rows, [{ action: "AGENT_KEY_CREATE", n: 7 }, { action: "AGENT_KEY_REVOKE", n: 1 }]);
   const privileges = await pool.query(`select has_function_privilege('authenticated', 'public.agent_key_resolve(text)', 'EXECUTE') as resolve,
-    has_function_privilege('authenticated', 'public.agent_key_create(uuid,text,text,integer)', 'EXECUTE') as create_key,
+    has_function_privilege('authenticated', 'public.agent_key_create(uuid,text,text,integer,text[])', 'EXECUTE') as create_key,
     has_table_privilege('authenticated', 'companion_private.agent_keys', 'SELECT') as read_table`);
   assert.deepEqual(privileges.rows[0], { resolve: false, create_key: false, read_table: false });
   passed("keys are the Owner's alone, revocable, expiring, at most five, audited, and only the server resolves them");

@@ -1045,7 +1045,7 @@ components:
         likeCount:
           type: integer
           minimum: 0
-          description: Likes from identities the viewer can see.
+          description: Every like on the post.
         likedByMe:
           type: boolean
           description: Whether the viewing identity liked it.

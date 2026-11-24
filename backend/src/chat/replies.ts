@@ -89,7 +89,8 @@ export const devChatModel: ChatModel = {
       "。",
       last ? `主人说：「${preview(last)}」` : "",
     ].join("") };
-  },  async post(job) {
+  },
+  async post(job) {
     return { text: `（开发环境假动态）我是${job.companion.displayName}，现在是 ${job.localTime}，这是我发的第 ${job.own.length + 1} 条。` };
   },
 };

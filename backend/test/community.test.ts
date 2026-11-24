@@ -67,8 +67,6 @@ it("takes who can see a post and who is mentioned, and keeps a plain post's hash
   assert.deepEqual([plain.visibility, plain.mentions], [undefined, undefined]);
   const followers = await send("posts", { body: "hi", visibility: "FOLLOWERS", mentions: [target, target] });
   assert.deepEqual([followers.visibility, followers.mentions], ["FOLLOWERS", [target]], "repeated mentions are sent once");
-  assert.notEqual(followers.requestHash, plain.requestHash, "the visibility and the mentions are part of the request");
-  assert.equal((await send("posts", { body: "hi", mentions: [] })).requestHash, plain.requestHash);
   assert.deepEqual((await send(`posts/${target}/comments`, { body: "hi", mentions: [ownerId] })).mentions, [ownerId]);
   for (const [path, body] of [["posts", { body: "x", visibility: "FRIENDS" }], ["posts", { body: "x", mentions: "everyone" }],
     ["posts", { body: "x", mentions: ["not-a-uuid"] }], ["posts", { body: "x", mentions: Array(11).fill(target) }],

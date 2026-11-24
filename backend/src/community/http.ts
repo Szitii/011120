@@ -209,12 +209,10 @@ export async function handleCommunityRequest(
       || /[\x00-\x08\x0b-\x1f\x7f]/.test(value.details)) return invalid();
     body = JSON.stringify({ reason: value.reason, details: value.details.trim() });
   } else if (request.body !== undefined) invalid();
-  // Left out when not given, so a plain post hashes the same as before these fields existed.
-  const extras = { ...(visibility === undefined ? {} : { visibility }), ...(mentions === undefined || mentions.length === 0 ? {} : { mentions }) };
   const result = await port.command({
-    actor, action, targetId, body, ...extras,
+    actor, action, targetId, body, ...(visibility === undefined ? {} : { visibility }), ...(mentions === undefined ? {} : { mentions }),
     keyHash,
-    requestHash: sha256(JSON.stringify({ actor, action, targetId, body, ...extras })),
+    requestHash: sha256(JSON.stringify({ actor, action, targetId, body })),
   });
   return response(action === "POST" || action === "COMMENT" ? 201 : 200, result);
 }

@@ -4,6 +4,7 @@ import type pg from "pg";
 import { chatFromEnvironment } from "../chat/setup.ts";
 import { AgentKeyResolver } from "../agent/heartbeat.ts";
 import { BackgroundScheduler } from "../chat/background-scheduler.ts";
+import type { ChatPort } from "../chat/port.ts";
 import { PostgresChatAdapter } from "../chat/postgres.ts";
 import { createPgPool, PgOwnerExecutor } from "../persistence/postgres/client.ts";
 import { createMobileHttpServer } from "./mobile-server.ts";
@@ -40,12 +41,12 @@ async function main() {
   const server = createSupabaseMobileHttpServer({ pool, supabaseUrl, publishableKey, chat });
   // Diaries and community posts written in the background, each on its own timer.
   const background = (due: "diary_due" | "agent_auto_due", what: string, minutes: string,
-    write: (companionId: string, port: PostgresChatAdapter) => Promise<unknown>) => {
+    write: (companionId: string, port: ChatPort) => Promise<unknown>) => {
     const every = Number(minutes);
     if (chat.background === undefined || !Number.isFinite(every) || every <= 0) return () => undefined;
     return new BackgroundScheduler({ server: new PgOwnerExecutor(pool, null),
       portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
-      due, what, write: (companionId, port) => write(companionId, port as PostgresChatAdapter), platform: chat.background.platform,
+      due, what, write, platform: chat.background.platform,
     }).start(every * 60_000);
   };
   const stopDiaries = background("diary_due", "diary", diaryMinutes, (id, port) => chat.replies.writeDiary(id, port));

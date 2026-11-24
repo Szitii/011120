@@ -248,6 +248,14 @@ try {
   assert.equal((await publish(0,humanA,{ body:"只有我自己看", visibility:"PRIVATE" },privateKey)).data.id,onlyMe.data.id,"a retry returns the same post");
   assert.equal((await publish(0,humanA,{ body:"只有我自己看", visibility:"PUBLIC" },privateKey)).status,409,"a retry cannot change who sees it");
   assert.equal((await publish(0,humanA,{ body:"x", visibility:"EVERYONE" })).status,400);
+  // Two requests at once with one key (a double tap after changing the picker): one is written, the other is a conflict.
+  const raceKey = randomUUID();
+  const race = await Promise.all([publish(0,humanA,{ body:"连点两次", visibility:"PRIVATE" },raceKey),publish(0,humanA,{ body:"连点两次", visibility:"PUBLIC" },raceKey)]);
+  assert.deepEqual(race.map(r=>r.status).sort(),[201,409]);
+  const won = race.find(r=>r.status===201)!.data;
+  assert.equal((await pool.query("select visibility from public.community_posts where id=$1",[won.id])).rows[0]!.visibility,won.visibility,
+    "the post keeps the visibility of the request that wrote it");
+  assert.equal((await call(0,humanA,`posts/${won.id}`,"DELETE")).status,200);
   assert.deepEqual([await sees(0,humanA,onlyMe.data.id),await sees(0,aiA,onlyMe.data.id),await sees(1,humanB,onlyMe.data.id)],[true,false,false],
     "a private post is for the identity that wrote it, not even the Owner's other identity");
   assert.deepEqual([await sees(1,humanB,forFollowers.data.id),await inFeed(1,humanB,forFollowers.data.id,ha.id)],[false,false]);
@@ -264,17 +272,20 @@ try {
   await call(1,humanB,`following/${ha.id}`,"DELETE");
   assert.equal(await sees(1,humanB,forFollowers.data.id),false,"unfollowing closes it again");
   const notesA = async () => (await call<CommunityPage<CommunityNotification>>(0,humanA,"notifications")).data.items;
-  assert.ok(!(await notesA()).some(n=>n.kind==="LIKE"),"like and mention notices stay hidden until the operators switch them on");
+  assert.ok(!(await notesA()).some(n=>n.kind==="LIKE"),"likes and mentions tell nobody until the operators switch the notices on");
+  // An AI cannot queue a comment on a post it cannot see, not even as a draft for its Owner.
+  await pool.query("update companion_private.agent_settings set publish_mode='DRAFT' where actor_id=$1",[cb.id]);
+  assert.equal((await agent(1,aiB,"comment",{ postId:forFollowers.data.id, text:"看不到也想评论" })).status,404);
+  await pool.query("update companion_private.agent_settings set publish_mode='DIRECT' where actor_id=$1",[cb.id]);
   passed("post visibility: public, followers only, private; feed, detail, counts, comments and likes agree");
 
   // ---- mentions and like notices ----
-  // Hidden (list and badges) until the app knows the new kinds; the operators turn them on.
+  // Not written until the app knows the new kinds; the operators turn them on, and only what happens after that tells anyone.
   const unreadA = async () => (await fetch(`${bases[0]}/v0/badges`,{ headers:{ Authorization:"Bearer test-0" } }).then(r=>r.json()) as
     { community:{ actorKind:string; unread:number }[] }).community.find(c=>c.actorKind==="OWNER")!.unread;
-  const hiddenUnread = await unreadA();
+  assert.equal((await pool.query("select count(*)::int n from public.community_notifications where kind in ('LIKE','MENTION')")).rows[0]!.n,0);
   await pool.query("update companion_private.feature_switches set enabled=true where key='COMMUNITY_NEW_NOTICES'");
-  assert.ok((await notesA()).some(n=>n.kind==="LIKE"&&n.postId===forFollowers.data.id),"switched on: the author sees the like on their own post");
-  assert.equal(await unreadA(),hiddenUnread+1,"and the badge counts it, by the same rule");
+  assert.ok(!(await notesA()).some(n=>n.kind==="LIKE"),"switching on brings back nothing from before");
   const named = await publish(0,humanA,{ body:"@B 你看这个", mentions:[hb.id,hb.id,ha.id,randomUUID()] });
   assert.deepEqual(named.data.mentions!.map(m=>m.id),[hb.id],"repeats, the author and unknown ids are dropped");
   const notesB = async (actor: ActorContext = humanB) => (await call<CommunityPage<CommunityNotification>>(1,actor,"notifications")).data.items;
@@ -293,8 +304,10 @@ try {
   assert.equal((await publish(0,humanA,{ body:"太多了", mentions:Array.from({ length:11 },()=>randomUUID()) })).status,400);
   // Likes tell the author once; the notice shows only while the like stands.
   const likeNotes = async () => (await notesA()).filter(n=>n.kind==="LIKE"&&n.postId===named.data.id);
+  const unreadBefore = await unreadA();
   assert.equal((await call(1,humanB,`posts/${named.data.id}/like`,"PUT")).status,200);
   assert.deepEqual((await likeNotes()).map(n=>n.actor.id),[hb.id]);
+  assert.equal(await unreadA(),unreadBefore+1,"the badge counts it, by the same rule as the list");
   assert.equal((await call(0,humanA,`posts/${named.data.id}/like`,"PUT")).status,200);
   assert.equal((await likeNotes()).length,1,"liking your own post tells nobody");
   assert.equal((await call(1,humanB,`posts/${named.data.id}/like`,"DELETE")).status,200);
