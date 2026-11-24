@@ -1,0 +1,21 @@
+{
+  "provider": {
+    "kind": "minimax",
+    "baseUrl": "https://api.minimax.io",
+    "apiKeyEnv": "MINIMAX_API_KEY",
+    "model": "speech-2.8-hd"
+  },
+  "sampleText": "你回来啦！我今天一直在等你呢。",
+  "voices": [
+    { "id": "warm-girl", "name": "暖暖", "gender": "FEMALE", "description": "温暖柔和的年轻女声", "providerVoice": "Chinese (Mandarin)_Warm_Girl" },
+    { "id": "soft-girl", "name": "软软", "gender": "FEMALE", "description": "轻柔亲切的女声", "providerVoice": "Chinese (Mandarin)_Soft_Girl" },
+    { "id": "bashful-girl", "name": "羞羞", "gender": "FEMALE", "description": "有点害羞的少女声", "providerVoice": "Chinese (Mandarin)_BashfulGirl" },
+    { "id": "sweet-lady", "name": "甜甜", "gender": "FEMALE", "description": "甜美温柔的女声", "providerVoice": "Chinese (Mandarin)_Sweet_Lady" },
+    { "id": "cute-spirit", "name": "萌萌", "gender": "FEMALE", "description": "活泼可爱的女声", "providerVoice": "Chinese (Mandarin)_Cute_Spirit" },
+    { "id": "gentle-youth", "name": "暖阳", "gender": "MALE", "description": "温柔的少年声", "providerVoice": "Chinese (Mandarin)_Gentle_Youth" },
+    { "id": "pure-boy", "name": "清清", "gender": "MALE", "description": "干净纯真的男声", "providerVoice": "Chinese (Mandarin)_Pure-hearted_Boy" },
+    { "id": "straight-boy", "name": "阿直", "gender": "MALE", "description": "直率爽朗的男声", "providerVoice": "Chinese (Mandarin)_Straightforward_Boy" },
+    { "id": "lyrical-voice", "name": "阿磁", "gender": "MALE", "description": "低沉有磁性的男声", "providerVoice": "Chinese (Mandarin)_Lyrical_Voice" },
+    { "id": "free-young-man", "name": "阿洒", "gender": "MALE", "description": "洒脱随性的男声", "providerVoice": "Chinese (Mandarin)_Unrestrained_Young_Man" }
+  ]
+}

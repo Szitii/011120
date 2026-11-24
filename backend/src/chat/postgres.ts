@@ -3,6 +3,7 @@ import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type { Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, ReservationDecision } from "./port.ts";
+import type { Clip } from "./voices.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
 export class PostgresChatAdapter implements ChatPort {
@@ -39,6 +40,14 @@ export class PostgresChatAdapter implements ChatPort {
 
   markRead(chatId: string, messageId: string): Promise<unknown> {
     return this.#object("select public.chat_mark_read($1,$2) as payload", [chatId, messageId]);
+  }
+
+  features(): Promise<unknown> {
+    return this.#object("select public.platform_features() as payload", []);
+  }
+
+  wallet(): Promise<unknown> {
+    return this.#object("select public.wallet_get() as payload", []);
   }
 
   badges(): Promise<unknown> {
@@ -100,8 +109,8 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown> {
-    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5) as payload",
-      [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.revision]);
+    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6) as payload",
+      [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.voice ?? null, settings.revision]);
   }
 
   async claim(chatId: string): Promise<ChatClaim | null> {
@@ -109,9 +118,33 @@ export class PostgresChatAdapter implements ChatPort {
     return payload === null ? null : this.#check(payload) as ChatClaim;
   }
 
-  async finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null): Promise<boolean> {
-    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[]) as payload", [replyId, claimId, outcome, bodies]);
+  async finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null,
+    clips?: readonly (Clip | null)[]): Promise<boolean> {
+    const audio = clips === undefined || clips.every(clip => clip === null) ? null : JSON.stringify(clips.map(clip => clip === null ? null
+      : { mime: clip.mime, durationMs: clip.durationMs, characters: clip.characters, data: Buffer.from(clip.bytes).toString("base64") }));
+    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb) as payload",
+      [replyId, claimId, outcome, bodies, audio]);
     return (payload as { accepted?: unknown }).accepted === true;
+  }
+
+  async voiceLeft(): Promise<{ companion: number; owner: number }> {
+    const payload = await this.#object("select public.chat_voice_left() as payload", []) as { left?: unknown; ownerLeft?: unknown };
+    const count = (value: unknown): number => (typeof value === "number" ? value : 0);
+    return { companion: count(payload.left), owner: count(payload.ownerLeft) };
+  }
+
+  sendVoice(chatId: string, body: string, recording: { mime: string; durationMs: number; bytes: Uint8Array }, keyHash: string): Promise<unknown> {
+    return this.#object("select public.chat_send_voice($1,$2,$3,$4::jsonb) as payload", [chatId, body, keyHash, JSON.stringify({
+      mime: recording.mime, durationMs: recording.durationMs, data: Buffer.from(recording.bytes).toString("base64"),
+    })]);
+  }
+
+  async audio(chatId: string, messageId: string): Promise<{ mime: string; bytes: Uint8Array }> {
+    const payload = await this.#object("select public.chat_audio_get($1,$2) as payload", [chatId, messageId]) as { mime?: unknown; data?: unknown };
+    if (typeof payload.mime !== "string" || typeof payload.data !== "string") {
+      throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid chat response.");
+    }
+    return { mime: payload.mime, bytes: Buffer.from(payload.data, "base64") };
   }
 
   async reserve(input: ChatReservation): Promise<ReservationDecision> {
@@ -147,7 +180,8 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveDiarySettings(companionId: string, settings: DiarySettings): Promise<unknown> {
-    return this.#object("select public.diary_update_settings($1,$2,$3) as payload", [companionId, settings.frequency, settings.revision]);
+    return this.#object("select public.diary_update_settings($1,$2,$3,$4) as payload",
+      [companionId, settings.frequency, settings.autoWrite ?? null, settings.revision]);
   }
 
   async diaryBegin(companionId: string): Promise<DiaryStart> {

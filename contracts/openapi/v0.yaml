@@ -60,6 +60,18 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1chat-settings
   /chat-models:
     $ref: ./chat.yaml#/paths/~1chat-models
+  /features:
+    $ref: ./chat.yaml#/paths/~1features
+  /chats/{chatId}/messages/{messageId}/audio:
+    $ref: ./chat.yaml#/paths/~1chats~1{chatId}~1messages~1{messageId}~1audio
+  /chats/{chatId}/voice:
+    $ref: ./chat.yaml#/paths/~1chats~1{chatId}~1voice
+  /voices:
+    $ref: ./chat.yaml#/paths/~1voices
+  /voices/{voiceId}/sample:
+    $ref: ./chat.yaml#/paths/~1voices~1{voiceId}~1sample
+  /wallet:
+    $ref: ./chat.yaml#/paths/~1wallet
   /companions/{companionId}/agent-keys:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys
   /companions/{companionId}/agent-keys/{keyId}:
@@ -830,7 +842,7 @@ components:
     IdentityCandidate:
       type: object
       additionalProperties: false
-      required: [id, field, value, sourcePath, sourceTrust, approvable, blockedByFindingIds]
+      required: [id, field, sourcePath, sourceTrust, approvable, blockedByFindingIds]
       properties:
         id: { type: string }
         field:
@@ -839,7 +851,8 @@ components:
             An identity field (displayName, identitySummary, personaTraits, ...) or `memory`: one entry of
             the card's `memories` list (strings, at most 50, each at most 500 characters). Approved memory
             candidates become the Companion's memories (GET /v0/companions/{id}/memories), not identity fields.
-        value: {}
+        value:
+          description: The text. Absent when the candidate cannot be approved (blocked text is never sent back).
         sourcePath: { type: string }
         sourceTrust: { const: EXTERNAL_UNTRUSTED }
         approvable: { type: boolean }

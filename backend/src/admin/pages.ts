@@ -40,7 +40,15 @@ export interface ChatPage {
 export interface Models {
   switches: { scope: "ALL" | "PROVIDER" | "MODEL"; key: string; enabled: boolean; note: string | null; updatedAt: string }[];
   quota: { dailyCalls: number; dailyCostMinor: number; currency: string; updatedAt: string };
+  cap: { enabled: boolean; dailyCostMinor: number; currency: string; spentTodayMinor: number; updatedAt: string };
+  wallet: { enabled: boolean; welcomeCredits: number; creditsPerCent: number; backgroundFloor: number; updatedAt: string };
 }
+export interface Feature { key: string; enabled: boolean; updatedAt: string }
+/** The feature switches the console knows, with what each one means (migration 0050). */
+export const FEATURES: Readonly<Record<string, string>> = {
+  GROUP_CHAT_CREATE: "新建群聊",
+  GROUP_CHAT_SEND: "在已有群聊里发消息",
+};
 export interface Spend {
   from: string; to: string;
   totals: { currency: string; calls: number; costMinor: number }[];
@@ -264,9 +272,16 @@ export function switchTargets(catalog: readonly CatalogEntry[]): { value: string
     ...catalog.map(m => ({ value: `MODEL:${m.provider}/${m.model}`, label: `模型 ${m.name}(${m.provider}/${m.model})` }))];
 }
 
-export function modelsPage(zone: string, models: Models, spend: Spend, catalog: readonly CatalogEntry[], done: boolean): string {
+export function modelsPage(zone: string, models: Models, spend: Spend, catalog: readonly CatalogEntry[], done: boolean,
+  features: readonly Feature[] = []): string {
   const q = models.quota, back = `/models?from=${spend.from}&to=${spend.to}`;
   return page("模型与费用", "/models", html`
+<h2>功能开关</h2><table><tr><th>功能</th><th>现在</th><th>时间</th></tr>${features.map(f => html`
+<tr><td>${word(FEATURES, f.key)}</td><td><span class="tag ${f.enabled ? "" : "bad"}">${f.enabled ? "开" : "关"}</span></td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table>
+${act("/models/feature", "执行", back, html`<select name="key" required><option value="">开关哪一个…</option>${
+    Object.entries(FEATURES).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select>
+<select name="enabled" required><option value="">开还是关…</option><option value="off">关掉</option><option value="on">打开</option></select>`)}
+<p class="muted">立刻生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>
 <h2>模型开关</h2><table><tr><th>模型</th><th>厂商 / 模型名</th><th>现在</th></tr>${catalog.map(m => {
     const state = switchState(models, m);
     return html`<tr><td>${m.name}</td><td>${m.provider}/${m.model}</td><td><span class="tag ${state === "开" ? "" : "bad"}">${state}</span></td></tr>`;
@@ -281,6 +296,22 @@ ${models.switches.length === 0 ? "" : html`<table><tr><th>开关</th><th>状态<
 <p>现在:每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
 ${act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
 <label>金额(分)<input name="cents" type="number" min="0" required value="${q.dailyCostMinor}"></label>`)}
+<h2>全平台每天的花费上限</h2>
+<p>${models.cap.enabled ? html`现在:每天 ${money(models.cap.dailyCostMinor, models.cap.currency)},今天(UTC)已用 ${
+    money(models.cap.spentTodayMinor, models.cap.currency)}(含进行中的调用)。` : "现在:没有上限。"}到了上限后,平台模型的回复显示“平台模型暂时关闭”,不扣额度。</p>
+${act("/models/cap", "修改上限", back, html`<select name="enabled" required><option value="on">开</option><option value="off">关(不设上限)</option></select>
+<label>金额(分)<input name="cents" type="number" min="0" required value="${models.cap.dailyCostMinor}"></label>`)}
+<h2>主人积分钱包</h2>
+<p>${models.wallet.enabled ? "现在:开。" : "现在:关(只按每个家机每天的免费额度限制)。"}新主人送 ${models.wallet.welcomeCredits} 积分;
+模型花费每 1 分 = ${models.wallet.creditsPerCent} 积分;写日记要给聊天留 ${models.wallet.backgroundFloor} 积分。调用失败不扣积分。</p>
+${act("/models/wallet", "修改钱包规则", back, html`<select name="enabled" required><option value="${models.wallet.enabled ? "on" : "off"}">${
+    models.wallet.enabled ? "开" : "关"}(不变)</option><option value="on">开</option><option value="off">关</option></select>
+<label>新人赠送 <input name="welcome" type="number" min="0" required value="${models.wallet.welcomeCredits}"></label>
+<label>每分积分 <input name="rate" type="number" min="1" required value="${models.wallet.creditsPerCent}"></label>
+<label>给聊天保留 <input name="floor" type="number" min="0" required value="${models.wallet.backgroundFloor}"></label>`)}
+${act("/models/credit", "调整积分", back, html`<input name="owner" placeholder="主人编号" required size="38">
+<label>积分(可以是负数)<input name="credits" type="number" required></label>`)}
+<p class="muted">调整的是赠送积分;负数最多扣到 0。改赠送数量只影响之后第一次用钱包的主人。</p>
 <h2>花费</h2><form method="get" action="/models" class="act"><label>从 <input type="date" name="from" value="${spend.from}"></label>
 <label>到 <input type="date" name="to" value="${spend.to}"></label><button>查看</button><span class="muted">按 UTC 日期</span></form>
 <p>合计:${spend.totals.length === 0 ? "这段时间没有模型调用。"

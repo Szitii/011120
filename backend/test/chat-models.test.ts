@@ -275,6 +275,7 @@ it("lists models with availability and checks the Owner's choice", async () => {
   const catalog = new ChatCatalog(file, keys);
   const saved: unknown[] = [];
   const port = { modelsEnabled: async (models: { provider: string }[]) => models.map(m => m.provider !== "other"),
+    settings: async () => ({ voice: "kept" }),
     saveSettings: async (_id: string, settings: unknown) => { saved.push(settings); return settings; } } as unknown as ChatPort;
   const session = { ownerId: owner, owner: {} as OwnerApiPort, chat: port } as AuthenticatedOwnerSession;
   const replies = new ChatReplies();
@@ -294,7 +295,7 @@ it("lists models with availability and checks the Owner's choice", async () => {
   await assert.rejects(get("/v0/chat-models", "POST"), { code: "NOT_FOUND" });
   const put = { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: "cheap", revision: 1 };
   assert.equal((await get(`/v0/companions/${me}/chat-settings`, "PUT", put))!.status, 200);
-  assert.deepEqual(saved, [put], "any catalog model may be chosen, even one not usable right now");
+  assert.deepEqual(saved, [{ ...put, voice: "kept" }], "any catalog model may be chosen, even one not usable right now");
   await assert.rejects(get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, model: "ghost" }), { code: "INVALID_INPUT" });
 });
 
@@ -305,5 +306,8 @@ it("sets up chat from the environment: platform models with a key, otherwise the
   for (const [mode, withKeys] of [["stage1-mobile-dev", true], ["stage1-mobile-dev", false], ["supabase-auth", false]] as const) {
     const chat = chatFromEnvironment(mode, withKeys ? { ...env, ...keys } : env);
     assert.ok(chat.catalog.has("big") && chat.replies instanceof ChatReplies);
+    assert.deepEqual(chat.background, withKeys ? { platform: true } : undefined, "background diaries need a real model");
   }
+  const ownKeys = chatFromEnvironment("supabase-auth", { ...env, CONNECTION_SECRET_KEY: Buffer.alloc(32, 1).toString("base64") });
+  assert.deepEqual(ownKeys.background, { platform: false }, "only Owners' own keys and agents");
 });
