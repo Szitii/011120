@@ -10,16 +10,17 @@ export const SOFA_SLOT = { left: .41, top: .50, width: .34, height: .18 };
 export const TABLE_SLOT = { left: .44, top: .66, width: .28, height: .14 };
 const bounds = ({ left, top, width, height }: typeof SOFA_SLOT): ObstacleBox =>
   ({ x1: left, y1: top, x2: left + width, y2: top + height });
+export const BED_FLOOR_EDGE = .56;
 export const FURNITURE = {
   sofa: {
     bounds: bounds(SOFA_SLOT),
-    user: { approach: point(.782, .657), anchor: point(.625, .646) },
-    companion: { approach: point(.38, .657), anchor: point(.535, .646) },
+    user: { approach: point(.782, .704), entry: point(.747, .639), anchor: point(.64, .639) },
+    companion: { approach: point(.395, .704), entry: point(.416, .639), anchor: point(.523, .639) },
   },
   bed: {
-    bounds: { x1: .02, y1: .22, x2: .35, y2: .56 },
-    user: { approach: point(.42, .47), entry: point(.294, .45), anchor: point(.235, .390) },
-    companion: { approach: point(.39, .47), entry: point(.294, .427), anchor: point(.125, .390) },
+    bounds: { x1: .02, y1: .22, x2: .35, y2: BED_FLOOR_EDGE },
+    user: { approach: point(.46, .475), entry: point(.294, .45), anchor: point(.235, .365) },
+    companion: { approach: point(.39, .47), entry: point(.294, .427), anchor: point(.125, .365) },
   },
 } satisfies Record<FurnitureId, { bounds: ObstacleBox } & Record<ActorId, { approach: RoomPoint; entry?: RoomPoint; anchor: RoomPoint }>>;
 

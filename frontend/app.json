@@ -12,8 +12,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "允许从系统相册选择照片，保存到你的小家相册。",
-          "cameraPermission": false
+          "photosPermission": "允许从系统相册选择照片，在动态中预览或保存到小家相册。",
+          "cameraPermission": "允许使用相机为动态拍照。"
         }
       ],
       [

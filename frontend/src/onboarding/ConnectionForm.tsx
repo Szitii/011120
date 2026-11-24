@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { AppState, BackHandler, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { BringButton, BringField, Check, GlassCard } from "./BringControls";
@@ -10,9 +10,11 @@ import { connectionMessages, providerPresets, validateExternal, validateApiKey, 
 
 const providers = Object.keys(providerPresets) as Array<keyof typeof providerPresets>;
 
-export function ConnectionForm({ kind, onClose, submitConnection }: {
+export function ConnectionForm({ kind, onClose, closeLabel = "返回连接设置", handleBack = false, submitConnection }: {
   kind: "key" | "external";
   onClose: () => void;
+  closeLabel?: string;
+  handleBack?: boolean;
   submitConnection: (input: ConnectionInput) => Promise<ConnectionTest>;
 }) {
   const s = useThemedStyles(createStyles);
@@ -32,8 +34,25 @@ export function ConnectionForm({ kind, onClose, submitConnection }: {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    const subscription = AppState.addEventListener("change", state => {
+      if (state !== "background") return;
+      setSecret("");
+      setShowKey(false);
+    });
+    return () => {
+      mounted.current = false;
+      subscription.remove();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!handleBack) return;
+    const listener = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (!pending.current) onClose();
+      return true;
+    });
+    return () => listener.remove();
+  }, [handleBack, onClose]);
 
   function selectProvider(id: ProviderId) {
     setProvider(id);
@@ -59,11 +78,13 @@ export function ConnectionForm({ kind, onClose, submitConnection }: {
     pending.current = true;
     setBusy(true);
     setResult(undefined);
-    setSecret("");
     setShowKey(false);
     try {
       const status = await submitConnection(outcome.input);
-      if (mounted.current) setResult(connectionMessages[status]);
+      if (mounted.current) {
+        if (status === "CONNECTED") setSecret("");
+        setResult(connectionMessages[status]);
+      }
     } catch (error) {
       if (!mounted.current) return;
       setResult(error instanceof ApiProblemError && error.status === 501 ? "线上暂未开放模型连接。你可以先返回使用平台托管。"
@@ -139,7 +160,7 @@ export function ConnectionForm({ kind, onClose, submitConnection }: {
     <Text style={s.body}>连通测试仅发送验证消息。启用后可在聊天设置里撤销连接。</Text>
     {result && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={s.notice}>{result}</Text>}
     <BringButton label={busy ? "正在测试…" : kind === "key" ? "测试并启用" : "测试并连通"} disabled={busy} onPress={() => void submit()} />
-    <BringButton label="返回连接设置" secondary disabled={busy} onPress={onClose} />
+    <BringButton label={closeLabel} secondary disabled={busy} onPress={() => { if (!pending.current) onClose(); }} />
   </>;
 }
 

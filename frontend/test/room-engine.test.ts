@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RoomEngine } from "../src/room/roomEngine.ts";
 import { findSafePath } from "../src/room/pathfinding.ts";
-import { DUO_POINTS, DUO_SLOT, FURNITURE, SOFA_SLOT, TABLE_SLOT, WAKE_POINTS } from "../src/room/geometry.ts";
+import { BED_FLOOR_EDGE, DUO_POINTS, DUO_SLOT, FURNITURE, SOFA_SLOT, TABLE_SLOT, WAKE_POINTS } from "../src/room/geometry.ts";
 
 test("floor taps replan a single actor without teleporting or losing the walking cycle", () => {
   const engine = new RoomEngine();
@@ -25,7 +25,11 @@ test("floor taps replan a single actor without teleporting or losing the walking
 
 test("sleep and seated phases stay anchored while a movement command uses walk sprites", () => {
   const engine = new RoomEngine();
+  const initial = engine.snapshot().actors;
   engine.furniture("bed");
+  engine.tick(16);
+  assert.notDeepEqual(engine.snapshot().actors.companion.point, initial.companion.point);
+  assert.notDeepEqual(engine.snapshot().actors.user.point, initial.user.point);
   for (let frame = 0; frame < 300; frame++) engine.tick(16);
   for (const id of ["companion", "user"] as const) {
     const actor = engine.snapshot().actors[id];
@@ -33,11 +37,17 @@ test("sleep and seated phases stay anchored while a movement command uses walk s
     assert.deepEqual(actor.point, FURNITURE.bed[id].anchor);
   }
   engine.wake();
-  for (let frame = 0; frame < 15; frame++) {
+  for (let frame = 0; frame < 180; frame++) {
+    const before = engine.snapshot().actors;
     engine.tick(16);
-    const { companion, user } = engine.snapshot().actors;
-    assert.equal(companion.phase, user.phase);
-    assert.ok((companion.opacity ?? 1) > 0 && (user.opacity ?? 1) > 0);
+    for (const id of ["companion", "user"] as const) {
+      const after = engine.snapshot().actors[id];
+      const point = before[id].point;
+      if (frame === 0) assert.equal(after.phase, "SIT");
+      assert.notEqual(after.phase, "SLEEP");
+      if (after.point.ny < BED_FLOOR_EDGE) assert.notEqual(after.phase, "WALK");
+      assert.ok(Math.hypot((after.point.nx - point.nx) * .8, after.point.ny - point.ny) <= .004001);
+    }
   }
   assert.deepEqual(engine.snapshot().actors.companion.point, WAKE_POINTS.companion);
   assert.deepEqual(engine.snapshot().actors.user.point, WAKE_POINTS.user);
@@ -87,11 +97,65 @@ test("seated actors leave the sofa from their respective openings before a duo a
   assert.equal(seated.user.phase, "SIT");
   assert.equal(seated.companion.phase, "SIT");
   engine.action("CUDDLE");
-  for (let frame = 0; frame < 15; frame++) engine.tick(16);
-  assert.equal(engine.snapshot().actors.user.point.nx, FURNITURE.sofa.user.approach.nx);
-  assert.equal(engine.snapshot().actors.companion.point.nx, FURNITURE.sofa.companion.approach.nx);
+  for (let frame = 0; frame < 15; frame++) {
+    const previous = engine.snapshot().actors;
+    engine.tick(16);
+    for (const id of ["companion", "user"] as const) {
+      const { point } = engine.snapshot().actors[id];
+      assert.ok(Math.hypot((point.nx - previous[id].point.nx) * .8, point.ny - previous[id].point.ny) <= .004001);
+    }
+  }
   settle();
   assert.deepEqual(engine.takeStartedActions(), ["CUDDLE"]);
   assert.deepEqual(engine.snapshot().actors.user.point, DUO_POINTS.user);
   assert.deepEqual(engine.snapshot().actors.companion.point, DUO_POINTS.companion);
+});
+
+test("sofa entry and exit clear the coffee table and use walk frames until seated", () => {
+  const engine = new RoomEngine();
+  const inTable = ({ nx, ny }: { nx: number; ny: number }) =>
+    nx >= TABLE_SLOT.left - .016 && nx <= TABLE_SLOT.left + TABLE_SLOT.width + .016 &&
+    ny >= TABLE_SLOT.top - .012 && ny <= TABLE_SLOT.top + TABLE_SLOT.height + .012;
+  engine.furniture("sofa");
+  let walkingAtSofa = false;
+  for (let frame = 0; frame < 360; frame++) {
+    engine.tick(16);
+    for (const actor of Object.values(engine.snapshot().actors)) {
+      assert.equal(inTable(actor.point), false);
+      if (actor.furniture === "sofa" && actor.phase === "WALK") walkingAtSofa = true;
+    }
+  }
+  assert.equal(walkingAtSofa, true);
+  assert.equal(engine.snapshot().actors.user.phase, "SIT");
+
+  engine.floor({ nx: .59, ny: .84 });
+  for (let frame = 0; frame < 360; frame++) {
+    engine.tick(16);
+    const { user } = engine.snapshot().actors;
+    assert.equal(inTable(user.point), false);
+    assert.notEqual(user.phase, "SIT");
+  }
+  assert.ok(engine.snapshot().actors.user.point.ny > TABLE_SLOT.top + TABLE_SLOT.height);
+});
+
+test("straight floor retargets keep their travel direction and avoid an initial grid snap", () => {
+  const engine = new RoomEngine();
+  const start = engine.snapshot().actors.user.point;
+  const first = { nx: start.nx - .1, ny: start.ny };
+  assert.deepEqual(findSafePath(start, first), [first]);
+  engine.floor(first);
+  assert.equal(engine.snapshot().actors.user.facingLeft, true);
+  engine.tick(16);
+  const mid = engine.snapshot().actors.user.point;
+  const reversed = { nx: start.nx + .06, ny: start.ny };
+  engine.floor(reversed);
+  assert.equal(engine.snapshot().actors.user.facingLeft, false);
+  engine.tick(16);
+  assert.ok(engine.snapshot().actors.user.point.nx > mid.nx);
+  const current = engine.snapshot().actors.user.point;
+  engine.floor(current);
+  engine.tick(16);
+  assert.deepEqual(engine.snapshot().actors.user.point, current);
+  assert.equal(engine.snapshot().actors.user.phase, "IDLE");
+  assert.equal(findSafePath({ nx: .60, ny: .46 }, { nx: .60, ny: .61 }, true), null);
 });

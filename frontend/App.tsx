@@ -2,6 +2,7 @@ import { WalletBalance } from "./src/wallet/WalletBalance";
 import type { ChatClient } from "./src/chat/client";
 import type { Badges, PlatformFeatures } from "../contracts/chat";
 import { useAppIsActive } from "./src/state/useAppIsActive";
+import { ConnectionForm } from "./src/onboarding/ConnectionForm";
 import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
 import { useThemedStyles } from "./src/theme/SkinProvider";
 import type { UiPalette } from "./src/theme/skinTokens";
@@ -11,7 +12,9 @@ import {
   BackHandler,
   ActivityIndicator,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -66,7 +69,7 @@ import {
   type Route,
   type CommunityTarget,
 } from "./src/state/navigation";
-import { SkinProvider, useSkin } from "./src/theme/SkinProvider";
+import { SkinProvider, TEXT_SIZES, useSkin } from "./src/theme/SkinProvider";
 import { CHROME } from "./src/theme/layoutTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
@@ -106,8 +109,11 @@ function formatDate(value: string): string {
   return new Date(value).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function identityLabel(identity?: ActiveIdentityContext): string {
-  return identity?.activeSubject.presentation.displayName ?? "本人";
+function identityLabel(identity?: ActiveIdentityContext, ownerNickname?: string): string {
+  const subject = identity?.activeSubject;
+  const name = subject?.presentation.displayName;
+  if (subject?.kind === "OWNER") return ownerNickname ?? (name && name !== "Owner" ? name : "本人");
+  return name ?? "本人";
 }
 
 export default function App() {
@@ -200,6 +206,18 @@ function WorldApp({ client, account, isMockMode }: {
   const viewerKey = `${viewer?.kind}:${identityId}`;
   const appActive = useAppIsActive();
   const authenticatedOwner = identityValue?.viewer.ownerId;
+  const [ownerProfile, setOwnerProfile] = useState<{ id: string; name: string }>();
+  const ownerNickname = ownerProfile?.id === authenticatedOwner ? ownerProfile?.name : undefined;
+  const [nicknameRevision, reloadNickname] = useState(0);
+  useEffect(() => {
+    const community = client.api.community;
+    if (!authenticatedOwner || !community) return;
+    let current = true;
+    void community.profile({ kind: "OWNER", id: authenticatedOwner }).then(profile => {
+      if (current) setOwnerProfile({ id: authenticatedOwner, name: profile.displayName });
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [authenticatedOwner, client.api, nicknameRevision]);
   const [features, setFeatures] = useState<PlatformFeatures>();
   const [featureRevision, setFeatureRevision] = useState(0);
   const refreshFeatures = useCallback(() => setFeatureRevision(value => value + 1), []);
@@ -522,7 +540,7 @@ function WorldApp({ client, account, isMockMode }: {
   }
 
   useEffect(() => {
-    if (route.type === "root" || route.type === "compose-post" || route.type === "bring-companion") return;
+    if (route.type === "root" || route.type === "compose-post" || route.type === "bring-companion" || route.type === "bring-connection") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       goBack();
       return true;
@@ -562,11 +580,11 @@ function WorldApp({ client, account, isMockMode }: {
         <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
       )}
 
-      {!isMoment && route.type !== "chat" && route.type !== "compose-post" && route.type !== "bring-companion" && (
+      {!isMoment && route.type !== "chat" && route.type !== "compose-post" && route.type !== "bring-companion" && route.type !== "bring-connection" && (
         <AppHeader
           routeIsRoot={route.type === "root"}
           rootTab={nav.rootTab}
-          identityTitle={identityLabel(identityValue)}
+          identityTitle={identityLabel(identityValue, ownerNickname)}
           isSampleCompanion={isSampleCompanion}
           identity={identity}
           onBack={goBack}
@@ -694,7 +712,7 @@ function WorldApp({ client, account, isMockMode }: {
           initialChatId={route.chatId}
           companionId={route.companionId}
           companionName={route.companionName ?? companionDisplayName}
-          ownerName={identityLabel(identityValue)}
+          ownerName={identityLabel(identityValue, ownerNickname)}
           autoFocus={route.autoFocus === true}
           backLabel={route.fromTab === "messages" ? "返回消息" : route.fromTab === "my" ? "返回" : "返回小家"}
           onSaveQuote={ownerId && route.companionId ? quote => addAlbumQuote({ ownerId, companionId: route.companionId! }, quote) : undefined}
@@ -780,7 +798,13 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && client.api.community && (
         <HumanProfileEditor key={identityId} client={client.api.community}
-          viewer={{ kind: "OWNER", id: identityId }} onClose={goBack} />
+          viewer={{ kind: "OWNER", id: identityId }} onClose={saved => {
+            if (saved) {
+              reloadNickname(value => value + 1);
+              invalidateCommunity();
+            }
+            goBack();
+          }} />
       )}
 
       {route.type === "encounter" && (
@@ -825,11 +849,26 @@ function WorldApp({ client, account, isMockMode }: {
             setNav(current => {
               const home = selectTab(current, "home");
               return connectionKind && client.api.chat?.saveConnection
-                ? pushRoute(home, { type: "chat-settings", companionId: created.companionId, connectionKind })
+                ? pushRoute(home, { type: "bring-connection", companionId: created.companionId, kind: connectionKind })
                 : home;
             });
           }}
         />
+      )}
+
+      {route.type === "bring-connection" && canUseChat && client.api.chat?.saveConnection && (
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: CHROME.screenInset, gap: 14 }}>
+            <SecondaryHeading title={route.kind === "key" ? "自带 API Key" : "连接自建家机"} />
+            <ConnectionForm kind={route.kind} onClose={goBack} handleBack closeLabel="稍后设置，先去小家" submitConnection={async input => {
+              const result = await client.api.chat!.saveConnection!(route.companionId, input);
+              if (result.result === "CONNECTED") {
+                setNav(current => current.stack.at(-1) === route ? popRoute(current) : current);
+              }
+              return result.result;
+            }} />
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
 
       {route.type === "social-activation" && (
@@ -873,6 +912,7 @@ function WorldApp({ client, account, isMockMode }: {
       <IdentitySwitcher
         visible={switcherOpen}
         identity={identity}
+        ownerNickname={ownerNickname}
         companions={ownerCompanions}
         pending={identitySwitchPending}
         onClose={() => setSwitcherOpen(false)}
@@ -1602,15 +1642,18 @@ function AppSettingsSheet({
   onAgentSettings?: () => void;
 }) {
   const styles = useThemedStyles(createStyles);
-  const { skin, ui, setSkinById, availableSkins } = useSkin();
+  const { skin, ui, setSkinById, availableSkins, textSize, setTextSize } = useSkin();
   const [colorModalOpen, setColorModalOpen] = useState(false);
   const defaultSkin = skin.id === "default";
   const ink = defaultSkin ? ui.ink : skin.colors.ink;
   const muted = defaultSkin ? ui.muted : skin.colors.inkSub;
 
   return (
-    <>
-      <BottomSheet visible={visible} title="设置" onClose={onClose}>
+    <BottomSheet visible={visible} title={colorModalOpen ? "基础外观" : "设置"} onClose={() => {
+      setColorModalOpen(false);
+      onClose();
+    }}>
+      {!colorModalOpen ? <>
         {visible && walletClient?.wallet && <WalletBalance client={walletClient} />}
         <View style={[styles.cleanCardGroup, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
           {onAgentSettings && (
@@ -1649,16 +1692,13 @@ function AppSettingsSheet({
           )}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="基础外观配色"
+            accessibilityLabel="基础外观"
             style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
-            onPress={() => {
-              onClose();
-              setColorModalOpen(true);
-            }}
+            onPress={() => setColorModalOpen(true)}
           >
             <View style={styles.cleanRowLeft}>
               <Ionicons name="color-palette-outline" size={20} color={skin.glass.iconTint} />
-              <Text style={[styles.cleanRowTitle, { color: ink }]}>基础外观配色</Text>
+              <Text style={[styles.cleanRowTitle, { color: ink }]}>基础外观</Text>
             </View>
             <View style={styles.cleanRowRight}>
               <Text style={[styles.cleanRowValue, { color: muted }]}>{skin.name}</Text>
@@ -1674,15 +1714,28 @@ function AppSettingsSheet({
             </Pressable>
           )}
         </View>
-      </BottomSheet>
-
-      <BottomSheet visible={colorModalOpen} title="基础外观配色" onClose={() => setColorModalOpen(false)}>
-        <Text style={[styles.heroBio, { color: muted }]}>聊天样式预览</Text>
+      </> : <ScrollView style={{ maxHeight: "72%" }} contentContainerStyle={{ gap: 8 }} keyboardShouldPersistTaps="handled">
+        <Pressable accessibilityRole="button" onPress={() => setColorModalOpen(false)} style={styles.cleanRow}>
+          <Text style={[styles.cleanRowTitle, { color: ink }]}>返回设置</Text>
+        </Pressable>
+        <Text style={[styles.heroBio, { color: muted }]}>字体大小</Text>
+        <View style={[styles.skinPickerRow, { flexWrap: "wrap" }]}>
+          {(Object.keys(TEXT_SIZES) as Array<keyof typeof TEXT_SIZES>).map(size => (
+            <Pressable key={size} accessibilityRole="radio" accessibilityState={{ selected: size === textSize }}
+              onPress={() => setTextSize(size)} style={[styles.skinPill, {
+                backgroundColor: size === textSize ? skin.colors.accent : skin.colors.surface, borderColor: skin.colors.border,
+              }]}>
+              <Text style={[styles.skinPillText, { color: size === textSize ? skin.colors.accentFg : ink }]}>{TEXT_SIZES[size]}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[styles.profileHandle, { color: muted }]}>预览</Text>
+        <Text style={[styles.feedBody, { color: ink }]}>今天回家时，窗边正好有一束光。</Text>
         <View style={[styles.skinPreviewBox, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
           <GlassChatBubble senderRole="ai" text="看你昨晚说肩颈酸，把靠枕换软了。" />
           <GlassChatBubble senderRole="human" text="收到啦，今晚早点回来。" />
         </View>
-        <View style={styles.skinPickerRow}>
+        <View style={[styles.skinPickerRow, { flexWrap: "wrap" }]}>
           {availableSkins.map((preset) => {
             const active = preset.id === skin.id;
             return (
@@ -1704,14 +1757,15 @@ function AppSettingsSheet({
             );
           })}
         </View>
-      </BottomSheet>
-    </>
+      </ScrollView>}
+    </BottomSheet>
   );
 }
 
 function IdentitySwitcher({
   visible,
   identity,
+  ownerNickname,
   companions,
   pending,
   onClose,
@@ -1721,6 +1775,7 @@ function IdentitySwitcher({
   visible: boolean;
   identity: LoadState<ActiveIdentityContext>;
   companions: LoadState<OwnerCompanionCollection>;
+  ownerNickname?: string;
   pending: boolean;
   onClose: () => void;
   onOwner: () => void;
@@ -1734,7 +1789,7 @@ function IdentitySwitcher({
   const ownerPresentation = identity.kind === "success" && identity.value.activeSubject.kind === "OWNER"
     ? identity.value.activeSubject.presentation
     : undefined;
-  const ownerName = ownerPresentation?.displayName ?? "本人";
+  const ownerName = ownerNickname ?? identityLabel(ownerActive && identity.kind === "success" ? identity.value : undefined);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>

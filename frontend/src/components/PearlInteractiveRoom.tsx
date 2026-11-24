@@ -4,7 +4,7 @@ import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { BED_QUILT_OVERLAY, BOY_SPRITES, DUO_SPRITES, GIRL_SPRITES, ROOM_BASE_IMAGE, ROOM_SLOTS, SOFA_FRONT, type CharacterAction, type RoomImage } from "../room/roomSlots";
-import { DUO_SLOT, type ActorId } from "../room/geometry";
+import { BED_FLOOR_EDGE, DUO_SLOT, SOFA_SLOT, type ActorId } from "../room/geometry";
 import { RoomEngine, type ActorFrame } from "../room/roomEngine";
 import { useAppIsActive } from "../state/useAppIsActive";
 import { useSkin } from "../theme/SkinProvider";
@@ -112,15 +112,16 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     const action = spriteFor(actor);
     const sprites = (id === "user") !== isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
     const seated = actor.phase === "SIT";
-    const inBed = actor.furniture === "bed" && actor.point.nx < .314;
-    const zIndex = inBed ? 530 : actor.furniture === "sofa" ? 660 : depth(actor.point.ny) + 1;
-    // Pillow poses use their own scale so the folded quilt covers only the body.
-    const height = actor.phase === "SLEEP" ? .142 : seated ? .132 : .175;
+    const inBed = actor.furniture === "bed" && actor.point.ny < BED_FLOOR_EDGE;
+    const beforeSofaFront = actor.furniture === "sofa" && actor.point.ny < SOFA_SLOT.top + SOFA_SLOT.height;
+    const zIndex = inBed ? 530 : beforeSofaFront ? 660 : depth(actor.point.ny) + 1;
+    // All poses share the same canvas and foot baseline.
+    const height = .175;
     const width = height;
     return <View key={id} testID={`room-actor-${id}`} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
       actor.point.ny - height * .973, width, height), {
-      zIndex, opacity: frame.duo ? 0 : actor.opacity ?? 1,
-      transform: [{ scaleX: (seated ? id === "user" : action !== "sleep" && actor.facingLeft) ? -1 : 1 }],
+      zIndex, opacity: frame.duo ? 0 : 1,
+      transform: [{ scaleX: (seated ? id === "user" : actor.phase === "WALK" && actor.facingLeft) ? -1 : 1 }],
     }]}>
       <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />
     </View>;
@@ -129,7 +130,6 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
   const sofa = ROOM_SLOTS.find(slot => slot.id === "slot_sofa")!;
   const bed = ROOM_SLOTS.find(slot => slot.id === "slot_bed")!;
   const companion = frame.actors.companion.point;
-  const quiltVisible = Object.values(frame.actors).some(actor => actor.furniture === "bed" && actor.point.nx < .314);
   const labelColor = night ? ui.onDark : skin.colors.ink;
   return <View style={[styles.frame, { borderColor: skin.colors.border, backgroundColor: skin.colors.canvas }]}
     onLayout={event => {
@@ -143,14 +143,14 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
       <View pointerEvents="none" style={[box(size, sofa.left, sofa.top, sofa.width, sofa.height), { zIndex: 680 }]}>
         <SceneImage source={SOFA_FRONT} onLoad={onLoad} />
       </View>
-      <View pointerEvents="none" style={[box(size, bed.left, bed.top, bed.width, bed.height), { zIndex: 531, opacity: quiltVisible ? 1 : 0 }]}>
+      <View pointerEvents="none" style={[box(size, bed.left, bed.top, bed.width, bed.height), { zIndex: 531 }]}>
         <SceneImage source={BED_QUILT_OVERLAY} onLoad={onLoad} />
       </View>
       <View testID="room-duo-sprite" pointerEvents="none" style={[box(size, DUO_SLOT.left, DUO_SLOT.top, DUO_SLOT.width, DUO_SLOT.height), { zIndex: depth(DUO_SLOT.top + DUO_SLOT.height) + 1 }]}>
         <SpriteFrames sources={DUO_TEXTURES} current={frame.duo ? `${frame.duo.action}:${frame.duo.frame}` : ""} onLoad={onLoad} />
       </View>
       {night && <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.night, { backgroundColor: ui.roomNight }]} />}
-      {sleeping && <Text style={[styles.zzz, { left: size.width * .17, top: size.height * .29,
+      {sleeping && <Text style={[styles.zzz, { left: size.width * .25, top: size.height * .235,
         opacity: .5 + Math.sin(frame.time / 400) * .3, color: labelColor }]}>Zzz</Text>}
       {frame.effects.map(effect => <View key={effect.id} pointerEvents="none"
         style={[styles.effect, { left: size.width * effect.point.nx - 14, top: size.height * effect.point.ny - 12,
