@@ -12,7 +12,9 @@ import {
   BackHandler,
   ActivityIndicator,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -538,7 +540,7 @@ function WorldApp({ client, account, isMockMode }: {
   }
 
   useEffect(() => {
-    if (route.type === "root" || route.type === "compose-post" || route.type === "bring-companion") return;
+    if (route.type === "root" || route.type === "compose-post" || route.type === "bring-companion" || route.type === "bring-connection") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       goBack();
       return true;
@@ -855,16 +857,18 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "bring-connection" && canUseChat && client.api.chat?.saveConnection && (
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: CHROME.screenInset, gap: 14 }}>
-          <SecondaryHeading title={route.kind === "key" ? "自带 API Key" : "连接自建家机"} />
-          <ConnectionForm kind={route.kind} onClose={goBack} closeLabel="稍后设置，先去小家" submitConnection={async input => {
-            const result = await client.api.chat!.saveConnection!(route.companionId, input);
-            if (result.result === "CONNECTED") {
-              setNav(current => current.stack.at(-1) === route ? popRoute(current) : current);
-            }
-            return result.result;
-          }} />
-        </ScrollView>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: CHROME.screenInset, gap: 14 }}>
+            <SecondaryHeading title={route.kind === "key" ? "自带 API Key" : "连接自建家机"} />
+            <ConnectionForm kind={route.kind} onClose={goBack} handleBack closeLabel="稍后设置，先去小家" submitConnection={async input => {
+              const result = await client.api.chat!.saveConnection!(route.companionId, input);
+              if (result.result === "CONNECTED") {
+                setNav(current => current.stack.at(-1) === route ? popRoute(current) : current);
+              }
+              return result.result;
+            }} />
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
 
       {route.type === "social-activation" && (
