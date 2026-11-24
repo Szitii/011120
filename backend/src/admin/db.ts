@@ -7,7 +7,7 @@ import type pg from "pg";
 
 export type AdminFunction = "reports" | "report_resolve" | "owners" | "owner_detail" | "owner_suspend" | "twin_suspend"
   | "content_remove" | "content_restore" | "chats" | "chat_read" | "models" | "model_switch_set" | "chat_quota_set"
-  | "spend" | "log" | "spend_cap_set" | "wallet_policy_set" | "wallet_adjust";
+  | "spend" | "log" | "features" | "feature_set" | "spend_cap_set" | "wallet_policy_set" | "wallet_adjust";
 
 export interface AdminDb {
   /** Calls one console function and returns its JSON (undefined for the ones that return nothing). */
@@ -32,6 +32,7 @@ const KNOWN: readonly (readonly [RegExp, string])[] = [
   [/^owner not found$/, "没有找到这个主人。"],
   [/^owner is deleted$/, "这个主人账号已经删除。"],
   [/^chat not found$/, "没有找到这个会话,可能主人已经删除了。"],
+  [/^unknown feature$/, "没有这个功能开关。"],
   [/^credits must be a non-zero whole number$/, "积分要填不为 0 的整数。"],
   [/^permission denied/, "这个数据库账号没有管理权限(需要属于 companion_admin)。"],
 ];

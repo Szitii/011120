@@ -12,9 +12,9 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { AdminRefusal, type AdminDb } from "./db.ts";
-import { chatGatePage, chatPage, errorPage, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS,
+import { chatGatePage, chatPage, errorPage, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
   type CatalogEntry, type ChatList, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue,
-  type Spend } from "./pages.ts";
+  type Feature, type Spend } from "./pages.ts";
 
 export interface AdminServerOptions {
   readonly db: AdminDb;
@@ -110,7 +110,8 @@ export function createAdminServer(options: AdminServerOptions): Server {
     if (path === "/models") {
       const to = dayOr(query.get("to"), now().toISOString().slice(0, 10));
       const from = dayOr(query.get("from"), new Date(Date.parse(to) - 6 * 86_400_000).toISOString().slice(0, 10));
-      return modelsPage(zone, await db.call<Models>("models"), await db.call<Spend>("spend", from, to), catalog, done);
+      return modelsPage(zone, await db.call<Models>("models"), await db.call<Spend>("spend", from, to), catalog, done,
+        await db.call<Feature[]>("features"));
     }
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
@@ -143,6 +144,9 @@ export function createAdminServer(options: AdminServerOptions): Server {
       if (!targets.has(form.target ?? "") || (form.enabled !== "on" && form.enabled !== "off")) throw new AdminRefusal("请选择开关哪一个,以及开还是关。");
       const cut = form.target!.indexOf(":");
       await db.call("model_switch_set", form.target!.slice(0, cut), form.target!.slice(cut + 1), form.enabled === "on", reason);
+    } else if (path === "/models/feature") {
+      if (!Object.hasOwn(FEATURES, form.key ?? "") || (form.enabled !== "on" && form.enabled !== "off")) throw new AdminRefusal("请选择开关哪一个,以及开还是关。");
+      await db.call("feature_set", form.key, form.enabled === "on", reason);
     } else if (path === "/models/cap") {
       if ((form.enabled !== "on" && form.enabled !== "off") || !/^\d{1,9}$/.test(form.cents ?? "")) throw new AdminRefusal("请选择开关,金额要填整数。");
       await db.call("spend_cap_set", form.enabled === "on", Number(form.cents), reason);

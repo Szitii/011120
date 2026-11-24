@@ -50,7 +50,10 @@ try {
   const review = (await call<Review>(0, "companion-imports", "POST", card)).data;
   const memoryCandidates = review.draft.candidates.filter(c => c.field === "memory");
   assert.deepEqual(memoryCandidates.map(c => [c.value, c.approvable]),
-    [["我们一起看过海", true], ["主人的生日在三月", true], ["my key is sk-abcdefghijklmnop1234", false]]);
+    [["我们一起看过海", true], ["主人的生日在三月", true], [undefined, false]], "a blocked candidate's text is never sent back");
+  const stored = await pool.query("select raw_payload, normalized_draft::text as draft from companion_private.companion_imports where id = $1", [review.id]);
+  assert.equal(stored.rows[0]!.raw_payload, null, "the original upload is not kept");
+  assert.ok(!stored.rows[0]!.draft.includes("sk-abcdefghijklmnop1234"), "nor the blocked text");
   const blocked = await call(0, `companion-imports/${review.id}/approve`, "POST",
     { approvedCandidateIds: ["candidate-displayName", "candidate-memory-3"] });
   assert.equal(blocked.status, 400, "a blocked memory cannot be approved");

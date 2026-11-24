@@ -46,6 +46,7 @@ const fixtures = {
       { id: id(84), companionId: COMPANION, body: null, status: "PENDING", failure: null, createdAt: AT }],
     next: { at: AT, id: id(81) },
   } satisfies ChatPage as ChatPage,
+  features: [{ key: "GROUP_CHAT_CREATE", enabled: false, updatedAt: AT }, { key: "GROUP_CHAT_SEND", enabled: true, updatedAt: AT }],
   models: { switches: [{ scope: "MODEL", key: "claude/claude-small", enabled: false, note: NASTY, updatedAt: AT },
     { scope: "PROVIDER", key: "other", enabled: false, note: "outage", updatedAt: AT }, { scope: "ALL", key: "*", enabled: true, note: "back on", updatedAt: AT }],
     quota: { dailyCalls: 200, dailyCostMinor: 100, currency: "USD", updatedAt: AT },
@@ -327,13 +328,15 @@ it("shows a private chat only after a reason is given", async () => {
 it("shows model switches, the quota and what was spent, and changes only what the catalog names", async () => {
   const { send, calls } = await start();
   const page = await send("/models");
-  assert.deepEqual(calls, [["models"], ["spend", "2026-11-17", "2026-11-23"]], "the last seven days by default");
+  assert.deepEqual(calls, [["models"], ["spend", "2026-11-17", "2026-11-23"], ["features"]], "the last seven days by default");
   const states = [...page.body.matchAll(/<td>claude\/claude-big<\/td><td><span class="tag ([a-z]*)">([^<]+)</g)].map(m => [m[1], m[2]]);
   assert.deepEqual(states, [["", "开"]]);
   assert.match(page.body, /claude\/claude-small<\/td><td><span class="tag bad">关\(模型关闭\)/);
   assert.match(page.body, /other\/other-chat<\/td><td><span class="tag bad">关\(厂商关闭\)/);
   assert.deepEqual([...page.body.matchAll(/<option value="((?:ALL|PROVIDER|MODEL):[^"]+)"/g)].map(m => m[1]),
     ["ALL:*", "PROVIDER:claude", "PROVIDER:other", "MODEL:claude/claude-big", "MODEL:claude/claude-small", "MODEL:other/other-chat"]);
+  assert.match(page.body, /<td>新建群聊<\/td><td><span class="tag bad">关<\/span>/);
+  assert.match(page.body, /<td>在已有群聊里发消息<\/td><td><span class="tag ">开<\/span>/);
   assert.match(page.body, /每天 200 次调用、1\.00 USD/);
   assert.match(page.body, /每天 20\.00 USD,今天\(UTC\)已用 3\.45 USD/);
   assert.match(page.body, /现在:关\(只按每个家机每天的免费额度限制\)。新主人送 1000 积分/);
@@ -376,6 +379,12 @@ it("shows model switches, the quota and what was spent, and changes only what th
   assert.deepEqual(calls, []);
   assert.equal((await send("/models/quota", { form: change({ calls: "150", cents: "80" }) })).status, 303);
   assert.deepEqual(calls, [["chat_quota_set", 150, 80, "because"]]);
+  calls.length = 0;
+  for (const form of [change({ key: "GROUP_CHAT_SEND" }), change({ key: "NOPE", enabled: "on" }), change({ enabled: "on" })]) {
+    assert.equal((await send("/models/feature", { form })).status, 409);
+  }
+  assert.equal((await send("/models/feature", { form: change({ key: "GROUP_CHAT_CREATE", enabled: "on" }) })).status, 303);
+  assert.deepEqual(calls, [["feature_set", "GROUP_CHAT_CREATE", true, "because"]]);
   calls.length = 0;
   const OWNER_ID = "00000000-0000-4000-8000-000000000001";
   for (const [path, form] of [
