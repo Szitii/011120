@@ -4,3 +4,5 @@
 !contracts/
 !backend/config/
 !backend/src/
+!backend/scripts/admin-console.ts
+!backend/scripts/admin-start.sh
