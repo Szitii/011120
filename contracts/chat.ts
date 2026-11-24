@@ -184,3 +184,41 @@ export interface CompanionMemory {
 export interface MemoryList {
   items: CompanionMemory[];
 }
+
+/**
+ * 家机接入方式: how a Companion speaks. PLATFORM: the platform's models (default). BYOK: the
+ * Owner's own API key for a provider; the platform still writes the prompt (persona, memories).
+ * EXTERNAL: the Owner's own agent at an HTTPS endpoint (OpenAI /chat/completions format).
+ * The key or token is never sent back; keyHint is its last 4 characters.
+ */
+export interface CompanionConnection {
+  kind: "PLATFORM" | "BYOK" | "EXTERNAL";
+  /** BYOK: deepseek, qwen, kimi, doubao, glm, minimax or custom. */
+  provider: string | null;
+  /** BYOK: the provider's API base. EXTERNAL: the endpoint. */
+  baseUrl: string | null;
+  model: string | null;
+  /** EXTERNAL: the name the Owner gave it. */
+  name: string | null;
+  keyHint: string | null;
+  connectedAt: string | null;
+}
+
+/** PUT /v0/companions/{id}/connection. `consent` must be true (the Owner read the privacy note). */
+export type ConnectionInput =
+  | { kind: "BYOK"; provider: string; baseUrl?: string; model: string; apiKey: string; consent: boolean }
+  | { kind: "EXTERNAL"; name: string; endpoint: string; bearerToken: string; model?: string | null; consent: boolean };
+
+/**
+ * The server tries one tiny call before saving. CONNECTED: saved. AUTH_FAILED: the key or token was
+ * refused. NOT_FOUND: wrong address or model name. UNREACHABLE: no answer in time. BAD_ANSWER: it
+ * answered, but not in the /chat/completions format. BLOCKED_ADDRESS: not a public address. ERROR: other.
+ */
+export type ConnectionTest = "CONNECTED" | "AUTH_FAILED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER" | "BLOCKED_ADDRESS" | "ERROR";
+
+/** PUT result: the connection now in use (unchanged unless CONNECTED). */
+export interface ConnectionSaveResult {
+  result: ConnectionTest;
+  connection: CompanionConnection;
+}
+

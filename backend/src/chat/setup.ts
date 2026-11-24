@@ -7,10 +7,19 @@ import { ChatCatalog } from "./models.ts";
 import { PlatformChatModel } from "./platform.ts";
 import { createModelCaller } from "./providers.ts";
 import { ChatReplies, devChatModel } from "./replies.ts";
+import { ConnectedChatModel, Connections } from "../connections/model.ts";
+import { SecretBox } from "../connections/secret-box.ts";
 
+/**
+ * With CONNECTION_SECRET_KEY set, Owners may also connect their own key or agent
+ * (connections/model.ts); Companions without one answer as described above.
+ */
 export function chatFromEnvironment(mode: "stage1-mobile-dev" | "supabase-auth", env = process.env) {
   const catalog = ChatCatalog.load(env);
   const platform = catalog.models.some(model => catalog.usable(model))
     ? new PlatformChatModel(catalog, createModelCaller(catalog)) : undefined;
-  return { catalog, replies: new ChatReplies(platform ?? (mode === "stage1-mobile-dev" ? devChatModel : undefined)) };
+  const fallback = platform ?? (mode === "stage1-mobile-dev" ? devChatModel : undefined);
+  const box = SecretBox.fromEnv(env);
+  if (box === undefined) return { catalog, replies: new ChatReplies(fallback) };
+  return { catalog, replies: new ChatReplies(new ConnectedChatModel(fallback, box)), connections: new Connections(box) };
 }

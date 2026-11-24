@@ -332,3 +332,51 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 - 说话方式、价值观、边界这几个人设字段，导入时还没有从卡片里读，下一步补。
 - Markdown 和纯文本的设定加记忆，要先用模型整理成结构化内容，所以要等接上模型才能做。在那之前，前端继续显示"暂未接入"。
 
+## 11. 家机接入方式：自带 Key、接自己的 Agent（2026-11-24）
+
+对应前端 `docs/claude_2026_11_24.txt` 的 P2（形态 A 和形态 B），以及接入家机五屏流程里的"自带 Key / 外部本体"。接口：`GET / PUT / DELETE /v0/companions/{id}/connection`，类型在 `contracts/chat.ts`（`CompanionConnection`、`ConnectionInput`、`ConnectionSaveResult`）。
+
+### 11.1 三种方式
+
+| kind | 意思 | 谁写提示词 | 记忆 |
+| --- | --- | --- | --- |
+| `PLATFORM`（默认） | 平台的模型 | 平台 | 用 |
+| `BYOK` | 主人自己的 API Key，接 DeepSeek、通义千问、Kimi、豆包、智谱、MiniMax，或者自定义的 OpenAI 兼容接口 | 平台（人设、记忆、聊天规则都和平台模型一样） | 用 |
+| `EXTERNAL` | 主人自己的 Agent（Dify、Coze、OpenClaw、自己的服务），要用 OpenAI `/chat/completions` 格式回复 | 对方自己（平台只发聊天记录和几条基本规则） | 不发，对方有自己的记忆 |
+
+不管用哪种，家机的回复都会过平台的安全检查，也会照常存进聊天记录、写进日记。BYOK 和 EXTERNAL 不占平台的每日额度。
+
+### 11.2 接口
+
+- `GET`：返回 `{kind, provider, baseUrl, model, name, keyHint, connectedAt}`。**Key 和 Token 永远不会返回**，`keyHint` 是最后 4 位，可以显示成"••••9876"。
+- `PUT`：服务器先用一条很短的请求试一次，**通了才保存**，返回 `{result, connection}`。
+  - 自带 Key：`{kind:"BYOK", provider, model, apiKey, consent:true}`。`provider` 取 deepseek / qwen / kimi / doubao / glm / minimax / custom；选 custom 时再带 `baseUrl`。预设服务商的地址由服务器决定，前端传的会被忽略，模型名和前端 `providerPresets` 里的默认值一致即可。
+  - 自己的 Agent：`{kind:"EXTERNAL", name, endpoint, bearerToken, model?, consent:true}`。没有 Token 时 `bearerToken` 传空字符串。
+  - `consent` 必须是 true，就是隐私说明的那个勾选框。
+- `DELETE`：回到平台模型，服务器上的密钥一起删掉。
+
+`result` 的值和建议的提示：
+
+| result | 提示 |
+| --- | --- |
+| `CONNECTED` | 已接入 |
+| `AUTH_FAILED` | Key 或 Token 不对 |
+| `NOT_FOUND` | 地址或模型名不对 |
+| `UNREACHABLE` | 连不上（15 秒内没有响应） |
+| `BAD_ANSWER` | 连上了，但返回的不是 /chat/completions 格式 |
+| `BLOCKED_ADDRESS` | 地址不能用（内网、本机之类） |
+| `ERROR` | 对方报错，稍后再试 |
+
+只要不是 `CONNECTED`，原来的接入方式就不变。
+
+- 400：格式不对，比如不是 https、地址里带了用户名密码或 `?` 参数、端口不是 443、Key 里有空格、没勾选同意。
+- 404：不是自己的家机。
+- 429：10 分钟内试了超过 10 次。
+- **501：服务器上还没开这个功能**，这时显示前端现在的"服务端尚未接入"就行。线上要等后端配好加密钥匙才会打开。
+
+### 11.3 安全上做了什么（给隐私说明参考）
+
+- Key 和 Token 在服务器上加密后才存进数据库（AES-256-GCM），数据库、备份和运营后台都只能看到密文，App 也拿不回明文。
+- 服务器只会访问公网的 https 地址（443 端口），不会访问内网、本机、云服务器的元数据地址，也不跟随跳转。
+- 聊天内容会发给主人选的服务商或 Agent，隐私说明里要写清楚这一点。发出去之前，主人消息里的密码、密钥会被打码。
+
