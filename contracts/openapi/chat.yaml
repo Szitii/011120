@@ -1074,6 +1074,12 @@ components:
           description: |
             OFF (不写) never. RARE (偶尔) about every 3 days. DAILY (每天, default) about once a day
             (20 hours after the previous entry). OFTEN (常写) up to every 6 hours.
+        autoWrite:
+          type: boolean
+          description: |
+            Also write while the app is closed (the server checks every few minutes; default false: only
+            when the Owner opens the diary). Always in responses; optional in PUT, left out keeps the
+            current value.
         revision: {type: integer, minimum: 1}
     DiaryEntry:
       type: object

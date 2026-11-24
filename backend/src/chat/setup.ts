@@ -23,6 +23,9 @@ export function chatFromEnvironment(mode: "stage1-mobile-dev" | "supabase-auth",
   const fallback = platform ?? (mode === "stage1-mobile-dev" ? devChatModel : undefined);
   const voices = Voices.fromEnvironment(mode, env);
   const box = SecretBox.fromEnv(env);
-  if (box === undefined) return { catalog, replies: new ChatReplies(fallback, undefined, voices) };
-  return { catalog, replies: new ChatReplies(new ConnectedChatModel(fallback, box), undefined, voices), connections: new Connections(box) };
+  // Who can write diaries in the background: the platform's models, Owners' own keys and agents, or nobody.
+  const background = platform !== undefined || box !== undefined ? { platform: platform !== undefined } : undefined;
+  if (box === undefined) return { catalog, replies: new ChatReplies(fallback, undefined, voices), background };
+  return { catalog, replies: new ChatReplies(new ConnectedChatModel(fallback, box), undefined, voices), connections: new Connections(box),
+    background };
 }

@@ -208,6 +208,11 @@ export interface ChatModelList {
  */
 export interface DiarySettings {
   frequency: "OFF" | "RARE" | "DAILY" | "OFTEN";
+  /**
+   * Also write when the app is closed (the server checks every few minutes). Off: only when the
+   * Owner opens the diary. Optional in PUT: left out keeps the current value.
+   */
+  autoWrite?: boolean;
   revision: number;
 }
 
