@@ -1645,8 +1645,11 @@ function AppSettingsSheet({
   const muted = defaultSkin ? ui.muted : skin.colors.inkSub;
 
   return (
-    <>
-      <BottomSheet visible={visible} title="设置" onClose={onClose}>
+    <BottomSheet visible={visible} title={colorModalOpen ? "基础外观" : "设置"} onClose={() => {
+      setColorModalOpen(false);
+      onClose();
+    }}>
+      {!colorModalOpen ? <>
         {visible && walletClient?.wallet && <WalletBalance client={walletClient} />}
         <View style={[styles.cleanCardGroup, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
           {onAgentSettings && (
@@ -1687,10 +1690,7 @@ function AppSettingsSheet({
             accessibilityRole="button"
             accessibilityLabel="基础外观"
             style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
-            onPress={() => {
-              onClose();
-              setColorModalOpen(true);
-            }}
+            onPress={() => setColorModalOpen(true)}
           >
             <View style={styles.cleanRowLeft}>
               <Ionicons name="color-palette-outline" size={20} color={skin.glass.iconTint} />
@@ -1710,9 +1710,10 @@ function AppSettingsSheet({
             </Pressable>
           )}
         </View>
-      </BottomSheet>
-
-      <BottomSheet visible={colorModalOpen} title="基础外观" onClose={() => setColorModalOpen(false)}>
+      </> : <ScrollView style={{ maxHeight: "72%" }} contentContainerStyle={{ gap: 8 }} keyboardShouldPersistTaps="handled">
+        <Pressable accessibilityRole="button" onPress={() => setColorModalOpen(false)} style={styles.cleanRow}>
+          <Text style={[styles.cleanRowTitle, { color: ink }]}>返回设置</Text>
+        </Pressable>
         <Text style={[styles.heroBio, { color: muted }]}>字体大小</Text>
         <View style={[styles.skinPickerRow, { flexWrap: "wrap" }]}>
           {(Object.keys(TEXT_SIZES) as Array<keyof typeof TEXT_SIZES>).map(size => (
@@ -1730,7 +1731,7 @@ function AppSettingsSheet({
           <GlassChatBubble senderRole="ai" text="看你昨晚说肩颈酸，把靠枕换软了。" />
           <GlassChatBubble senderRole="human" text="收到啦，今晚早点回来。" />
         </View>
-        <View style={styles.skinPickerRow}>
+        <View style={[styles.skinPickerRow, { flexWrap: "wrap" }]}>
           {availableSkins.map((preset) => {
             const active = preset.id === skin.id;
             return (
@@ -1752,8 +1753,8 @@ function AppSettingsSheet({
             );
           })}
         </View>
-      </BottomSheet>
-    </>
+      </ScrollView>}
+    </BottomSheet>
   );
 }
 

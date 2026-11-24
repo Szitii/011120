@@ -2,7 +2,6 @@ import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { DUO_POINTS, FURNITURE, SPAWN, WAKE_POINTS, type ActorId, type FurnitureId, type RoomPoint } from "./geometry.ts";
 import { findSafePath } from "./pathfinding.ts";
 
-
 const ACTORS = ["companion", "user"] as const;
 type DuoAction = Exclude<CompanionAction, "WAVE">;
 type Phase = "IDLE" | "WALK" | "SIT" | "SLEEP" | "DUO";
@@ -57,7 +56,8 @@ export class RoomEngine {
   }
 
   floor(point: RoomPoint) {
-    if (this.locked || this.sleeping) return;
+    const user = this.tracks.user;
+    if (this.locked || this.sleeping || (user.frame.furniture && user.steps.length)) return;
     const plan = this.plan("user", point);
     if (!plan) return;
     this.apply(plan);
@@ -112,13 +112,14 @@ export class RoomEngine {
     const steps = path.map(point => ({ point }) as Step);
     if (start.furniture) {
       const exit = FURNITURE[start.furniture][actor];
-      steps.unshift({ point: exit.approach, transition: "SIT" });
-      if (exit.entry) steps.unshift({ point: exit.entry, transition: "SIT", furniture: start.furniture });
+      steps.unshift({ point: exit.approach, furniture: start.furniture, pose: "IDLE" });
+      if (exit.entry) steps.unshift({ point: exit.entry, furniture: start.furniture });
     }
     if (dock && furniture) {
       const entry = FURNITURE[furniture][actor].entry;
-      if (entry) steps.push({ point: entry, furniture, transition: "SIT" });
-      steps.push({ point: dock.anchor, furniture, pose: furniture === "bed" ? "SLEEP" : "SIT", transition: "SIT" });
+      const bed = furniture === "bed";
+      if (entry) steps.push({ point: entry, furniture, transition: bed ? "SIT" : undefined });
+      steps.push({ point: dock.anchor, furniture, pose: bed ? "SLEEP" : "SIT", transition: bed ? "SIT" : undefined });
     }
     return { actor, steps };
   }

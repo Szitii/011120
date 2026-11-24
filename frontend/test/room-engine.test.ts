@@ -107,3 +107,30 @@ test("seated actors leave the sofa from their respective openings before a duo a
   assert.deepEqual(engine.snapshot().actors.user.point, DUO_POINTS.user);
   assert.deepEqual(engine.snapshot().actors.companion.point, DUO_POINTS.companion);
 });
+
+test("sofa entry and exit clear the coffee table and use walk frames until seated", () => {
+  const engine = new RoomEngine();
+  const inTable = ({ nx, ny }: { nx: number; ny: number }) =>
+    nx >= TABLE_SLOT.left - .016 && nx <= TABLE_SLOT.left + TABLE_SLOT.width + .016 &&
+    ny >= TABLE_SLOT.top - .012 && ny <= TABLE_SLOT.top + TABLE_SLOT.height + .012;
+  engine.furniture("sofa");
+  let walkingAtSofa = false;
+  for (let frame = 0; frame < 360; frame++) {
+    engine.tick(16);
+    for (const actor of Object.values(engine.snapshot().actors)) {
+      assert.equal(inTable(actor.point), false);
+      if (actor.furniture === "sofa" && actor.phase === "WALK") walkingAtSofa = true;
+    }
+  }
+  assert.equal(walkingAtSofa, true);
+  assert.equal(engine.snapshot().actors.user.phase, "SIT");
+
+  engine.floor({ nx: .59, ny: .84 });
+  for (let frame = 0; frame < 360; frame++) {
+    engine.tick(16);
+    const { user } = engine.snapshot().actors;
+    assert.equal(inTable(user.point), false);
+    assert.notEqual(user.phase, "SIT");
+  }
+  assert.ok(engine.snapshot().actors.user.point.ny > TABLE_SLOT.top + TABLE_SLOT.height);
+});

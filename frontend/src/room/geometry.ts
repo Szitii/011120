@@ -13,8 +13,8 @@ const bounds = ({ left, top, width, height }: typeof SOFA_SLOT): ObstacleBox =>
 export const FURNITURE = {
   sofa: {
     bounds: bounds(SOFA_SLOT),
-    user: { approach: point(.782, .704), entry: point(.715, .686), anchor: point(.625, .646) },
-    companion: { approach: point(.395, .704), entry: point(.44, .686), anchor: point(.535, .646) },
+    user: { approach: point(.782, .704), entry: point(.747, .639), anchor: point(.625, .639) },
+    companion: { approach: point(.395, .704), entry: point(.416, .639), anchor: point(.535, .639) },
   },
   bed: {
     bounds: { x1: .02, y1: .22, x2: .35, y2: .56 },
