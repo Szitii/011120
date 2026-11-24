@@ -24,6 +24,14 @@ info:
     (send their ids in `mentions`) always; with no mention, each by its `groupActivity`. Then
     Companions may answer each other by their `companionInteraction`, until 8 Companion turns;
     then the chat waits for the Owner. A new Owner message stops their conversation.
+
+    Voice messages (语音): when the Owner picks a voice for a Companion (`voice` in its chat
+    settings, from GET /voices), it sometimes answers with a voice message, like a person: it
+    decides which. A voice message has `audio: {durationMs}` and its transcript in `body`; play GET
+    .../messages/{messageId}/audio. While a Companion records one it is in both `typing` and
+    `recording` (show "正在说话…"). Clips are kept 30 days, then `audio` becomes null and the
+    message shows as text. Each Owner gets a limited number per day; past it, replies are text.
+    The Owner sends a voice message with POST /chats/{chatId}/voice (when GET /voices says `input`).
 servers:
 - url: /v0
 security:
@@ -324,6 +332,133 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /chats/{chatId}/messages/{messageId}/audio:
+    parameters:
+    - *chatId
+    - name: messageId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: getChatMessageAudio
+      summary: The audio of a voice message (one with `audio` set)
+      description: |
+        audio/mpeg (audio/wav on the development host). Supports a single `Range: bytes=start-end`
+        (206 with Content-Range, 416 when outside the clip). 404 for a text message, an expired clip,
+        or a message not shown yet. Send the Authorization header like every other call.
+      x-capability-status: implemented
+      parameters:
+      - name: Range
+        in: header
+        required: false
+        schema: {type: string, example: bytes=0-1023}
+      responses:
+        '200':
+          description: The whole clip
+          content:
+            audio/mpeg:
+              schema: {type: string, format: binary}
+            audio/wav:
+              schema: {type: string, format: binary}
+        '206':
+          description: The requested part
+          content:
+            audio/mpeg:
+              schema: {type: string, format: binary}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '416':
+          description: The range is outside the clip
+  /chats/{chatId}/voice:
+    parameters:
+    - *chatId
+    post:
+      operationId: sendChatVoice
+      summary: The Owner sends a voice message
+      description: |
+        The server turns the recording into text and sends it like POST .../messages (no @mentions):
+        the message has `audio` and `body` is what was recognised. Record mono AAC (m4a, about
+        32 kbit/s), at most 60 s and 700 KB. A retry with the same Idempotency-Key returns the first
+        message. 422 VOICE_NOT_UNDERSTOOD - nothing could be heard. 429 VOICE_LIMIT - today's voice
+        messages are used up. 503 VOICE_UNAVAILABLE - speech recognition is off or failed (try again or type).
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [audio, mime, durationMs]
+              properties:
+                audio: {type: string, contentEncoding: base64, description: The recording.}
+                mime: {type: string, enum: [audio/mp4, audio/aac, audio/mpeg, audio/wav, audio/ogg]}
+                durationMs: {type: integer, minimum: 1, maximum: 60000}
+      responses:
+        '201':
+          description: Sent; replies are on the way when `replying` is true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, typing, replying]
+                properties:
+                  message: {$ref: '#/components/schemas/ChatMessage'}
+                  typing: {$ref: '#/components/schemas/Typing'}
+                  replying: {$ref: '#/components/schemas/Replying'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: VOICE_NOT_UNDERSTOOD
+        '429':
+          description: VOICE_LIMIT
+        '503':
+          description: VOICE_UNAVAILABLE
+  /voices:
+    get:
+      operationId: listVoices
+      summary: The voices an Owner can pick for a Companion
+      description: |
+        `available: false` means voice messages are not switched on on this server: hide the voice
+        picker (a Companion with a voice set then answers in text).
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Voices
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VoiceList'}
+        '401': *problem
+        '403': *problem
+  /voices/{voiceId}/sample:
+    parameters:
+    - name: voiceId
+      in: path
+      required: true
+      schema: {type: string}
+    get:
+      operationId: getVoiceSample
+      summary: Hear a voice say a short sample line (made once per server, then cached)
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The sample
+          content:
+            audio/mpeg:
+              schema: {type: string, format: binary}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '503': *problem
   /chat-models:
     get:
       operationId: listChatModels
@@ -740,7 +875,7 @@ components:
         displayName: {type: string}
     ChatMessage:
       type: object
-      required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt]
+      required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt, audio]
       properties:
         id: {type: string, format: uuid}
         companionId: {type: [string, 'null'], format: uuid, description: null when the Owner wrote it.}
@@ -760,9 +895,17 @@ components:
             switched its models off for now. QUOTA - today's free replies are used up. ERROR - something went wrong.
         retryable: {type: boolean}
         sentAt: {type: string, format: date-time}
+        audio:
+          type: [object, 'null']
+          description: |
+            A voice message - play GET /chats/{chatId}/messages/{id}/audio; body is its transcript.
+            null for text, and once the clip has expired (kept 30 days).
+          required: [durationMs]
+          properties:
+            durationMs: {type: integer, minimum: 1}
     Chat:
       type: object
-      required: [id, title, direct, members, lastMessage, unreadCount, readUpTo, typing, replying, activeAt]
+      required: [id, title, direct, members, lastMessage, unreadCount, readUpTo, typing, recording, replying, activeAt]
       properties:
         id: {type: string, format: uuid}
         title: {type: [string, 'null'], description: Group name; always null for a one-to-one chat.}
@@ -775,6 +918,10 @@ components:
         unreadCount: {type: integer, minimum: 0, description: Companion messages shown after the Owner's read position.}
         readUpTo: {type: [string, 'null'], format: uuid, description: The last message the Owner read (PUT .../read); null before the first.}
         typing: {$ref: '#/components/schemas/Typing'}
+        recording:
+          type: array
+          description: Those in typing whose next message is a voice message; show "正在说话…" for them.
+          items: {type: string, format: uuid}
         replying: {$ref: '#/components/schemas/Replying'}
         activeAt: {type: string, format: date-time}
     Badges:
@@ -849,7 +996,27 @@ components:
         model:
           type: [string, 'null']
           description: An id from GET /chat-models; null - the platform default. Any listed id may be saved.
+        voice:
+          type: [string, 'null']
+          description: |
+            An id from GET /voices - the Companion sometimes answers with a voice message in this voice.
+            null - text only (default). Always sent; on PUT, leaving it out keeps the current voice.
         revision: {type: integer, minimum: 1}
+    VoiceInfo:
+      type: object
+      required: [id, name, gender, description]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        gender: {type: string, enum: [FEMALE, MALE]}
+        description: {type: string}
+    VoiceList:
+      type: object
+      required: [items, available, input]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/VoiceInfo'}}
+        available: {type: boolean, description: false - Companions cannot answer with voice messages on this server.}
+        input: {type: boolean, description: 'true - the Owner can send voice messages (POST /chats/{chatId}/voice).'}
     ChatModelInfo:
       type: object
       required: [id, name, provider, tier, inputPerMTok, outputPerMTok, available]

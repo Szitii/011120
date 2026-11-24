@@ -8,7 +8,7 @@ import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import type { ChatClaim, DiaryJob } from "../src/chat/port.ts";
-import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, DiaryPage, DiarySettings, DiaryWriteResult }
+import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, DiaryPage, DiarySettings, DiaryWriteResult, VoiceList }
   from "../../contracts/chat.ts";
 
 const connectionString = process.env.DATABASE_URL;
@@ -128,7 +128,7 @@ try {
   assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, connections: false });
   passed("group chats paused by switch: no new group, no sending in an old one; one-to-one chats unaffected");
 
-  const group =await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001");
+  const group = await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001");
   assert.equal(group.status, 200, JSON.stringify(group.data));
   assert.equal((await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001")).data.id, group.data.id);
   assert.equal((await call(0, "chats", "POST", { companionIds: [second, A.companion], title: "一家人" }, "group-key-0000000001")).status, 409);
@@ -146,10 +146,10 @@ try {
   assert.match(page.items[0]!.body!, /SecondCompanion接着SampleCompanion的话说一句/);
   passed("a group: both answer the Owner, then they talk to each other within their interaction limit");
 
-  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, revision: 1 });
+  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, revision: 1 });
   assert.equal((await call(1, `companions/${second}/chat-settings`)).status, 404);
   const quiet = await putSettings(second, { groupActivity: "QUIET", companionInteraction: "NONE" });
-  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 2 });
+  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, revision: 2 });
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: null, revision: 1 })).status, 409);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "LOUD", companionInteraction: "NONE", model: null, revision: 2 })).status, 400);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: "not-in-catalog", revision: 2 })).status, 400);
@@ -212,7 +212,7 @@ try {
   let read = await latest();
   const failed = read.items[0]!;
   assert.deepEqual([failed.status, failed.failure, failed.retryable, failed.body], ["FAILED", "ERROR", true, null]);
-  assert.deepEqual(await portA.retry(fresh.id, failed.id), { typing: [], replying: true });
+  assert.deepEqual(await portA.retry(fresh.id, failed.id), { typing: [], recording: [], replying: true });
   await new ChatReplies(devChatModel).drain(fresh.id, portA);
   read = await latest();
   assert.deepEqual(read.items.slice(0, 2).map(m => [m.status, m.body]),
@@ -235,7 +235,7 @@ try {
   assert.ok(claim);
   assert.deepEqual([claim.companion.displayName, claim.optional, claim.direct, claim.replyTo], ["SecondCompanion", false, false, "OWNER"]);
   assert.deepEqual(claim.companion.identity, { persona: "calm" });
-  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 0 });
+  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, revision: 0 });
   assert.equal(claim.history.at(-1)!.body, "抢一下");
   assert.equal(await portA.claim(fresh.id), null);
   assert.equal(await portA.finish(claim.replyId, randomUUID(), "SENT", ["冒名"]), false);
@@ -488,6 +488,93 @@ try {
     outputTokens: 1, costMinor: 1 }), { decision: "STALE" }, "a finished entry cannot book again");
   passed("diary model calls are booked as DIARY_ENTRY and settled");
   await pool.query("delete from public.community_posts where id = any($1::uuid[])", [diaryPosts]);
+
+  // Voice messages. Without a speech key the dev host speaks silence (a WAV), so the whole path runs here.
+  const voiceList = (await call<VoiceList>(0, "voices")).data;
+  assert.equal(voiceList.available, true);
+  const voiceId = voiceList.items[0]!.id;
+  const auth = { Authorization: "Bearer chat-0" };
+  const sample = await fetch(`${bases[0]}/v0/voices/${voiceId}/sample`, { headers: auth });
+  assert.deepEqual([sample.status, sample.headers.get("content-type")], [200, "audio/wav"]);
+  assert.equal(Buffer.from(await sample.arrayBuffer()).toString("latin1", 0, 4), "RIFF");
+  assert.equal((await putSettings(A.companion, { voice: "no-such-voice" })).status, 400);
+  assert.equal((await putSettings(A.companion, { voice: voiceId })).data.voice, voiceId);
+  const { voice: _dropped, ...withoutVoice } = (await call<ChatSettings>(0, `companions/${A.companion}/chat-settings`)).data;
+  assert.equal((await call<ChatSettings>(0, `companions/${A.companion}/chat-settings`, "PUT", withoutVoice)).data.voice, voiceId,
+    "an app that does not send voice keeps it");
+  const talk = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion] })).data.id;
+  const voiceReply = async (body: string) => {
+    assert.equal((await call(0, `chats/${talk}/messages`, "POST", { body })).status, 201);
+    const items = (await settle(talk)).items;
+    const owner = items.findIndex(m => m.body === body);
+    return items.slice(0, owner).reverse(); // this reply's messages, oldest first
+  };
+  const [spoken, written] = await voiceReply("我回来了");
+  assert.deepEqual([spoken!.body, written!.body, written!.audio], ["（开发环境假回复）我是SampleCompanion", "收到：「我回来了」", null]);
+  assert.ok(spoken!.audio && spoken!.audio.durationMs > 0, JSON.stringify(spoken));
+  const audioUrl = `${bases[0]}/v0/chats/${talk}/messages/${spoken!.id}/audio`;
+  const whole = await fetch(audioUrl, { headers: auth });
+  const wav = Buffer.from(await whole.arrayBuffer());
+  assert.deepEqual([whole.status, whole.headers.get("content-type"), whole.headers.get("accept-ranges"), wav.toString("latin1", 0, 4)],
+    [200, "audio/wav", "bytes", "RIFF"]);
+  assert.equal(Number(whole.headers.get("content-length")), wav.length);
+  const part = await fetch(audioUrl, { headers: { ...auth, Range: "bytes=0-3" } });
+  assert.deepEqual([part.status, part.headers.get("content-range"), Buffer.from(await part.arrayBuffer()).toString("latin1")],
+    [206, `bytes 0-3/${wav.length}`, "RIFF"]);
+  assert.equal((await fetch(`${bases[1]}/v0/chats/${talk}/messages/${spoken!.id}/audio`, { headers: { Authorization: "Bearer chat-1" } })).status, 404,
+    "another Owner cannot hear it");
+  assert.equal((await fetch(`${bases[0]}/v0/chats/${talk}/messages/${written!.id}/audio`, { headers: auth })).status, 404);
+  const listed = (await call<{ items: Chat[] }>(0, "chats")).data.items.find(c => c.id === talk)!;
+  assert.deepEqual(listed.recording, []);
+  assert.deepEqual(await portA.voiceLeft(), { companion: 59, owner: 100 });
+  passed("voice messages: pick a voice, a reply with a voice message, its audio with ranges, only for its Owner");
+
+  await pool.query("update companion_private.chat_quota set daily_voice = 1");
+  assert.equal((await portA.voiceLeft()).companion, 0);
+  const [capped] = await voiceReply("再说一句");
+  assert.deepEqual([capped!.body, capped!.audio], ["（开发环境假回复）我是SampleCompanion", null], "today's voice messages are used up: text");
+  await pool.query("update companion_private.chat_quota set daily_voice = 60");
+  await pool.query("update companion_private.chat_audio set created_at = now() - interval '31 days'");
+  const [renewed] = await voiceReply("还在吗");
+  assert.ok(renewed!.audio, "a new voice message");
+  const kept = (await call<ChatPage>(0, `chats/${talk}`)).data.items.find(m => m.id === spoken!.id)!;
+  assert.deepEqual([kept.body, kept.audio], ["（开发环境假回复）我是SampleCompanion", null], "an expired clip is gone; the text stays");
+  await assert.rejects(pool.query("select public.chat_finish(gen_random_uuid(), gen_random_uuid(), 'SENT', array['a'], '[null, null]')"),
+    { code: "22023" });
+  await assert.rejects(pool.query("select public.chat_finish(gen_random_uuid(), gen_random_uuid(), 'ERROR', null, '[null]')"), { code: "22023" });
+  // The Owner's voice message: the dev host "hears" a fixed sentence.
+  assert.equal(voiceList.input, true);
+  const recording = { audio: Buffer.from("fake m4a").toString("base64"), mime: "audio/mp4", durationMs: 1500 };
+  const voiceKey = randomUUID();
+  const mine = await call<ChatSendResult>(0, `chats/${talk}/voice`, "POST", recording, voiceKey);
+  assert.equal(mine.status, 201, JSON.stringify(mine.data));
+  assert.deepEqual([mine.data.message.companionId, mine.data.message.body, mine.data.message.audio, mine.data.replying],
+    [null, "（开发环境假转写）这是一条语音", { durationMs: 1500 }, true]);
+  assert.equal((await call<ChatSendResult>(0, `chats/${talk}/voice`, "POST", recording, voiceKey)).data.message.id, mine.data.message.id,
+    "a retry gets the same message");
+  const heardBack = await fetch(`${bases[0]}/v0/chats/${talk}/messages/${mine.data.message.id}/audio`, { headers: auth });
+  assert.deepEqual([heardBack.headers.get("content-type"), Buffer.from(await heardBack.arrayBuffer()).toString()], ["audio/mp4", "fake m4a"]);
+  assert.equal((await call(1, `chats/${talk}/voice`, "POST", recording)).status, 404, "not into another Owner's chat");
+  assert.equal((await call(0, `chats/${talk}/voice`, "POST", { ...recording, mime: "audio/webm" })).status, 400);
+  await settle(talk);
+  assert.deepEqual(await portA.voiceLeft(), { companion: 58, owner: 99 }, "the Owner's own do not count against the Companions'");
+  await portA.send(talk, "听到了吗", [], keyHash());
+  const heardTurn = (await portA.claim(talk))!;
+  assert.deepEqual([heardTurn.history.find(h => h.companionId === null && h.body === "（开发环境假转写）这是一条语音")?.voice,
+    heardTurn.history.at(-1)?.body, heardTurn.history.at(-1)?.voice], [true, "听到了吗", false], "Companions see which messages were spoken");
+  assert.ok(heardTurn.history.some(h => h.companionId === A.companion && h.voice), "its own voice messages are marked too");
+  assert.equal(await portA.finish(heardTurn.replyId, heardTurn.claimId, "SENT", ["听到了"]), true);
+  await pool.query("update companion_private.chat_quota set daily_owner_voice = 1");
+  assert.deepEqual((await call(0, `chats/${talk}/voice`, "POST", recording)).data, { code: "VOICE_LIMIT" });
+  await assert.rejects(portA.sendVoice(talk, "绕过", { mime: "audio/mp4", durationMs: 1, bytes: Buffer.from("x") }, keyHash()),
+    { code: "INVALID_STATE" }, "the database checks the limit too");
+  await pool.query("update companion_private.chat_quota set daily_owner_voice = 100");
+  passed("voice messages: the Owner sends one, it is recognised, kept with its audio, and Companions see it was spoken");
+
+  await putSettings(A.companion, { voice: null });
+  const [plain] = await voiceReply("好的");
+  assert.equal(plain!.audio, null, "no voice: text only");
+  passed("voice messages: the daily limit, clips expire to text, malformed audio is refused, and no voice means text");
 
   // Leave the shared development database as other suites expect it.
   await pool.query("delete from companion_private.diary_entries where companion_id in ($1, $2)", [A.companion, second]);
