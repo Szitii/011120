@@ -1,11 +1,18 @@
 /**
- * The admin console: a small web server for operators, meant to run on the operator's own machine.
+ * The admin console: a small web server for operators. It runs in one of two ways.
  *
- *  * It answers only requests addressed to this machine (Host 127.0.0.1 or localhost) that carry
- *    the token made at start-up (a new one every start). The link printed at start-up hands the
- *    token to the browser; after that it travels in a cookie the browser sends to no other site.
- *    A form must be posted from the console's own pages (Origin). So a web page open in the same
- *    browser cannot use the console.
+ *  * On the operator's own machine: it answers only requests addressed to this machine (Host
+ *    127.0.0.1 or localhost) that carry the token made at start-up (a new one every start). The
+ *    link printed at start-up hands the token to the browser; after that it travels in a cookie
+ *    the browser sends to no other site.
+ *  * On a server in the tailnet, behind `tailscale serve`: it answers only requests addressed to
+ *    its tailnet name, and Tailscale tells it who is asking (Tailscale-User-Login; `tailscale serve`
+ *    removes any such header the browser sent and sets it from the WireGuard key). Each person on
+ *    the list has their own database login, so the log still names them. It must listen on
+ *    127.0.0.1, where only `tailscale serve` can reach it.
+ *
+ *  * Either way a form must be posted from the console's own pages (Origin), so a web page open
+ *    in the same browser cannot use the console.
  *  * Pages carry no script, and the browser is told to run none.
  *  * Every change needs a reason and a ticked box; the database writes the log.
  */
@@ -16,10 +23,19 @@ import { chatGatePage, chatPage, errorPage, logPage, modelsPage, ownerPage, owne
   type CatalogEntry, type ChatList, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue,
   type Feature, type Spend } from "./pages.ts";
 
-export interface AdminServerOptions {
+/** On the tailnet: the console's machine name, and each allowed Tailscale login with their own database login. */
+export interface Tailnet {
+  readonly hostname: string;
+  readonly operators: ReadonlyMap<string, AdminDb>;
+}
+
+export type AdminServerOptions = Common & ({
   readonly db: AdminDb;
   /** The start-up token: at least 32 characters, unguessable. */
   readonly token: string;
+} | { readonly tailnet: Tailnet });
+
+interface Common {
   readonly catalog: readonly CatalogEntry[];
   /** IANA time zone for the times shown; default: this machine's. */
   readonly timeZone?: string;
@@ -84,13 +100,19 @@ function dayOr(value: string | null, fallback: string): string {
 }
 
 export function createAdminServer(options: AdminServerOptions): Server {
-  if (options.token.length < 32) throw new Error("The admin token must be at least 32 characters.");
-  const { db, catalog } = options;
+  const tailnet = "tailnet" in options ? options.tailnet : null;
+  if (tailnet === null && !("token" in options && options.token.length >= 32)) throw new Error("The admin token must be at least 32 characters.");
+  if (tailnet !== null && (!/^[a-z0-9-]+$/.test(tailnet.hostname) || tailnet.operators.size === 0)) {
+    throw new Error("The tailnet needs a machine name (a-z, 0-9, -) and at least one operator.");
+  }
+  // The tailnet name: short (MagicDNS) or full (<name>.<tailnet>.ts.net); served on port 80, so no port.
+  const tailnetHost = tailnet && new RegExp(`^${tailnet.hostname}(\\.[a-z0-9-]+\\.ts\\.net)?$`);
+  const { catalog } = options;
   const zone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const now = options.now ?? (() => new Date());
   const targets = new Set(switchTargets(catalog).map(t => t.value));
 
-  async function get(url: URL): Promise<string> {
+  async function get(db: AdminDb, url: URL): Promise<string> {
     const path = url.pathname, query = url.searchParams, done = query.get("ok") === "1";
     let m: RegExpExecArray | null;
     if (path === "/reports") {
@@ -122,7 +144,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
   }
 
   /** Runs one posted form; returns the page to show, or null to go back to where the form was. */
-  async function post(path: string, form: Form): Promise<string | null> {
+  async function post(db: AdminDb, path: string, form: Form): Promise<string | null> {
     const reason = reasonOf(form);
     let m: RegExpExecArray | null;
     if ((m = ROUTES.chat.exec(path))) {
@@ -166,27 +188,46 @@ export function createAdminServer(options: AdminServerOptions): Server {
     return null;
   }
 
-  async function answer(request: IncomingMessage): Promise<Answer> {
+  /** Who may use the console from here: their database, and the hosts their forms may come from; or what to answer instead. */
+  function enter(request: IncomingMessage, url: URL, method: string): { db: AdminDb; hosts: string[] } | Answer {
+    const host = request.headers.host ?? "";
+    if (tailnet !== null) {
+      // Only requests addressed to the tailnet name: a page elsewhere cannot reach the console under its own name.
+      if (!tailnetHost!.test(host)) return { status: 403, body: "Forbidden" };
+      const login = request.headers["tailscale-user-login"];
+      const db = typeof login === "string" ? tailnet.operators.get(login.toLowerCase()) : undefined;
+      if (db === undefined) {
+        return { status: 403, body: errorPage("打不开", "你的 Tailscale 账号不在管理员名单里。名单在服务器的 ADMIN_OPERATORS 里。", "/") };
+      }
+      return { db, hosts: [host] };
+    }
+    const local = options as { db: AdminDb; token: string };
     // Only requests addressed to this machine: a page elsewhere cannot reach the console under its own name.
     const hosts = [`127.0.0.1:${request.socket.localPort}`, `localhost:${request.socket.localPort}`];
-    if (!hosts.includes(request.headers.host ?? "")) return { status: 403, body: "Forbidden" };
-    const url = URL.parse(request.url ?? "/", "http://console");
-    if (url === null) return { status: 400, body: "Bad request" };
-    const method = request.method ?? "GET";
-
+    if (!hosts.includes(host)) return { status: 403, body: "Forbidden" };
     // The start-up link: trade the token in the address for a cookie, and take it out of the address.
     const offered = url.searchParams.get("token");
     if (method === "GET" && url.pathname === "/" && offered !== null) {
-      return same(offered, options.token) ? { location: "/reports", cookie: `${COOKIE}=${options.token}; HttpOnly; SameSite=Strict; Path=/` }
+      return same(offered, local.token) ? { location: "/reports", cookie: `${COOKIE}=${local.token}; HttpOnly; SameSite=Strict; Path=/` }
         : { status: 403, body: errorPage("打不开", "这个链接里的口令不对。请用后台启动时打印的链接。", "/") };
     }
     const cookie = (request.headers.cookie ?? "").split(";").map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`));
-    if (!cookie || !same(cookie.slice(COOKIE.length + 1), options.token)) {
+    if (!cookie || !same(cookie.slice(COOKIE.length + 1), local.token)) {
       return { status: 403, body: errorPage("打不开", "请用后台启动时终端里打印的链接打开。后台每次重新启动,链接都会换。", "/") };
     }
+    return { db: local.db, hosts };
+  }
+
+  async function answer(request: IncomingMessage): Promise<Answer> {
+    const url = URL.parse(request.url ?? "/", "http://console");
+    if (url === null) return { status: 400, body: "Bad request" };
+    const method = request.method ?? "GET";
+    const entered = enter(request, url, method);
+    if (!("db" in entered)) return entered;
+    const { db, hosts } = entered;
     let back = "/reports";
     try {
-      if (method === "GET") return url.pathname === "/" ? { location: "/reports" } : { status: 200, body: await get(url) };
+      if (method === "GET") return url.pathname === "/" ? { location: "/reports" } : { status: 200, body: await get(db, url) };
       if (method !== "POST") return { status: 405, body: errorPage("不支持", "不支持这种请求。", back) };
       // A form must come from the console's own pages: any other origin (another site, another port
       // here, a sandboxed frame's "null") is refused. Browsers send Origin with every POST.
@@ -195,7 +236,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
       }
       const form = await readForm(request);
       back = backPath(form);
-      const shown = await post(url.pathname, form);
+      const shown = await post(db, url.pathname, form);
       return shown === null ? { location: `${back}${back.includes("?") ? "&" : "?"}ok=1` } : { status: 200, body: shown };
     } catch (error) {
       if (error instanceof NotFound) return { status: 404, body: errorPage("没有这个页面", "没有找到这个页面或对象。", "/reports") };
@@ -207,7 +248,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
   return createServer((request, response) => {
     answer(request).catch((error: unknown): Answer => {
       (options.onError ?? console.error)(error);
-      return { status: 500, body: errorPage("出错了", "后台出错了,这次操作没有完成。详细信息在启动后台的终端里。", "/reports") };
+      return { status: 500, body: errorPage("出错了", "后台出错了,这次操作没有完成。详细信息在后台的运行日志里。", "/reports") };
     }).then(result => {
       if ("location" in result) {
         response.writeHead(303, { ...HEADERS, Location: result.location, ...(result.cookie ? { "Set-Cookie": result.cookie } : {}) }).end();
