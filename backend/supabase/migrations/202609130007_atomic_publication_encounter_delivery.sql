@@ -7,8 +7,8 @@ alter table public.publication_reservations
   add column outcome_code text;
 
 update public.publication_reservations
-set idempotency_key_hash = encode(digest('legacy-publication:' || id::text, 'sha256'), 'hex'),
-    request_hash = encode(digest('legacy-publication-request:' || id::text, 'sha256'), 'hex')
+set idempotency_key_hash = encode(sha256(convert_to('legacy-publication:' || id::text,'UTF8')), 'hex'),
+    request_hash = encode(sha256(convert_to('legacy-publication-request:' || id::text,'UTF8')), 'hex')
 where idempotency_key_hash is null or request_hash is null;
 
 alter table public.publication_reservations

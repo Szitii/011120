@@ -860,11 +860,12 @@ components:
               pendingDrafts: {type: integer, maximum: 20}
     CommunityFollow:
       type: object
-      required: [actor, since]
+      required: [actor, since, following]
       properties:
         actor:
           $ref: '#/components/schemas/Actor'
         since: {type: string, format: date-time}
+        following: {type: boolean, description: 'Whether the viewing identity follows this one (in the followers list: already followed back).'}
     AgentDraft:
       type: object
       required: [id, kind, postId, body, createdAt]

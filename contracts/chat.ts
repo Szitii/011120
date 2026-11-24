@@ -41,11 +41,40 @@ export interface Chat {
   direct: boolean;
   members: ChatMember[];
   lastMessage: ChatMessage | null;
+  /**
+   * Companion messages shown after the Owner's read position (PUT /v0/chats/{id}/read).
+   * The server always sends it; optional here so app code written before it still compiles.
+   */
+  unreadCount?: number;
+  /** The last message the Owner read; null before the first. Always sent; optional like unreadCount. */
+  readUpTo?: string | null;
   /** Companions to show as "typing…" right now. */
   typing: string[];
   /** More replies are on the way: keep refreshing every 1-2 s while true, even if nobody shows as typing. */
   replying: boolean;
   activeAt: string;
+}
+
+/** GET /v0/badges: every unread count for the tab badges. */
+export interface Badges {
+  /** Unread Companion messages over every chat. */
+  chats: number;
+  /** Unread items of GET /v0/life-event-inbox. */
+  ownerInbox: number;
+  /** Unread community notifications for each identity the Owner can act as (the Owner first). */
+  community: { actorKind: "OWNER" | "COMPANION"; actorId: string; unread: number }[];
+}
+
+/**
+ * 相伴起始日: the calendar day (in timeZone) the Owner and this Companion count from; null when not set.
+ * PUT sends startDate (or null to clear), timeZone and the revision last read; a stale revision is a 409.
+ */
+export interface Anniversary {
+  companionId: string;
+  startDate: string | null;
+  timeZone: string;
+  revision: number;
+  updatedAt: string;
 }
 
 export interface ChatPage {
@@ -138,3 +167,58 @@ export interface DiaryWriteResult {
   nextAt: string | null;
   failure: "UNAVAILABLE" | "DISABLED" | "QUOTA" | "BLOCKED" | "ERROR" | null;
 }
+
+/**
+ * 长期记忆: one thing a Companion remembers, used when it chats and writes its diary. Only the Owner
+ * adds memories (by hand, or by approving them one by one when importing a card), and sees and
+ * deletes all of them. IMPORT: came from an approved card. OWNER: added by hand.
+ */
+export interface CompanionMemory {
+  id: string;
+  body: string;
+  source: "IMPORT" | "OWNER";
+  createdAt: string;
+}
+
+/** GET /v0/companions/{id}/memories: every memory, newest first (at most 200 per Companion). */
+export interface MemoryList {
+  items: CompanionMemory[];
+}
+
+/**
+ * 家机接入方式: how a Companion speaks. PLATFORM: the platform's models (default). BYOK: the
+ * Owner's own API key for a provider; the platform still writes the prompt (persona, memories).
+ * EXTERNAL: the Owner's own agent at an HTTPS endpoint (OpenAI /chat/completions format).
+ * The key or token is never sent back; keyHint is its last 4 characters.
+ */
+export interface CompanionConnection {
+  kind: "PLATFORM" | "BYOK" | "EXTERNAL";
+  /** BYOK: deepseek, qwen, kimi, doubao, glm, minimax or custom. */
+  provider: string | null;
+  /** BYOK: the provider's API base. EXTERNAL: the endpoint. */
+  baseUrl: string | null;
+  model: string | null;
+  /** EXTERNAL: the name the Owner gave it. */
+  name: string | null;
+  keyHint: string | null;
+  connectedAt: string | null;
+}
+
+/** PUT /v0/companions/{id}/connection. `consent` must be true (the Owner read the privacy note). */
+export type ConnectionInput =
+  | { kind: "BYOK"; provider: string; baseUrl?: string; model: string; apiKey: string; consent: boolean }
+  | { kind: "EXTERNAL"; name: string; endpoint: string; bearerToken: string; model?: string | null; consent: boolean };
+
+/**
+ * The server tries one tiny call before saving. CONNECTED: saved. AUTH_FAILED: the key or token was
+ * refused. NOT_FOUND: wrong address or model name. UNREACHABLE: no answer in time. BAD_ANSWER: it
+ * answered, but not in the /chat/completions format. BLOCKED_ADDRESS: not a public address. ERROR: other.
+ */
+export type ConnectionTest = "CONNECTED" | "AUTH_FAILED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER" | "BLOCKED_ADDRESS" | "ERROR";
+
+/** PUT result: the connection now in use (unchanged unless CONNECTED). */
+export interface ConnectionSaveResult {
+  result: ConnectionTest;
+  connection: CompanionConnection;
+}
+

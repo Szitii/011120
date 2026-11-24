@@ -1,5 +1,6 @@
 import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+import type { Connection } from "../connections/model.ts";
 
 /** What the server needs to write one Companion reply (from chat_claim). */
 export interface ChatClaim {
@@ -66,7 +67,25 @@ export interface ChatPort {
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;
   remove(chatId: string): Promise<unknown>;
+  /** The Owner has read up to this message (only moves forward); returns the chat. */
+  markRead(chatId: string, messageId: string): Promise<unknown>;
+  /** Every unread count for the tab badges. */
+  badges(): Promise<unknown>;
+  anniversary(companionId: string): Promise<unknown>;
+  saveAnniversary(companionId: string, startDate: string | null, timeZone: string, revision: number): Promise<unknown>;
   settings(companionId: string): Promise<unknown>;
+  /** Every memory of the Companion, newest first ({ items }). */
+  memories(companionId: string): Promise<unknown>;
+  addMemory(companionId: string, body: string, keyHash: string): Promise<unknown>;
+  deleteMemory(companionId: string, memoryId: string): Promise<unknown>;
+  /** How the Companion speaks, without the secret. */
+  connectionView(companionId: string): Promise<unknown>;
+  /** Server only: save a tested connection; `secret` is already sealed. */
+  saveConnection(companionId: string, connection: Connection, hint: string): Promise<unknown>;
+  /** Back to the platform's models. */
+  removeConnection(companionId: string): Promise<unknown>;
+  /** Server only: the connection with its sealed secret, or null for the platform. */
+  connection(companionId: string): Promise<Connection | null>;
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown>;
   /** Server only: the next reply to write, or null. */
   claim(chatId: string): Promise<ChatClaim | null>;

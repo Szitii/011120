@@ -6,6 +6,9 @@
  *   POST   /v0/chats                                   { companionIds, title? }  one-to-one or a new group
  *   GET    /v0/chats/{id}?cursor=                      the chat and a page of messages, newest first
  *   DELETE /v0/chats/{id}                              delete the chat and its messages
+ *   PUT    /v0/chats/{id}/read                         { messageId }  the Owner has read up to here
+ *   GET    /v0/badges                                  every unread count for the tab badges
+ *   GET|PUT /v0/companions/{id}/anniversary            the day the Owner and the Companion count from
  *   POST   /v0/chats/{id}/messages                     { body, mentions? }       send
  *   POST   /v0/chats/{id}/messages/{messageId}/retry   try a failed reply again
  *   GET|PUT /v0/companions/{id}/chat-settings          how a Companion takes part, and its model
@@ -15,16 +18,22 @@
  *   POST   /v0/companions/{id}/diary                   write an entry if one is due (waits for the model)
  *   DELETE /v0/companions/{id}/diary/{entryId}         erase an entry
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
+ *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
+ *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
  *
  * POST /v0/chats, POST .../messages and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
+import { hasCredential } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { ChatModelList, ChatSettings, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
+import { checkConnection, type Connections } from "../connections/model.ts";
+import type { ConnectionInput, ConnectionSaveResult, CompanionConnection } from "../../../contracts/chat.ts";
 import type { ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 
@@ -73,6 +82,29 @@ function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined): Ch
   return { groupActivity, companionInteraction, model, revision } as ChatSettings;
 }
 
+const DATE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
+
+/** startDate "YYYY-MM-DD" or null; the database checks the day exists, the range and the time zone. */
+function anniversary(request: MvpHttpRequest): [string | null, string, number] {
+  const { startDate, timeZone, revision } = body(request, ["startDate", "timeZone", "revision"]);
+  if (!(startDate === null || (typeof startDate === "string" && DATE.test(startDate)))
+    || typeof timeZone !== "string" || timeZone.length < 1 || timeZone.length > 64
+    || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
+  return [startDate as string | null, timeZone, revision as number];
+}
+
+/** The shape of PUT .../connection; the values are checked by checkConnection. */
+function connectionInput(request: MvpHttpRequest): ConnectionInput {
+  const kind = (request.body as { kind?: unknown } | undefined)?.kind;
+  const input = kind === "BYOK" ? body(request, ["kind", "provider", "baseUrl", "model", "apiKey", "consent"])
+    : kind === "EXTERNAL" ? body(request, ["kind", "name", "endpoint", "bearerToken", "model", "consent"]) : invalid();
+  const strings = kind === "BYOK" ? ["provider", "model", "apiKey"] : ["name", "endpoint", "bearerToken"];
+  if (strings.some(key => typeof input[key] !== "string") || typeof input.consent !== "boolean"
+    || !(input.baseUrl === undefined || typeof input.baseUrl === "string")
+    || (kind === "EXTERNAL" && !(input.model === undefined || input.model === null || typeof input.model === "string"))) return invalid();
+  return input as unknown as ConnectionInput;
+}
+
 function diarySettings(request: MvpHttpRequest): DiarySettings {
   const { frequency, revision } = body(request, ["frequency", "revision"]);
   if (!["OFF", "RARE", "DAILY", "OFTEN"].includes(frequency as string)
@@ -108,6 +140,7 @@ const replying = (payload: unknown): boolean => {
 
 export async function handleChatRequest(
   request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string, replies: ChatReplies, catalog?: ChatCatalog,
+  connections?: Connections,
 ): Promise<MvpHttpResponse | undefined> {
   const url = new URL(request.url, "https://chat.invalid");
   const path = url.pathname.replace(/\/$/, "").split("/").slice(1); // ["v0", ...]
@@ -116,8 +149,12 @@ export async function handleChatRequest(
   const actionsRoute = path[1] === "companions" && path[3] === "actions" && path.length === 4;
   const diaryRoute = path[1] === "companions" && path[3] === "diary" && (path.length === 4 || path.length === 5);
   const diarySettingsRoute = path[1] === "companions" && path[3] === "diary-settings" && path.length === 4;
+  const anniversaryRoute = path[1] === "companions" && path[3] === "anniversary" && path.length === 4;
+  const badgesRoute = path[1] === "badges" && path.length === 2;
+  const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
+  const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute && !diaryRoute
-    && !diarySettingsRoute)) return undefined;
+    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute && !memoriesRoute && !connectionRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -126,6 +163,13 @@ export async function handleChatRequest(
   const method = request.method.toUpperCase();
 
   if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
+  if (badgesRoute) return method === "GET" ? response(200, await port.badges()) : notFound();
+  if (anniversaryRoute) {
+    const companionId = id(path[2]);
+    if (method === "GET") return response(200, await port.anniversary(companionId));
+    if (method === "PUT") return response(200, await port.saveAnniversary(companionId, ...anniversary(request)));
+    return notFound();
+  }
   if (settingsRoute) {
     const companionId = id(path[2]);
     if (method === "GET") return response(200, await port.settings(companionId));
@@ -147,6 +191,35 @@ export async function handleChatRequest(
     if (method === "GET") return response(200, await port.diarySettings(companionId));
     if (method === "PUT") return response(200, await port.saveDiarySettings(companionId, diarySettings(request)));
     return notFound();
+  }
+  if (connectionRoute) {
+    const companionId = id(path[2]);
+    if (method === "GET") return response(200, await port.connectionView(companionId));
+    if (method === "DELETE") return response(200, await port.removeConnection(companionId));
+    if (method !== "PUT") return notFound();
+    const input = connectionInput(request);
+    if (connections === undefined) return response(501, { code: "CONNECTIONS_UNAVAILABLE" });
+    const current = await port.connectionView(companionId) as CompanionConnection; // 404 unless it is the Owner's
+    const checked = checkConnection(input);
+    if (checked === "INVALID_INPUT" || checked === "INVALID_URL") return invalid();
+    if (checked === "BLOCKED_ADDRESS") return response(200, { result: "BLOCKED_ADDRESS", connection: current } satisfies ConnectionSaveResult);
+    if (!connections.allow(session.ownerId)) return response(429, { code: "TOO_MANY_TESTS" });
+    const result = await connections.test(checked);
+    if (result !== "CONNECTED") return response(200, { result, connection: current } satisfies ConnectionSaveResult);
+    const saved = await port.saveConnection(companionId, { ...checked, secret: connections.box.seal(checked.secret, companionId) },
+      // The last 4 characters help the Owner recognise the key; a short one shows nothing, so it is never stored in clear.
+      checked.secret.length >= 12 ? checked.secret.slice(-4) : "");
+    return response(200, { result, connection: saved as CompanionConnection } satisfies ConnectionSaveResult);
+  }
+  if (memoriesRoute) {
+    const companionId = id(path[2]);
+    if (path.length === 5) return method === "DELETE" ? response(200, await port.deleteMemory(companionId, id(path[4]))) : notFound();
+    if (method === "GET") return response(200, await port.memories(companionId));
+    if (method !== "POST") return notFound();
+    // A memory is sent to the model with every reply: no keys or passwords in it.
+    const memory = text(body(request, ["body"]).body, 500);
+    if (hasCredential(memory)) return invalid();
+    return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
   }
   if (diaryRoute) {
     const companionId = id(path[2]);
@@ -170,6 +243,8 @@ export async function handleChatRequest(
     result = await port.read(chat, beforeAt, beforeId);
   } else if (part === undefined && method === "DELETE") {
     return response(200, await port.remove(chat));
+  } else if (part === "read" && path.length === 4 && method === "PUT") {
+    return response(200, await port.markRead(chat, id(body(request, ["messageId"]).messageId)));
   } else if (part === "messages" && messageId === undefined && method === "POST") {
     const input = body(request, ["body", "mentions"]);
     const mentions = input.mentions === undefined ? [] : ids(input.mentions, 0);

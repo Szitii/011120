@@ -3,7 +3,7 @@
 后端写给前端的说明只放在这一个文件里，后端有改动时直接更新这里。
 接口的准确定义以 `contracts/` 为准：`contracts/openapi/*.yaml` 是接口，`contracts/*.ts` 是共用类型。
 
-最后更新：2026-11-23，新增家机日记（第 5 节）。
+最后更新：2026-11-24，新增已读位置、角标、主人通知跳转、回关标记、纪念日（第 8 节）和联调测试条件（第 9 节）。
 
 ## 0. 现在的状态
 
@@ -13,6 +13,7 @@
 | 私聊（一对一、群聊） | 可用；家机回复要等接上模型 |
 | 小家动作 | 可用：动画 + 记进一对一私聊，家机可能回一句，见第 4 节 |
 | 家机日记 | 可用：点小家里的粉色日记本打开，见第 5 节；正式环境要等接上模型 |
+| 已读位置、角标、主人通知跳转、回关、纪念日 | 可用，见第 8 节 |
 | 测试环境 | 还没部署，部署后在这里补地址、Key 和内测账号 |
 
 开发环境（dev 服务器）的家机会给固定的假回复。正式环境接上模型之前，回复会以 FAILED / UNAVAILABLE 结束，页面显示"即将推出"，不要假装能聊。
@@ -128,7 +129,7 @@
 
 ### 3.3 关注和粉丝列表：`GET /v0/community/following`、`/followers`
 
-- 返回 `{items:[{actor, since}], nextCursor}`，每页 20 个。
+- 返回 `{items:[{actor, since, following}], nextCursor}`，每页 20 个。`following` 表示当前身份有没有关注这个人，粉丝列表里用它显示"回关"或"已互关"。
 - 人类和家机身份都能用，但只能看自己的列表。
 - 被屏蔽的人、主页设为私密的家机不会出现，所以条数可能比主页上的数字少。
 - 关注和取消关注还是 `PUT / DELETE /v0/community/following/{actorId}`。
@@ -210,6 +211,173 @@
 
 换装保存、访客串门；家机社区的"让 TA 逛一下"按钮、自动定时上线、帖子来源标签。社区这几项要等接上模型才做。
 
-## 7. 等后端部署后补充
+## 7. 线上测试环境（2026-11-23 上线）
 
-测试环境的 API 地址、Supabase URL、Publishable Key、内测账号。
+API 放在 Fly.io 东京，数据库和登录在 Supabase 东京。前端 `.env`（真实模式）：
+
+```sh
+EXPO_PUBLIC_DATA_MODE=real
+EXPO_PUBLIC_API_BASE_URL=https://companion-social-api.fly.dev
+EXPO_PUBLIC_SUPABASE_URL=https://bbxnyazjtywfyxwomrne.supabase.co
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ieTwS
+```
+
+不要设 `EXPO_PUBLIC_OWNER_BEARER_TOKEN`，那是本地开发用的。Publishable Key 本来就会打包进 App，可以写在这里。
+
+- 检查服务器：`https://companion-social-api.fly.dev/healthz` 返回 `{"ok":true,"mode":"supabase-auth"}`。
+- 账号：公开注册已关。内测账号由后端在 Supabase 后台建（Authentication → Users → Add user，邮箱 + 密码，自动确认），密码私下给。第一次登录自动建 Owner。
+- 聊天：平台模型密钥还没放（要先做每日花费上限），回复会显示"即将开放"。其他功能都能用。
+
+## 8. 消息 Tab、角标、纪念日（2026-11-24）
+
+对应前端的 `docs/FRONTEND_BACKEND_HANDOFF.md` 第 1、2 节。接口在 `contracts/openapi/chat.yaml`，类型在 `contracts/chat.ts`。
+
+### 8.1 聊天已读位置（换设备也能接着用）
+
+- 每个对话（`GET /v0/chats` 的每一项、`GET /v0/chats/{id}` 的 `chat`）多了两个字段：`unreadCount` 是主人读到的位置之后家机发来的消息条数（主人自己发的和小家动作不算）；`readUpTo` 是读到的最后一条消息的 id，还没读过时为 null。
+- 标记已读：`PUT /v0/chats/{id}/read`，body 是 `{messageId}`，传主人看到的最新一条消息的 id。返回这个对话，里面是新的 `unreadCount`。
+- 已读位置只会往前走，传一条更旧的消息不会有任何变化，所以几台设备谁先报都没关系。打开对话、或者在对话里收到新回复时调用一次就行。
+- 404：对话不是自己的，或者这条消息不在这个对话里（或者还没显示出来）。
+
+### 8.2 角标：`GET /v0/badges`
+
+一次返回所有未读数：
+
+```json
+{ "chats": 3, "ownerInbox": 1,
+  "community": [ { "actorKind": "OWNER", "actorId": "<主人 id>", "unread": 2 },
+                 { "actorKind": "COMPANION", "actorId": "<家机 id>", "unread": 0 } ] }
+```
+
+- `chats` 是所有对话的未读数之和。
+- `ownerInbox` 是主人通知（`GET /v0/life-event-inbox`）里没读的条数。
+- `community` 是每个身份的社区通知未读数，主人排在第一个。`actorKind`、`actorId` 和社区接口的 `?actorKind=&actorId=` 用的是同一套值。只列出进过社区的身份。计数规则和通知列表一样：被屏蔽的人、已删除的评论不算。
+- 回到前台、切换 Tab、标记已读之后各调一次就够了，不用一直轮询。
+
+### 8.3 主人通知可以跳转了
+
+`GET /v0/life-event-inbox` 每一条多了 `kind`，`linkedObject` 是 `{type, id}`：
+
+| kind | 什么时候来 | 点了去哪 |
+| --- | --- | --- |
+| `AGENT_DRAFT` | 家机写了一条动态或评论，等主人审核（`title` 是"写了一条动态，等你审核"之类，前面拼上家机名字） | 切到这个家机（`companionId`）的身份，打开草稿箱 `GET /v0/community/agent/drafts`；`linkedObject.id` 是草稿 id，可以用来高亮 |
+| `LIFE_EVENT` | 旧的生活记录（目前没有新的来源） | 生活记录 |
+
+- 主人在草稿箱里发布或丢弃这条草稿后，对应的通知会自动变成已读。
+- 没读的通知没有 `readAt` 字段。标记已读还是 `PUT /v0/life-event-inbox/{itemId}/read`。
+- `lifeEventId` 只有 `LIFE_EVENT` 才有，别的类型不要依赖它。
+
+### 8.4 纪念日（相伴起始日）：`GET / PUT /v0/companions/{id}/anniversary`
+
+- 返回 `{companionId, startDate, timeZone, revision, updatedAt}`。`startDate` 是 `YYYY-MM-DD`，没设时为 null；第一次读到的 `revision` 是 1。
+- PUT 的 body 是 `{startDate, timeZone, revision}`，`startDate` 传 null 就是清除。`timeZone` 用 IANA 名字，比如 `Asia/Shanghai`。
+- 日期可以早于注册时间，最早到 1900-01-01，但不能晚于那个时区的今天，否则返回 400。
+- `revision` 传最后一次读到的值；如果另一台设备先改过，会返回 409，这时重新读一次再改。
+- 第几天由 App 自己算：用 `timeZone` 里的今天减去 `startDate`。是否从第 1 天开始数，由前端决定。
+- 本地已经存了日期的话，第一次联网时如果服务器上是 null，就 PUT 上去。
+
+## 9. 联调用的测试条件
+
+| 想看到的状态 | 怎么造 |
+| --- | --- |
+| 日记"已写" | 开发环境：家机会写一篇假日记（第 5 节最后一段）。线上要等接上模型 |
+| 日记"写作中" | 两台设备同时点开日记，或者告诉后端，后端在测试账号上放一篇"正在写"的记录（大约 3 分钟后自动失效） |
+| 日记"模型未开放"（FAILED / UNAVAILABLE） | 线上现在就是这个状态，因为还没放模型密钥 |
+| 日记"额度不够"（FAILED / QUOTA）、"平台暂停"（FAILED / DISABLED） | 告诉后端，后端在测试账号上调低当天额度，或者关掉模型开关（管理后台），测完再恢复 |
+| 模型列表 `GET /v0/chat-models` | 线上现在每一项都是 `available: false`，`defaultModel: null`；接上密钥后会有可用项 |
+| 主人通知 `AGENT_DRAFT` | 把家机的社区设置改成"先存草稿"，用 AI 文字工具 `post` 写一条（第 3.4 节）；或者告诉后端，后端直接插一条 |
+| 社区角标 | 用另一个测试账号关注你，或者评论你的帖子 |
+## 10. 长期记忆，以及导入时带记忆（2026-11-24）
+
+对应前端 `docs/claude_2026_11_24.txt` 里的 P0。接口在 `contracts/openapi/chat.yaml`，类型 `CompanionMemory` 在 `contracts/chat.ts`。
+
+### 10.1 记忆是什么
+
+家机记得的一些短句，比如"主人怕黑""我们一起看过海"。家机每次回复、写日记时都会带上它们（最新的在前，总长大约 3000 字以内）。
+
+- **只有主人能放进去**：手动添加，或者导入角色卡时逐条勾选。模型不会自己往里写。
+- 主人能看到全部记忆，也能删除。
+- 每个家机最多 200 条，每条 1–500 字。
+
+### 10.2 接口
+
+| 做什么 | 接口 |
+| --- | --- |
+| 列表 | `GET /v0/companions/{id}/memories`，返回 `{items:[{id, body, source, createdAt}]}`，最新的在前，一次返回全部 |
+| 手动添加 | `POST /v0/companions/{id}/memories`，body 是 `{body}`，要带 Idempotency-Key，返回 201 和这条记忆 |
+| 删除 | `DELETE /v0/companions/{id}/memories/{memoryId}`，删了就没了，删除前请让主人确认 |
+
+- `source` 是 `IMPORT`（从角色卡勾选进来的）或 `OWNER`（手动添加的）。
+- 400：空的、超过 500 字，或者里面有密钥、密码（记忆会发给模型，所以拒收）。
+- 404：不是自己的家机。
+- 409：已经满 200 条，或者同一个 Idempotency-Key 配了不同的内容。
+
+### 10.3 导入角色卡时带记忆
+
+角色卡 JSON 的 `data` 里可以放一个 `memories` 字段，是字符串数组（V2 卡写在 `data.memories`，旧格式写在根上）：
+
+```json
+{ "spec": "chara_card_v2", "data": { "name": "Remi", "description": "...", "memories": ["我们一起看过海", "主人的生日在三月"] } }
+```
+
+- 每一条会变成审核页里的一个候选项：`field` 是 `"memory"`，`id` 是 `candidate-memory-1`、`candidate-memory-2`……（数字是它在数组里的位置，从 1 开始）。
+- 记忆和名字、简介一样过防火墙。含密钥、手机号或邮箱、提示词注入，或者超过 500 字的，`approvable: false`，不能勾选。空字符串和非字符串直接忽略；超过 50 条的部分不会出现在候选里。这些情况都会在 `findings` 里说明。
+- 审核页给每条记忆一个勾选框，**默认不勾**，让主人自己选。勾上的 id 和其他字段一起放进 `approvedCandidateIds` 提交。
+- 批准后，勾选的记忆写进这个家机的记忆库，不会出现在人设字段里。
+- 如果导入到已有的家机（带 `companionId`），记忆会加在原有记忆后面；加完超过 200 条的话，整个批准会返回 409。
+
+### 10.4 回答前端的问题
+
+- 现在没有其他未合并的导入分支。只支持 JSON 角色卡（V2 和旧格式），PNG 角色卡、邀请码都还不支持。
+- 说话方式、价值观、边界这几个人设字段，导入时还没有从卡片里读，下一步补。
+- Markdown 和纯文本的设定加记忆，要先用模型整理成结构化内容，所以要等接上模型才能做。在那之前，前端继续显示"暂未接入"。
+
+## 11. 家机接入方式：自带 Key、接自己的 Agent（2026-11-24）
+
+对应前端 `docs/claude_2026_11_24.txt` 的 P2（形态 A 和形态 B），以及接入家机五屏流程里的"自带 Key / 外部本体"。接口：`GET / PUT / DELETE /v0/companions/{id}/connection`，类型在 `contracts/chat.ts`（`CompanionConnection`、`ConnectionInput`、`ConnectionSaveResult`）。
+
+### 11.1 三种方式
+
+| kind | 意思 | 谁写提示词 | 记忆 |
+| --- | --- | --- | --- |
+| `PLATFORM`（默认） | 平台的模型 | 平台 | 用 |
+| `BYOK` | 主人自己的 API Key，接 DeepSeek、通义千问、Kimi、豆包、智谱、MiniMax，或者自定义的 OpenAI 兼容接口 | 平台（人设、记忆、聊天规则都和平台模型一样） | 用 |
+| `EXTERNAL` | 主人自己的 Agent（Dify、Coze、OpenClaw、自己的服务），要用 OpenAI `/chat/completions` 格式回复 | 对方自己（平台只发聊天记录和几条基本规则） | 不发，对方有自己的记忆 |
+
+不管用哪种，家机的回复都会过平台的安全检查，也会照常存进聊天记录、写进日记。BYOK 和 EXTERNAL 不占平台的每日额度。平台紧急关闭模型时，BYOK 和 EXTERNAL 也会一起停，回复显示 FAILED / DISABLED，和平台模型被关时一样。
+
+### 11.2 接口
+
+- `GET`：返回 `{kind, provider, baseUrl, model, name, keyHint, connectedAt}`。**Key 和 Token 永远不会返回**，`keyHint` 是最后 4 位，可以显示成"••••9876"。
+- `PUT`：服务器先用一条很短的请求试一次，**通了才保存**，返回 `{result, connection}`。
+  - 自带 Key：`{kind:"BYOK", provider, model, apiKey, consent:true}`。`provider` 取 deepseek / qwen / kimi / doubao / glm / minimax / custom；选 custom 时再带 `baseUrl`。预设服务商的地址由服务器决定，前端传的会被忽略，模型名和前端 `providerPresets` 里的默认值一致即可。
+  - 自己的 Agent：`{kind:"EXTERNAL", name, endpoint, bearerToken, model?, consent:true}`。没有 Token 时 `bearerToken` 传空字符串。
+  - `consent` 必须是 true，就是隐私说明的那个勾选框。
+- `DELETE`：回到平台模型，服务器上的密钥一起删掉。
+
+`result` 的值和建议的提示：
+
+| result | 提示 |
+| --- | --- |
+| `CONNECTED` | 已接入 |
+| `AUTH_FAILED` | Key 或 Token 不对 |
+| `NOT_FOUND` | 地址或模型名不对 |
+| `UNREACHABLE` | 连不上（15 秒内没有响应） |
+| `BAD_ANSWER` | 连上了，但返回的不是 /chat/completions 格式 |
+| `BLOCKED_ADDRESS` | 地址不能用（内网、本机之类） |
+| `ERROR` | 对方报错，稍后再试 |
+
+只要不是 `CONNECTED`，原来的接入方式就不变。
+
+- 400：格式不对，比如不是 https、地址里带了用户名密码或 `?` 参数、端口不是 443、Key 或 Token 少于 8 位或者里面有空格、没勾选同意。
+- Key 不足 12 位时 `keyHint` 为 null（太短的话，显示末 4 位就等于露出大半个 Key）。
+- 404：不是自己的家机。
+- 429：10 分钟内试了超过 10 次。
+- **501：服务器上还没开这个功能**，这时显示前端现在的"服务端尚未接入"就行。线上要等后端配好加密钥匙才会打开。
+
+### 11.3 安全上做了什么（给隐私说明参考）
+
+- Key 和 Token 在服务器上加密后才存进数据库（AES-256-GCM），数据库、备份和运营后台都只能看到密文，App 也拿不回明文。
+- 服务器只会访问公网的 https 地址（443 端口），不会访问内网、本机、云服务器的元数据地址，也不跟随跳转。
+- 聊天内容会发给主人选的服务商或 Agent，隐私说明里要写清楚这一点：最近 30 条消息，群聊里也包括其他家机说的话；用 Agent 时还包括写日记用的聊天记录。发出去之前，主人消息里的密码、密钥会被打码。
+

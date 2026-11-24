@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { handleChatRequest } from "../chat/http.ts";
+import type { Connections } from "../connections/model.ts";
 import type { ChatCatalog } from "../chat/models.ts";
 import { ChatReplies } from "../chat/replies.ts";
 import { handleCommunityRequest } from "../community/http.ts";
@@ -448,6 +449,7 @@ export class MvpApiBoundary {
   readonly #id: () => string;
   readonly #replies: ChatReplies;
   readonly #catalog: ChatCatalog | undefined;
+  readonly #connections: Connections | undefined;
 
   constructor(input: {
     readonly sessions: OwnerSessionResolver;
@@ -456,11 +458,14 @@ export class MvpApiBoundary {
     readonly replies?: ChatReplies;
     /** The models an Owner can pick; without one, only the platform default (model null). */
     readonly catalog?: ChatCatalog;
+    /** Owners' own keys and agents; without it, PUT .../connection answers 501. */
+    readonly connections?: Connections;
   }) {
     this.#sessions = input.sessions;
     this.#id = input.id ?? randomUUID;
     this.#replies = input.replies ?? new ChatReplies();
     this.#catalog = input.catalog;
+    this.#connections = input.connections;
   }
 
   async handle(request: MvpHttpRequest): Promise<MvpHttpResponse> {
@@ -472,7 +477,7 @@ export class MvpApiBoundary {
       const session = await authenticate(request, this.#sessions);
       const community = await handleCommunityRequest(request, session, traceId);
       if (community) return community;
-      const chat = await handleChatRequest(request, session, traceId, this.#replies, this.#catalog);
+      const chat = await handleChatRequest(request, session, traceId, this.#replies, this.#catalog, this.#connections);
       if (chat) return chat;
 
       for (const [routeMethod, path, handler] of ROUTES) {

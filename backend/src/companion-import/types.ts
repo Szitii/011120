@@ -33,9 +33,12 @@ export type IdentityField =
   | "pronouns"
   | "togetherSince";
 
+/** "memory": one thing the Companion remembers; approved ones go to its memories, not into the identity. */
+export type CandidateField = IdentityField | "memory";
+
 export interface IdentityCandidate {
   readonly id: string;
-  readonly field: IdentityField;
+  readonly field: CandidateField;
   readonly value: string | readonly string[] | Record<string, unknown>;
   readonly sourcePath: string;
   readonly sourceTrust: "EXTERNAL_UNTRUSTED";

@@ -3,6 +3,10 @@ create role authenticated nologin;
 create role service_role nologin bypassrls;
 create schema auth;
 create schema storage;
+-- Supabase keeps pgcrypto in schema extensions, so public.digest does not exist there.
+-- Migrations use the built-in sha256() instead; this keeps tests from passing on a public.digest.
+create schema extensions;
+create extension pgcrypto schema extensions;
 
 create table auth.users (
   id uuid primary key,

@@ -137,6 +137,99 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /chats/{chatId}/read:
+    parameters:
+    - *chatId
+    put:
+      operationId: markChatRead
+      summary: The Owner has read up to this message (kept on the server, so it carries across devices)
+      description: |
+        Send the newest message the Owner has seen. The read position only moves forward: an older
+        message than the saved one changes nothing, so devices may report in any order. Returns the
+        chat with its new unreadCount. 404 when the message is not a shown message of this chat.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messageId]
+              additionalProperties: false
+              properties:
+                messageId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: The chat
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Chat'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /badges:
+    get:
+      operationId: getBadges
+      summary: Every unread count for the tab badges in one call
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Counts
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Badges'}
+        '401': *problem
+        '403': *problem
+  /companions/{companionId}/anniversary:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: getAnniversary
+      summary: The day the Owner and this Companion count from (相伴起始日); startDate null when not set
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Anniversary
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Anniversary'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    put:
+      operationId: updateAnniversary
+      summary: Set the date, or clear it with startDate null; send the revision last read (a stale revision is a 409)
+      description: |
+        startDate is a calendar date in timeZone (an IANA name such as Asia/Shanghai), from 1900-01-01
+        up to today there; it may be long before the account existed.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startDate, timeZone, revision]
+              additionalProperties: false
+              properties:
+                startDate: {type: [string, 'null'], format: date}
+                timeZone: {type: string}
+                revision: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Anniversary'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
   /chats/{chatId}/messages:
     parameters:
     - *chatId
@@ -428,6 +521,177 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /companions/{companionId}/memories:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: listMemories
+      summary: Every long-term memory of the Companion, newest first (at most 200)
+      description: |
+        Memories are short things the Companion remembers, sent to the model with every reply and
+        diary entry. Only the Owner adds them: by hand (POST), or by approving `memory` candidates
+        one by one when importing a card. The model never adds memories by itself.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Memories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/CompanionMemory'}}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    post:
+      operationId: addMemory
+      summary: Add one memory by hand (1-500 characters, no keys or passwords); 409 past 200
+      description: The same Idempotency-Key returns the first memory; with other text it is a 409.
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              additionalProperties: false
+              properties:
+                body: {type: string, minLength: 1, maxLength: 500}
+      responses:
+        '201':
+          description: The memory
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionMemory'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+  /companions/{companionId}/memories/{memoryId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: memoryId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    delete:
+      operationId: deleteMemory
+      summary: Delete one memory; the text is gone
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {const: true}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/connection:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: getConnection
+      summary: How the Companion speaks - the platform's models, the Owner's own key (BYOK), or the Owner's own agent (EXTERNAL)
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Connection (never the key or token)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionConnection'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    put:
+      operationId: saveConnection
+      summary: Test a key or agent with one tiny call, and save it only when it answered
+      description: |
+        The server calls only public https addresses on port 443 (no private, loopback or link-local
+        address, no redirects). For a preset provider the API base is fixed by the server; custom needs
+        baseUrl. The key or token is sealed on the server and never sent back (keyHint is its last 4
+        characters). result says how the test went; the connection changes only when it is CONNECTED.
+        501 when the server has no CONNECTION_SECRET_KEY (connections are off). 429 after 10 tests in
+        10 minutes.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+                required: [kind, provider, model, apiKey, consent]
+                additionalProperties: false
+                properties:
+                  kind: {const: BYOK}
+                  provider: {type: string, enum: [deepseek, qwen, kimi, doubao, glm, minimax, custom]}
+                  baseUrl: {type: string, description: "custom only - the provider's OpenAI-compatible API base (https)"}
+                  model: {type: string, maxLength: 120}
+                  apiKey: {type: string, maxLength: 512}
+                  consent: {const: true}
+              - type: object
+                required: [kind, name, endpoint, bearerToken, consent]
+                additionalProperties: false
+                properties:
+                  kind: {const: EXTERNAL}
+                  name: {type: string, minLength: 1, maxLength: 40}
+                  endpoint: {type: string, description: 'The full https URL that answers in the OpenAI /chat/completions format.'}
+                  bearerToken: {type: string, maxLength: 512, description: Empty for none.}
+                  model: {type: [string, 'null'], maxLength: 120}
+                  consent: {const: true}
+      responses:
+        '200':
+          description: How the test went, and the connection now in use
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result, connection]
+                properties:
+                  result: {type: string, enum: [CONNECTED, AUTH_FAILED, NOT_FOUND, UNREACHABLE, BAD_ANSWER, BLOCKED_ADDRESS, ERROR]}
+                  connection: {$ref: '#/components/schemas/CompanionConnection'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '429': *problem
+        '501': *problem
+    delete:
+      operationId: deleteConnection
+      summary: Go back to the platform's models; the sealed key is deleted
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Connection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionConnection'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
 components:
   securitySchemes:
     ownerBearer:
@@ -475,7 +739,7 @@ components:
         sentAt: {type: string, format: date-time}
     Chat:
       type: object
-      required: [id, title, direct, members, lastMessage, typing, replying, activeAt]
+      required: [id, title, direct, members, lastMessage, unreadCount, readUpTo, typing, replying, activeAt]
       properties:
         id: {type: string, format: uuid}
         title: {type: [string, 'null'], description: Group name; always null for a one-to-one chat.}
@@ -485,9 +749,55 @@ components:
           oneOf:
           - $ref: '#/components/schemas/ChatMessage'
           - type: 'null'
+        unreadCount: {type: integer, minimum: 0, description: Companion messages shown after the Owner's read position.}
+        readUpTo: {type: [string, 'null'], format: uuid, description: The last message the Owner read (PUT .../read); null before the first.}
         typing: {$ref: '#/components/schemas/Typing'}
         replying: {$ref: '#/components/schemas/Replying'}
         activeAt: {type: string, format: date-time}
+    Badges:
+      type: object
+      required: [chats, ownerInbox, community]
+      properties:
+        chats: {type: integer, minimum: 0, description: Unread Companion messages over every chat.}
+        ownerInbox: {type: integer, minimum: 0, description: Unread items of GET /v0/life-event-inbox.}
+        community:
+          type: array
+          description: Unread community notifications for each identity the Owner can act as (the Owner first).
+          items:
+            type: object
+            required: [actorKind, actorId, unread]
+            properties:
+              actorKind: {type: string, enum: [OWNER, COMPANION]}
+              actorId: {type: string, format: uuid, description: 'The Owner id or the Companion id, as used for ?actorKind=&actorId=.'}
+              unread: {type: integer, minimum: 0}
+    Anniversary:
+      type: object
+      required: [companionId, startDate, timeZone, revision, updatedAt]
+      properties:
+        companionId: {type: string, format: uuid}
+        startDate: {type: [string, 'null'], format: date, description: null when not set.}
+        timeZone: {type: string}
+        revision: {type: integer, minimum: 1}
+        updatedAt: {type: string, format: date-time}
+    CompanionMemory:
+      type: object
+      required: [id, body, source, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        body: {type: string}
+        source: {type: string, enum: [IMPORT, OWNER], description: 'IMPORT: approved from a card. OWNER: added by hand.'}
+        createdAt: {type: string, format: date-time}
+    CompanionConnection:
+      type: object
+      required: [kind, provider, baseUrl, model, name, keyHint, connectedAt]
+      properties:
+        kind: {type: string, enum: [PLATFORM, BYOK, EXTERNAL]}
+        provider: {type: [string, 'null']}
+        baseUrl: {type: [string, 'null']}
+        model: {type: [string, 'null']}
+        name: {type: [string, 'null']}
+        keyHint: {type: [string, 'null'], description: Last 4 characters of the key or token; null when none.}
+        connectedAt: {type: [string, 'null'], format: date-time}
     ChatPage:
       type: object
       required: [chat, items, nextCursor]
