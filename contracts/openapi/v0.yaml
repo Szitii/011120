@@ -70,6 +70,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1voices
   /voices/{voiceId}/sample:
     $ref: ./chat.yaml#/paths/~1voices~1{voiceId}~1sample
+  /wallet:
+    $ref: ./chat.yaml#/paths/~1wallet
   /companions/{companionId}/actions:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1actions
   /companions/{companionId}/diary:

@@ -37,6 +37,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
     markRead: async (...args) => { calls.push(["markRead", ...args]); return {}; },
     features: async () => { calls.push(["features"]); return { groupChatCreate: false, groupChatSend: true }; },
+    wallet: async () => { calls.push(["wallet"]); return { enabled: false }; },
     badges: async () => { calls.push(["badges"]); return {}; },
     anniversary: async (...args) => { calls.push(["anniversary", ...args]); return {}; },
     saveAnniversary: async (...args) => { calls.push(["saveAnniversary", ...args]); return {}; },
@@ -145,6 +146,13 @@ it("tells the app which features it may offer", async () => {
   assert.deepEqual(on?.body, { groupChatCreate: false, groupChatSend: true, connections: true });
   assert.equal(await refusal(port, request("features", "POST")), "NOT_FOUND");
   assert.deepEqual(calls, [["features"], ["features"]]);
+});
+
+it("routes the wallet", async () => {
+  const { port, calls } = fakePort();
+  assert.equal(await status(port, request("wallet")), 200);
+  assert.equal(await refusal(port, request("wallet", "POST")), "NOT_FOUND");
+  assert.deepEqual(calls, [["wallet"]]);
 });
 
 it("routes memories and refuses ones with credentials", async () => {

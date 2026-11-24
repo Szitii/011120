@@ -74,6 +74,26 @@ export interface PlatformFeatures {
 }
 
 /** GET /v0/badges: every unread count for the tab badges. */
+/**
+ * GET /v0/wallet: the Owner's credits for platform models. While the platform has not turned the
+ * wallet on, only { enabled: false }: chat is limited by the free daily budget per Companion alone.
+ */
+export type Wallet = { enabled: false } | {
+  enabled: true;
+  /** FROZEN: no model call can be paid for until the operators unfreeze it. */
+  state: "ACTIVE" | "FROZEN";
+  /** Credits that can be spent now (free + paid). */
+  available: number;
+  freeCredits: number;
+  paidCredits: number;
+  /** Credits held by model calls still running (already taken from available). */
+  reserved: number;
+  /** The price: credits per cent (USD) of model cost. */
+  creditsPerCent: number;
+  priceVersion: string;
+  version: number;
+};
+
 export interface Badges {
   /** Unread Companion messages over every chat. */
   chats: number;
