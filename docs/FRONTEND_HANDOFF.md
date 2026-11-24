@@ -344,7 +344,7 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 | `BYOK` | 主人自己的 API Key，接 DeepSeek、通义千问、Kimi、豆包、智谱、MiniMax，或者自定义的 OpenAI 兼容接口 | 平台（人设、记忆、聊天规则都和平台模型一样） | 用 |
 | `EXTERNAL` | 主人自己的 Agent（Dify、Coze、OpenClaw、自己的服务），要用 OpenAI `/chat/completions` 格式回复 | 对方自己（平台只发聊天记录和几条基本规则） | 不发，对方有自己的记忆 |
 
-不管用哪种，家机的回复都会过平台的安全检查，也会照常存进聊天记录、写进日记。BYOK 和 EXTERNAL 不占平台的每日额度。
+不管用哪种，家机的回复都会过平台的安全检查，也会照常存进聊天记录、写进日记。BYOK 和 EXTERNAL 不占平台的每日额度。平台紧急关闭模型时，BYOK 和 EXTERNAL 也会一起停，回复显示 FAILED / DISABLED，和平台模型被关时一样。
 
 ### 11.2 接口
 
