@@ -24,7 +24,7 @@ type Failed = { failed: "DISABLED" | "QUOTA" };
 type Book = (booking: Booking) => Promise<ReservationDecision>;
 
 /** The Companion's memories, newest first (the Owner's list; this runs as the Owner). */
-async function memoriesOf(port: ChatPort, companionId: string): Promise<string[]> {
+export async function memoriesOf(port: ChatPort, companionId: string): Promise<string[]> {
   const list = await port.memories(companionId) as { items?: { body?: unknown }[] };
   return (list.items ?? []).flatMap(memory => (typeof memory.body === "string" ? [memory.body] : []));
 }
