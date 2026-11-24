@@ -1,7 +1,5 @@
 import { useThemedStyles } from "./theme/SkinProvider";
 import type { UiPalette } from "./theme/skinTokens";
-import * as DocumentPicker from "expo-document-picker";
-import { File } from "expo-file-system";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -17,12 +15,12 @@ import type {
   CompanionIdentity,
   ControlsPatch,
   ControlsResource,
-  ImportReview,
   ProjectionSelection,
 } from "./contracts.ts";
 import { CommunityButton, SecondaryHeading, createCommunityStyles } from "./community/components.tsx";
-import { ApiProblemError, createCommandKey, safeClientMessage } from "./adapters/real-api.ts";
+import { ApiProblemError, safeClientMessage } from "./adapters/real-api.ts";
 
+import { useCommandKeys } from "./state/useCommandKeys";
 import { DiaryFrequency } from "./diary/DiaryFrequency";
 import type { DiaryClient } from "./diary/client";
 
@@ -31,20 +29,6 @@ type AsyncState<T> =
   | { kind: "success"; value: T }
   | { kind: "empty" }
   | { kind: "error"; title: string; retry: boolean };
-
-function useCommandKeys() {
-  const keys = useRef(new Map<string, { payload: string; key: string }>());
-  const forRequest = (kind: string, payload: unknown) => {
-    const serialized = JSON.stringify(payload);
-    const previous = keys.current.get(kind);
-    if (previous?.payload === serialized) return previous.key;
-    const key = createCommandKey(kind);
-    keys.current.set(kind, { payload: serialized, key });
-    return key;
-  };
-  const complete = (kind: string) => { keys.current.delete(kind); };
-  return { forRequest, complete };
-}
 
 function ErrorBlock({
   title,
@@ -266,144 +250,6 @@ function PillOptions({
   );
 }
 
-export function BringCompanionScreen({ api, existingCompanionId, onCreated }: {
-  api: ClientApi;
-  existingCompanionId?: string;
-  onCreated: (identity: CompanionIdentity, approvedFields: string[]) => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  const [method, setMethod] = useState<"manual" | "card">();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [personality, setPersonality] = useState("");
-  const [raw, setRaw] = useState("");
-  const [review, setReview] = useState<ImportReview>();
-  const [selected, setSelected] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const pending = useRef(false);
-  const mounted = useRef(true);
-  const keys = useCommandKeys();
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-
-  const candidates = review?.draft?.candidates ?? [];
-  const required = candidates.find(item => item.field === "displayName" && item.approvable);
-  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格" };
-
-  async function run(work: () => Promise<void>) {
-    if (pending.current) return;
-    pending.current = true;
-    setBusy(true);
-    setMessage("");
-    try {
-      await work();
-    } catch (error) {
-      if (mounted.current) setMessage(importMessage(error));
-    } finally {
-      pending.current = false;
-      if (mounted.current) setBusy(false);
-    }
-  }
-
-  async function inspect(value: string) {
-    let payload: unknown;
-    try {
-      payload = JSON.parse(value.replace(/^\uFEFF/, ""));
-    } catch {
-      setMessage("这份角色卡格式不完整。请重新选择文件或粘贴完整内容。");
-      return;
-    }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      setMessage("请选择包含一位家机资料的 JSON 文件。");
-      return;
-    }
-    const result = await api.createCompanionImport(payload as Record<string, unknown>, keys.forRequest("import", payload));
-    if (!mounted.current) return;
-    keys.complete("import");
-    setReview(result);
-    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.field === "displayName").map(item => item.id));
-  }
-
-  function pickFile() {
-    void run(async () => {
-      const pick = await DocumentPicker.getDocumentAsync({ type: ["application/json", "text/plain", "application/octet-stream"] });
-      if (pick.canceled || !mounted.current) return;
-      const item = pick.assets[0];
-      if (!item.name.toLowerCase().endsWith(".json") || (item.size ?? 0) > 256 * 1024) {
-        setMessage("请选择不超过 256 KB 的 .json 角色卡。");
-        return;
-      }
-      const value = item.file ? await item.file.text() : await new File(item.uri).text();
-      if (mounted.current) await inspect(value);
-    });
-  }
-
-  function approve() {
-    if (!review || !required) return;
-    const ids = [...selected].sort();
-    void run(async () => {
-      const identity = await api.approveCompanionImport(review.id, ids, existingCompanionId,
-        keys.forRequest("approve", [review.id, ids, existingCompanionId]));
-      if (mounted.current) onCreated(identity, candidates.filter(item => ids.includes(item.id)).map(item => item.field));
-    });
-  }
-
-  return <ScrollView style={styles.screen} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-    <SecondaryHeading title={existingCompanionId ? "更新家机资料" : "带家机来"} />
-    <Text style={styles.bodyMuted}>先核对名字、简介和性格，确认后就能在小家见到 TA。资料默认只留在你的小家。</Text>
-    {!review && <View style={styles.pillWrap}>
-      <CommunityButton label="手动填写" selected={method === "manual"} disabled={busy} onPress={() => { setMethod("manual"); setMessage(""); }} />
-      <CommunityButton label="导入角色卡" selected={method === "card"} disabled={busy} onPress={() => { setMethod("card"); setMessage(""); }} />
-    </View>}
-    {!review && method === "manual" && <View style={styles.card}>
-      <Text style={styles.fieldLabel}>怎么称呼 TA？</Text>
-      <TextInput accessibilityLabel="名字" value={name} onChangeText={setName} editable={!busy} maxLength={200} style={styles.shortInput} />
-      <Text style={styles.fieldLabel}>简介（可选）</Text>
-      <TextInput accessibilityLabel="简介" value={description} onChangeText={setDescription} editable={!busy} multiline style={styles.shortInput} />
-      <Text style={styles.fieldLabel}>性格（可选）</Text>
-      <TextInput accessibilityLabel="性格" value={personality} onChangeText={setPersonality} editable={!busy} multiline style={styles.shortInput} />
-      <CommunityButton primary label="预览资料" disabled={busy || !name.trim()}
-        onPress={() => void run(() => inspect(JSON.stringify({ name, description, personality })))} />
-    </View>}
-    {!review && method === "card" && <View style={styles.card}>
-      <CommunityButton label="选择 .json 文件" disabled={busy} onPress={pickFile} />
-      <Text style={styles.bodyMuted}>也可以粘贴已有的角色卡内容。请先移除密码、密钥与私人聊天记录。</Text>
-      <TextInput accessibilityLabel="粘贴角色卡" placeholder="粘贴角色卡内容" value={raw} onChangeText={setRaw}
-        editable={!busy} multiline autoCapitalize="none" autoCorrect={false} style={styles.input} />
-      <CommunityButton primary label="核对角色卡" disabled={busy || !raw.trim()} onPress={() => void run(() => inspect(raw))} />
-    </View>}
-    {review && <View style={styles.stack}>
-      <Text style={styles.cardTitle}>核对家机资料</Text>
-      {candidates.map(item => <View key={item.id} style={styles.card}>
-        <Text style={styles.fieldLabel}>{labels[item.field] ?? item.field}</Text>
-        <Text style={styles.bodyMuted}>{item.approvable ? (Array.isArray(item.value) ? item.value.join("、") : String(item.value)) : "该项未通过检查，无法带入。"}</Text>
-        {item.approvable && item.id !== required?.id && <CommunityButton label="保留这项" selected={selected.includes(item.id)}
-          disabled={busy} onPress={() => setSelected(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])} />}
-      </View>)}
-      {review.findings.length > 0 && <Text style={styles.bodyMuted}>有 {review.findings.length} 项检查提示，敏感内容和额外资料不会带入。</Text>}
-      {!required && <Text accessibilityRole="alert" style={styles.bodyMuted}>请返回修改名字，再提交核对。</Text>}
-      <CommunityButton primary label={existingCompanionId ? "确认更新" : "确认添加并去小家"} disabled={busy || !required} onPress={approve} />
-      <CommunityButton label="返回编辑" disabled={busy} onPress={() => { setReview(undefined); setMessage(""); }} />
-    </View>}
-    {busy && <ActivityIndicator accessibilityLabel="正在处理家机资料" />}
-    {message !== "" && <Text accessibilityRole="alert" style={styles.bodyMuted}>{message}</Text>}
-  </ScrollView>;
-}
-
-function importMessage(error: unknown): string {
-  if (error instanceof ApiProblemError) {
-    if (error.code === "IMPORT_NAME_REQUIRED") return "请先给家机填一个名字。";
-    if (error.status === 413) return "角色卡超过 256 KB，请删减后再试。";
-    if (error.status === 415 || error.status === 400) return "这份资料无法读取，请检查名字与角色卡格式。";
-    if (error.status === 404) return "这次审核已不可用，请返回重新核对资料。";
-    if (error.status === 409) return "审核状态已经变化，请返回重新核对资料。";
-  }
-  return safeClientMessage(error).title;
-}
-
 export function SocialActivationScreen({
   api,
   companion,
@@ -623,7 +469,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink },
   fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: ui.ink },
   shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 14, color: ui.ink, fontSize: 13 },
-  input: { minHeight: 180, marginTop: 22, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 16, color: ui.ink, textAlignVertical: "top", fontFamily: "monospace", fontSize: 12, lineHeight: 18 },
   primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: ui.accentWash, alignItems: "center", justifyContent: "center" },
   primaryText: { color: ui.accentInk, fontSize: 14, fontWeight: "600" },
   secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },

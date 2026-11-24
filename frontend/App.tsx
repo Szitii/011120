@@ -1,3 +1,4 @@
+import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
 import { useThemedStyles } from "./src/theme/SkinProvider";
 import type { UiPalette } from "./src/theme/skinTokens";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -46,7 +47,6 @@ import type {
 import { ViewerSensitiveCache } from "./src/state/cache";
 import { toStage1MediaPresentation } from "./src/media";
 import {
-  BringCompanionScreen,
   ControlsScreen,
   SocialActivationScreen,
 } from "./src/stage1-surfaces";
@@ -483,7 +483,7 @@ function WorldApp({ client, account, isMockMode }: {
   }
 
   useEffect(() => {
-    if (route.type === "root" || route.type === "compose-post") return;
+    if (route.type === "root" || route.type === "compose-post" || route.type === "bring-companion") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       goBack();
       return true;
@@ -519,11 +519,11 @@ function WorldApp({ client, account, isMockMode }: {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: skin.colors.canvas }]}>
       <StatusBar style={skin.isDark ? "light" : "dark"} />
-      {route.type === "root" && (
+      {(route.type === "root" || route.type === "bring-companion") && (
         <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
       )}
 
-      {!isMoment && route.type !== "chat" && route.type !== "compose-post" && (
+      {!isMoment && route.type !== "chat" && route.type !== "compose-post" && route.type !== "bring-companion" && (
         <AppHeader
           routeIsRoot={route.type === "root"}
           rootTab={nav.rootTab}
@@ -760,6 +760,8 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "bring-companion" && viewer?.kind === "OWNER" && (
         <BringCompanionScreen
+          key={route.companionId ?? "new"}
+          onBack={goBack}
           api={client.api}
           existingCompanionId={route.companionId}
           onCreated={(created, approvedFields) => {
