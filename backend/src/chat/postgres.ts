@@ -83,6 +83,18 @@ export class PostgresChatAdapter implements ChatPort {
       [companionId, c.kind, c.provider, c.baseUrl, c.model, c.name, c.secret, hint]);
   }
 
+  createAgentKey(companionId: string, name: string, tokenHash: string, days: number): Promise<unknown> {
+    return this.#object("select public.agent_key_create($1,$2,$3,$4) as payload", [companionId, name, tokenHash, days]);
+  }
+
+  agentKeys(companionId: string): Promise<unknown> {
+    return this.#object("select public.agent_key_list($1) as payload", [companionId]);
+  }
+
+  revokeAgentKey(companionId: string, keyId: string): Promise<unknown> {
+    return this.#object("select public.agent_key_revoke($1,$2) as payload", [companionId, keyId]);
+  }
+
   removeConnection(companionId: string): Promise<unknown> {
     return this.#object("select public.connection_delete($1) as payload", [companionId]);
   }

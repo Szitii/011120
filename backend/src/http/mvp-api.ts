@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { handleChatRequest } from "../chat/http.ts";
+import { handleAgentRequest, Heartbeats } from "../agent/heartbeat.ts";
 import type { Connections } from "../connections/model.ts";
 import type { ChatCatalog } from "../chat/models.ts";
 import { ChatReplies } from "../chat/replies.ts";
@@ -450,6 +451,7 @@ export class MvpApiBoundary {
   readonly #replies: ChatReplies;
   readonly #catalog: ChatCatalog | undefined;
   readonly #connections: Connections | undefined;
+  readonly #heartbeats = new Heartbeats();
 
   constructor(input: {
     readonly sessions: OwnerSessionResolver;
@@ -475,6 +477,7 @@ export class MvpApiBoundary {
       const pathname = url.pathname.replace(/\/$/, "") || "/";
       const method = request.method.toUpperCase();
       const session = await authenticate(request, this.#sessions);
+      if (session.agent !== undefined) return await handleAgentRequest(request, session, traceId, this.#heartbeats);
       const community = await handleCommunityRequest(request, session, traceId);
       if (community) return community;
       const chat = await handleChatRequest(request, session, traceId, this.#replies, this.#catalog, this.#connections);

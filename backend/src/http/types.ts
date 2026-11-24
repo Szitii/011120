@@ -270,6 +270,8 @@ export interface AuthenticatedOwnerSession {
   readonly owner: OwnerApiPort;
   readonly community?: import("../community/port.ts").CommunityPort;
   readonly chat?: import("../chat/port.ts").ChatPort;
+  /** Set when the caller is the Owner's agent with an agent key: it may only check in (agent/heartbeat.ts). */
+  readonly agent?: { readonly keyId: string; readonly companionId: string; readonly scopes: readonly string[] };
 }
 
 export interface OwnerSessionResolver {

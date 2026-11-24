@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type pg from "pg";
 import { chatFromEnvironment } from "../chat/setup.ts";
+import { AgentKeyResolver } from "../agent/heartbeat.ts";
 import { DiaryScheduler } from "../chat/diary-scheduler.ts";
 import { PostgresChatAdapter } from "../chat/postgres.ts";
 import { createPgPool, PgOwnerExecutor } from "../persistence/postgres/client.ts";
@@ -13,7 +14,7 @@ export const createSupabaseMobileHttpServer = (input: {
   supabaseUrl: string;
   publishableKey: string;
   chat?: Parameters<typeof createMobileHttpServer>[2];
-}) => createMobileHttpServer(new SupabaseOwnerSessionResolver(input), "supabase-auth", input.chat);
+}) => createMobileHttpServer(new AgentKeyResolver(input.pool, new SupabaseOwnerSessionResolver(input)), "supabase-auth", input.chat);
 
 async function main() {
   const {
