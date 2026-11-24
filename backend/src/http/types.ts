@@ -139,12 +139,15 @@ export interface EncounterDetailView {
 
 export interface LifeEventInboxItemView {
   readonly id: string;
-  readonly lifeEventId: string;
+  /** LIFE_EVENT: a life event. AGENT_DRAFT: a Companion's draft waiting for review. */
+  readonly kind: "LIFE_EVENT" | "AGENT_DRAFT";
+  /** LIFE_EVENT only. */
+  readonly lifeEventId?: string;
   readonly companionId: string;
   readonly title: string;
   readonly createdAt: string;
   readonly readAt?: string;
-  readonly linkedObject: { readonly type: "LIFE_EVENT"; readonly id: string };
+  readonly linkedObject: { readonly type: "LIFE_EVENT" | "AGENT_DRAFT"; readonly id: string };
 }
 
 export interface LifeEventInboxCollectionView {

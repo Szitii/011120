@@ -71,11 +71,11 @@ class OwnerPort implements OwnerApiPort {
 
   async listLifeEventInbox(limit: number, before?: Parameters<OwnerApiPort["listLifeEventInbox"]>[1]) {
     this.calls.push({ name: "life-list", input: { limit, before } });
-    return { items: [{ id: id("40"), lifeEventId: id("41"), companionId: id("3"), title: "Encounter complete", createdAt: "2026-09-18T00:00:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } }], nextCursor: null };
+    return { items: [{ id: id("40"), kind: "LIFE_EVENT" as const, lifeEventId: id("41"), companionId: id("3"), title: "Encounter complete", createdAt: "2026-09-18T00:00:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } }], nextCursor: null };
   }
   async acknowledgeLifeEvent(itemId: string) {
     this.calls.push({ name: "life-read", input: itemId });
-    return { id: itemId, lifeEventId: id("41"), companionId: id("3"), title: "Encounter complete", createdAt: "2026-09-18T00:00:00.000Z", readAt: "2026-09-18T00:01:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } };
+    return { id: itemId, kind: "LIFE_EVENT" as const, lifeEventId: id("41"), companionId: id("3"), title: "Encounter complete", createdAt: "2026-09-18T00:00:00.000Z", readAt: "2026-09-18T00:01:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } };
   }
   async getControls(companionId: string) {
     this.calls.push({ name: "controls-get", input: companionId });

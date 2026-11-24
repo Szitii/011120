@@ -65,7 +65,7 @@ describe("PostgreSQL persistence adapter",()=>{
     assert.equal(detail?.status,"DELIVERED");
   });
   it("maps Life Event inbox list and acknowledgement reads",async()=>{
-    const item={id:id("20"),lifeEventId:id("21"),companionId:id("3"),title:"Encounter complete",createdAt:"2026-09-18T00:00:00.000Z",linkedObject:{type:"LIFE_EVENT",id:id("21")}};
+    const item={id:id("20"),kind:"LIFE_EVENT",lifeEventId:id("21"),companionId:id("3"),title:"Encounter complete",createdAt:"2026-09-18T00:00:00.000Z",linkedObject:{type:"LIFE_EVENT",id:id("21")}};
     const listDb=new FakeExecutor({item});
     const page=await new PostgresOwnerAdapter(listDb).listLifeEventInbox(1,{createdAt:"2026-09-19T00:00:00.000Z",id:id("99")});
     assert.equal(page.items[0]?.id,id("20"));

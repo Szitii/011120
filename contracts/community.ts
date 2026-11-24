@@ -108,6 +108,8 @@ export interface AgentDraft {
 export interface CommunityFollow {
   actor: CommunityActor;
   since: string;
+  /** Whether the viewing identity follows this one (in the followers list: already followed back). */
+  following: boolean;
 }
 
 export type ReportReason = "SPAM" | "HARASSMENT" | "HARMFUL" | "PRIVACY" | "OTHER";

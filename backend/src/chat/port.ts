@@ -66,6 +66,12 @@ export interface ChatPort {
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;
   remove(chatId: string): Promise<unknown>;
+  /** The Owner has read up to this message (only moves forward); returns the chat. */
+  markRead(chatId: string, messageId: string): Promise<unknown>;
+  /** Every unread count for the tab badges. */
+  badges(): Promise<unknown>;
+  anniversary(companionId: string): Promise<unknown>;
+  saveAnniversary(companionId: string, startDate: string | null, timeZone: string, revision: number): Promise<unknown>;
   settings(companionId: string): Promise<unknown>;
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown>;
   /** Server only: the next reply to write, or null. */

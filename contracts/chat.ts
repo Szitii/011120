@@ -41,11 +41,44 @@ export interface Chat {
   direct: boolean;
   members: ChatMember[];
   lastMessage: ChatMessage | null;
+  /** Companion messages shown after the Owner's read position (PUT /v0/chats/{id}/read). */
+  unreadCount: number;
+  /** The last message the Owner read; null before the first. */
+  readUpTo: string | null;
   /** Companions to show as "typing…" right now. */
   typing: string[];
   /** More replies are on the way: keep refreshing every 1-2 s while true, even if nobody shows as typing. */
   replying: boolean;
   activeAt: string;
+}
+
+/** GET /v0/chats */
+export interface ChatList {
+  items: Chat[];
+  /** Sum of unreadCount over every chat. */
+  unreadTotal: number;
+}
+
+/** GET /v0/badges: every unread count for the tab badges. */
+export interface Badges {
+  /** Unread Companion messages over every chat. */
+  chats: number;
+  /** Unread items of GET /v0/life-event-inbox. */
+  ownerInbox: number;
+  /** Unread community notifications for each identity the Owner can act as (the Owner first). */
+  community: { actorKind: "OWNER" | "COMPANION"; actorId: string; unread: number }[];
+}
+
+/**
+ * 相伴起始日: the calendar day (in timeZone) the Owner and this Companion count from; null when not set.
+ * PUT sends startDate (or null to clear), timeZone and the revision last read; a stale revision is a 409.
+ */
+export interface Anniversary {
+  companionId: string;
+  startDate: string | null;
+  timeZone: string;
+  revision: number;
+  updatedAt: string;
 }
 
 export interface ChatPage {

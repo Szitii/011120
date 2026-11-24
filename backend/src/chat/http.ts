@@ -6,6 +6,9 @@
  *   POST   /v0/chats                                   { companionIds, title? }  one-to-one or a new group
  *   GET    /v0/chats/{id}?cursor=                      the chat and a page of messages, newest first
  *   DELETE /v0/chats/{id}                              delete the chat and its messages
+ *   PUT    /v0/chats/{id}/read                         { messageId }  the Owner has read up to here
+ *   GET    /v0/badges                                  every unread count for the tab badges
+ *   GET|PUT /v0/companions/{id}/anniversary            the day the Owner and the Companion count from
  *   POST   /v0/chats/{id}/messages                     { body, mentions? }       send
  *   POST   /v0/chats/{id}/messages/{messageId}/retry   try a failed reply again
  *   GET|PUT /v0/companions/{id}/chat-settings          how a Companion takes part, and its model
@@ -73,6 +76,17 @@ function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined): Ch
   return { groupActivity, companionInteraction, model, revision } as ChatSettings;
 }
 
+const DATE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
+
+/** startDate "YYYY-MM-DD" or null; the database checks the day exists, the range and the time zone. */
+function anniversary(request: MvpHttpRequest): [string | null, string, number] {
+  const { startDate, timeZone, revision } = body(request, ["startDate", "timeZone", "revision"]);
+  if (!(startDate === null || (typeof startDate === "string" && DATE.test(startDate)))
+    || typeof timeZone !== "string" || timeZone.length < 1 || timeZone.length > 64
+    || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
+  return [startDate as string | null, timeZone, revision as number];
+}
+
 function diarySettings(request: MvpHttpRequest): DiarySettings {
   const { frequency, revision } = body(request, ["frequency", "revision"]);
   if (!["OFF", "RARE", "DAILY", "OFTEN"].includes(frequency as string)
@@ -116,8 +130,10 @@ export async function handleChatRequest(
   const actionsRoute = path[1] === "companions" && path[3] === "actions" && path.length === 4;
   const diaryRoute = path[1] === "companions" && path[3] === "diary" && (path.length === 4 || path.length === 5);
   const diarySettingsRoute = path[1] === "companions" && path[3] === "diary-settings" && path.length === 4;
+  const anniversaryRoute = path[1] === "companions" && path[3] === "anniversary" && path.length === 4;
+  const badgesRoute = path[1] === "badges" && path.length === 2;
   if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute && !diaryRoute
-    && !diarySettingsRoute)) return undefined;
+    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -126,6 +142,13 @@ export async function handleChatRequest(
   const method = request.method.toUpperCase();
 
   if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
+  if (badgesRoute) return method === "GET" ? response(200, await port.badges()) : notFound();
+  if (anniversaryRoute) {
+    const companionId = id(path[2]);
+    if (method === "GET") return response(200, await port.anniversary(companionId));
+    if (method === "PUT") return response(200, await port.saveAnniversary(companionId, ...anniversary(request)));
+    return notFound();
+  }
   if (settingsRoute) {
     const companionId = id(path[2]);
     if (method === "GET") return response(200, await port.settings(companionId));
@@ -170,6 +193,8 @@ export async function handleChatRequest(
     result = await port.read(chat, beforeAt, beforeId);
   } else if (part === undefined && method === "DELETE") {
     return response(200, await port.remove(chat));
+  } else if (part === "read" && path.length === 4 && method === "PUT") {
+    return response(200, await port.markRead(chat, id(body(request, ["messageId"]).messageId)));
   } else if (part === "messages" && messageId === undefined && method === "POST") {
     const input = body(request, ["body", "mentions"]);
     const mentions = input.mentions === undefined ? [] : ids(input.mentions, 0);
