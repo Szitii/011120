@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import { useEffect, useRef, useState } from "react";
@@ -33,9 +34,10 @@ const options = [
     help: "第一次来、还没有现成资料，填写名字和性格就能开始。记忆可以在日常相处里慢慢积累。" },
 ] as const;
 
-export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBack }: {
+export function BringCompanionScreen({ api, existingCompanionId, ownerId, onCreated, onBack }: {
   api: ClientApi;
   existingCompanionId?: string;
+  ownerId?: string;
   onCreated: (identity: CompanionIdentity, approvedFields: string[]) => void;
   onBack: () => void;
 }) {
@@ -51,6 +53,8 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
   const [file, setFile] = useState<{ name: string; size: number; text: string }>();
   const [missingName, setMissingName] = useState(false);
   const [importName, setImportName] = useState("");
+  const [savedImportId, setSavedImportId] = useState<string>();
+  const reviewKey = ownerId ? `companion:import-review:v1:${ownerId}:${existingCompanionId ?? "new"}` : undefined;
   const [review, setReview] = useState<ImportReview>();
   const [selected, setSelected] = useState<string[]>([]);
   const [selfKey, setSelfKey] = useState(false);
@@ -64,6 +68,46 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (!reviewKey || !api.getCompanionImport) return;
+    let current = true;
+    void AsyncStorage.getItem(reviewKey).then(value => {
+      if (current && value) setSavedImportId(value);
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [api, reviewKey]);
+
+  function showReview(result: ImportReview) {
+    setReview(result);
+    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.field === "displayName").map(item => item.id));
+    setSelfKey(false);
+    setStep("review");
+  }
+
+  async function clearSavedReview() {
+    if (reviewKey) await AsyncStorage.removeItem(reviewKey).catch(() => undefined);
+    if (mounted.current) setSavedImportId(undefined);
+  }
+
+  function resumeReview() {
+    if (!savedImportId || !api.getCompanionImport) return;
+    const id = savedImportId;
+    void run(async () => {
+      try {
+        const result = await api.getCompanionImport!(id);
+        if (!mounted.current) return;
+        if (result.status === "REVIEWABLE") showReview(result);
+        else {
+          await clearSavedReview();
+          if (mounted.current) setMessage("这次审核已结束，可以重新导入。");
+        }
+      } catch (error) {
+        if (error instanceof ApiProblemError && error.status === 404) await clearSavedReview();
+        throw error;
+      }
+    });
+  }
 
   function back() {
     if (pending.current) return;
@@ -88,7 +132,7 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
 
   const candidates = review?.draft?.candidates ?? [];
   const required = candidates.find(item => item.field === "displayName" && item.approvable);
-  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格" };
+  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格", memory: "记忆" };
 
   async function run(work: () => Promise<void>) {
     if (pending.current) return;
@@ -134,10 +178,12 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     const result = await api.createCompanionImport(card, keys.forRequest("import", card));
     if (!mounted.current) return;
     keys.complete("import");
-    setReview(result);
-    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.field === "displayName").map(item => item.id));
-    setSelfKey(false);
-    setStep("review");
+    if (reviewKey && result.status === "REVIEWABLE") {
+      await AsyncStorage.setItem(reviewKey, result.id).catch(() => undefined);
+      if (!mounted.current) return;
+      setSavedImportId(result.id);
+    }
+    showReview(result);
   }
 
   function pickFile() {
@@ -177,6 +223,7 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     void run(async () => {
       const identity = await api.approveCompanionImport(review.id, ids, existingCompanionId,
         keys.forRequest("approve", [review.id, ids, existingCompanionId]));
+      await clearSavedReview();
       if (mounted.current) onCreated(identity, candidates.filter(item => ids.includes(item.id)).map(item => item.field));
     });
   }
@@ -212,6 +259,7 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
         <Text style={s.body}>{subtitle}</Text>
       </Pressable>
 
+      {step === "entry" && savedImportId && <BringButton label="继续上次审核" secondary disabled={busy} onPress={resumeReview} />}
       {step === "entry" && options.filter(option => !existingCompanionId || option.id !== "external").map(option => (
         <Choice key={option.id} icon={option.icon} title={existingCompanionId && option.id === "manual" ? "手动填写" : option.title}
           description={option.description} note={option.tags} onPress={() => {

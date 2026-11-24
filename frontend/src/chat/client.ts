@@ -1,4 +1,5 @@
 import type {
+  Anniversary, Badges, CompanionMemory, MemoryList, CompanionConnection, ConnectionInput, ConnectionSaveResult,
   Chat,
   ChatModelList,
   ChatPage,
@@ -17,6 +18,16 @@ interface ChatRetryResult {
 export type { ChatModelInfo as ChatModelItem, ChatModelList } from "../../../contracts/chat.ts";
 
 export interface ChatClient {
+  badges?(): Promise<Badges>;
+  markRead?(chatId: string, messageId: string): Promise<Chat>;
+  getAnniversary?(id: string): Promise<Anniversary>;
+  saveAnniversary?(id: string, value: Pick<Anniversary, "startDate" | "timeZone" | "revision">): Promise<Anniversary>;
+  listMemories?(id: string): Promise<MemoryList>;
+  addMemory?(id: string, body: string, key: string): Promise<CompanionMemory>;
+  deleteMemory?(id: string, memoryId: string): Promise<unknown>;
+  getConnection?(id: string): Promise<CompanionConnection>;
+  saveConnection?(id: string, input: ConnectionInput): Promise<ConnectionSaveResult>;
+  removeConnection?(id: string): Promise<CompanionConnection>;
   listChats(): Promise<{ items: Chat[] }>;
   openChat(companionIds: string[], title?: string, key?: string): Promise<Chat>;
   getChat(chatId: string, cursor?: string): Promise<ChatPage>;
@@ -46,7 +57,18 @@ export function makeIdempotencyKey(prefix: string): string {
 }
 
 export function createChatClient(send: SendFn): ChatClient {
+  const companion = (id: string) => `/v0/companions/${encodeURIComponent(id)}`;
   return {
+    badges: () => send("GET", "/v0/badges"),
+    markRead: (id, messageId) => send("PUT", `/v0/chats/${encodeURIComponent(id)}/read`, { messageId }),
+    getAnniversary: id => send("GET", `${companion(id)}/anniversary`),
+    saveAnniversary: (id, value) => send("PUT", `${companion(id)}/anniversary`, value),
+    listMemories: id => send("GET", `${companion(id)}/memories`),
+    addMemory: (id, body, key) => send("POST", `${companion(id)}/memories`, { body }, key),
+    deleteMemory: (id, memoryId) => send("DELETE", `${companion(id)}/memories/${encodeURIComponent(memoryId)}`),
+    getConnection: id => send("GET", `${companion(id)}/connection`),
+    saveConnection: (id, input) => send("PUT", `${companion(id)}/connection`, input),
+    removeConnection: id => send("DELETE", `${companion(id)}/connection`),
     listChats() {
       return send("GET", "/v0/chats");
     },

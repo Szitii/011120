@@ -31,7 +31,10 @@ export function normalizeImportCard(value: unknown, suppliedName = ""): Card | u
   // Standard cards keep their metadata for the firewall. Structured exports use an allowlist.
   const standard = root.spec === "chara_card_v2" && data;
   const legacy = !data && !identity && !character && !Object.hasOwn(root, "raw_persona_text");
-  if (!standard && !legacy) return selected;
+  if (!standard && !legacy) {
+    const memories = Array.isArray(data?.memories) ? data.memories : root.memories;
+    return Array.isArray(memories) ? { ...selected, memories: memories.filter(item => typeof item === "string") } : selected;
+  }
   const withoutVault = (card: Card) => Object.fromEntries(
     Object.entries(card).filter(([key]) => !key.toLowerCase().startsWith("private_memory_vault"))
   );

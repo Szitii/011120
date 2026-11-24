@@ -15,7 +15,7 @@ export type Route =
   | { type: "life-archive" }
   | { type: "edit-human-profile" }
   | { type: "agent-settings" }
-  | { type: "agent-drafts" }
+  | { type: "agent-drafts"; companionId?: string; draftId?: string }
   | { type: "encounter"; encounterId: string }
   | { type: "profile"; companionId: string }
   | { type: "bring-companion"; companionId?: string }

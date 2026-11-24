@@ -60,6 +60,7 @@ export function ChatScreen({
   onBackToHome,
   onSaveQuote,
   onOpenSettings,
+  onRead,
 }: {
   client: ChatClient;
   initialChatId?: string;
@@ -70,6 +71,7 @@ export function ChatScreen({
   backLabel?: string;
   onBackToHome: () => void;
   onSaveQuote?: (quote: QuoteInput) => Promise<void>;
+  onRead?: () => void;
   onOpenSettings?: () => void;
 }) {
   const { ui } = useSkin();
@@ -105,6 +107,26 @@ export function ChatScreen({
   const reqVersionRef = useRef(0);
   const cursorExhaustedRef = useRef(false);
   const pendingSendRef = useRef<{ text: string; key: string } | null>(null);
+
+  const sendingRead = useRef<string | undefined>(undefined);
+  const lastRead = useRef<string | undefined>(undefined);
+  const [readRevision, bumpReadRevision] = useState(0);
+  const messageToRead = messages.find(message => message.status === "SENT" && message.companionId !== null && !message.action)?.id;
+  useEffect(() => {
+    if (!client.markRead || !appActive || !chat?.unreadCount || !messageToRead || chat.readUpTo === messageToRead) return;
+    const key = `${chat.id}:${messageToRead}`;
+    if (sendingRead.current || lastRead.current === key) return;
+    sendingRead.current = key;
+    const session = sessionRef.current;
+    void client.markRead(chat.id, messageToRead).then(() => {
+      if (session !== sessionRef.current) return;
+      lastRead.current = key;
+      onRead?.();
+      bumpReadRevision(value => value + 1);
+    }).catch(() => { /* Another refresh or opening the chat can retry. */ }).finally(() => {
+      if (sendingRead.current === key) sendingRead.current = undefined;
+    });
+  }, [client, appActive, chat, messageToRead, onRead, readRevision]);
 
   const loadLatest = useCallback(async (targetChatId: string, silent = false) => {
     if (silent && pollInFlightRef.current) return;

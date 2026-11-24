@@ -3,6 +3,7 @@ import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import type { ChatModelList, ChatSettings } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
+import { MemorySettings } from "./MemorySettings";
 import type { ChatClient } from "./client";
 
 const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"]] as const;
@@ -61,6 +62,7 @@ export function ChatSettingsScreen({ client, companionId }: { client: ChatClient
   return <ScrollView style={s.page} contentContainerStyle={s.content}>
     <SecondaryHeading title="聊天设置" />
     {!!notice && <Text accessibilityLiveRegion="polite" style={s.body}>{notice}</Text>}
+    {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
     {!form ? busy ? <ActivityIndicator accessibilityLabel="正在读取聊天设置" />
       : <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />
       : <>

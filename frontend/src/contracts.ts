@@ -115,6 +115,7 @@ export interface ClientApi {
   ): Promise<CompanionProfile>;
   lifeEventInbox(cursor?: NonNullable<LifeEventInboxCollection["nextCursor"]>): Promise<LifeEventInboxCollection>;
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem>;
+  getCompanionImport?(id: string): Promise<ImportReview>;
   createCompanionImport(payload: Record<string, unknown>, idempotencyKey?: string): Promise<ImportReview>;
   approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string, idempotencyKey?: string): Promise<CompanionIdentity>;
   projectSocialPersona(
@@ -136,11 +137,12 @@ export interface ClientApi {
 export interface LifeEventInboxItem {
   id: string;
   companionId: string;
-  lifeEventId: string;
+  kind?: "LIFE_EVENT" | "AGENT_DRAFT";
+  lifeEventId?: string;
   title: string;
   readAt?: string;
   createdAt: string;
-  linkedObject: { type: "LIFE_EVENT"; id: string };
+  linkedObject: { type: "LIFE_EVENT" | "AGENT_DRAFT"; id: string };
 }
 
 export interface LifeEventInboxCollection {

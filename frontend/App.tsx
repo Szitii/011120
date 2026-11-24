@@ -1,3 +1,5 @@
+import type { Badges } from "../contracts/chat";
+import { useAppIsActive } from "./src/state/useAppIsActive";
 import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
 import { useThemedStyles } from "./src/theme/SkinProvider";
 import type { UiPalette } from "./src/theme/skinTokens";
@@ -194,6 +196,21 @@ function WorldApp({ client, account, isMockMode }: {
     : undefined;
   const encounterId = route.type === "encounter" ? route.encounterId : undefined;
   const viewerKey = `${viewer?.kind}:${identityId}`;
+  const appActive = useAppIsActive();
+  const [badgeRevision, setBadgeRevision] = useState(0);
+  const [badgeState, setBadgeState] = useState<{ key: string; data: Badges }>();
+  const refreshBadges = useCallback(() => setBadgeRevision(value => value + 1), []);
+  useEffect(() => {
+    if (!appActive || !subject || !client.api.chat?.badges) return;
+    let current = true;
+    void client.api.chat.badges().then(data => {
+      if (current) setBadgeState({ key: viewerKey, data });
+    }).catch(() => { /* Keep the last badge count during a transient failure. */ });
+    return () => { current = false; };
+  }, [appActive, viewerKey, nav.rootTab, badgeRevision, client.api]);
+  const badgeData = badgeState?.key === viewerKey ? badgeState.data : undefined;
+  const communityUnread = badgeData?.community.find(row => row.actorId === identityId)?.unread ?? 0;
+  const unread = communityUnread + (ownerId ? (badgeData?.chats ?? 0) + (badgeData?.ownerInbox ?? 0) : 0);
   const profileKey = profileId ? `${viewerKey}:${profileId}` : undefined;
   const encounterKey = encounterId ? `${viewerKey}:${encounterId}` : undefined;
   const detailScope = useRef({ profileKey, encounterKey, profileRequest: 0, encounterRequest: 0 });
@@ -602,7 +619,10 @@ function WorldApp({ client, account, isMockMode }: {
             })}
             onCreateGroup={() => openFromTab("messages", { type: "create-group" })}
             onCommunityTarget={target => openFromTab("messages", { type: "community-target", target })}
-            onLife={() => openFromTab("messages", { type: "life-archive" })}
+            onRead={refreshBadges}
+            onLife={item => item.kind === "AGENT_DRAFT" || item.linkedObject?.type === "AGENT_DRAFT"
+              ? openFromTab("messages", { type: "agent-drafts", companionId: item.companionId, draftId: item.linkedObject?.id })
+              : openFromTab("messages", { type: "life-archive" })}
           />
         </View>
       )}
@@ -655,6 +675,7 @@ function WorldApp({ client, account, isMockMode }: {
           backLabel={route.fromTab === "messages" ? "返回消息" : route.fromTab === "my" ? "返回" : "返回小家"}
           onSaveQuote={ownerId && route.companionId ? quote => addAlbumQuote({ ownerId, companionId: route.companionId! }, quote) : undefined}
           onOpenSettings={route.companionId ? () => setNav(current => pushRoute(current, { type: "chat-settings", companionId: route.companionId! })) : undefined}
+          onRead={refreshBadges}
           onBackToHome={goBack}
         />
       )}
@@ -725,8 +746,10 @@ function WorldApp({ client, account, isMockMode }: {
           onOpenDrafts={() => setNav(current => pushRoute(current, { type: "agent-drafts" }))} />
       )}
 
-      {route.type === "agent-drafts" && agentViewer && client.api.community && (
-        <AgentDraftsScreen key={`${agentViewer.kind}:${agentViewer.id}`} client={client.api.community} viewer={agentViewer} />
+      {route.type === "agent-drafts" && (agentViewer || (ownerId && route.companionId)) && client.api.community && (
+        <AgentDraftsScreen key={route.companionId ?? agentViewer?.id} client={client.api.community}
+          viewer={route.companionId ? { kind: "COMPANION", id: route.companionId } : agentViewer!}
+          draftId={route.draftId} onChanged={refreshBadges} />
       )}
 
       {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && client.api.community && (
@@ -764,6 +787,7 @@ function WorldApp({ client, account, isMockMode }: {
           onBack={goBack}
           api={client.api}
           existingCompanionId={route.companionId}
+          ownerId={ownerId}
           onCreated={(created, approvedFields) => {
             setCreatedHome({
               companionId: created.companionId, displayName: created.displayName, identityId: created.id,
@@ -809,6 +833,7 @@ function WorldApp({ client, account, isMockMode }: {
       {!isMoment && route.type === "root" && (
         <FloatingGlassTabs
           current={nav.rootTab}
+          unread={unread}
           onSelect={(tab) => setNav((state) => selectTab(state, tab))}
         />
       )}

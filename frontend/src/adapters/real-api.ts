@@ -96,6 +96,9 @@ export class RealApiAdapter implements ClientApi {
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem> {
     return this.send("PUT", `/v0/life-event-inbox/${encodeURIComponent(itemId)}/read`);
   }
+  getCompanionImport(id: string): Promise<ImportReview> {
+    return this.get(`/v0/companion-imports/${encodeURIComponent(id)}`);
+  }
   createCompanionImport(payload: Record<string, unknown>, idempotencyKey?: string): Promise<ImportReview> {
     return this.send("POST", "/v0/companion-imports", payload, { "Idempotency-Key": idempotencyKey ?? createCommandKey("import") });
   }
