@@ -63,6 +63,16 @@ export interface Chat {
   activeAt: string;
 }
 
+/** GET /v0/features: what the app may offer right now. Hide what is false. */
+export interface PlatformFeatures {
+  /** Creating a group chat (POST /v0/chats with 2 or more Companions). Off: 409. */
+  groupChatCreate: boolean;
+  /** Sending and retrying in an existing group chat. Off: read and delete only (send is 409). */
+  groupChatSend: boolean;
+  /** Connecting the Owner's own key or agent (PUT .../connection). Off: 501. */
+  connections: boolean;
+}
+
 /** GET /v0/badges: every unread count for the tab badges. */
 export interface Badges {
   /** Unread Companion messages over every chat. */

@@ -41,6 +41,12 @@ export interface Models {
   switches: { scope: "ALL" | "PROVIDER" | "MODEL"; key: string; enabled: boolean; note: string | null; updatedAt: string }[];
   quota: { dailyCalls: number; dailyCostMinor: number; currency: string; updatedAt: string };
 }
+export interface Feature { key: string; enabled: boolean; updatedAt: string }
+/** The feature switches the console knows, with what each one means (migration 0050). */
+export const FEATURES: Readonly<Record<string, string>> = {
+  GROUP_CHAT_CREATE: "新建群聊",
+  GROUP_CHAT_SEND: "在已有群聊里发消息",
+};
 export interface Spend {
   from: string; to: string;
   totals: { currency: string; calls: number; costMinor: number }[];
@@ -264,9 +270,16 @@ export function switchTargets(catalog: readonly CatalogEntry[]): { value: string
     ...catalog.map(m => ({ value: `MODEL:${m.provider}/${m.model}`, label: `模型 ${m.name}(${m.provider}/${m.model})` }))];
 }
 
-export function modelsPage(zone: string, models: Models, spend: Spend, catalog: readonly CatalogEntry[], done: boolean): string {
+export function modelsPage(zone: string, models: Models, spend: Spend, catalog: readonly CatalogEntry[], done: boolean,
+  features: readonly Feature[] = []): string {
   const q = models.quota, back = `/models?from=${spend.from}&to=${spend.to}`;
   return page("模型与费用", "/models", html`
+<h2>功能开关</h2><table><tr><th>功能</th><th>现在</th><th>时间</th></tr>${features.map(f => html`
+<tr><td>${word(FEATURES, f.key)}</td><td><span class="tag ${f.enabled ? "" : "bad"}">${f.enabled ? "开" : "关"}</span></td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table>
+${act("/models/feature", "执行", back, html`<select name="key" required><option value="">开关哪一个…</option>${
+    Object.entries(FEATURES).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select>
+<select name="enabled" required><option value="">开还是关…</option><option value="off">关掉</option><option value="on">打开</option></select>`)}
+<p class="muted">立刻生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>
 <h2>模型开关</h2><table><tr><th>模型</th><th>厂商 / 模型名</th><th>现在</th></tr>${catalog.map(m => {
     const state = switchState(models, m);
     return html`<tr><td>${m.name}</td><td>${m.provider}/${m.model}</td><td><span class="tag ${state === "开" ? "" : "bad"}">${state}</span></td></tr>`;

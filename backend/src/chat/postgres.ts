@@ -42,6 +42,10 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_mark_read($1,$2) as payload", [chatId, messageId]);
   }
 
+  features(): Promise<unknown> {
+    return this.#object("select public.platform_features() as payload", []);
+  }
+
   badges(): Promise<unknown> {
     return this.#object("select public.home_badges() as payload", []);
   }

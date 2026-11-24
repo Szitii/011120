@@ -1951,4 +1951,22 @@ select public.test_assert(
   'diary entries are reachable only through the diary functions, and only the API server writes them'
 );
 
+select public.test_assert(
+  not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.feature_switches', 'SELECT')
+      or has_table_privilege(r.role, 'companion_private.feature_switches', 'UPDATE'))
+  and has_function_privilege('authenticated', 'public.platform_features()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.platform_features()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.feature_on(text)'::regprocedure, 'EXECUTE')
+  and exists(select 1 from pg_trigger where tgrelid = 'companion_private.chats'::regclass and tgname = 'chats_group_create_guard')
+  and exists(select 1 from pg_trigger where tgrelid = 'companion_private.chat_messages'::regclass and tgname = 'chat_messages_group_send_guard'),
+  'feature switches are read through platform_features and enforced on the chat tables'
+);
+select public.test_assert(
+  companion_private.import_redact('{"candidates":[{"id":"a","approvable":true,"value":"ok"},{"id":"b","approvable":false,"value":"sk-secret"}],"x":1}')
+    = '{"candidates":[{"id":"a","approvable":true,"value":"ok"},{"id":"b","approvable":false,"value":null}],"x":1}'::jsonb
+  and companion_private.import_redact('{"x":1}') = '{"x":1}'::jsonb,
+  'a blocked import candidate keeps no text'
+);
+
 drop function public.test_assert(boolean, text);
