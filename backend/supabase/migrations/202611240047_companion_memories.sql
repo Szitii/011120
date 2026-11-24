@@ -31,7 +31,8 @@ returns jsonb language sql immutable as $$
   select jsonb_build_object('id', m.id, 'body', m.body, 'source', m.source, 'createdAt', m.created_at)
 $$;
 
-create function companion_private.memory_companion(p_companion uuid)
+-- p_companion if it is the signed-in Owner's (not deleted or quarantined); else "companion not found".
+create function companion_private.owned_companion(p_companion uuid)
 returns uuid language plpgsql security definer set search_path='' as $$
 begin
   if not companion_private.chat_companion_ok(companion_private.chat_owner(), p_companion) then
@@ -43,7 +44,7 @@ end $$;
 -- Every memory of the Companion, newest first (at most 200).
 create function public.memory_list(p_companion uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.memory_companion(p_companion);
+declare c uuid := companion_private.owned_companion(p_companion);
 begin
   return jsonb_build_object('items', coalesce((select jsonb_agg(companion_private.memory_json(m) order by m.created_at desc, m.id desc)
     from companion_private.companion_memories m where m.companion_id = c), '[]'));
@@ -52,7 +53,7 @@ end $$;
 -- The Owner adds one memory. The same key returns the first one; with other text it is a conflict.
 create function public.memory_add(p_companion uuid, p_body text, p_key text)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.memory_companion(p_companion); m companion_private.companion_memories%rowtype;
+declare c uuid := companion_private.owned_companion(p_companion); m companion_private.companion_memories%rowtype;
   v_body text := btrim(p_body); o uuid := companion_private.chat_owner();
 begin
   if v_body is null or v_body !~ '\S' or char_length(v_body) > 500 or p_key is null or p_key !~ '^[a-f0-9]{64}$' then
@@ -76,7 +77,7 @@ end $$;
 -- Deleting is final: the text is gone.
 create function public.memory_delete(p_companion uuid, p_memory uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.memory_companion(p_companion); o uuid := companion_private.chat_owner();
+declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
 begin
   delete from companion_private.companion_memories where id = p_memory and companion_id = c;
   if not found then raise exception using errcode='P0001', message='memory not found'; end if;
@@ -217,7 +218,7 @@ begin
   return query select companion_private.identity_payload(identity_row);
 end $$;
 
-revoke all on function companion_private.memory_json(companion_private.companion_memories), companion_private.memory_companion(uuid)
+revoke all on function companion_private.memory_json(companion_private.companion_memories), companion_private.owned_companion(uuid)
   from public, anon, authenticated;
 revoke all on function public.memory_list(uuid), public.memory_add(uuid, text, text), public.memory_delete(uuid, uuid)
   from public, anon, authenticated;

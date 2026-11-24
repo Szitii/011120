@@ -247,11 +247,11 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
         return;
       }
       const trimmed = value.trim();
+      const blockedBy = (findingIdsByPath.get(path) ?? []).filter((id) => blockingIds.has(id));
       if (Array.from(trimmed).length > MAX_MEMORY_LENGTH) {
-        addFinding(path, "FIELD_CONSTRAINT", "BLOCK", "CANDIDATE_BLOCKED", value, `A memory exceeds ${MAX_MEMORY_LENGTH} characters`);
+        blockedBy.push(addFinding(path, "FIELD_CONSTRAINT", "BLOCK", "CANDIDATE_BLOCKED", value, `A memory exceeds ${MAX_MEMORY_LENGTH} characters`));
       }
-      memoryCandidates.push(candidate(`candidate-memory-${index + 1}`, "memory", trimmed, path,
-        (findingIdsByPath.get(path) ?? []).filter((id) => findings.some((f) => f.id === id && f.action === "CANDIDATE_BLOCKED"))));
+      memoryCandidates.push(candidate(`candidate-memory-${index + 1}`, "memory", trimmed, path, blockedBy));
     });
   }
 
