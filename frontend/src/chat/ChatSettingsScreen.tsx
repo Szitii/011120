@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ChatModelList, ChatSettings, VoiceList } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
-import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
+import { BottomSheet } from "../components/BottomSheet";
+import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
+import { CommunityButton } from "../community/components";
+import { CHROME, RADIUS } from "../theme/layoutTokens";
+import { useSkin, useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
 import { VoicePicker } from "./VoicePicker";
@@ -12,11 +18,28 @@ const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"
 const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
 const TIER = { ECONOMY: "经济", STANDARD: "均衡", PREMIUM: "高级" };
 
-export function ChatSettingsScreen({ client, companionId, connectionKind, connectionsEnabled, groupSendEnabled, onAvailabilityChanged }: {
-  client: ChatClient; companionId: string; connectionKind?: "key" | "external";
-  connectionsEnabled: boolean; groupSendEnabled: boolean; onAvailabilityChanged: () => void;
+export function ChatSettingsScreen({
+  client,
+  companionId,
+  connectionKind,
+  connectionsEnabled,
+  groupSendEnabled,
+  onAvailabilityChanged,
+  onBack,
+  onDeleteCompanion,
+}: {
+  client: ChatClient;
+  companionId: string;
+  connectionKind?: "key" | "external";
+  connectionsEnabled: boolean;
+  groupSendEnabled: boolean;
+  onAvailabilityChanged: () => void;
+  onBack?: () => void;
+  onDeleteCompanion?: () => Promise<void>;
 }) {
-  const s = useCommunityStyles();
+  const { ui } = useSkin();
+  const s = useThemedStyles(createStyles);
+  const [connectionMode, setConnectionMode] = useState<"key" | "external" | undefined>(connectionKind);
   const [form, setForm] = useState<ChatSettings>();
   const [voices, setVoices] = useState<VoiceList>();
   const [voiceChanged, setVoiceChanged] = useState(false);
@@ -24,9 +47,34 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [modelError, setModelError] = useState(false);
+  const [deleteSheetOpen, setDeleteSheetOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [reload, setReload] = useState(0);
   const pending = useRef(false);
   const mounted = useRef(false);
+
+  const handleBack = useCallback(() => {
+    if (connectionMode) {
+      setConnectionMode(undefined);
+      return;
+    }
+    onBack?.();
+  }, [connectionMode, onBack]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (connectionMode) {
+        setConnectionMode(undefined);
+        return true;
+      }
+      if (onBack) {
+        onBack();
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [connectionMode, onBack]);
 
   useEffect(() => {
     let current = true;
@@ -74,36 +122,246 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
     }
   }
 
-  return <ScrollView style={s.page} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-    <SecondaryHeading title="聊天设置" />
-    {!!notice && <Text accessibilityLiveRegion="polite" style={s.body}>{notice}</Text>}
-    {client.saveConnection && <ConnectionSettings client={client} companionId={companionId} initialKind={connectionKind} enabled={connectionsEnabled} onAvailabilityChanged={onAvailabilityChanged} />}
-    {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
-    {!form ? busy ? <ActivityIndicator accessibilityLabel="正在读取聊天设置" />
-      : <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />
-      : <>
-        {groupSendEnabled && <View style={s.card}>
-          <Text style={s.author}>群聊活跃度</Text>
-          <View style={s.row}>{ACTIVITY.map(([value, label]) => <CommunityButton key={value} label={label}
-            disabled={busy} selected={form.groupActivity === value} onPress={() => setForm({ ...form, groupActivity: value })} />)}</View>
-          <Text style={s.author}>家机互动倾向</Text>
-          <View style={s.row}>{INTERACTION.map(([value, label]) => <CommunityButton key={value} label={label}
-            disabled={busy} selected={form.companionInteraction === value} onPress={() => setForm({ ...form, companionInteraction: value })} />)}</View>
-        </View>}
-        <View style={s.card}>
-          <Text style={s.author}>聊天模型</Text>
-          <CommunityButton label="使用平台默认" disabled={busy} selected={form.model === null} onPress={() => setForm({ ...form, model: null })} />
-          {models?.items.map(model => <CommunityButton key={model.id}
-            label={`${model.name} · ${TIER[model.tier]}${model.available ? "" : " · 暂不可用"}`}
-            selected={model.id === form.model} disabled={busy || !model.available} onPress={() => setForm({ ...form, model: model.id })} />)}
-          {modelError && <Text style={s.meta}>暂时无法读取模型列表，当前设置仍会保留。</Text>}
+  async function confirmDelete() {
+    if (!onDeleteCompanion) {
+      setDeleteSheetOpen(false);
+      setNotice("删除家机需要后端删除接口就绪后开放，目前已在排期中。");
+      return;
+    }
+    setDeleting(true);
+    try {
+      await onDeleteCompanion();
+      if (mounted.current) setDeleteSheetOpen(false);
+    } catch (error) {
+      if (mounted.current) {
+        setDeleteSheetOpen(false);
+        setNotice(safeClientMessage(error).title);
+      }
+    } finally {
+      if (mounted.current) setDeleting(false);
+    }
+  }
+
+  const usableModels = (models?.items ?? []).filter(m => m.available);
+
+  return (
+    <View style={s.root}>
+      {onBack && (
+        <View style={s.header}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={connectionMode ? "返回聊天设置" : "返回"}
+            onPress={handleBack}
+            style={({ pressed }) => [s.backBtn, pressed && { opacity: 0.78 }]}
+          >
+            <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
+            <Ionicons name="chevron-back" size={19} color={ui.ink} />
+          </Pressable>
+          <Text accessibilityRole="header" style={s.headerTitle}>
+            {connectionMode === "key" ? "自带 API Key" : connectionMode === "external" ? "连接自建家机" : "聊天设置"}
+          </Text>
+          <View style={s.headerSpacer} />
         </View>
-        {voices?.available && <VoicePicker voices={voices.items} sample={client.voiceSample}
-          selected={form.voice} disabled={busy} onSelect={voice => {
-            setVoiceChanged(true);
-            setForm({ ...form, voice });
-          }} />}
-        <CommunityButton primary label={busy ? "正在处理…" : "保存设置"} disabled={busy} onPress={() => void save()} />
-      </>}
-  </ScrollView>;
+      )}
+
+      <ScrollView style={s.scroll} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+        {!!notice && (
+          <View style={s.noticeBanner}>
+            <Text accessibilityLiveRegion="polite" style={s.noticeText}>{notice}</Text>
+          </View>
+        )}
+
+        {client.saveConnection && (
+          <ConnectionSettings
+            client={client}
+            companionId={companionId}
+            mode={connectionMode}
+            onModeChange={setConnectionMode}
+            enabled={connectionsEnabled}
+            onAvailabilityChanged={onAvailabilityChanged}
+          />
+        )}
+
+        {!connectionMode && (
+          <>
+            {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
+
+            {!form ? (
+              busy ? (
+                <ActivityIndicator accessibilityLabel="正在读取聊天设置" color={ui.accent} style={{ marginVertical: 20 }} />
+              ) : (
+                <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />
+              )
+            ) : (
+              <>
+                {groupSendEnabled && (
+                  <View style={s.card}>
+                    <Text style={s.sectionTitle}>群聊活跃度</Text>
+                    <View style={s.pillRow}>
+                      {ACTIVITY.map(([value, label]) => (
+                        <CommunityButton
+                          key={value}
+                          label={label}
+                          disabled={busy}
+                          selected={form.groupActivity === value}
+                          onPress={() => setForm({ ...form, groupActivity: value })}
+                        />
+                      ))}
+                    </View>
+                    <Text style={[s.sectionTitle, { marginTop: 8 }]}>家机互动倾向</Text>
+                    <View style={s.pillRow}>
+                      {INTERACTION.map(([value, label]) => (
+                        <CommunityButton
+                          key={value}
+                          label={label}
+                          disabled={busy}
+                          selected={form.companionInteraction === value}
+                          onPress={() => setForm({ ...form, companionInteraction: value })}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {(
+                  <View style={s.card}>
+                    <Text style={s.sectionTitle}>聊天模型</Text>
+                    <CommunityButton
+                      label="使用平台默认"
+                      disabled={busy}
+                      selected={form.model === null}
+                      onPress={() => setForm({ ...form, model: null })}
+                    />
+                    {usableModels.map(model => (
+                      <CommunityButton
+                        key={model.id}
+                        label={`${model.name} · ${TIER[model.tier]}`}
+                        selected={model.id === form.model}
+                        disabled={busy}
+                        onPress={() => setForm({ ...form, model: model.id })}
+                      />
+                    ))}
+                    {form.model && !usableModels.some(model => model.id === form.model) && <Text style={s.mutedText}>当前所选模型暂不可用，原设置仍保留。</Text>}
+                    {!modelError && models && !models.defaultModel && <Text style={s.mutedText}>平台默认模型暂不可用。</Text>}
+                    {modelError && <Text style={s.mutedText}>暂时无法读取模型列表，当前设置仍会保留。</Text>}
+                  </View>
+                )}
+
+                {voices?.available && (
+                  <VoicePicker
+                    voices={voices.items}
+                    sample={client.voiceSample}
+                    selected={form.voice}
+                    disabled={busy}
+                    onSelect={voice => {
+                      setVoiceChanged(true);
+                      setForm({ ...form, voice });
+                    }}
+                  />
+                )}
+
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={() => void save()}
+                  style={({ pressed }) => [s.saveBtn, busy && { opacity: 0.55 }, pressed && { opacity: 0.85 }]}
+                >
+                  <Text style={s.saveBtnText}>{busy ? "正在保存…" : "保存设置"}</Text>
+                </Pressable>
+
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy || deleting}
+                  onPress={() => setDeleteSheetOpen(true)}
+                  style={({ pressed }) => [s.deleteBtn, pressed && { opacity: 0.78 }]}
+                >
+                  <Text style={s.deleteBtnText}>删除这位家机</Text>
+                </Pressable>
+              </>
+            )}
+          </>
+        )}
+      </ScrollView>
+
+      <BottomSheet visible={deleteSheetOpen} title="删除这位家机？" onClose={() => { if (!deleting) setDeleteSheetOpen(false); }}>
+        <View style={{ gap: 12 }}>
+          <Text style={s.mutedText}>
+            {onDeleteCompanion
+              ? "删除后将无法恢复该家机的聊天与小家记录，请确认是否继续。"
+              : "服务端删除家机接口正在接入中，上线后即可在这里一键移除不需要的家机。"}
+          </Text>
+          <CommunityButton
+            label={deleting ? "正在删除…" : onDeleteCompanion ? "确认删除" : "我知道了"}
+            disabled={deleting}
+            onPress={() => void confirmDelete()}
+          />
+        </View>
+      </BottomSheet>
+    </View>
+  );
 }
+
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  root: { flex: 1 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: CHROME.screenInset,
+    paddingTop: 6,
+    paddingBottom: 10,
+  },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: RADIUS.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerTitle: { fontSize: 16.5, fontWeight: "700", color: ui.ink },
+  headerSpacer: { width: 38 },
+  scroll: { flex: 1 },
+  content: {
+    paddingHorizontal: CHROME.screenInset,
+    paddingTop: 6,
+    paddingBottom: CHROME.scrollBottomClearance + 24,
+    gap: 14,
+  },
+  noticeBanner: {
+    borderRadius: 14,
+    backgroundColor: ui.accentWash,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  noticeText: { fontSize: 13, color: ui.accentInk },
+  card: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: ui.line,
+    backgroundColor: ui.white,
+    padding: 16,
+    gap: 10,
+  },
+  sectionTitle: { fontSize: 15, fontWeight: "700", color: ui.ink },
+  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  mutedText: { fontSize: 13, color: ui.muted, lineHeight: 19 },
+  saveBtn: {
+    height: 48,
+    borderRadius: RADIUS.pill,
+    backgroundColor: ui.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 4,
+  },
+  saveBtnText: { fontSize: 15, fontWeight: "700", color: ui.onAccent },
+  deleteBtn: {
+    height: 46,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: ui.line,
+    backgroundColor: ui.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  deleteBtnText: { fontSize: 14.5, fontWeight: "600", color: ui.danger },
+});

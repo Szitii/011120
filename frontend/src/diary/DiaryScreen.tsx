@@ -1,16 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { DiaryEntry, DiaryWriteResult } from "../../../contracts/chat.ts";
 import { safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
+import { PixelAvatar } from "../components/PixelAvatar";
+import type { OwnerCompanionSummary } from "../contracts";
 import { useAppIsActive } from "../state/useAppIsActive";
+import { RADIUS } from "../theme/layoutTokens";
+import { useSkin, useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { DiaryFrequency } from "./DiaryFrequency";
 import type { DiaryClient } from "./client";
 
-export function DiaryScreen({ client, companionId, companionName }: {
-  client: DiaryClient; companionId: string; companionName: string;
+export function DiaryScreen({
+  client,
+  companionId,
+  companionName,
+  companions = [],
+  onSelectCompanion,
+}: {
+  client: DiaryClient;
+  companionId: string;
+  companionName: string;
+  companions?: OwnerCompanionSummary[];
+  onSelectCompanion?: (companion: OwnerCompanionSummary) => void;
 }) {
   const s = useCommunityStyles();
+  const ds = useThemedStyles(createStyles);
+  const { ui } = useSkin();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [items, setItems] = useState<DiaryEntry[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -132,12 +149,33 @@ export function DiaryScreen({ client, companionId, companionName }: {
   return (
     <ScrollView style={s.page} contentContainerStyle={s.content}>
       <SecondaryHeading title={`${companionName}的日记`} />
+
+      {companions.length > 1 && onSelectCompanion && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={ds.switcher}>
+          {companions.map(item => {
+            const active = item.companionId === companionId;
+            return (
+              <Pressable
+                key={item.companionId}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                onPress={() => { if (!active) onSelectCompanion(item); }}
+                style={[ds.pill, active && ds.pillActive]}
+              >
+                <PixelAvatar name={item.displayName} role="companion" size={20} />
+                <Text style={[ds.pillText, active && ds.pillTextActive]}>{item.displayName}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      )}
+
       <CommunityButton label={settingsOpen ? "收起日记设置" : "日记设置"} selected={settingsOpen}
         onPress={() => setSettingsOpen(open => !open)} />
       {settingsOpen && <DiaryFrequency client={client} companionId={companionId} />}
       {writing && <Text accessibilityLiveRegion="polite" style={s.meta}>TA 正在写日记…</Text>}
       {notice !== "" && <Text accessibilityLiveRegion="polite" style={s.meta}>{notice}</Text>}
-      {loading && <ActivityIndicator accessibilityLabel="正在读取日记" />}
+      {loading && <ActivityIndicator accessibilityLabel="正在读取日记" color={ui.accent} />}
       {readError && <View style={s.card}>
         <Text accessibilityRole="alert" style={s.body}>{readError.title}</Text>
         <CommunityButton label="重新加载" onPress={() => void read(readError.cursor)} />
@@ -161,3 +199,24 @@ export function DiaryScreen({ client, companionId, companionName }: {
     </ScrollView>
   );
 }
+
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  switcher: { gap: 8, paddingVertical: 2 },
+  pill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: RADIUS.pill,
+    backgroundColor: ui.white,
+    borderWidth: 1,
+    borderColor: ui.line,
+  },
+  pillActive: {
+    backgroundColor: ui.accentWash,
+    borderColor: ui.accent,
+  },
+  pillText: { fontSize: 13, fontWeight: "600", color: ui.ink },
+  pillTextActive: { color: ui.accentInk },
+});

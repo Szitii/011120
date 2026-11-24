@@ -3,7 +3,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator, BackHandler, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
+  ActivityIndicator, AppState, BackHandler, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, View,
 } from "react-native";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
@@ -13,24 +13,24 @@ import { useCommandKeys } from "../state/useCommandKeys";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import { BringButton, BringField, Check, Choice, GlassCard, GlassIcon, createStyles } from "./BringControls";
 import { importCardName, normalizeImportCard } from "./import-card";
-import { extendedImportAvailability } from "./connection-client";
+import { connectionMessages, extendedImportAvailability, validateExternal } from "./connection-client";
 
-type Step = "entry" | "details" | "review" | "reply";
+type Step = "entry" | "details" | "review" | "reply" | "external";
 type Method = "card" | "manual";
 
 const options = [
   { id: "card", icon: "document-text-outline", title: "导入人设与记忆",
     description: "上传角色卡、备份文档，或直接粘贴已有的人设与记忆",
     tags: "角色卡 · JSON · Markdown · 文本",
-    help: "手里已有角色卡、本地备份文档，或想粘贴已有的人设与记忆迁移过来，无需运行独立后台。当前可导入 JSON 角色卡，Markdown 和纯文本记忆待开放。" },
+    help: "手里已有角色卡、本地备份文档（JSON、Markdown、纯文本），或想直接粘贴已有的人设与记忆迁移过来，无独立后台服务。" },
   { id: "external", icon: "link-outline", title: "连接自建家机",
     description: "已有运行中的本体或外部 Agent，填入 HTTPS 接口地址",
     tags: "HTTPS 端点 · 独立驱动",
-    help: "适合已搭建独立运行的家机或私有后台的人。人设、记忆和模型由你的服务管理。创建家机后，可在聊天设置中测试 HTTPS 连接。" },
+    help: "自己搭建了独立运行的 Agent 或私有后台，人设、记忆与模型均由自有服务管理，填入 HTTPS 接口即可直接连通。" },
   { id: "manual", icon: "person-add-outline", title: "从零创建",
     description: "还没有现成资料？写下名字和性格，记忆可以以后慢慢攒",
     tags: "新手推荐 · 30 秒完成",
-    help: "第一次来、还没有现成资料，填写名字和性格就能开始。记忆可以在日常相处里慢慢积累。" },
+    help: "第一次来、还没有现成资料，直接填写名字和性格就能开始，记忆可以在日常相处里慢慢积累。" },
 ] as const;
 
 export function BringCompanionScreen({ api, existingCompanionId, ownerId, canConfigureConnection, onCreated, onBack }: {
@@ -49,6 +49,11 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [personality, setPersonality] = useState("");
+  const [extName, setExtName] = useState("");
+  const [extEndpoint, setExtEndpoint] = useState("");
+  const [extToken, setExtToken] = useState("");
+  const [extConsent, setExtConsent] = useState(false);
+  const [createdExternal, setCreatedExternal] = useState<CompanionIdentity>();
   const [raw, setRaw] = useState("");
   const [file, setFile] = useState<{ name: string; size: number; text: string }>();
   const [missingName, setMissingName] = useState(false);
@@ -66,7 +71,10 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    const subscription = AppState.addEventListener("change", state => {
+      if (state === "background") { setExtToken(""); setExtConsent(false); }
+    });
+    return () => { mounted.current = false; subscription.remove(); };
   }, []);
 
   useEffect(() => {
@@ -114,6 +122,9 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
     switch (step) {
       case "entry": onBack(); break;
       case "details": setStep("entry"); break;
+      case "external":
+        if (createdExternal) { onCreated(createdExternal, ["displayName"], undefined); break; }
+        setConnectionKind(undefined); setExtToken(""); setStep("entry"); break;
       case "review": setStep("details"); break;
       case "reply": setStep("review"); break;
     }
@@ -184,6 +195,53 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
     showReview(result);
   }
 
+  function submitExternal() {
+    Keyboard.dismiss();
+    const outcome = validateExternal({
+      name: extName,
+      endpoint: extEndpoint,
+      bearerToken: extToken,
+      consent: extConsent,
+    });
+    if (outcome.status !== "READY") {
+      setMessage(outcome.message);
+      return;
+    }
+    void run(async () => {
+      let identity = createdExternal;
+      if (!identity) {
+        const card = { name: extName.trim() };
+        const imp = await api.createCompanionImport(card, keys.forRequest("ext-import", card));
+        const nameCandidate = (imp.draft?.candidates ?? []).find(c => c.field === "displayName" && c.approvable);
+        if (!nameCandidate) {
+          setMessage("家机名称未通过检查，请修改后重试。");
+          return;
+        }
+        identity = await api.approveCompanionImport(
+          imp.id,
+          [nameCandidate.id],
+          existingCompanionId,
+          keys.forRequest("ext-approve", [imp.id, nameCandidate.id]),
+        );
+        if (!mounted.current) return;
+        setCreatedExternal(identity);
+      }
+
+      if (api.chat?.saveConnection) {
+        const saved = await api.chat.saveConnection(identity.companionId, outcome.input);
+        if (!mounted.current) return;
+        if (saved.result === "CONNECTED") {
+          setExtToken("");
+          onCreated(identity, ["displayName"], undefined);
+          return;
+        }
+        setMessage(connectionMessages[saved.result] || "连通测试未通过，请检查 HTTPS 地址和密钥后再试。");
+      } else {
+        onCreated(identity, ["displayName"], "external");
+      }
+    });
+  }
+
   function pickFile() {
     Keyboard.dismiss();
     void run(async () => {
@@ -227,14 +285,16 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
   }
 
   const heading = step === "entry" ? (existingCompanionId ? "更新家机资料" : "接入你的家机")
+    : step === "external" ? "连接自建家机"
     : step === "details" ? (method === "manual" ? (existingCompanionId ? "填写家机资料" : "从零创建") : "导入人设与记忆")
     : step === "review" ? "核对家机资料"
     : "选择 TA 的回复方式";
   const subtitle = {
     entry: existingCompanionId ? "选择这次更新资料的方式" : "选一种最适合你们的方式",
+    external: "接入你自己的外部 Agent 或本体服务",
     details: method === "manual" ? "从名字和性格开始，记忆可以慢慢积累" : "先核对资料，再决定要带入哪些内容",
     review: "这些资料默认只留在你的小家",
-    reply: "先创建家机，之后可在聊天设置里连接或更换模型",
+    reply: "随时可在聊天设置里切换",
   }[step];
 
   return <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -244,7 +304,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
     </View>
     <ScrollView key={step} style={s.flex} contentContainerStyle={s.page} keyboardShouldPersistTaps="handled"
       keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}>
-      {step !== "entry" && !existingCompanionId && <View style={s.progress} accessible
+      {step !== "entry" && step !== "external" && !existingCompanionId && <View style={s.progress} accessible
         accessibilityLabel={step === "details" || step === "review" ? "第 1 步，共 2 步" : "第 2 步，共 2 步"}>
         <View style={[s.segment, s.segmentCurrent]} />
         <View style={[s.segment, step === "reply" && s.segmentCurrent]} />
@@ -259,11 +319,39 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
         <Choice key={option.id} icon={option.icon} title={existingCompanionId && option.id === "manual" ? "手动填写" : option.title}
           description={option.description} note={option.tags} onPress={() => {
             setMessage("");
-            setConnectionKind(option.id === "external" ? "external" : undefined);
+            if (option.id === "external") {
+              setConnectionKind("external");
+              setStep("external");
+              return;
+            }
+            setConnectionKind(undefined);
             setMethod(option.id === "card" ? "card" : "manual");
             setStep("details");
           }} />
       ))}
+
+      {step === "external" && <>
+        <GlassCard>
+          <BringField label="家机名称" placeholder="请输入家机名称" value={extName} onChangeText={setExtName} editable={!busy && !createdExternal} maxLength={200} />
+          <BringField label="接口地址（HTTPS）" placeholder="请输入 HTTPS 接口地址" value={extEndpoint} onChangeText={value => { setExtEndpoint(value); setExtConsent(false); setMessage(""); }}
+            editable={!busy} autoCapitalize="none" autoCorrect={false} />
+          <BringField label="访问密钥（Bearer Token）" placeholder="选填" value={extToken} onChangeText={setExtToken}
+            secureTextEntry editable={!busy} autoCapitalize="none" autoCorrect={false} autoComplete="off" />
+        </GlassCard>
+        <View style={{ borderRadius: 14, backgroundColor: ui.accentWash, paddingHorizontal: 14, paddingVertical: 11 }}>
+          <Text style={{ fontSize: 13, color: ui.accentInk, lineHeight: 19 }}>
+            连接成功后，聊天回复由你配置的外部服务提供；外部服务可能产生费用。
+          </Text>
+        </View>
+        <Check label="我同意将近期聊天发给填写的外部接口，内容可能包含群聊中其他家机的消息及写日记用的聊天记录。" checked={extConsent}
+          onPress={() => setExtConsent(prev => !prev)} disabled={busy} />
+        <BringButton label={busy ? "正在测试…" : "测试并连通"} disabled={busy || !extName.trim() || !extEndpoint.trim() || !extConsent}
+          onPress={submitExternal} />
+        {createdExternal && (
+          <BringButton label="稍后配置，先去小家" secondary disabled={busy}
+            onPress={() => onCreated(createdExternal, ["displayName"], undefined)} />
+        )}
+      </>}
 
       {step === "details" && <GlassCard>
         {method === "manual" ? <>
@@ -315,18 +403,15 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
       {step === "reply" && <>
         <View accessibilityRole="radiogroup" style={s.replyOptions}>
           <Choice icon="cloud-outline" title="平台托管" badge="默认" selected={!selectedConnection}
-            description="使用平台模型回复，无需自己配置"
-            note="新手体验额度与余额功能待开放，当前以平台可用额度为准"
+            description="开箱即用，含新手体验额度，无需自己配置"
+            note="体验额度归属你的账号，随时可查看余额"
             onPress={() => { if (!pending.current) setConnectionKind(undefined); }} />
           {canConfigureConnection && <Choice icon="key-outline" title="自带 API Key" selected={connectionKind === "key"}
             description="填写你自己的服务商密钥，使用个人账号额度"
-            note="填写密钥后由服务端测试，支持常用服务商"
+            note="支持常用服务商 · 3 步测试启用"
             onPress={() => { if (!pending.current) setConnectionKind("key"); }} />}
-          {canConfigureConnection && <Choice icon="link-outline" title="自建家机" selected={connectionKind === "external"}
-            description="创建完成后，填写并验证你的接口地址" note="服务端连接失败时可以稍后重试"
-            onPress={() => { if (!pending.current) setConnectionKind("external"); }} />}
         </View>
-        <BringButton label={selectedConnection ? "创建并配置连接" : "完成入驻"} disabled={busy || !required}
+        <BringButton label={selectedConnection ? "创建并配置密钥" : "完成入驻"} disabled={busy || !required}
           onPress={() => approve(selectedConnection)} />
       </>}
 

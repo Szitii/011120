@@ -1,16 +1,20 @@
-import { useSkin } from "../theme/SkinProvider";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useLayoutEffect, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
-import { CommunityButton, SecondaryHeading, useCommunityStyles } from "./components.tsx";
+import { PixelAvatar } from "../components/PixelAvatar";
+import { CommunityButton } from "./components.tsx";
+import { CHROME, RADIUS } from "../theme/layoutTokens";
+import { useSkin, useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 
 export function HumanProfileEditor({ client, viewer, onClose }: {
   client: CommunityClient;
   viewer: ActorContext;
   onClose: (saved: boolean) => void;
 }) {
-  const s = useCommunityStyles();
+  const s = useThemedStyles(createStyles);
   const { ui } = useSkin();
   const [settings, setSettings] = useState<HumanProfileSettings>();
   const [displayName, setDisplayName] = useState("");
@@ -19,6 +23,7 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState("");
+  const [avatarNotice, setAvatarNotice] = useState("");
   const ownerId = viewer.id;
   const viewerKind = viewer.kind;
   const scope = useMemo(() => ({ active: false, pending: false, version: 0 }), [client, ownerId, viewerKind]);
@@ -62,8 +67,10 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
   const description = bio.trim();
   const nameLength = Array.from(name).length;
   const bioLength = Array.from(description).length;
-  const canSave = settings && !loading && !saving && !conflict && nameLength > 0 && nameLength <= 80 && bioLength <= 500
-    && (name !== settings.displayName || description !== settings.bio);
+  const canSave = Boolean(
+    settings && !loading && !saving && !conflict && nameLength > 0 && nameLength <= 80 && bioLength <= 500
+      && (name !== settings.displayName || description !== settings.bio)
+  );
 
   async function save() {
     if (!settings || !canSave || scope.pending) return;
@@ -92,24 +99,170 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
     }
   }
 
-  return <ScrollView style={s.page} keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-    <SecondaryHeading title="编辑资料" />
-    {loading && <ActivityIndicator accessibilityLabel="正在加载资料" color={ui.accent} />}
-    {settings && <View style={s.card}>
-      <Text style={s.author}>社区昵称</Text>
-      <TextInput accessibilityLabel="社区昵称" autoCapitalize="none" autoCorrect={false}
-        editable={!loading && !saving} style={[s.input, { minHeight: 48, textAlignVertical: "center" }]} value={displayName} onChangeText={setDisplayName} />
-      <Text style={nameLength > 80 ? s.error : s.meta}>{nameLength} / 80</Text>
-      <Text style={s.author}>简介</Text>
-      <TextInput accessibilityLabel="简介" editable={!loading && !saving} multiline style={s.input} value={bio} onChangeText={setBio} />
-      <Text style={bioLength > 500 ? s.error : s.meta}>{bioLength} / 500 · 对社区成员公开</Text>
-    </View>}
-    {error !== "" && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-    <View style={s.row}>
-      <CommunityButton label="取消" disabled={saving} onPress={() => onClose(false)} />
-      {settings && <CommunityButton label={saving ? "正在保存…" : "保存资料"} selected disabled={!canSave} onPress={() => void save()} />}
+  return (
+    <ScrollView style={s.page} keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+      <Text accessibilityRole="header" style={s.screenTitle}>编辑资料</Text>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="更换头像"
+        onPress={() => setAvatarNotice("自定义头像上传接口正在接入中，上线后点击这里即可从相册更换。")}
+        style={({ pressed }) => [s.avatarBlock, pressed && { opacity: 0.85 }]}
+      >
+        <View style={s.avatarRing}>
+          <PixelAvatar name={displayName || "我"} role="owner" size={88} />
+          <View style={s.cameraBadge}>
+            <Ionicons name="camera-outline" size={16} color={ui.onAccent} />
+          </View>
+        </View>
+        <Text style={s.avatarHint}>轻点更换头像</Text>
+      </Pressable>
+
+      {!!avatarNotice && <Text style={s.infoText}>{avatarNotice}</Text>}
+      {loading && <ActivityIndicator accessibilityLabel="正在加载资料" color={ui.accent} style={{ marginVertical: 16 }} />}
+
+      {settings && (
+        <View style={s.card}>
+          <View style={s.fieldHeader}>
+            <Text style={s.label}>社区昵称</Text>
+            <Text style={nameLength > 80 ? s.errorText : s.counter}>{nameLength} / 80</Text>
+          </View>
+          <TextInput
+            accessibilityLabel="社区昵称"
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!loading && !saving}
+            style={s.input}
+            value={displayName}
+            onChangeText={setDisplayName}
+            placeholder="输入你的昵称"
+            placeholderTextColor={ui.muted}
+          />
+
+          <View style={[s.fieldHeader, { marginTop: 8 }]}>
+            <Text style={s.label}>简介</Text>
+            <Text style={bioLength > 500 ? s.errorText : s.counter}>{bioLength} / 500</Text>
+          </View>
+          <TextInput
+            accessibilityLabel="简介"
+            editable={!loading && !saving}
+            multiline
+            style={[s.input, s.bioInput]}
+            value={bio}
+            onChangeText={setBio}
+            placeholder="写一句介绍自己，对社区成员公开"
+            placeholderTextColor={ui.muted}
+          />
+        </View>
+      )}
+
+      {error !== "" && <Text accessibilityRole="alert" style={s.errorText}>{error}</Text>}
+
+      {settings && (
+        <Pressable
+          accessibilityRole="button"
+          disabled={!canSave}
+          onPress={() => void save()}
+          style={({ pressed }) => [
+            s.saveBtn,
+            !canSave && s.saveBtnDisabled,
+            pressed && canSave && { opacity: 0.86 },
+          ]}
+        >
+          <Text style={s.saveBtnText}>{saving ? "正在保存…" : "保存资料"}</Text>
+        </Pressable>
+      )}
+
       {conflict && <CommunityButton label="载入最新资料" disabled={loading} onPress={() => void load()} />}
       {!settings && !loading && <CommunityButton label="重新加载" onPress={() => void load()} />}
-    </View>
-  </ScrollView>;
+    </ScrollView>
+  );
 }
+
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  page: { flex: 1 },
+  content: {
+    paddingHorizontal: CHROME.screenInset,
+    paddingTop: 8,
+    paddingBottom: CHROME.scrollBottomClearance + 24,
+    gap: 16,
+  },
+  screenTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: ui.ink,
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  avatarBlock: {
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+  },
+  avatarRing: {
+    position: "relative",
+    padding: 4,
+    borderRadius: 999,
+    backgroundColor: ui.white,
+    borderWidth: 1,
+    borderColor: ui.line,
+  },
+  cameraBadge: {
+    position: "absolute",
+    right: 0,
+    bottom: 0,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: ui.accent,
+    borderWidth: 2,
+    borderColor: ui.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarHint: { fontSize: 12.5, color: ui.muted },
+  infoText: { fontSize: 12.5, color: ui.accentInk, textAlign: "center" },
+  card: {
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: ui.line,
+    backgroundColor: ui.white,
+    padding: 18,
+    gap: 10,
+  },
+  fieldHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  label: { fontSize: 14, fontWeight: "700", color: ui.ink },
+  counter: { fontSize: 12, color: ui.muted },
+  input: {
+    minHeight: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: ui.line,
+    backgroundColor: ui.background[0],
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    fontSize: 14.5,
+    color: ui.ink,
+  },
+  bioInput: {
+    minHeight: 104,
+    textAlignVertical: "top",
+  },
+  errorText: { fontSize: 12.5, color: ui.danger },
+  saveBtn: {
+    height: 50,
+    borderRadius: RADIUS.pill,
+    backgroundColor: ui.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 4,
+  },
+  saveBtnDisabled: {
+    backgroundColor: ui.accentWash,
+  },
+  saveBtnText: { fontSize: 15.5, fontWeight: "700", color: ui.onAccent },
+});
