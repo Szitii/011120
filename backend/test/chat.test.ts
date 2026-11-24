@@ -72,6 +72,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     postReserve: async () => ({ decision: "STALE" }),
     postFinish: async () => null,
     voiceLeft: async () => ({ companion: 0, owner: 0 }),
+    voiceUsed: async (...args) => { calls.push(["voiceUsed", ...args]); },
     sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
     audio: async (...args) => { calls.push(["audio", ...args]); return { mime: "audio/mpeg", bytes: new Uint8Array([1, 2, 3, 4, 5]) }; },
   };

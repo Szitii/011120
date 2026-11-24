@@ -57,6 +57,16 @@ export interface Spend {
     inputTokens: number; outputTokens: number; costMinor: number }[];
   byCompanion: { companionId: string; ownerId: string; displayName: string | null; currency: string; calls: number; costMinor: number }[];
 }
+/** One month of everything the platform paid for (companion_admin.costs, migration 0058). Money in USD cents. */
+export interface Costs {
+  month: string; from: string; to: string;
+  totals: { modelCents: number; hearCents: number; speakPoints: number; speakOverCents: number; fixedCents: number };
+  prices: { planPoints: number; speakCentsPerMillion: number; hearCentsPerHour: number; updatedAt: string };
+  fixed: { item: string; cents: number; note: string | null; updatedAt: string }[];
+  days: { day: string; modelCents: number; modelCalls: number; hearSeconds: number; hears: number; hearCents: number;
+    speakPoints: number; speaks: number }[];
+  models: Spend;
+}
 export interface LogPage {
   items: { id: number; operator: string; action: string; targetType: string; targetId: string; ownerId: string | null;
     reason: string; detail: Record<string, unknown>; createdAt: string }[];
@@ -98,12 +108,13 @@ const SOURCES: Readonly<Record<string, string>> = {
 /** What a report or a log row is about. */
 const TARGETS: Readonly<Record<string, string>> = {
   ACTOR: "账号", POST: "帖子", COMMENT: "评论", OWNER: "主人", SOCIAL_TWIN: "家机", REPORT: "举报", CHAT: "会话",
-  CHAT_QUOTA: "每日额度", ALL: "全部模型", PROVIDER: "厂商", MODEL: "模型",
+  CHAT_QUOTA: "每日额度", ALL: "全部模型", PROVIDER: "厂商", MODEL: "模型", FIXED_COST: "固定月费", VOICE_PRICES: "语音单价",
 };
 const ACTIONS: Readonly<Record<string, string>> = {
   REMOVE_POST: "移除帖子", REMOVE_COMMENT: "移除评论", RESTORE_POST: "恢复帖子", RESTORE_COMMENT: "恢复评论",
   SUSPEND_TWIN: "停用家机", RESTORE_TWIN: "恢复家机", SUSPEND_OWNER: "封禁主人", RESTORE_OWNER: "解封主人",
   RESOLVE_REPORT: "处理举报", MODEL_SWITCH: "模型开关", CHAT_QUOTA: "每日额度", READ_CHAT: "查看私聊",
+  FIXED_COST: "固定月费", VOICE_PRICES: "语音单价",
 };
 const MESSAGE_STATUS: Readonly<Record<string, string>> = {
   PENDING: "(正在回复)", FAILED: "(回复失败)", BLOCKED: "(被安全扫描拦下)", PASSED: "(选择不说话)",
@@ -115,6 +126,9 @@ const word = (table: Readonly<Record<string, string>>, key: string | null) => ke
 const time = (zone: string, value: string | null) => value === null ? "" :
   new Date(value).toLocaleString("zh-CN", { timeZone: zone, hour12: false });
 const money = (minor: number, currency: string) => `${(minor / 100).toFixed(2)} ${currency}`;
+/** Dollars from cents that may be a fraction: a little that is not nothing shows as "< $0.01". */
+const usd = (cents: number) => cents > 0 && cents < 1 ? "< $0.01" : `$${(Math.round(cents) / 100).toFixed(2)}`;
+const count = (n: number) => Math.round(n).toLocaleString("en-US");
 const name = (value: string | null) => value ?? "(未命名)";
 
 // ---------- shared pieces ----------
@@ -130,9 +144,14 @@ form.act{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0}inp
 input[name=reason]{flex:1;min-width:200px}button{cursor:pointer}.muted{color:#667085}.tag{display:inline-block;padding:0 6px;border-radius:4px;background:#eef0f3}
 .bad{background:#fde8e8}.ok{background:#e6f4ea;border:1px solid #b7dfc3;padding:8px 12px;border-radius:6px}
 .err{background:#fde8e8;border:1px solid #f1b0b0;padding:8px 12px;border-radius:6px}pre{white-space:pre-wrap;word-break:break-word;margin:4px 0}
-.msg{margin:6px 0}.msg b{margin-right:8px}`;
+.msg{margin:6px 0}.msg b{margin-right:8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:12px 0}
+.cards .card{margin:0}.big{font-size:30px;font-weight:700;line-height:1.2}.total{background:#1f2328;color:#fff;border-color:#1f2328}
+.total .muted{color:#c9d1d9}.bar{height:12px;background:#eef0f3;border-radius:6px;overflow:hidden;margin:6px 0}
+.bar span{display:block;height:100%;background:#2f81f7}.bar span.over{background:#d1242f}td.num,th.num{text-align:right}`;
 
-const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户"], ["/models", "模型与费用"], ["/log", "操作日志"]];
+const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户"], ["/costs", "花费"], ["/models", "模型与额度"],
+  ["/log", "操作日志"]];
 
 function page(title: string, at: string, body: Safe, done = false): string {
   return html`<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -273,10 +292,10 @@ export function switchTargets(catalog: readonly CatalogEntry[]): { value: string
     ...catalog.map(m => ({ value: `MODEL:${m.provider}/${m.model}`, label: `模型 ${m.name}(${m.provider}/${m.model})` }))];
 }
 
-export function modelsPage(zone: string, models: Models, spend: Spend, catalog: readonly CatalogEntry[], done: boolean,
+export function modelsPage(zone: string, models: Models, catalog: readonly CatalogEntry[], done: boolean,
   features: readonly Feature[] = []): string {
-  const q = models.quota, back = `/models?from=${spend.from}&to=${spend.to}`;
-  return page("模型与费用", "/models", html`
+  const q = models.quota, back = "/models";
+  return page("模型与额度", "/models", html`
 <h2>功能开关</h2><table><tr><th>功能</th><th>现在</th><th>时间</th></tr>${features.map(f => html`
 <tr><td>${word(FEATURES, f.key)}</td><td><span class="tag ${f.enabled ? "" : "bad"}">${f.enabled ? "开" : "关"}</span></td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table>
 ${act("/models/feature", "执行", back, html`<select name="key" required><option value="">开关哪一个…</option>${
@@ -313,16 +332,63 @@ ${act("/models/wallet", "修改钱包规则", back, html`<select name="enabled" 
 ${act("/models/credit", "调整积分", back, html`<input name="owner" placeholder="主人编号" required size="38">
 <label>积分(可以是负数)<input name="credits" type="number" required></label>`)}
 <p class="muted">调整的是赠送积分;负数最多扣到 0。改赠送数量只影响之后第一次用钱包的主人。</p>
-<h2>花费</h2><form method="get" action="/models" class="act"><label>从 <input type="date" name="from" value="${spend.from}"></label>
-<label>到 <input type="date" name="to" value="${spend.to}"></label><button>查看</button><span class="muted">按 UTC 日期</span></form>
-<p>合计:${spend.totals.length === 0 ? "这段时间没有模型调用。"
-    : spend.totals.map(t => `${t.calls} 次调用,${money(t.costMinor, t.currency)}`).join(";")}</p>
-${spend.byDay.length === 0 ? "" : html`<table><tr><th>日期</th><th>厂商 / 模型</th><th>调用</th><th>其中未成功</th><th>输入 token</th><th>输出 token</th><th>花费</th></tr>
-${spend.byDay.map(d => html`<tr><td>${d.day}</td><td>${d.provider}/${d.model}</td><td>${d.calls}</td><td>${d.failed}</td>
-<td>${d.inputTokens}</td><td>${d.outputTokens}</td><td>${money(d.costMinor, d.currency)}</td></tr>`)}</table>
-<p class="muted">“未成功”包括调用失败、被安全扫描拦下、结果不明(按占用额全额记账)。</p>
-<h2>花费最多的家机(前 20)</h2><table><tr><th>家机</th><th>调用</th><th>花费</th></tr>${spend.byCompanion.map(c => html`
-<tr><td>${ownerLink(c.ownerId, c.displayName)}</td><td>${c.calls}</td><td>${money(c.costMinor, c.currency)}</td></tr>`)}</table>`}`, done);
+<p class="muted">花了多少钱,在“花费”页。</p>`, done);
+}
+
+/** Everything the platform paid for in one month: the total first, then where it went. */
+export function costsPage(zone: string, c: Costs, done: boolean): string {
+  const t = c.totals, p = c.prices, back = `/costs?month=${c.month}`;
+  const total = t.modelCents + t.hearCents + t.speakOverCents + t.fixedCents;
+  const used = p.planPoints > 0 ? t.speakPoints / p.planPoints : 0;
+  const thisMonth = c.month === new Date().toISOString().slice(0, 7);
+  const m = c.models;
+  return page(`花费 · ${c.month}`, "/costs", html`
+<form method="get" action="/costs" class="act"><label>月份 <input type="month" name="month" value="${c.month}" required></label><button>查看</button>
+<span class="muted">按 UTC 日期;金额都是美元</span></form>
+<div class="cards">
+<div class="card total"><div class="muted">${thisMonth ? "本月到今天" : "这个月"}总花费</div><div class="big">${usd(total)}</div>
+<div class="muted">按用量的 ${usd(total - t.fixedCents)} + 固定月费 ${usd(t.fixedCents)}</div></div>
+<div class="card"><div class="muted">AI 模型</div><div class="big">${usd(t.modelCents)}</div><div class="muted">聊天、日记、自动发帖</div></div>
+<div class="card"><div class="muted">语音转文字</div><div class="big">${usd(t.hearCents)}</div><div class="muted">主人发的语音,按时长</div></div>
+<div class="card"><div class="muted">文字转语音 · 超出包月</div><div class="big">${usd(t.speakOverCents)}</div><div class="muted">包月以内不另收钱</div></div>
+<div class="card"><div class="muted">固定月费</div><div class="big">${usd(t.fixedCents)}</div><div class="muted">服务器、数据库、语音包月</div></div>
+</div>
+<div class="card"><b>语音包月点数</b>:已用 ${count(t.speakPoints)} / ${count(p.planPoints)}(${Math.round(used * 100)}%)
+<div class="bar"><span class="${used > 1 ? "over" : ""}" style="width:${Math.min(100, Math.round(used * 100))}%"></span></div>
+<span class="muted">${used > 1 ? "已经超出包月,超出部分按量收费。" : used > 0.8 ? "快用完了,用完后按量收费。" : "家机发的每条语音按字数用点数(以 MiniMax 账单为准)。"}</span></div>
+
+<h2>每天</h2>${c.days.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : html`<table>
+<tr><th>日期</th><th class="num">AI 模型</th><th class="num">模型调用</th><th class="num">语音转文字</th><th class="num">识别时长</th>
+<th class="num">文字转语音(点数)</th><th class="num">当天合计</th></tr>${c.days.map(d => html`
+<tr><td>${d.day}</td><td class="num">${usd(d.modelCents)}</td><td class="num">${count(d.modelCalls)}</td><td class="num">${usd(d.hearCents)}</td>
+<td class="num">${count(d.hearSeconds)} 秒 / ${d.hears} 条</td><td class="num">${count(d.speakPoints)} / ${d.speaks} 条</td>
+<td class="num"><b>${usd(d.modelCents + d.hearCents)}</b></td></tr>`)}</table>
+<p class="muted">“当天合计”不含固定月费和包月;文字转语音只有超出包月才另收钱,算在月合计里。</p>`}
+
+<h2>AI 模型:按模型</h2>${m.byDay.length === 0 ? html`<p class="muted">这个月没有模型调用。</p>` : html`<table>
+<tr><th>日期</th><th>厂商 / 模型</th><th class="num">调用</th><th class="num">其中未成功</th><th class="num">输入 token</th><th class="num">输出 token</th><th class="num">花费</th></tr>
+${m.byDay.map(d => html`<tr><td>${d.day}</td><td>${d.provider}/${d.model}</td><td class="num">${d.calls}</td><td class="num">${d.failed}</td>
+<td class="num">${count(d.inputTokens)}</td><td class="num">${count(d.outputTokens)}</td><td class="num">${d.currency === "USD" ? usd(d.costMinor) : money(d.costMinor, d.currency)}</td></tr>`)}</table>
+<p class="muted">“未成功”包括调用失败、被安全扫描拦下、结果不明(按占用额全额记账)。主人自带 Key 和自己的 Agent 不花平台的钱,不在这里。</p>
+<h2>AI 模型:花费最多的家机(前 20)</h2><table><tr><th>家机</th><th class="num">调用</th><th class="num">花费</th></tr>${m.byCompanion.map(x => html`
+<tr><td>${ownerLink(x.ownerId, x.displayName)}</td><td class="num">${x.calls}</td><td class="num">${x.currency === "USD" ? usd(x.costMinor) : money(x.costMinor, x.currency)}</td></tr>`)}</table>`}
+
+<h2>固定月费</h2>${c.fixed.length === 0 ? html`<p class="muted">还没有填。</p>` : html`<table>
+<tr><th>项目</th><th class="num">每月</th><th>备注</th><th>更新时间</th></tr>${c.fixed.map(f => html`
+<tr><td>${f.item}</td><td class="num">${usd(f.cents)}</td><td>${f.note}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table>`}
+${act("/costs/fixed", "保存", back, html`<input name="item" required maxlength="60" placeholder="项目,如 Fly 服务器" list="fixed-items">
+<datalist id="fixed-items">${c.fixed.map(f => html`<option value="${f.item}">`)}</datalist>
+<label>每月(美元)<input name="dollars" required inputmode="decimal" size="8" placeholder="0.00"></label>
+<input name="note" maxlength="200" placeholder="备注(可不填)">`)}
+<p class="muted">同名项目会被改成新金额;金额填 <b>删除</b> 就删掉这一项。按账单填:Fly 两个应用、Supabase、MiniMax 包月等。</p>
+
+<h2>语音单价</h2>
+<p>包月每月 ${count(p.planPoints)} 点;超出后每百万字符 ${usd(p.speakCentsPerMillion)};语音转文字每小时 ${usd(p.hearCentsPerHour)}。
+<span class="muted">更新于 ${time(zone, p.updatedAt)}</span></p>
+${act("/costs/prices", "修改单价", back, html`<label>包月点数 <input name="points" type="number" min="0" required value="${p.planPoints}"></label>
+<label>超出后每百万字符(美元)<input name="speak" required inputmode="decimal" size="8" value="${(p.speakCentsPerMillion / 100).toString()}"></label>
+<label>转文字每小时(美元)<input name="hear" required inputmode="decimal" size="8" value="${(p.hearCentsPerHour / 100).toString()}"></label>`)}
+<p class="muted">默认值来自 MiniMax 国际版官网价格(2026-11):Starter 包月 5 美元 100,000 点,speech-2.8-hd 每百万字符 100 美元,语音识别每小时 0.38 美元。</p>`, done);
 }
 
 export function logPage(zone: string, log: LogPage, owner: string | null): string {

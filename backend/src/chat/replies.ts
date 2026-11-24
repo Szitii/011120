@@ -236,7 +236,10 @@ export class ChatReplies {
     const clips = await Promise.all(texts.map(async (text, i): Promise<Clip | null> => {
       if (!wanted[i] || left <= 0) return null;
       left -= 1;
-      return voices.speak(text, voice, tones[i] || null, signal).catch(() => null);
+      const clip = await voices.speak(text, voice, tones[i] || null, signal).catch(() => null);
+      // Booked for the cost page; a booking that fails must not cost the Owner the message.
+      if (clip !== null) await port.voiceUsed("SPEAK", clip.characters).catch(() => undefined);
+      return clip;
     }));
     return clips.some(clip => clip !== null) ? clips : undefined;
   }

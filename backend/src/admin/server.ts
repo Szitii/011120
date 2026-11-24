@@ -19,9 +19,9 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { AdminRefusal, type AdminDb } from "./db.ts";
-import { chatGatePage, chatPage, errorPage, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
-  type CatalogEntry, type ChatList, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue,
-  type Feature, type Spend } from "./pages.ts";
+import { chatGatePage, chatPage, costsPage, errorPage, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
+  type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue,
+  type Feature } from "./pages.ts";
 
 /** On the tailnet: the console's machine name, and each allowed Tailscale login with their own database login. */
 export interface Tailnet {
@@ -60,6 +60,10 @@ const HEADERS = {
   "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin", "Cache-Control": "no-store",
 };
 const FORM_LIMIT = 16_384;
+const DOLLARS = /^\d{1,7}(\.\d{1,2})?$/;
+const PRICE = /^\d{1,7}(\.\d{1,4})?$/;
+/** Dollars as typed, in cents (a price may be a fraction of a cent). */
+const cents = (dollars: string) => Number((Number(dollars) * 100).toFixed(2));
 
 class NotFound extends Error {}
 type Form = Readonly<Record<string, string>>;
@@ -129,11 +133,10 @@ export function createAdminServer(options: AdminServerOptions): Server {
       return ownerPage(zone, detail, await db.call<ChatList>("chats", m[1]), await db.call<LogPage>("log", null, m[1]), done);
     }
     if ((m = ROUTES.chat.exec(path))) return chatGatePage(m[1]!);
-    if (path === "/models") {
-      const to = dayOr(query.get("to"), now().toISOString().slice(0, 10));
-      const from = dayOr(query.get("from"), new Date(Date.parse(to) - 6 * 86_400_000).toISOString().slice(0, 10));
-      return modelsPage(zone, await db.call<Models>("models"), await db.call<Spend>("spend", from, to), catalog, done,
-        await db.call<Feature[]>("features"));
+    if (path === "/models") return modelsPage(zone, await db.call<Models>("models"), catalog, done, await db.call<Feature[]>("features"));
+    if (path === "/costs") {
+      const month = dayOr(`${query.get("month")}-01`, `${now().toISOString().slice(0, 7)}-01`);
+      return costsPage(zone, await db.call<Costs>("costs", month), done);
     }
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
@@ -179,6 +182,15 @@ export function createAdminServer(options: AdminServerOptions): Server {
     } else if (path === "/models/credit") {
       if (!ROUTES.uuid.test(form.owner ?? "") || !/^-?[1-9]\d{0,7}$/.test(form.credits ?? "")) throw new AdminRefusal("请填主人编号和不为 0 的整数积分。");
       await db.call("wallet_adjust", form.owner, Number(form.credits), reason);
+    } else if (path === "/costs/fixed") {
+      const item = (form.item ?? "").trim(), amount = (form.dollars ?? "").trim();
+      if (item === "" || !(amount === "删除" || DOLLARS.test(amount))) throw new AdminRefusal("请填项目名称,金额填美元(最多两位小数),或填“删除”。");
+      await db.call("fixed_cost_set", item, amount === "删除" ? null : Math.round(Number(amount) * 100), form.note ?? "", reason);
+    } else if (path === "/costs/prices") {
+      if (!/^\d{1,9}$/.test(form.points ?? "") || !PRICE.test(form.speak ?? "") || !PRICE.test(form.hear ?? "")) {
+        throw new AdminRefusal("点数要填整数,单价填美元(最多四位小数)。");
+      }
+      await db.call("voice_prices_set", Number(form.points), cents(form.speak!), cents(form.hear!), reason);
     } else if (path === "/models/quota") {
       if (!/^\d{1,6}$/.test(form.calls ?? "") || !/^\d{1,9}$/.test(form.cents ?? "")) throw new AdminRefusal("次数和金额要填整数。");
       await db.call("chat_quota_set", Number(form.calls), Number(form.cents), reason);
