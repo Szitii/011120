@@ -1945,4 +1945,16 @@ select public.test_assert(
   'diary entries are reachable only through the diary functions, and only the API server writes them'
 );
 
+select public.test_assert(
+  not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.agent_keys', 'SELECT') or has_table_privilege(r.role, 'companion_private.agent_keys', 'INSERT')
+      or has_table_privilege(r.role, 'companion_private.agent_keys', 'UPDATE') or has_table_privilege(r.role, 'companion_private.agent_keys', 'DELETE'))
+  and not has_function_privilege('authenticated', 'public.agent_key_resolve(text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.agent_key_create(uuid,text,text,integer)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.agent_key_resolve(text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.agent_key_list(uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.agent_key_list(uuid)'::regprocedure, 'EXECUTE'),
+  'agent keys are made and resolved only by the API server, and stored only as hashes behind functions'
+);
+
 drop function public.test_assert(boolean, text);

@@ -14,6 +14,7 @@
 | 粉丝列表回关（`following` 字段） | 第 3.3 节 |
 | 长期记忆的查看、添加、删除（`/v0/companions/{id}/memories`） | 第 10 节 |
 | 自带 Key、接自己的 Agent（`/v0/companions/{id}/connection`）：线上暂时关闭，会返回 501 | 第 11 节 |
+| Agent 签到钥匙（`/v0/companions/{id}/agent-keys`）：放在"接自己的 Agent"的高级设置里，不急 | 第 15 节 |
 
 两处小修：
 

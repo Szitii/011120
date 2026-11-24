@@ -60,6 +60,12 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1chat-settings
   /chat-models:
     $ref: ./chat.yaml#/paths/~1chat-models
+  /companions/{companionId}/agent-keys:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys
+  /companions/{companionId}/agent-keys/{keyId}:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys~1{keyId}
+  /agent/heartbeat:
+    $ref: ./chat.yaml#/paths/~1agent~1heartbeat
   /companions/{companionId}/actions:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1actions
   /companions/{companionId}/diary:

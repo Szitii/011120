@@ -20,6 +20,8 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET|POST /v0/companions/{id}/agent-keys             keys for the Owner's own agent to check in (agent/heartbeat.ts)
+ *   DELETE /v0/companions/{id}/agent-keys/{keyId}      revoke one
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
  *
  * POST /v0/chats, POST .../messages and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
@@ -33,6 +35,7 @@ import type { ChatModelList, ChatSettings, DiarySettings } from "../../../contra
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
+import { newAgentToken } from "../agent/heartbeat.ts";
 import type { ConnectionInput, ConnectionSaveResult, CompanionConnection } from "../../../contracts/chat.ts";
 import type { ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
@@ -153,8 +156,9 @@ export async function handleChatRequest(
   const badgesRoute = path[1] === "badges" && path.length === 2;
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
+  const agentKeysRoute = path[1] === "companions" && path[3] === "agent-keys" && (path.length === 4 || path.length === 5);
   if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute && !diaryRoute
-    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute && !memoriesRoute && !connectionRoute)) return undefined;
+    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute && !memoriesRoute && !connectionRoute && !agentKeysRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -210,6 +214,19 @@ export async function handleChatRequest(
       // The last 4 characters help the Owner recognise the key; a short one shows nothing, so it is never stored in clear.
       checked.secret.length >= 12 ? checked.secret.slice(-4) : "");
     return response(200, { result, connection: saved as CompanionConnection } satisfies ConnectionSaveResult);
+  }
+  if (agentKeysRoute) {
+    const companionId = id(path[2]);
+    if (path.length === 5) return method === "DELETE" ? response(200, await port.revokeAgentKey(companionId, id(path[4]))) : notFound();
+    if (method === "GET") return response(200, await port.agentKeys(companionId));
+    if (method !== "POST") return notFound();
+    const input = body(request, ["name", "days"]);
+    const days = input.days === undefined ? 30 : input.days;
+    if (!Number.isInteger(days) || (days as number) < 1 || (days as number) > 365) return invalid();
+    const { token, hash } = newAgentToken();
+    const key = await port.createAgentKey(companionId, text(input.name, 40), hash, days as number) as Record<string, unknown>;
+    // The only time the token is shown.
+    return response(201, { ...key, token });
   }
   if (memoriesRoute) {
     const companionId = id(path[2]);
