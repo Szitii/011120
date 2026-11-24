@@ -15,7 +15,7 @@ export interface ChatClaim {
   /** A one-to-one chat (otherwise a group). */
   direct: boolean;
   companion: { companionId: string; displayName: string; identity: unknown; settings: ChatSettings };
-  members: { companionId: string; displayName: string }[];
+  members: { companionId: string; displayName: string; avatar?: string | null }[];
   /** The last 30 shown messages, oldest first; companionId null is the Owner. An action has no body. */
   history: {
     companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string;
@@ -72,6 +72,8 @@ export interface ChatPort {
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;
   remove(chatId: string): Promise<unknown>;
+  /** A built-in avatar ("preset:<id>") or null, for the Owner (companionId null) or one of their Companions. */
+  saveAvatar(companionId: string | null, avatar: string | null): Promise<unknown>;
   /** Deletes the Owner's Companion and what was private to it (chats, diary, memories, keys). */
   deleteCompanion(companionId: string): Promise<unknown>;
   /** The Owner has read up to this message (only moves forward); returns the chat. */

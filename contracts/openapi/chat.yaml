@@ -794,6 +794,43 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /owner/avatar:
+    put:
+      operationId: setOwnerAvatar
+      summary: The Owner picks one of the app's built-in avatars, or clears it
+      description: |
+        `avatar` is "preset:<id>" (id: 1 to 40 of a-z, 0-9, _ and -, starting with a letter or digit) or
+        null. The app owns the pictures and maps the id to one; the server only stores the id. It is
+        returned as `avatar` wherever the Owner's human identity is shown.
+      x-capability-status: implemented
+      requestBody: &avatarBody
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AvatarChoice'}
+      responses: &avatarResponses
+        '200':
+          description: The avatar now in use
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AvatarChoice'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/avatar:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    put:
+      operationId: setCompanionAvatar
+      summary: Pick one of the app's built-in avatars for the Owner's Companion, or clear it
+      description: Returned as `avatar` on community authors and profiles, chat members and GET /companions.
+      x-capability-status: implemented
+      requestBody: *avatarBody
+      responses: *avatarResponses
   /companions/{companionId}:
     parameters:
     - name: companionId
@@ -1026,10 +1063,17 @@ components:
       description: 挥手 / 摸头 / 抱抱 / 贴贴. Same names as contracts/companion-actions.ts.
     ChatMember:
       type: object
-      required: [companionId, displayName]
+      required: [companionId, displayName, avatar]
       properties:
         companionId: {type: string, format: uuid}
         displayName: {type: string}
+        avatar: {type: [string, 'null'], description: 'A built-in avatar "preset:<id>", or null.'}
+    AvatarChoice:
+      type: object
+      required: [avatar]
+      additionalProperties: false
+      properties:
+        avatar: {type: [string, 'null'], pattern: '^preset:[a-z0-9][a-z0-9_-]{0,39}$'}
     ChatMessage:
       type: object
       required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt, audio]

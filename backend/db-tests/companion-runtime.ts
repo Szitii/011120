@@ -6,7 +6,7 @@ import { createPgPool } from "../src/persistence/postgres/index.ts";
 import type { Chat, ChatPage } from "../../contracts/chat.ts";
 import type { ActorContext, CommunityDetail, CommunityPage, CommunityPost, CommunityProfile } from "../../contracts/community.ts";
 
-// Deleting a Companion and the limit of 10 per Owner (migration 0054). Runs last: it leaves
+// Built-in avatars (migration 0055), deleting a Companion and the limit of 10 per Owner (0054). Runs last: it leaves
 // Owner A's extra Companions deleted and never touches the two seeded ones.
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");
@@ -68,6 +68,34 @@ try {
     throw new Error("replies never finished");
   }
   const roster = async () => (await call<{ items: { companionId: string }[] }>(0, "companions")).data.items.map(c => c.companionId);
+
+  // ---- built-in avatars for the Owner and a Companion ----
+  const ownerA: ActorContext = { kind: "OWNER", id: A.owner }, seeded: ActorContext = { kind: "COMPANION", id: A.companion };
+  const viewerB = `actorKind=OWNER&actorId=${B.owner}`;
+  const actorA = (await call<CommunityProfile>(0, `community/profile?${as(ownerA)}`)).data;
+  const actorAi = (await call<CommunityProfile>(0, `community/profile?${as(seeded)}`)).data;
+  assert.deepEqual([actorA.avatar, actorAi.avatar], [null, null]);
+  assert.deepEqual((await call(0, "owner/avatar", "PUT", { avatar: "preset:cat_01" })).data, { avatar: "preset:cat_01" });
+  assert.deepEqual((await call(0, `companions/${A.companion}/avatar`, "PUT", { avatar: "preset:fox-2" })).data, { avatar: "preset:fox-2" });
+  assert.equal((await call<CommunityProfile>(1, `community/profile/${actorA.id}?${viewerB}`)).data.avatar, "preset:cat_01", "others see the Owner's avatar");
+  assert.equal((await call<CommunityProfile>(1, `community/profile/${actorAi.id}?${viewerB}`)).data.avatar, "preset:fox-2", "and the Companion's");
+  const listed = (await call<{ items: { companionId: string; avatar?: string }[] }>(0, "companions")).data.items;
+  assert.equal(listed.find(c => c.companionId === A.companion)!.avatar, "preset:fox-2");
+  const own = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion] })).data;
+  assert.deepEqual(own.members.map(m => m.avatar), ["preset:fox-2"], "chat members carry it");
+  for (const bad of ["https://example.com/a.png", "preset:", "preset:Cat", "cat_01"]) {
+    assert.equal((await call(0, "owner/avatar", "PUT", { avatar: bad })).status, 400, bad);
+    assert.equal((await call(0, `companions/${A.companion}/avatar`, "PUT", { avatar: bad })).status, 400, bad);
+  }
+  assert.equal((await call(1, `companions/${A.companion}/avatar`, "PUT", { avatar: "preset:cat_01" })).status, 404, "another Owner's Companion");
+  assert.equal(await count("public.audit_events where action in ('OWNER_SET_AVATAR', 'COMPANION_SET_AVATAR') and owner_id = $1", [A.owner]), 2);
+  assert.deepEqual((await call(0, "owner/avatar", "PUT", { avatar: "preset:cat_01" })).data, { avatar: "preset:cat_01" });
+  assert.equal(await count("public.audit_events where action = 'OWNER_SET_AVATAR' and owner_id = $1", [A.owner]), 1, "saving the same avatar again changes nothing");
+  assert.deepEqual((await call(0, "owner/avatar", "PUT", { avatar: null })).data, { avatar: null });
+  assert.deepEqual((await call(0, `companions/${A.companion}/avatar`, "PUT", { avatar: null })).data, { avatar: null });
+  assert.equal((await call<CommunityProfile>(1, `community/profile/${actorA.id}?${viewerB}`)).data.avatar, null, "null clears it");
+  assert.ok(!("avatar" in (await call<{ items: Record<string, unknown>[] }>(0, "companions")).data.items.find(c => c.companionId === A.companion)!));
+  passed("built-in avatars: set and cleared by the Owner, shown on profiles, chat members and the Companion list");
 
   // ---- a Companion with everything: chats, memory, keys, a connection, a community life ----
   const doomed = await makeCompanion("Doomed", true), friend = await makeCompanion("Friend");

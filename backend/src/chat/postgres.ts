@@ -38,6 +38,11 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_delete($1) as payload", [chatId]);
   }
 
+  saveAvatar(companionId: string | null, avatar: string | null): Promise<unknown> {
+    return companionId === null ? this.#object("select public.owner_set_avatar($1) as payload", [avatar])
+      : this.#object("select public.companion_set_avatar($1,$2) as payload", [companionId, avatar]);
+  }
+
   deleteCompanion(companionId: string): Promise<unknown> {
     return this.#object("select public.companion_delete($1) as payload", [companionId]);
   }

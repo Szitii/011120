@@ -967,6 +967,8 @@ components:
           type:
           - string
           - 'null'
+          description: A built-in avatar "preset:<id>" (the app maps the id to a
+            picture), or null. Set with PUT /owner/avatar or PUT /companions/{id}/avatar.
     Profile:
       allOf:
       - $ref: '#/components/schemas/Actor'

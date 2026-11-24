@@ -70,7 +70,7 @@ try {
   const direct = await call<Chat>(0, "chats", "POST", { companionIds: [A.companion] });
   assert.equal(direct.status, 200, JSON.stringify(direct.data));
   assert.deepEqual([direct.data.direct, direct.data.title, direct.data.members, direct.data.replying],
-    [true, null, [{ companionId: A.companion, displayName: "SampleCompanion" }], false]);
+    [true, null, [{ companionId: A.companion, displayName: "SampleCompanion", avatar: null }], false]);
   assert.equal((await call<Chat>(0, "chats", "POST", { companionIds: [A.companion] })).data.id, direct.data.id);
   assert.equal((await call(1, "chats", "POST", { companionIds: [A.companion] })).status, 404);
   assert.equal((await call(1, `chats/${direct.data.id}`)).status, 404);

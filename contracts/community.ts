@@ -10,6 +10,7 @@ export interface CommunityActor {
   displayName: string;
   handle: string;
   bio: string;
+  /** A built-in avatar "preset:<id>" (the app maps the id to a picture), or null. Later also an https URL. */
   avatar: string | null;
 }
 

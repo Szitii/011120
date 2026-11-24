@@ -2009,5 +2009,15 @@ select public.test_assert(
   and exists(select 1 from pg_trigger where tgrelid = 'public.companions'::regclass and tgname = 'companions_limit_guard'),
   'only a signed-in Owner deletes a Companion, and the limit per Owner is enforced on the table'
 );
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.owner_set_avatar(text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.companion_set_avatar(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.owner_set_avatar(text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.companion_set_avatar(uuid,text)'::regprocedure, 'EXECUTE')
+  and companion_private.avatar_ok(null) and companion_private.avatar_ok('preset:cat_01')
+  and not companion_private.avatar_ok('https://example.com/a.png') and not companion_private.avatar_ok('preset:')
+  and not companion_private.avatar_ok(E'preset:a\nb'),
+  'an avatar is one of the app''s built-in ones, set only by a signed-in Owner'
+);
 
 drop function public.test_assert(boolean, text);
