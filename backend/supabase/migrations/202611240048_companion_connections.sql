@@ -35,15 +35,6 @@ alter table companion_private.companion_connections enable row level security;
 alter table companion_private.companion_connections force row level security;
 revoke all on companion_private.companion_connections from public, anon, authenticated;
 
-create function companion_private.connection_companion(p_companion uuid)
-returns uuid language plpgsql security definer set search_path='' as $$
-begin
-  if not companion_private.chat_companion_ok(companion_private.chat_owner(), p_companion) then
-    raise exception using errcode='P0001', message='companion not found';
-  end if;
-  return p_companion;
-end $$;
-
 -- What the Owner sees: never the key or token, only its last 4 characters.
 create function companion_private.connection_json(p_companion uuid)
 returns jsonb language sql stable security definer set search_path='' as $$
@@ -56,7 +47,7 @@ $$;
 
 create function public.connection_get(p_companion uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.connection_companion(p_companion);
+declare c uuid := companion_private.owned_companion(p_companion);
 begin
   return companion_private.connection_json(c);
 end $$;
@@ -65,7 +56,7 @@ end $$;
 create function public.connection_save(p_companion uuid, p_kind text, p_provider text, p_base_url text, p_model text,
   p_name text, p_secret text, p_hint text)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.connection_companion(p_companion); o uuid := companion_private.chat_owner();
+declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
 begin
   insert into companion_private.companion_connections as x
     (companion_id, kind, provider, base_url, model, name, secret, secret_hint, consented_at, updated_at)
@@ -81,7 +72,7 @@ end $$;
 -- Back to the platform's models; the sealed key is deleted.
 create function public.connection_delete(p_companion uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.connection_companion(p_companion); o uuid := companion_private.chat_owner();
+declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
 begin
   delete from companion_private.companion_connections where companion_id = c;
   if found then
@@ -94,14 +85,14 @@ end $$;
 -- Server only: what a reply needs, with the sealed secret; null when the Companion uses the platform.
 create function public.connection_secret(p_companion uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.connection_companion(p_companion);
+declare c uuid := companion_private.owned_companion(p_companion);
 begin
   return (select jsonb_build_object('kind', x.kind, 'provider', x.provider, 'baseUrl', x.base_url, 'model', x.model,
       'name', x.name, 'secret', x.secret)
     from companion_private.companion_connections x where x.companion_id = c);
 end $$;
 
-revoke all on function companion_private.connection_companion(uuid), companion_private.connection_json(uuid)
+revoke all on function companion_private.connection_json(uuid)
   from public, anon, authenticated;
 revoke all on function public.connection_get(uuid), public.connection_delete(uuid),
   public.connection_save(uuid, text, text, text, text, text, text, text), public.connection_secret(uuid)

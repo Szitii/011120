@@ -1,7 +1,7 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
 import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import type { StoredConnection } from "../connections/model.ts";
+import type { Connection } from "../connections/model.ts";
 import type { Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, ReservationDecision } from "./port.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
@@ -53,7 +53,7 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.connection_get($1) as payload", [companionId]);
   }
 
-  saveConnection(companionId: string, c: StoredConnection, hint: string): Promise<unknown> {
+  saveConnection(companionId: string, c: Connection, hint: string): Promise<unknown> {
     return this.#object("select public.connection_save($1,$2,$3,$4,$5,$6,$7,$8) as payload",
       [companionId, c.kind, c.provider, c.baseUrl, c.model, c.name, c.secret, hint]);
   }
@@ -62,9 +62,9 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.connection_delete($1) as payload", [companionId]);
   }
 
-  async connection(companionId: string): Promise<StoredConnection | null> {
+  async connection(companionId: string): Promise<Connection | null> {
     const payload = await this.#payload("select public.connection_secret($1) as payload", [companionId]);
-    return payload === null ? null : this.#check(payload) as StoredConnection;
+    return payload === null ? null : this.#check(payload) as Connection;
   }
 
   settings(companionId: string): Promise<unknown> {

@@ -6,8 +6,12 @@
  * EXTERNAL: the Owner's agent gets the conversation as chat messages and answers itself.
  * Every call goes through the SSRF guard (guard.ts). Companions without a connection use
  * `platform` (the platform's models, or the dev host's fake replies).
+ *
+ * The operators' kill switches stop these too: "all models off", or the provider `owner-key`
+ * (every BYOK connection) or `owner-agent` (every EXTERNAL one).
  */
 import { diaryPrompt, parseReply, replyPrompt, agentMessages } from "../chat/prompt.ts";
+import { memoriesOf } from "../chat/platform.ts";
 import { readCompletion, type ModelResult } from "../chat/providers.ts";
 import type { ChatClaim, ChatPort, DiaryJob } from "../chat/port.ts";
 import type { Answer, ChatModel, DiaryAnswer } from "../chat/replies.ts";
@@ -25,17 +29,10 @@ export const PROVIDERS: Readonly<Record<string, string>> = {
   minimax: "https://api.minimaxi.com/v1",
 };
 
-/** What connection_secret returns: how to reach the Companion's model, with the sealed key. */
-export interface StoredConnection {
-  kind: "BYOK" | "EXTERNAL";
-  provider: string | null;
-  baseUrl: string;
-  model: string | null;
-  name: string | null;
-  secret: string;
-}
-
-/** A checked connection, ready to test and save (`secret` still in plain text). */
+/**
+ * How to reach a Companion's model. `secret` is the key or token: in plain text after
+ * checkConnection, sealed when stored (what connection_secret returns).
+ */
 export interface Connection {
   kind: "BYOK" | "EXTERNAL";
   provider: string | null;
@@ -80,10 +77,16 @@ export function checkConnection(input: ConnectionInput): Connection | "INVALID_I
   return { kind: "EXTERNAL", provider: null, baseUrl: url.href, model: input.model ?? null, name, secret: input.bearerToken };
 }
 
-async function complete(post: PostJson, connection: { kind: string; baseUrl: string; model: string | null }, secret: string,
-  messages: { role: string; content: string }[], maxTokens: number, signal: AbortSignal, timeoutMs: number): Promise<ModelResult> {
-  const answer = await post(endpoint(connection), secret ? { authorization: `Bearer ${secret}` } : {},
-    { ...(connection.model ? { model: connection.model } : {}), messages, max_tokens: maxTokens, stream: false }, { signal, timeoutMs });
+type Message = { role: string; content: string };
+
+/** One /chat/completions call; `secret` in plain text (empty: no Authorization header). */
+const ask = (post: PostJson, connection: Connection, secret: string, messages: Message[], maxTokens: number, signal: AbortSignal,
+  timeoutMs: number) => post(endpoint(connection), secret ? { authorization: `Bearer ${secret}` } : {},
+  { ...(connection.model ? { model: connection.model } : {}), messages, max_tokens: maxTokens, stream: false }, { signal, timeoutMs });
+
+async function complete(post: PostJson, connection: Connection, secret: string, messages: Message[], maxTokens: number,
+  signal: AbortSignal): Promise<ModelResult> {
+  const answer = await ask(post, connection, secret, messages, maxTokens, signal, CALL_TIMEOUT_MS);
   if (answer.status < 200 || answer.status > 299) throw new Error(`The connection answered HTTP ${answer.status}.`);
   if (answer.body === undefined) throw new Error("The connection did not answer in JSON.");
   return readCompletion(answer.body);
@@ -92,9 +95,8 @@ async function complete(post: PostJson, connection: { kind: string; baseUrl: str
 /** One tiny call, so only a connection that works is saved. */
 export async function testConnection(connection: Connection, post: PostJson = createPostJson()): Promise<ConnectionTest> {
   try {
-    const answer = await post(endpoint(connection), connection.secret ? { authorization: `Bearer ${connection.secret}` } : {},
-      { ...(connection.model ? { model: connection.model } : {}), messages: [{ role: "user", content: "你好" }], max_tokens: 16, stream: false },
-      { signal: AbortSignal.timeout(TEST_TIMEOUT_MS), timeoutMs: TEST_TIMEOUT_MS });
+    const answer = await ask(post, connection, connection.secret, [{ role: "user", content: "你好" }], 16,
+      AbortSignal.timeout(TEST_TIMEOUT_MS), TEST_TIMEOUT_MS);
     if (answer.status === 401 || answer.status === 403) return "AUTH_FAILED";
     if (answer.status === 404) return "NOT_FOUND";
     if (answer.status < 200 || answer.status > 299) return "ERROR";
@@ -103,6 +105,14 @@ export async function testConnection(connection: Connection, post: PostJson = cr
   } catch (error) {
     return error instanceof BlockedAddressError ? "BLOCKED_ADDRESS" : "UNREACHABLE";
   }
+}
+
+/** The Companion's connection, null for the platform, or "DISABLED" when the operators switched it off. */
+async function connectionOf(port: ChatPort, companionId: string): Promise<Connection | null | "DISABLED"> {
+  const stored = await port.connection(companionId);
+  if (stored === null) return null;
+  const [on] = await port.modelsEnabled([{ provider: stored.kind === "BYOK" ? "owner-key" : "owner-agent", model: stored.model ?? "agent" }]);
+  return on === true ? stored : "DISABLED";
 }
 
 export class ConnectedChatModel implements ChatModel {
@@ -118,12 +128,13 @@ export class ConnectedChatModel implements ChatModel {
 
   async reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal }): Promise<Answer> {
     const companionId = turn.companion.companionId;
-    const stored = await context.port.connection(companionId);
+    const stored = await connectionOf(context.port, companionId);
     if (stored === null) return this.#platform ? this.#platform.reply(turn, context) : { failed: "UNAVAILABLE" };
+    if (stored === "DISABLED") return { failed: "DISABLED" };
     const secret = this.#box.open(stored.secret, companionId);
     const messages = stored.kind === "EXTERNAL" ? agentMessages(turn)
       : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId)));
-    const result = await complete(this.#post, stored, secret, messages, REPLY_TOKENS, context.signal, CALL_TIMEOUT_MS);
+    const result = await complete(this.#post, stored, secret, messages, REPLY_TOKENS, context.signal);
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the reply was cut off");
     return parseReply(result.text, turn.companion.displayName);
@@ -131,26 +142,20 @@ export class ConnectedChatModel implements ChatModel {
 
   async diary(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer> {
     const companionId = job.companion.companionId;
-    const stored = await context.port.connection(companionId);
-    if (stored === null) {
-      return this.#platform?.diary ? this.#platform.diary(job, context) : { failed: "UNAVAILABLE" };
-    }
+    const stored = await connectionOf(context.port, companionId);
+    if (stored === null) return this.#platform?.diary ? this.#platform.diary(job, context) : { failed: "UNAVAILABLE" };
+    if (stored === "DISABLED") return { failed: "DISABLED" };
     const secret = this.#box.open(stored.secret, companionId);
     const prompt = diaryPrompt(job, stored.kind === "BYOK" ? await memoriesOf(context.port, companionId) : []);
-    const result = await complete(this.#post, stored, secret, toMessages(prompt), DIARY_TOKENS, context.signal, CALL_TIMEOUT_MS);
+    const result = await complete(this.#post, stored, secret, toMessages(prompt), DIARY_TOKENS, context.signal);
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the entry was cut off");
     return { text: result.text };
   }
 }
 
-const toMessages = (prompt: { system: string; user: string }) =>
+const toMessages = (prompt: { system: string; user: string }): Message[] =>
   [{ role: "system", content: prompt.system }, { role: "user", content: prompt.user }];
-
-async function memoriesOf(port: ChatPort, companionId: string): Promise<string[]> {
-  const list = await port.memories(companionId) as { items?: { body?: unknown }[] };
-  return (list.items ?? []).flatMap(memory => (typeof memory.body === "string" ? [memory.body] : []));
-}
 
 /**
  * What the connection routes need: the secret box, the test call, and a limit of 10 tests per
