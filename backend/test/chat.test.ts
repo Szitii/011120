@@ -122,6 +122,11 @@ it("routes read state, badges and the anniversary", async () => {
     request(`companions/${companion}/anniversary`, "PUT", { startDate: "2024-01-01", timeZone: "Asia/Shanghai" }),
   ]) assert.equal(await refusal(port, req), "INVALID_INPUT", JSON.stringify(req.body));
   for (const req of [request("badges", "POST"), request(`companions/${companion}/anniversary`, "DELETE"), request(`chats/${chatId}/read`)]) {
+    assert.equal(await refusal(port, req), "NOT_FOUND");
+  }
+  assert.equal(calls.length, 0);
+});
+
 it("routes memories and refuses ones with credentials", async () => {
   const { port, calls } = fakePort();
   const memoryId = "00000000-0000-0000-0000-00000000f001";

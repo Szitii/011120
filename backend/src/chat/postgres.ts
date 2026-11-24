@@ -50,6 +50,8 @@ export class PostgresChatAdapter implements ChatPort {
 
   saveAnniversary(companionId: string, startDate: string | null, timeZone: string, revision: number): Promise<unknown> {
     return this.#object("select public.anniversary_save($1,$2::date,$3,$4) as payload", [companionId, startDate, timeZone, revision]);
+  }
+
   memories(companionId: string): Promise<unknown> {
     return this.#object("select public.memory_list($1) as payload", [companionId]);
   }
