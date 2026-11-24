@@ -137,3 +137,25 @@ test("sofa entry and exit clear the coffee table and use walk frames until seate
   }
   assert.ok(engine.snapshot().actors.user.point.ny > TABLE_SLOT.top + TABLE_SLOT.height);
 });
+
+test("straight floor retargets keep their travel direction and avoid an initial grid snap", () => {
+  const engine = new RoomEngine();
+  const start = engine.snapshot().actors.user.point;
+  const first = { nx: start.nx - .1, ny: start.ny };
+  assert.deepEqual(findSafePath(start, first), [first]);
+  engine.floor(first);
+  assert.equal(engine.snapshot().actors.user.facingLeft, true);
+  engine.tick(16);
+  const mid = engine.snapshot().actors.user.point;
+  const reversed = { nx: start.nx + .06, ny: start.ny };
+  engine.floor(reversed);
+  assert.equal(engine.snapshot().actors.user.facingLeft, false);
+  engine.tick(16);
+  assert.ok(engine.snapshot().actors.user.point.nx > mid.nx);
+  const current = engine.snapshot().actors.user.point;
+  engine.floor(current);
+  engine.tick(16);
+  assert.deepEqual(engine.snapshot().actors.user.point, current);
+  assert.equal(engine.snapshot().actors.user.phase, "IDLE");
+  assert.equal(findSafePath({ nx: .60, ny: .46 }, { nx: .60, ny: .61 }, true), null);
+});

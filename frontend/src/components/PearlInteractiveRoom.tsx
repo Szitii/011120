@@ -121,7 +121,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     return <View key={id} testID={`room-actor-${id}`} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
       actor.point.ny - height * .973, width, height), {
       zIndex, opacity: frame.duo ? 0 : 1,
-      transform: [{ scaleX: (seated ? id === "user" : action !== "sleep" && actor.facingLeft) ? -1 : 1 }],
+      transform: [{ scaleX: (seated ? id === "user" : actor.phase === "WALK" && actor.facingLeft) ? -1 : 1 }],
     }]}>
       <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />
     </View>;

@@ -93,6 +93,10 @@ function closestPoint(target: RoomPoint, allowed: (point: GridPoint) => boolean)
 
 export function findSafePath(start: RoomPoint, target: RoomPoint, exactTarget = false): RoomPoint[] | null {
   const connects = (a: RoomPoint, b: RoomPoint) => isSegmentClear(a.nx, a.ny, b.nx, b.ny);
+  // Keep clear straight runs continuous, including taps made halfway between grid points.
+  if ((start.nx === target.nx || start.ny === target.ny) && connects(start, target)) {
+    return start.nx === target.nx && start.ny === target.ny ? [] : [target];
+  }
   const entry = closestPoint(start, (point) => connects(start, point));
   if (!entry) return null;
 

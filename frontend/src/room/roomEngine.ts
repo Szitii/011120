@@ -3,6 +3,7 @@ import { BED_FLOOR_EDGE, DUO_POINTS, FURNITURE, SPAWN, WAKE_POINTS, type ActorId
 import { findSafePath } from "./pathfinding.ts";
 
 const ACTORS = ["companion", "user"] as const;
+const WALK_FRAME_DISTANCE = .026;
 type DuoAction = Exclude<CompanionAction, "WAVE">;
 type Phase = "IDLE" | "WALK" | "SIT" | "SLEEP" | "DUO";
 export type ActorFrame = {
@@ -25,6 +26,11 @@ type RoomFrame = {
 type Plan = { actor: ActorId; steps: Step[] };
 
 const distance = (a: RoomPoint, b: RoomPoint) => Math.hypot((a.nx - b.nx) * .8, a.ny - b.ny);
+function faceSide(from: RoomPoint, to: RoomPoint, previous: boolean) {
+  const dx = (to.nx - from.nx) * .8;
+  const dy = to.ny - from.ny;
+  return Math.abs(dx) > 1e-6 && Math.abs(dx) >= Math.abs(dy) ? dx < 0 : previous;
+}
 const makeTrack = (point: RoomPoint): Track => ({ frame: { point, phase: "IDLE", step: 0, facingLeft: false }, steps: [], travelled: 0 });
 
 export class RoomEngine {
@@ -60,7 +66,11 @@ export class RoomEngine {
     if (this.locked || this.sleeping || (user.frame.furniture && user.steps.length)) return;
     const plan = this.plan("user", point);
     if (!plan) return;
-    this.apply(plan);
+    if (plan.steps.length) this.apply(plan);
+    else {
+      user.steps = [];
+      user.frame = { ...user.frame, phase: "IDLE", step: 0 };
+    }
     this.addEffect("ripple", plan.steps.at(-1)?.point ?? point);
   }
 
@@ -139,8 +149,12 @@ export class RoomEngine {
     const track = this.tracks[plan.actor];
     track.steps = plan.steps;
     if (track.frame.phase !== "WALK") track.travelled = 0;
-    if (!plan.steps[0].transition) {
-      track.frame = { ...track.frame, phase: "WALK", step: Math.floor(track.travelled / .026) % 4 };
+    const firstMove = plan.steps.find(step => distance(track.frame.point, step.point) > 1e-6);
+    if (firstMove && !plan.steps[0].transition && !plan.steps[0].pose) {
+      track.frame = {
+        ...track.frame, phase: "WALK", step: Math.floor(track.travelled / WALK_FRAME_DISTANCE) % 4,
+        facingLeft: faceSide(track.frame.point, firstMove.point, track.frame.facingLeft),
+      };
     }
   }
 
@@ -157,13 +171,13 @@ export class RoomEngine {
         nx: previous.nx + (next.point.nx - previous.nx) * fraction,
         ny: previous.ny + (next.point.ny - previous.ny) * fraction,
       };
-      track.travelled += travelled;
+      if (!next.transition) track.travelled += travelled;
       remaining -= travelled;
       if (arrived) track.steps.shift();
       track.frame = {
         point, phase: arrived && next.pose ? next.pose : arrived && !track.steps.length ? "IDLE" : next.transition ?? "WALK",
-        step: Math.floor(track.travelled / .026) % 4,
-        facingLeft: Math.abs(next.point.nx - previous.nx) > .001 ? next.point.nx < previous.nx : track.frame.facingLeft,
+        step: Math.floor(track.travelled / WALK_FRAME_DISTANCE) % 4,
+        facingLeft: faceSide(previous, next.point, track.frame.facingLeft),
         furniture: arrived && next.pose === "IDLE" ? undefined : next.furniture,
       };
     }
