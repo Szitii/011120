@@ -250,6 +250,7 @@ try {
   passed("removed content is hidden and can be put back, unless its author deleted it; Owners can be listed, searched and opened");
 
   // ---- private chats ----
+  await pool.query("update companion_private.feature_switches set enabled = true where key = 'GROUP_CHAT_CREATE'");
   await pool.query("insert into companion_private.chats(id, owner_id, title) values ($1, $2, 'Admin fixture chat')", [chatId, A.owner]);
   await pool.query("insert into companion_private.chat_members(chat_id, companion_id, position) values ($1, $2, 1)", [chatId, A.companion]);
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, created_at, shown_at)

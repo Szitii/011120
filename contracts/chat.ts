@@ -31,6 +31,12 @@ export interface ChatMessage {
   /** true when POST .../retry may be used (failure ERROR). A BLOCKED reply is final. */
   retryable: boolean;
   sentAt: string;
+  /**
+   * A voice message (语音): play GET /v0/chats/{chatId}/messages/{id}/audio; `body` is its transcript.
+   * null for text, and once the clip has expired (kept 30 days): then show the body as text.
+   * Always sent; optional here so app code written before it still compiles.
+   */
+  audio?: { durationMs: number } | null;
 }
 
 export interface Chat {
@@ -50,12 +56,44 @@ export interface Chat {
   readUpTo?: string | null;
   /** Companions to show as "typing…" right now. */
   typing: string[];
+  /** Those in `typing` whose next message is a voice message: show "正在说话…" instead. Always sent; optional like unreadCount. */
+  recording?: string[];
   /** More replies are on the way: keep refreshing every 1-2 s while true, even if nobody shows as typing. */
   replying: boolean;
   activeAt: string;
 }
 
+/** GET /v0/features: what the app may offer right now. Hide what is false. */
+export interface PlatformFeatures {
+  /** Creating a group chat (POST /v0/chats with 2 or more Companions). Off: 409. */
+  groupChatCreate: boolean;
+  /** Sending and retrying in an existing group chat. Off: read and delete only (send is 409). */
+  groupChatSend: boolean;
+  /** Connecting the Owner's own key or agent (PUT .../connection). Off: 501. */
+  connections: boolean;
+}
+
 /** GET /v0/badges: every unread count for the tab badges. */
+/**
+ * GET /v0/wallet: the Owner's credits for platform models. While the platform has not turned the
+ * wallet on, only { enabled: false }: chat is limited by the free daily budget per Companion alone.
+ */
+export type Wallet = { enabled: false } | {
+  enabled: true;
+  /** FROZEN: no model call can be paid for until the operators unfreeze it. */
+  state: "ACTIVE" | "FROZEN";
+  /** Credits that can be spent now (free + paid). */
+  available: number;
+  freeCredits: number;
+  paidCredits: number;
+  /** Credits held by model calls still running (already taken from available). */
+  reserved: number;
+  /** The price: credits per cent (USD) of model cost. */
+  creditsPerCent: number;
+  priceVersion: string;
+  version: number;
+};
+
 export interface Badges {
   /** Unread Companion messages over every chat. */
   chats: number;
@@ -104,7 +142,44 @@ export interface ChatSettings {
   companionInteraction: "NONE" | "RARE" | "NORMAL" | "LIVELY";
   /** A ChatModelInfo id from GET /v0/chat-models; null = the platform default. */
   model: string | null;
+  /**
+   * A VoiceInfo id from GET /v0/voices: the Companion sometimes answers with a voice message in this
+   * voice (it decides which messages, like a person). null: text only (default).
+   * Always sent; on PUT, leaving it out keeps the current voice.
+   */
+  voice?: string | null;
   revision: number;
+}
+
+/** One voice the Owner can pick for a Companion (GET /v0/voices). Hear it at GET /v0/voices/{id}/sample. */
+export interface VoiceInfo {
+  id: string;
+  name: string;
+  gender: "FEMALE" | "MALE";
+  description: string;
+}
+
+export interface VoiceList {
+  items: VoiceInfo[];
+  /** false: voice messages are not switched on on this server (no speech provider): hide the voice picker. */
+  available: boolean;
+  /** true: the Owner can send voice messages (POST /v0/chats/{id}/voice); false: hide the hold-to-talk button. */
+  input?: boolean;
+}
+
+/**
+ * POST /v0/chats/{id}/voice (with an Idempotency-Key): the Owner's voice message. Record mono AAC
+ * (m4a, about 32 kbit/s), at most 60 seconds. The server turns it into text and answers like
+ * POST .../messages (ChatSendResult); the message has `audio`, and `body` is what was recognised.
+ * 422 VOICE_NOT_UNDERSTOOD: nothing could be heard. 429 VOICE_LIMIT: today's voice messages are used up.
+ * 503 VOICE_UNAVAILABLE: speech recognition is off or failed; try again or type.
+ */
+export interface ChatVoiceInput {
+  /** The recording, base64. At most 700 KB before encoding. */
+  audio: string;
+  mime: "audio/mp4" | "audio/aac" | "audio/mpeg" | "audio/wav" | "audio/ogg";
+  /** How long the recording is, as the recorder measured it (1 to 60000). */
+  durationMs: number;
 }
 
 /** One model the Owner can pick (GET /v0/chat-models). */
