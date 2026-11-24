@@ -424,3 +424,46 @@ it("pages through the log, for everyone or one Owner", async () => {
   assert.match(none.body, /没有记录/);
   assert.ok(!none.body.includes("更早的记录"));
 });
+
+it("on the tailnet, lets in only its own name, people on the list (as their own login) and its own forms", async () => {
+  const alice = fakeDb(), bob = fakeDb();
+  assert.throws(() => createAdminServer({ tailnet: { hostname: "Bad.Name", operators: new Map([["a@x.test", alice.db]]) }, catalog }));
+  assert.throws(() => createAdminServer({ tailnet: { hostname: "companion-admin", operators: new Map() }, catalog }));
+  const server = createAdminServer({ tailnet: { hostname: "companion-admin", operators: new Map([["alice@x.test", alice.db], ["bob@x.test", bob.db]]) },
+    catalog, timeZone: "UTC" });
+  servers.push(server);
+  const port = await new Promise<number>(resolve => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
+  const send = (path: string, headers: Record<string, string>, form?: Record<string, string>) => new Promise<{ status: number; location: string | undefined; body: string }>((resolve, reject) => {
+    const body = form === undefined ? undefined : new URLSearchParams(form).toString();
+    const req = httpRequest({ host: "127.0.0.1", port, path, method: body === undefined ? "GET" : "POST",
+      headers: { ...headers, ...(body === undefined ? {} : { "Content-Type": "application/x-www-form-urlencoded" }) } }, response => {
+      const chunks: Buffer[] = [];
+      response.on("data", chunk => chunks.push(chunk as Buffer));
+      response.on("end", () => resolve({ status: response.statusCode!, location: response.headers.location, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+  const as = (login: string, host = "companion-admin") => ({ Host: host, "Tailscale-User-Login": login });
+
+  for (const host of ["evil.example", "companion-admin.evil.example", `127.0.0.1:${port}`, "companion-admin:8080", "xcompanion-admin"]) {
+    assert.deepEqual([(await send("/reports", as("alice@x.test", host))).status], [403], host);
+  }
+  for (const headers of [{ Host: "companion-admin" }, as("mallory@x.test"), as("")]) {
+    const refused = await send("/reports", headers);
+    assert.deepEqual([refused.status, /不在管理员名单里/.test(refused.body)], [403, true]);
+  }
+  assert.equal((await send(`/?token=${TOKEN}`, { Host: "companion-admin", Cookie: `admin_console=${TOKEN}` })).status, 403, "no token way in on the tailnet");
+  assert.equal(alice.calls.length + bob.calls.length, 0, "nothing is read for someone not on the list");
+
+  assert.equal((await send("/reports", as("Alice@X.test"))).status, 200, "the login is matched without case");
+  assert.equal((await send("/reports", as("bob@x.test", "companion-admin.tail1234.ts.net"))).status, 200);
+  assert.deepEqual([alice.calls.length, bob.calls.length], [1, 1], "each person reads through their own login");
+
+  for (const origin of ["http://evil.example", "http://companion-admin.tail1234.ts.net", "null"]) {
+    assert.equal((await send(`/owners/${OWNER}/suspend`, { ...as("alice@x.test"), Origin: origin }, change())).status, 403, origin);
+  }
+  const done = await send(`/owners/${OWNER}/suspend`, { ...as("bob@x.test"), Origin: "http://companion-admin" }, change());
+  assert.deepEqual([done.status, done.location, bob.calls.at(-1)], [303, "/reports?ok=1", ["owner_suspend", OWNER, true, "because"]]);
+  assert.equal(alice.calls.length, 1, "Bob's change went through Bob's login only");
+});

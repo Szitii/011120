@@ -1,0 +1,17 @@
+# Fly.io settings for the admin console. Steps: docs/manual/ADMIN_CONSOLE.md ("放在服务器上").
+# Deploy with: fly deploy -c fly.admin.toml
+# No [http_service] on purpose: the machine has no public address; it is reached through Tailscale only.
+app = "companion-social-admin"
+primary_region = "nrt" # Tokyo, next to the Supabase project
+
+[build]
+  dockerfile = "Dockerfile.admin"
+
+# Tailscale's identity: without it every restart would join as a new machine.
+[mounts]
+  source = "tailscale_state"
+  destination = "/var/lib/tailscale"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

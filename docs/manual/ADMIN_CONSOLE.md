@@ -1,6 +1,6 @@
 # 管理后台:怎么启动、怎么用
 
-管理后台是一个只在你自己电脑上运行的小网站,用来处理举报、管理用户、控制模型和查看花费。计划和已定的决定见 `docs/ADMIN_PLAN.md`。
+管理后台是一个小网站,用来处理举报、管理用户、控制模型和查看花费。它有两种用法:**放在服务器上**,在任何连上 Tailscale 的设备里打开 `http://companion-admin/`(平时用这个);或者**在自己电脑上临时启动**(服务器出问题时的备用)。计划和已定的决定见 `docs/ADMIN_PLAN.md`。
 
 ## 第一次用之前:建一个你自己的管理账号
 
@@ -14,7 +14,7 @@ create role admin_tianwei login password '一个长密码' in role companion_adm
 
 这个账号只能调用管理函数,读不了任何表。不再需要时:`drop role admin_tianwei;`
 
-## 启动
+## 在自己电脑上启动
 
 ```
 ADMIN_DATABASE_URL="postgresql://admin_tianwei:密码@数据库地址:5432/数据库名" npm run admin
@@ -25,6 +25,37 @@ ADMIN_DATABASE_URL="postgresql://admin_tianwei:密码@数据库地址:5432/数�
 端口默认 8790,想换就加 `ADMIN_PORT=端口号`(1024 到 65535)。
 
 模型开关页上能选的厂商和模型,来自**这台电脑**上的模型清单 `backend/config/chat-models.json`。如果线上服务器用的是另一份清单,启动后台时用 `CHAT_MODELS_FILE` 指向同一份,否则线上才有的模型在这里选不到。
+
+## 放在服务器上(Tailscale)
+
+后台跑在 Fly.io 应用 `companion-social-admin`(东京)上,**没有公网地址**,只在你的 Tailscale 网络里能看到。打开 `http://companion-admin/` 时,Tailscale 会告诉后台是谁的账号在访问;名单里的人用他自己的数据库账号操作,不在名单里的一律拒绝。不用口令,也不用开终端。
+
+**平时用**:设备装好 Tailscale 并登录名单里的账号,浏览器打开 `http://companion-admin/`。
+
+**加一个管理员**:先在 Tailscale 后台 Users 里邀请他;再给他建数据库账号(见上面"第一次用之前");然后把他加进名单,重新设置 `ADMIN_OPERATORS`(见第 4 步)。
+
+### 第一次部署
+
+1. **Tailscale 后台**(login.tailscale.com/admin):
+   - DNS 页面:确认 MagicDNS 是开着的。
+   - Access controls 页面:在最外层大括号里加 `"tagOwners": {"tag:admin-console": ["autogroup:admin"]},`(已有 `tagOwners` 就只加中间一行),保存。这样服务器不会因为登录过期而掉线。
+   - Settings → Keys → Generate auth key:Reusable 关、Ephemeral 关、Tags 选 `tag:admin-console`。复制生成的 `tskey-auth-...`。
+2. **建应用和存储**(仓库根目录):
+   ```sh
+   fly apps create companion-social-admin
+   fly volumes create tailscale_state -a companion-social-admin -r nrt -s 1
+   ```
+3. **Tailscale 钥匙**:`fly secrets set -a companion-social-admin TS_AUTHKEY=tskey-auth-...`
+4. **管理员名单**:每人一行"Tailscale 账号 → 他的数据库连接串"。连接串走 Supabase 的 Session pooler,用户名写成 `admin_1.<项目 ref>`。从标准输入导入,密码不出现在命令里:
+   ```sh
+   fly secrets import -a companion-social-admin
+   ADMIN_OPERATORS={"你的 Tailscale 账号": "postgresql://admin_1.<ref>:<密码>@<pooler 地址>:5432/postgres"}
+   ```
+   输完按 Ctrl+D。有两个人就在大括号里用逗号隔开写两项。
+5. **部署**:`fly deploy -c fly.admin.toml --ha=false`(只能一台:两台会在 Tailscale 里抢同一个名字)。
+6. **检查**:`fly logs -a companion-social-admin` 里应该有每个管理员对应的数据库账号,和"管理后台已启动"。然后在装了 Tailscale 的设备上打开 `http://companion-admin/`。
+
+**发新版本**:`fly deploy -c fly.admin.toml --ha=false`。**模型清单**用的是镜像里的 `backend/config/chat-models.json`,和 API 服务器同一份。
 
 ## 五个页面
 
@@ -55,6 +86,7 @@ ADMIN_DATABASE_URL="postgresql://admin_tianwei:密码@数据库地址:5432/数�
 
 ## 安全上要知道的
 
-- 后台只接受发给本机(`127.0.0.1` 或 `localhost`)、带着口令的请求;别的网页发来的表单一律拒绝。所以你浏览器里打开的其他网站用不了它。
+- 在自己电脑上:后台只接受发给本机(`127.0.0.1` 或 `localhost`)、带着口令的请求。在服务器上:只接受发给 `companion-admin` 的请求,由 Tailscale 说明是谁,名单外的人进不来。两种情况下,别的网页发来的表单都一律拒绝,所以你浏览器里打开的其他网站用不了它。
 - 页面里没有任何脚本,浏览器也被告知不执行脚本。用户写的内容只会当作文字显示。
-- 不要把后台放到公网上,也不要把启动链接发给别人。别人要用,就给他建一个自己的管理账号,在他自己的电脑上启动。
+- 不要给 `companion-social-admin` 加公网地址(`fly.admin.toml` 里故意没有 `[http_service]`),也不要把本机的启动链接发给别人。别人要用,就按上面"加一个管理员"把他加进来。
+- 名单在 Fly 的 secrets 里,不在仓库里。Tailscale 账号被盗,等于管理员账号被盗:Tailscale 登录要开两步验证。

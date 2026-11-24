@@ -1,0 +1,18 @@
+# The admin console on Fly.io, reachable only inside the Tailscale network (docs/manual/ADMIN_CONSOLE.md).
+# The machine has no public address: tailscaled joins the tailnet, and `tailscale serve` passes
+# http://companion-admin/ to the console on 127.0.0.1, naming the person who asks.
+FROM node:24-slim
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY --from=docker.io/tailscale/tailscale:stable /usr/local/bin/tailscaled /usr/local/bin/tailscale /usr/local/bin/
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
+COPY contracts contracts
+COPY backend/config backend/config
+COPY backend/src backend/src
+COPY backend/scripts/admin-console.ts backend/scripts/admin-start.sh backend/scripts/
+
+CMD ["sh", "backend/scripts/admin-start.sh"]

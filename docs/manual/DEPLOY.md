@@ -1,6 +1,6 @@
 # 部署：Supabase 东京 + Fly.io 东京
 
-2026-11-23 上线。数据库和登录：Supabase 托管，东京（`ap-northeast-1`）。API 服务器：Fly.io 应用 `companion-social-api`，东京（`nrt`），地址 `https://companion-social-api.fly.dev`。管理后台不上服务器，照旧在自己电脑上跑（见 `ADMIN_CONSOLE.md`）。
+2026-11-23 上线。数据库和登录：Supabase 托管，东京（`ap-northeast-1`）。API 服务器：Fly.io 应用 `companion-social-api`，东京（`nrt`），地址 `https://companion-social-api.fly.dev`。管理后台：Fly.io 应用 `companion-social-admin`，只在 Tailscale 网络里能打开（见 `ADMIN_CONSOLE.md`）。
 
 ## 平时要做的
 
