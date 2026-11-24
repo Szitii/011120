@@ -141,6 +141,11 @@ export interface ChatPort {
   voiceLeft(): Promise<{ companion: number; owner: number }>;
   /** Server only: the Owner's voice message, `body` being what the server recognised in `recording`. */
   sendVoice(chatId: string, body: string, recording: { mime: string; durationMs: number; bytes: Uint8Array }, keyHash: string): Promise<unknown>;
+  /**
+   * Server only: what one call to the speech provider used, for the cost page: SPEAK = characters
+   * as the provider billed them, HEAR = milliseconds of the Owner's recording.
+   */
+  voiceUsed(kind: "SPEAK" | "HEAR", amount: number): Promise<void>;
   /** The audio of a shown voice message in the Owner's chat (NOT_FOUND otherwise). */
   audio(chatId: string, messageId: string): Promise<{ mime: string; bytes: Uint8Array }>;
   /** Server only: book a model call and mark it started. */

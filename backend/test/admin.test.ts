@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { after, it } from "node:test";
 import type pg from "pg";
 import { AdminRefusal, PgAdminDb, explain, type AdminDb, type AdminFunction } from "../src/admin/db.ts";
-import type { ChatList, ChatPage, LogPage, Models, OwnerDetail, OwnerList, Report, ReportQueue, Spend } from "../src/admin/pages.ts";
+import type { ChatList, ChatPage, Costs, LogPage, Models, OwnerDetail, OwnerList, Report, ReportQueue, Spend } from "../src/admin/pages.ts";
 import { createAdminServer } from "../src/admin/server.ts";
 
 const TOKEN = "t".repeat(64);
@@ -325,10 +325,10 @@ it("shows a private chat only after a reason is given", async () => {
     .send(`/chats/${CHAT}`, { form: { reason: "why" } })).body, /私聊:群聊/);
 });
 
-it("shows model switches, the quota and what was spent, and changes only what the catalog names", async () => {
+it("shows model switches and the quota, and changes only what the catalog names", async () => {
   const { send, calls } = await start();
   const page = await send("/models");
-  assert.deepEqual(calls, [["models"], ["spend", "2026-11-17", "2026-11-23"], ["features"]], "the last seven days by default");
+  assert.deepEqual(calls, [["models"], ["features"]], "what was spent is on the costs page");
   const states = [...page.body.matchAll(/<td>claude\/claude-big<\/td><td><span class="tag ([a-z]*)">([^<]+)</g)].map(m => [m[1], m[2]]);
   assert.deepEqual(states, [["", "开"]]);
   assert.match(page.body, /claude\/claude-small<\/td><td><span class="tag bad">关\(模型关闭\)/);
@@ -340,30 +340,20 @@ it("shows model switches, the quota and what was spent, and changes only what th
   assert.match(page.body, /每天 200 次调用、1\.00 USD/);
   assert.match(page.body, /每天 20\.00 USD,今天\(UTC\)已用 3\.45 USD/);
   assert.match(page.body, /现在:关\(只按每个家机每天的免费额度限制\)。新主人送 1000 积分/);
-  assert.match(page.body, /合计:12 次调用,3\.45 USD/);
-  assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td>12</td><td>3.45 USD`));
+  assert.match(page.body, /<a href="\/costs" class="">花费<\/a>/);
   assert.ok(!page.body.includes("<script>alert"));
 
-  const allOff = await start({ models: { ...fixtures.models, switches: [{ scope: "ALL", key: "*", enabled: false, note: "stop", updatedAt: AT }] },
-    spend: { from: "2026-11-01", to: "2026-11-02", totals: [], byDay: [], byCompanion: [] } });
-  const stopped = await allOff.send("/models?from=2026-11-01&to=2026-11-02&ok=1");
-  assert.deepEqual(allOff.calls[1], ["spend", "2026-11-01", "2026-11-02"]);
+  const allOff = await start({ models: { ...fixtures.models, switches: [{ scope: "ALL", key: "*", enabled: false, note: "stop", updatedAt: AT }] } });
+  const stopped = await allOff.send("/models?ok=1");
   assert.equal((stopped.body.match(/关\(全部关闭\)/g) ?? []).length, 3);
-  assert.match(stopped.body, /这段时间没有模型调用/);
   assert.match(stopped.body, /操作已完成/);
   const noSwitches = await start({ models: { ...fixtures.models, switches: [] } });
-  assert.ok(!(await noSwitches.send("/models?from=yesterday&to=2026-11-10")).body.includes("最近一次的原因"));
-  assert.deepEqual(noSwitches.calls[1], ["spend", "2026-11-04", "2026-11-10"], "a date that is not a date falls back");
-  for (const range of ["from=2026-02-31&to=2026-13-01", "from=2026-02-30&to=0000-00-00", "to=2026-11-23T10:00"]) {
-    const impossible = await start();
-    assert.equal((await impossible.send(`/models?${range}`)).status, 200, range);
-    assert.deepEqual(impossible.calls[1], ["spend", "2026-11-17", "2026-11-23"], "a day that does not exist falls back too");
-  }
+  assert.ok(!(await noSwitches.send("/models")).body.includes("最近一次的原因"));
 
   calls.length = 0;
-  const back = "/models?from=2026-11-17&to=2026-11-23";
+  const back = "/models";
   const switched = await send("/models/switch", { form: change({ target: "MODEL:claude/claude-big", enabled: "off", back }) });
-  assert.deepEqual([switched.status, switched.headers.location], [303, `${back}&ok=1`]);
+  assert.deepEqual([switched.status, switched.headers.location], [303, "/models?ok=1"]);
   await send("/models/switch", { form: change({ target: "ALL:*", enabled: "on" }) });
   await send("/models/switch", { form: change({ target: "PROVIDER:other", enabled: "off" }) });
   assert.deepEqual(calls, [["model_switch_set", "MODEL", "claude/claude-big", false, "because"], ["model_switch_set", "ALL", "*", true, "because"],
@@ -466,4 +456,65 @@ it("on the tailnet, lets in only its own name, people on the list (as their own 
   const done = await send(`/owners/${OWNER}/suspend`, { ...as("bob@x.test"), Origin: "http://companion-admin" }, change());
   assert.deepEqual([done.status, done.location, bob.calls.at(-1)], [303, "/reports?ok=1", ["owner_suspend", OWNER, true, "because"]]);
   assert.equal(alice.calls.length, 1, "Bob's change went through Bob's login only");
+});
+
+it("shows one month of everything the platform paid for, and changes the fixed bills and the voice prices", async () => {
+  const costs: Costs = {
+    month: "2026-11", from: "2026-11-01", to: "2026-11-30",
+    totals: { modelCents: 345, hearCents: 0.4, speakPoints: 120000, speakOverCents: 200, fixedCents: 3500 },
+    prices: { planPoints: 100000, speakCentsPerMillion: 10000, hearCentsPerHour: 38, updatedAt: AT },
+    fixed: [{ item: "Fly 服务器", cents: 3000, note: NASTY, updatedAt: AT }, { item: "MiniMax 语音包月(Starter)", cents: 500, note: null, updatedAt: AT }],
+    days: [{ day: "2026-11-23", modelCents: 345, modelCalls: 12, hearSeconds: 38, hears: 4, hearCents: 0.4, speakPoints: 120000, speaks: 900 }],
+    models: fixtures.spend,
+  };
+  const { send, calls } = await start({ costs });
+  const page = await send("/costs");
+  assert.equal(page.status, 200);
+  assert.deepEqual(calls, [["costs", "2026-11-01"]], "this month (UTC) by default");
+  assert.match(page.body, /<a href="\/costs" class="on">花费<\/a>/);
+  assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
+  assert.match(page.body, /按用量的 \$5\.45 \+ 固定月费 \$35\.00/);
+  assert.match(page.body, /语音转文字<\/div><div class="big">&lt; \$0\.01</, "a little that is not nothing");
+  assert.match(page.body, /已用 120,000 \/ 100,000\(120%\)/);
+  assert.match(page.body, /<span class="over" style="width:100%">/);
+  assert.match(page.body, /已经超出包月/);
+  assert.match(page.body, /<td>2026-11-23<\/td><td class="num">\$3\.45<\/td><td class="num">12<\/td>/);
+  assert.match(page.body, /38 秒 \/ 4 条/);
+  assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td class="num">12</td><td class="num">\\$3\\.45<`));
+  assert.match(page.body, /<td>Fly 服务器<\/td><td class="num">\$30\.00<\/td>/);
+  assert.ok(!page.body.includes("<script>alert"));
+  assert.match(page.body, /size="8" value="100">/, "the price per million characters in dollars");
+  assert.match(page.body, /size="8" value="0\.38">/);
+
+  const quiet = await start({ costs: { ...costs, month: "2026-10", days: [], fixed: [], models: { ...fixtures.spend, byDay: [], byCompanion: [] },
+    totals: { modelCents: 0, hearCents: 0, speakPoints: 10, speakOverCents: 0, fixedCents: 0 } } });
+  const october = await quiet.send("/costs?month=2026-10&ok=1");
+  assert.deepEqual(quiet.calls, [["costs", "2026-10-01"]]);
+  assert.match(october.body, /这个月总花费<\/div><div class="big">\$0\.00/);
+  assert.match(october.body, /这个月还没有按用量的花费/);
+  assert.match(october.body, /这个月没有模型调用/);
+  assert.match(october.body, /还没有填/);
+  assert.match(october.body, /操作已完成/);
+  for (const month of ["2026-13", "nope", "2026-1"]) {
+    const fallback = await start({ costs });
+    await fallback.send(`/costs?month=${month}`);
+    assert.deepEqual(fallback.calls, [["costs", "2026-11-01"]], month);
+  }
+
+  calls.length = 0;
+  for (const form of [change({ item: "", dollars: "5" }), change({ item: "Fly", dollars: "-1" }), change({ item: "Fly", dollars: "1.234" }),
+    change({ item: "Fly" }), change({ item: "Fly", dollars: "five" })]) {
+    assert.equal((await send("/costs/fixed", { form })).status, 409, JSON.stringify(form));
+  }
+  for (const form of [change({ points: "1.5", speak: "100", hear: "0.38" }), change({ points: "100000", speak: "-1", hear: "0.38" }),
+    change({ points: "100000", speak: "100", hear: "0.123456" })]) {
+    assert.equal((await send("/costs/prices", { form })).status, 409, JSON.stringify(form));
+  }
+  assert.deepEqual(calls, []);
+  const saved = await send("/costs/fixed", { form: change({ item: " Fly 服务器 ", dollars: "12.5", note: "两个应用", back: "/costs?month=2026-11" }) });
+  assert.deepEqual([saved.status, saved.headers.location], [303, "/costs?month=2026-11&ok=1"]);
+  await send("/costs/fixed", { form: change({ item: "Fly 服务器", dollars: "删除" }) });
+  await send("/costs/prices", { form: change({ points: "300000", speak: "60", hear: "0.38" }) });
+  assert.deepEqual(calls, [["fixed_cost_set", "Fly 服务器", 1250, "两个应用", "because"], ["fixed_cost_set", "Fly 服务器", null, "", "because"],
+    ["voice_prices_set", 300000, 6000, 38, "because"]]);
 });

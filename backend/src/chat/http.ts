@@ -382,6 +382,8 @@ export async function handleChatRequest(
     } catch {
       return response(503, { code: "VOICE_UNAVAILABLE" });
     }
+    // Recognition is billed by length, understood or not: booked for the cost page.
+    await port.voiceUsed("HEAR", heard.durationMs > 0 ? heard.durationMs : said.durationMs).catch(() => undefined);
     const words = Array.from(heard.text.replace(/\s+/g, " ").trim()).slice(0, 2000).join("");
     if (words.length === 0) return response(422, { code: "VOICE_NOT_UNDERSTOOD" });
     result = await port.sendVoice(chat, words, said, key);

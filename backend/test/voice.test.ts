@@ -50,7 +50,9 @@ const turn = (voice: string | null): ChatClaim => ({
 /** A port for writing replies: claim hands out one turn, finish records what was stored. */
 function replyPort(claim: ChatClaim, left = 60) {
   const finished: [ChatOutcome, string[] | null, (Clip | null)[] | undefined][] = [];
+  const used: [string, number][] = [];
   const port = {
+    voiceUsed: async (kind: string, amount: number) => { if (left === -2) throw new Error("db down"); used.push([kind, amount]); },
     claim: async () => { const next = claimed ? null : claim; claimed = true; return next; },
     finish: async (_reply: string, _claim: string, outcome: ChatOutcome, bodies: string[] | null, clips?: (Clip | null)[]) => {
       finished.push([outcome, bodies, clips]); return true;
@@ -59,7 +61,7 @@ function replyPort(claim: ChatClaim, left = 60) {
     memories: async () => ({ items: [] }),
   } as unknown as ChatPort;
   let claimed = false;
-  return { port, finished };
+  return { port, finished, used };
 }
 
 const says = (...messages: string[]): ChatModel => ({ reply: async () => ({ messages }) });
@@ -164,9 +166,10 @@ it("reads voice marks and tells the model about them only when the Companion has
 it("says the marked messages in the Companion's voice and keeps the rest as text", async () => {
   const { speaker, said } = recordingSpeaker();
   const replies = new ChatReplies(says("[语音:开心]你回来啦", "今天做了什么？", "[语音]抱抱"), undefined, new Voices(catalog, speaker));
-  const { port, finished } = replyPort(turn("warm"));
+  const { port, finished, used } = replyPort(turn("warm"));
   assert.equal(await replies.drain(chatId, port), 1);
   assert.deepEqual(said, [["你回来啦", "warm", "happy"], ["抱抱", "warm", null]]);
+  assert.deepEqual(used, [["SPEAK", 2], ["SPEAK", 2]], "each clip is booked with the characters billed");
   assert.deepEqual(finished, [["SENT", ["你回来啦", "今天做了什么？", "抱抱"], [clip("你回来啦"), null, clip("抱抱")]]]);
   assert.equal(replies.voices?.available, true);
 });
@@ -186,6 +189,10 @@ it("falls back to text when a voice message cannot be made", async () => {
   assert.deepEqual(await run(says("[语音]一", "[语音]二"), turn("warm"), speaker, 1), ["SENT", ["一", "二"], [clip("一"), null]],
     "only as many as today's voice messages left");
   assert.deepEqual(await run(says("[语音]一"), turn("warm"), speaker, -1), text("一"), "the count could not be read");
+  const unbooked = replyPort(turn("warm"), -2);
+  (unbooked.port as unknown as { voiceLeft: () => Promise<unknown> }).voiceLeft = async () => ({ companion: 5, owner: 0 });
+  await new ChatReplies(says("[语音]好"), undefined, new Voices(catalog, speaker)).drain(chatId, unbooked.port);
+  assert.deepEqual(unbooked.finished[0], ["SENT", ["好"], [clip("好")]], "a booking that fails does not cost the message");
   assert.deepEqual(await run(says(`[语音]${"长".repeat(121)}`), turn("warm"), speaker), text("长".repeat(121)), "too long to say");
   assert.deepEqual(await run(says("[语音]一", "二", "[语音]三", "[语音]四"), turn("warm"), speaker),
     ["SENT", ["一", "二", "三\n四"], [clip("一"), null, null]], "joined messages are text");
@@ -287,6 +294,10 @@ it("stores clips with the reply and reads audio back through the database", asyn
   assert.equal(seen.at(-1)![1][4], null);
   rows = [{ payload: { left: 7, ownerLeft: 3 } }];
   assert.deepEqual(await adapter.voiceLeft(), { companion: 7, owner: 3 });
+  rows = [{ payload: null }];
+  await adapter.voiceUsed("HEAR", 2300.4);
+  await adapter.voiceUsed("SPEAK", -3);
+  assert.deepEqual(seen.slice(-2).map(([, values]) => values), [["HEAR", 2300], ["SPEAK", 0]], "the function returns nothing, and that is fine");
   rows = [{ payload: {} }];
   assert.deepEqual(await adapter.voiceLeft(), { companion: 0, owner: 0 });
   rows = [{ payload: { message: { id: "m" } } }];
@@ -342,13 +353,15 @@ it("marks voice messages in what the model reads", () => {
 
 it("takes the Owner's voice message: recognise, store, then reply", async () => {
   const calls: unknown[][] = [];
+  const used: unknown[][] = [];
   let ownerLeft = 5;
   const port = {
     voiceLeft: async () => ({ companion: 0, owner: ownerLeft }),
+    voiceUsed: async (...args: unknown[]) => { used.push(args); if (used.length === 3) throw new Error("db down"); },
     sendVoice: async (...args: unknown[]) => { calls.push(args); return { message: { id: "m" }, typing: [], replying: true }; },
   } as unknown as ChatPort;
-  let heard: string | Error = "  我 回来\n了 ";
-  const transcriber = { transcribe: async () => { if (heard instanceof Error) throw heard; return { text: heard, durationMs: 9 }; } };
+  let heard: string | Error = "  我 回来\n了 ", length = 9;
+  const transcriber = { transcribe: async () => { if (heard instanceof Error) throw heard; return { text: heard, durationMs: length }; } };
   const kicked: string[] = [];
   const replies = new ChatReplies(undefined, undefined, new Voices(catalog, undefined, transcriber));
   (replies as unknown as { kick: (id: string) => void }).kick = id => { kicked.push(id); };
@@ -372,10 +385,18 @@ it("takes the Owner's voice message: recognise, store, then reply", async () => 
   }
   assert.deepEqual((await post(ok, new ChatReplies()))!.body, { code: "VOICE_UNAVAILABLE" });
   assert.deepEqual((await post(ok, new ChatReplies(undefined, undefined, new Voices(catalog))))!.body, { code: "VOICE_UNAVAILABLE" });
+  assert.deepEqual(used, [["HEAR", 9]], "recognition is booked by length");
+  length = 0;
+  await post(ok);
+  await post(ok);
+  assert.deepEqual(used.slice(1), [["HEAR", 2300], ["HEAR", 2300]], "without a length from the provider, the recording's");
+  assert.equal(calls.length, 3, "a booking that fails does not lose the message");
+  calls.length = 1; used.length = 0;
   heard = new Error("402");
   assert.deepEqual([(await post(ok))!.status, (await post(ok))!.body], [503, { code: "VOICE_UNAVAILABLE" }]);
   heard = " \n ";
   assert.deepEqual([(await post(ok))!.status, (await post(ok))!.body], [422, { code: "VOICE_NOT_UNDERSTOOD" }]);
+  assert.deepEqual(used, [["HEAR", 2300], ["HEAR", 2300]], "a failed call is not booked; one not understood is (it was billed)");
   heard = "长".repeat(2100);
   await post(ok);
   assert.equal(Array.from((calls.at(-1) as string[])[1]!).length, 2000, "cut to what a message holds");

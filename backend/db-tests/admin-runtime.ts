@@ -441,8 +441,9 @@ try {
     [{ operator: "admin_test_one", reason: "Console check" }]);
   assert.equal((await web(`/chats/${randomUUID()}`, { reason: "No such chat" })).status, 409);
 
-  const models = await web("/models");
-  assert.ok(models.status === 200 && models.body.includes("admin-test-provider/m-spend") && /合计:\d+ 次调用/.test(models.body));
+  assert.equal((await web("/models")).status, 200);
+  const costs = await web("/costs");
+  assert.ok(costs.status === 200 && costs.body.includes("admin-test-provider/m-spend") && costs.body.includes("总花费"), "what was spent is on the costs page");
   assert.equal((await web("/models/switch", why("Console switch off", { target: "MODEL:admin-test-provider/m-spend", enabled: "off" }))).status, 303);
   assert.ok((await web("/models")).body.includes("关(模型关闭)"));
   assert.equal((await web("/models/switch", why("Console switch on", { target: "MODEL:admin-test-provider/m-spend", enabled: "on" }))).status, 303);
@@ -451,7 +452,7 @@ try {
   const logged = await web("/log");
   assert.ok(logged.status === 200 && ["Console quota", "Console switch on", "Console check", "查看私聊", "每日额度"].every(text => logged.body.includes(text)));
   assert.ok((await web(`/log?owner=${target.owner}`)).body.includes("Console suspension"));
-  passed("the console pages work end to end as an operator: reports, Owners, Companions, content, chats, models and the log");
+  passed("the console pages work end to end as an operator: reports, Owners, Companions, content, chats, models, costs and the log");
 
   // Leave the shared database as other suites expect it.
   await pool.query("update public.community_posts set deleted_at = coalesce(deleted_at, now()) where id = any($1)", [[first, second]]);
