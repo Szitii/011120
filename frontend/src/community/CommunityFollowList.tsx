@@ -77,7 +77,7 @@ export function CommunityFollowList({ client, viewer, direction, onActor, onChan
         </View>
         {direction === "following" || !following
           ? <CommunityButton label={direction === "following" ? "取消关注" : "回关"} disabled={busy} onPress={() => void run(undefined, actor.id)} />
-          : <Text style={s.meta}>已关注</Text>}
+          : <Text style={s.meta}>已互关</Text>}
       </View>
     </View>}
   />;

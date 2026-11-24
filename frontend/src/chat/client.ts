@@ -1,6 +1,7 @@
 import type {
   Anniversary, Badges, CompanionMemory, MemoryList, CompanionConnection, ConnectionInput, ConnectionSaveResult,
   Chat,
+  ChatMessage,
   ChatModelList,
   ChatPage,
   ChatSendResult,
@@ -78,6 +79,13 @@ type SendFn = <T>(
   body?: unknown,
   idempotencyKey?: string,
 ) => Promise<T>;
+
+// The API lists only visible messages, newest first. Any of them can advance the read position.
+export function chatReadTarget(chat: Pick<Chat, "unreadCount" | "readUpTo"> | null, latest?: Pick<ChatMessage, "id">): string | undefined {
+  if (!chat?.unreadCount) return undefined;
+  const latestId = latest?.id;
+  return latestId === chat.readUpTo ? undefined : latestId;
+}
 
 export function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;

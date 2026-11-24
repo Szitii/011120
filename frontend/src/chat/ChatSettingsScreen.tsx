@@ -3,7 +3,6 @@ import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import type { ChatModelList, ChatSettings, VoiceList } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
-import { AgentKeySettings } from "./AgentKeySettings";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
 import { VoicePicker } from "./VoicePicker";
@@ -13,9 +12,9 @@ const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"
 const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
 const TIER = { ECONOMY: "经济", STANDARD: "均衡", PREMIUM: "高级" };
 
-export function ChatSettingsScreen({ client, companionId, connectionKind, connectionsEnabled, onAvailabilityChanged }: {
+export function ChatSettingsScreen({ client, companionId, connectionKind, connectionsEnabled, groupSendEnabled, onAvailabilityChanged }: {
   client: ChatClient; companionId: string; connectionKind?: "key" | "external";
-  connectionsEnabled: boolean; onAvailabilityChanged: () => void;
+  connectionsEnabled: boolean; groupSendEnabled: boolean; onAvailabilityChanged: () => void;
 }) {
   const s = useCommunityStyles();
   const [form, setForm] = useState<ChatSettings>();
@@ -79,20 +78,18 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
     <SecondaryHeading title="聊天设置" />
     {!!notice && <Text accessibilityLiveRegion="polite" style={s.body}>{notice}</Text>}
     {client.saveConnection && <ConnectionSettings client={client} companionId={companionId} initialKind={connectionKind} enabled={connectionsEnabled} onAvailabilityChanged={onAvailabilityChanged} />}
-    {client.listAgentKeys && client.createAgentKey && client.revokeAgentKey && <AgentKeySettings
-      key={companionId} companionId={companionId} list={client.listAgentKeys} create={client.createAgentKey} revoke={client.revokeAgentKey} />}
     {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
     {!form ? busy ? <ActivityIndicator accessibilityLabel="正在读取聊天设置" />
       : <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />
       : <>
-        <View style={s.card}>
+        {groupSendEnabled && <View style={s.card}>
           <Text style={s.author}>群聊活跃度</Text>
           <View style={s.row}>{ACTIVITY.map(([value, label]) => <CommunityButton key={value} label={label}
             disabled={busy} selected={form.groupActivity === value} onPress={() => setForm({ ...form, groupActivity: value })} />)}</View>
           <Text style={s.author}>家机互动倾向</Text>
           <View style={s.row}>{INTERACTION.map(([value, label]) => <CommunityButton key={value} label={label}
             disabled={busy} selected={form.companionInteraction === value} onPress={() => setForm({ ...form, companionInteraction: value })} />)}</View>
-        </View>
+        </View>}
         <View style={s.card}>
           <Text style={s.author}>聊天模型</Text>
           <CommunityButton label="使用平台默认" disabled={busy} selected={form.model === null} onPress={() => setForm({ ...form, model: null })} />

@@ -4,6 +4,7 @@ import type { CompanionConnection } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, useCommunityStyles } from "../community/components";
 import { ConnectionForm } from "../onboarding/ConnectionForm";
+import { AgentKeySettings } from "./AgentKeySettings";
 import type { ChatClient } from "./client";
 
 export function ConnectionSettings({ client, companionId, initialKind, enabled, onAvailabilityChanged }: {
@@ -84,6 +85,9 @@ export function ConnectionSettings({ client, companionId, initialKind, enabled, 
           onPress={() => confirm ? void revoke() : setConfirm(true)} />
         {confirm && <CommunityButton label="取消" disabled={revoking} onPress={() => setConfirm(false)} />}
       </>}
+      {client.listAgentKeys && client.createAgentKey && client.revokeAgentKey && <AgentKeySettings
+        key={companionId} companionId={companionId} list={client.listAgentKeys}
+        create={client.createAgentKey} revoke={client.revokeAgentKey} />}
     </>}
   </View>;
 }

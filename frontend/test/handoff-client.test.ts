@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createChatClient } from "../src/chat/client.ts";
+import { chatReadTarget, createChatClient } from "../src/chat/client.ts";
 
 test("handoff requests use the owned chat and companion paths with the correct write payload", async () => {
   const calls: unknown[][] = [];
@@ -72,4 +72,13 @@ test("agent heartbeat keys use companion-scoped management routes with server-de
     ["POST", "/v0/companions/companion%2Fa/agent-keys", { name: "我的 Agent" }],
     ["DELETE", "/v0/companions/companion%2Fa/agent-keys/key%2Fb"],
   ]);
+});
+
+test("chat read position advances to the newest visible message, including failed and blocked replies", () => {
+  const failedReply = { id: "failed", status: "FAILED" } as const;
+  const blockedReply = { id: "blocked", status: "BLOCKED" } as const;
+  assert.equal(chatReadTarget({ unreadCount: 1, readUpTo: "earlier" }, failedReply), "failed");
+  assert.equal(chatReadTarget({ unreadCount: 2, readUpTo: "earlier" }, blockedReply), "blocked");
+  assert.equal(chatReadTarget({ unreadCount: 1, readUpTo: "blocked" }, blockedReply), undefined);
+  assert.equal(chatReadTarget({ unreadCount: 0 }, blockedReply), undefined);
 });

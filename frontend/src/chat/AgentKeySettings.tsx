@@ -52,7 +52,7 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
     mounted.current = true;
     void load();
     const subscription = AppState.addEventListener("change", state => {
-      if (state !== "background") return;
+      if (state === "active") return;
       secretSession.current++;
       setToken("");
     });
@@ -67,7 +67,7 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
 
   function createKey() {
     const label = name.trim();
-    if (!items || !label || activeCount >= 5 || token) return;
+    if (!items || notice || !label || activeCount >= 5 || token) return;
     const session = secretSession.current;
     void run(async () => {
       const { token: oneTimeToken, ...key } = await create(companionId, label);
@@ -93,7 +93,7 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
   if (!items && !notice) return null;
 
   return <View style={s.card}>
-    <CommunityButton label={expanded ? "收起 Agent 签到钥匙" : "管理 Agent 签到钥匙"} disabled={busy} onPress={() => {
+    <CommunityButton label={expanded ? "收起 Agent 高级设置" : "高级设置 · Agent 签到钥匙"} disabled={busy} onPress={() => {
       setExpanded(!expanded);
       setToken("");
       setConfirmId(undefined);
@@ -112,9 +112,9 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
         <Text style={s.meta}>有效钥匙 {activeCount}/5 · 新钥匙有效期 30 天</Text>
         <TextInput accessibilityLabel="钥匙名称" placeholder="给钥匙起个名字" style={s.input} maxLength={40}
           value={name} onChangeText={setName} editable={!busy && activeCount < 5} />
-        <CommunityButton label="创建钥匙" disabled={busy || !name.trim() || activeCount >= 5} onPress={createKey} />
+        <CommunityButton label="创建钥匙" disabled={busy || !!notice || !name.trim() || activeCount >= 5} onPress={createKey} />
       </>}
-      {(!items || !!notice) && <CommunityButton label="刷新钥匙列表" disabled={busy || !!token} onPress={() => void load()} />}
+      {!token && <CommunityButton label="刷新钥匙列表" disabled={busy} onPress={() => void load()} />}
       {!token && items?.map(item => <View key={item.id} style={s.card}>
         <Text style={s.author}>{item.name}</Text>
         <Text style={s.meta}>{item.active ? "有效" : "已失效"} · 到期 {new Date(item.expiresAt).toLocaleString("zh-CN")}</Text>

@@ -46,10 +46,10 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
       client={chatClient} companions={companions} active={active} onChat={onChat} onStartChat={onStartChat} onCreateGroup={onCreateGroup}
     />}
     {section === "notices" && source === "community" && (api.community
-      ? <CommunityNotices client={api.community} viewer={viewer} visible={visible} onOpen={onCommunityTarget} onRead={onRead} />
+      ? <CommunityNotices client={api.community} viewer={viewer} visible={active} onOpen={onCommunityTarget} onRead={onRead} />
       : <Text style={[s.meta, styles.heading]}>连接社区后可以查看通知。</Text>)}
     {section === "notices" && source === "owner" && viewer.kind === "OWNER" &&
-      <OwnerNotices api={api} visible={visible} onOpen={onLife} onRead={onRead} companions={companions} />}
+      <OwnerNotices api={api} visible={active} onOpen={onLife} onRead={onRead} companions={companions} />}
   </View>;
 }
 
@@ -131,7 +131,8 @@ function OwnerNotices({ api, visible, onOpen, onRead, companions }: {
     onRead();
     return value;
   }} visible={visible} onOpen={onOpen} renderSummary={item => {
-    const name = item.kind === "AGENT_DRAFT" ? companions.find(c => c.companionId === item.companionId)?.displayName : undefined;
+    const isDraft = item.kind === "AGENT_DRAFT" || item.linkedObject?.type === "AGENT_DRAFT";
+    const name = isDraft ? companions.find(c => c.companionId === item.companionId)?.displayName : undefined;
     return <Text style={s.author}>{name && !item.title.startsWith(name) ? `${name} · ${item.title}` : item.title}</Text>;
   }} />;
 }
@@ -187,7 +188,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
   }, []);
 
   useEffect(() => {
-    if (visible && !items) void read();
+    if (visible) void read();
   }, [load, visible]);
 
   function act(item: T, open = false) {
@@ -196,7 +197,6 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
       const next = item.readAt ? item : await acknowledge(item);
       if (!mounted.current) return;
       setItems(current => current?.map(value => value.id === item.id ? next : value));
-
     });
   }
 

@@ -15,7 +15,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
-import { makeIdempotencyKey, type ChatClient } from "./client";
+import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
@@ -147,22 +147,29 @@ export function ChatScreen({
   const sendingRead = useRef<string | undefined>(undefined);
   const lastRead = useRef<string | undefined>(undefined);
   const [readRevision, bumpReadRevision] = useState(0);
-  const messageToRead = messages.find(message => message.status === "SENT" && message.companionId !== null && !message.action)?.id;
+  const latestMessage = messages[0];
   useEffect(() => {
-    if (!client.markRead || !appActive || !chat?.unreadCount || !messageToRead || chat.readUpTo === messageToRead) return;
-    const key = `${chat.id}:${messageToRead}`;
+    if (!client.markRead || !appActive || !chat || chatIdRef.current !== chat.id) return;
+    const messageToRead = chatReadTarget(chat, latestMessage);
+    if (!messageToRead) return;
+    const chatId = chat.id;
+    const key = `${chatId}:${messageToRead}`;
     if (sendingRead.current || lastRead.current === key) return;
     sendingRead.current = key;
     const session = sessionRef.current;
-    void client.markRead(chat.id, messageToRead).then(() => {
+
+    void client.markRead(chatId, messageToRead).then(() => {
+      sendingRead.current = undefined;
       if (session !== sessionRef.current) return;
       lastRead.current = key;
       onRead?.();
+      // Recheck after releasing the lock in case another reply arrived meanwhile.
       bumpReadRevision(value => value + 1);
-    }).catch(() => { /* Another refresh or opening the chat can retry. */ }).finally(() => {
-      if (sendingRead.current === key) sendingRead.current = undefined;
+    }, () => {
+      // The next refresh or reopening the chat can retry.
+      sendingRead.current = undefined;
     });
-  }, [client, appActive, chat, messageToRead, onRead, readRevision]);
+  }, [client, appActive, chat, latestMessage, onRead, readRevision]);
 
   const loadLatest = useCallback(async (targetChatId: string, silent = false) => {
     if (silent && pollInFlightRef.current) return;
