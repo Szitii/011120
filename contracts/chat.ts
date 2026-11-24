@@ -41,10 +41,13 @@ export interface Chat {
   direct: boolean;
   members: ChatMember[];
   lastMessage: ChatMessage | null;
-  /** Companion messages shown after the Owner's read position (PUT /v0/chats/{id}/read). */
-  unreadCount: number;
-  /** The last message the Owner read; null before the first. */
-  readUpTo: string | null;
+  /**
+   * Companion messages shown after the Owner's read position (PUT /v0/chats/{id}/read).
+   * The server always sends it; optional here so app code written before it still compiles.
+   */
+  unreadCount?: number;
+  /** The last message the Owner read; null before the first. Always sent; optional like unreadCount. */
+  readUpTo?: string | null;
   /** Companions to show as "typing…" right now. */
   typing: string[];
   /** More replies are on the way: keep refreshing every 1-2 s while true, even if nobody shows as typing. */

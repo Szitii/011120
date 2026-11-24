@@ -46,9 +46,9 @@ try {
   const newest = page!.items.find(m => m.companionId !== null)!;
   assert.ok(newest, "the dev host replied");
   const older = page!.items.filter(m => m.companionId !== null)[1];
-  assert.ok(page!.chat.unreadCount >= 1, "the reply is unread");
+  assert.ok(page!.chat.unreadCount! >= 1, "the reply is unread");
   const list = (await call<{ items: Chat[] }>(0, "chats")).data;
-  assert.equal((await badges()).chats, list.items.reduce((n, c) => n + c.unreadCount, 0));
+  assert.equal((await badges()).chats, list.items.reduce((n, c) => n + c.unreadCount!, 0));
   const read = (await call<Chat>(0, `chats/${chat.id}/read`, "PUT", { messageId: newest.id })).data;
   assert.deepEqual([read.unreadCount, read.readUpTo], [0, newest.id]);
   if (older !== undefined) {
