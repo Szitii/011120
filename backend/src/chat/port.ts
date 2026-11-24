@@ -73,6 +73,10 @@ export interface ChatPort {
   anniversary(companionId: string): Promise<unknown>;
   saveAnniversary(companionId: string, startDate: string | null, timeZone: string, revision: number): Promise<unknown>;
   settings(companionId: string): Promise<unknown>;
+  /** Every memory of the Companion, newest first ({ items }). */
+  memories(companionId: string): Promise<unknown>;
+  addMemory(companionId: string, body: string, keyHash: string): Promise<unknown>;
+  deleteMemory(companionId: string, memoryId: string): Promise<unknown>;
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown>;
   /** Server only: the next reply to write, or null. */
   claim(chatId: string): Promise<ChatClaim | null>;

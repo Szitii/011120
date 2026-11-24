@@ -287,4 +287,48 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 | 模型列表 `GET /v0/chat-models` | 线上现在每一项都是 `available: false`，`defaultModel: null`；接上密钥后会有可用项 |
 | 主人通知 `AGENT_DRAFT` | 把家机的社区设置改成"先存草稿"，用 AI 文字工具 `post` 写一条（第 3.4 节）；或者告诉后端，后端直接插一条 |
 | 社区角标 | 用另一个测试账号关注你，或者评论你的帖子 |
+## 10. 长期记忆，以及导入时带记忆（2026-11-24）
+
+对应前端 `docs/claude_2026_11_24.txt` 里的 P0。接口在 `contracts/openapi/chat.yaml`，类型 `CompanionMemory` 在 `contracts/chat.ts`。
+
+### 10.1 记忆是什么
+
+家机记得的一些短句，比如"主人怕黑""我们一起看过海"。家机每次回复、写日记时都会带上它们（最新的在前，总长大约 3000 字以内）。
+
+- **只有主人能放进去**：手动添加，或者导入角色卡时逐条勾选。模型不会自己往里写。
+- 主人能看到全部记忆，也能删除。
+- 每个家机最多 200 条，每条 1–500 字。
+
+### 10.2 接口
+
+| 做什么 | 接口 |
+| --- | --- |
+| 列表 | `GET /v0/companions/{id}/memories`，返回 `{items:[{id, body, source, createdAt}]}`，最新的在前，一次返回全部 |
+| 手动添加 | `POST /v0/companions/{id}/memories`，body 是 `{body}`，要带 Idempotency-Key，返回 201 和这条记忆 |
+| 删除 | `DELETE /v0/companions/{id}/memories/{memoryId}`，删了就没了，删除前请让主人确认 |
+
+- `source` 是 `IMPORT`（从角色卡勾选进来的）或 `OWNER`（手动添加的）。
+- 400：空的、超过 500 字，或者里面有密钥、密码（记忆会发给模型，所以拒收）。
+- 404：不是自己的家机。
+- 409：已经满 200 条，或者同一个 Idempotency-Key 配了不同的内容。
+
+### 10.3 导入角色卡时带记忆
+
+角色卡 JSON 的 `data` 里可以放一个 `memories` 字段，是字符串数组（V2 卡写在 `data.memories`，旧格式写在根上）：
+
+```json
+{ "spec": "chara_card_v2", "data": { "name": "Remi", "description": "...", "memories": ["我们一起看过海", "主人的生日在三月"] } }
+```
+
+- 每一条会变成审核页里的一个候选项：`field` 是 `"memory"`，`id` 是 `candidate-memory-1`、`candidate-memory-2`……（数字是它在数组里的位置，从 1 开始）。
+- 记忆和名字、简介一样过防火墙。含密钥、手机号或邮箱、提示词注入，或者超过 500 字的，`approvable: false`，不能勾选。空字符串和非字符串直接忽略；超过 50 条的部分不会出现在候选里。这些情况都会在 `findings` 里说明。
+- 审核页给每条记忆一个勾选框，**默认不勾**，让主人自己选。勾上的 id 和其他字段一起放进 `approvedCandidateIds` 提交。
+- 批准后，勾选的记忆写进这个家机的记忆库，不会出现在人设字段里。
+- 如果导入到已有的家机（带 `companionId`），记忆会加在原有记忆后面；加完超过 200 条的话，整个批准会返回 409。
+
+### 10.4 回答前端的问题
+
+- 现在没有其他未合并的导入分支。只支持 JSON 角色卡（V2 和旧格式），PNG 角色卡、邀请码都还不支持。
+- 说话方式、价值观、边界这几个人设字段，导入时还没有从卡片里读，下一步补。
+- Markdown 和纯文本的设定加记忆，要先用模型整理成结构化内容，所以要等接上模型才能做。在那之前，前端继续显示"暂未接入"。
 

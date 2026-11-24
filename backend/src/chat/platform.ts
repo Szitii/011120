@@ -23,6 +23,12 @@ type Failed = { failed: "DISABLED" | "QUOTA" };
 /** Books one call in the ledger, for a chat turn or a diary entry. */
 type Book = (booking: Booking) => Promise<ReservationDecision>;
 
+/** The Companion's memories, newest first (the Owner's list; this runs as the Owner). */
+export async function memoriesOf(port: ChatPort, companionId: string): Promise<string[]> {
+  const list = await port.memories(companionId) as { items?: { body?: unknown }[] };
+  return (list.items ?? []).flatMap(memory => (typeof memory.body === "string" ? [memory.body] : []));
+}
+
 export class PlatformChatModel implements ChatModel {
   readonly #catalog: ChatCatalog;
   readonly #call: CallModel;
@@ -44,7 +50,8 @@ export class PlatformChatModel implements ChatModel {
       const quiet = "failed" in decided ? decided.failed !== "DISABLED" : decided.refused || !parseDecision(decided.text);
       if (quiet) return { pass: true };
     }
-    const result = await this.#withFallback(model, m => this.#run(port, book("REPLY"), m, replyPrompt(turn), REPLY_TOKENS, signal));
+    const prompt = replyPrompt(turn, await memoriesOf(port, turn.companion.companionId));
+    const result = await this.#withFallback(model, m => this.#run(port, book("REPLY"), m, prompt, REPLY_TOKENS, signal));
     if ("failed" in result) return result;
     if (result.refused) return { refused: true };
     return parseReply(result.text, turn.companion.displayName);
@@ -54,7 +61,8 @@ export class PlatformChatModel implements ChatModel {
     const model = this.#catalog.pick(job.companion.settings.model);
     if (model === undefined) return { failed: "UNAVAILABLE" };
     const book: Book = booking => port.diaryReserve(job.entryId, job.claimId, booking);
-    const result = await this.#withFallback(model, m => this.#run(port, book, m, diaryPrompt(job), DIARY_TOKENS, signal));
+    const prompt = diaryPrompt(job, await memoriesOf(port, job.companion.companionId));
+    const result = await this.#withFallback(model, m => this.#run(port, book, m, prompt, DIARY_TOKENS, signal));
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : { text: result.text };
   }

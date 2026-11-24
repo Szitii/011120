@@ -12,6 +12,8 @@ import {
   MAX_DEPTH,
   MAX_DISPLAY_NAME_LENGTH,
   MAX_IMPORT_BYTES,
+  MAX_MEMORIES,
+  MAX_MEMORY_LENGTH,
   MAX_NODES,
   MAX_STRING_LENGTH,
   MAX_TOTAL_STRING_LENGTH,
@@ -19,8 +21,9 @@ import {
   safePreview,
 } from "./policy.ts";
 import type {
-  IdentityCandidate,
+  CandidateField,
   IdentityField,
+  IdentityCandidate,
   ImportFinding,
   ImportSourceFormat,
   NormalizedIdentityDraft,
@@ -90,7 +93,7 @@ function requirePlainObject(value: unknown): Record<string, unknown> {
 
 function candidate(
   id: string,
-  field: IdentityField,
+  field: CandidateField,
   value: string | readonly string[] | Record<string, unknown>,
   sourcePath: string,
   blockedByFindingIds: readonly string[],
@@ -216,7 +219,7 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
       addFinding(path, "PROMPT_DIRECTIVE", "INFO", "EXCLUDED", value, "Legacy prompt metadata excluded");
     }
 
-    const isIdentityCandidateSource = field === "name" || field === "description" || field === "personality";
+    const isIdentityCandidateSource = field === "name" || field === "description" || field === "personality" || field === "memories";
     scanStrings(value, path, isIdentityCandidateSource ? "CANDIDATE_BLOCKED" : "EXCLUDED");
     if (field === "name" && typeof value === "string" && value.trim().length > MAX_DISPLAY_NAME_LENGTH) {
       addFinding(path, "FIELD_CONSTRAINT", "BLOCK", "CANDIDATE_BLOCKED", value, "Display name exceeds 200 characters");
@@ -225,6 +228,33 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
 
   const blockingIds = new Set(findings.filter((finding) => finding.action === "CANDIDATE_BLOCKED").map((finding) => finding.id));
   const candidates: IdentityCandidate[] = [];
+  // Our own `memories` field: a list of short texts. Each one is offered on its own, so the Owner
+  // approves memory by memory; a blocked one (credential, private data, injection) cannot be approved.
+  const memories = data.memories;
+  if (memories !== undefined && !Array.isArray(memories)) {
+    addFinding(`${prefix}.memories`, "FIELD_CONSTRAINT", "WARNING", "EXCLUDED", memories, "memories must be a list of texts");
+  }
+  const memoryCandidates: IdentityCandidate[] = [];
+  if (Array.isArray(memories)) {
+    memories.forEach((value, index) => {
+      const path = `${prefix}.memories[${index}]`;
+      if (typeof value !== "string" || value.trim() === "") {
+        addFinding(path, "FIELD_CONSTRAINT", "WARNING", "EXCLUDED", value, "Not a memory text");
+        return;
+      }
+      if (memoryCandidates.length >= MAX_MEMORIES) {
+        addFinding(path, "FIELD_CONSTRAINT", "WARNING", "EXCLUDED", value, `Only the first ${MAX_MEMORIES} memories are offered`);
+        return;
+      }
+      const trimmed = value.trim();
+      const blockedBy = (findingIdsByPath.get(path) ?? []).filter((id) => blockingIds.has(id));
+      if (Array.from(trimmed).length > MAX_MEMORY_LENGTH) {
+        blockedBy.push(addFinding(path, "FIELD_CONSTRAINT", "BLOCK", "CANDIDATE_BLOCKED", value, `A memory exceeds ${MAX_MEMORY_LENGTH} characters`));
+      }
+      memoryCandidates.push(candidate(`candidate-memory-${index + 1}`, "memory", trimmed, path, blockedBy));
+    });
+  }
+
   const addCandidate = (sourceField: string, field: IdentityField, asList = false): void => {
     const value = data[sourceField];
     if (typeof value !== "string" || value.trim() === "") return;
@@ -246,6 +276,7 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
   if (!candidates.some((entry) => entry.field === "displayName")) {
     throw new ImportPolicyError("IMPORT_NAME_REQUIRED", "A non-empty character name is required.");
   }
+  candidates.push(...memoryCandidates);
 
   return Object.freeze({
     sourceFormat: isV2 ? "CHARACTER_CARD_JSON_V2" : "LEGACY_CHARACTER_JSON",
