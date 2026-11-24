@@ -16,7 +16,8 @@ info:
        quiet shows no "typing…" while deciding, so `replying` can be true with `typing` empty.
     3. A reply that failed shows `status: FAILED`. `retryable: true` (failure ERROR) may be retried
        with POST .../retry. failure UNAVAILABLE: no model can answer yet ("coming soon"). DISABLED:
-       the platform switched its models off for now. QUOTA: today's free replies are used up.
+       the platform switched its models off for now (or today's platform-wide spend cap is reached).
+       QUOTA: today's free replies are used up, or the wallet has too few credits (see GET /wallet).
        `status: BLOCKED` was stopped by the safety scan (or declined by the model) and is final.
     The Owner may keep sending while Companions reply.
 
@@ -179,6 +180,36 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Badges'}
+        '401': *problem
+        '403': *problem
+  /wallet:
+    get:
+      operationId: getWallet
+      summary: The Owner's credits for platform models
+      description: |
+        While the platform has not turned the wallet on, only `{enabled: false}`. Otherwise the first
+        read also grants the welcome gift (once). A platform model call holds credits before it starts
+        (cost in cents x creditsPerCent) and gives back what it did not use; a failed call costs nothing.
+        Too few credits: the reply fails as QUOTA. Owner-key and own-agent replies use no credits.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Wallet
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: {type: boolean}
+                  state: {type: string, enum: [ACTIVE, FROZEN]}
+                  available: {type: integer, minimum: 0}
+                  freeCredits: {type: integer, minimum: 0}
+                  paidCredits: {type: integer, minimum: 0}
+                  reserved: {type: integer, minimum: 0}
+                  creditsPerCent: {type: integer, minimum: 1}
+                  priceVersion: {type: string}
+                  version: {type: integer, minimum: 1}
         '401': *problem
         '403': *problem
   /companions/{companionId}/anniversary:

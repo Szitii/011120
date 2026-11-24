@@ -143,6 +143,16 @@ export function createAdminServer(options: AdminServerOptions): Server {
       if (!targets.has(form.target ?? "") || (form.enabled !== "on" && form.enabled !== "off")) throw new AdminRefusal("请选择开关哪一个,以及开还是关。");
       const cut = form.target!.indexOf(":");
       await db.call("model_switch_set", form.target!.slice(0, cut), form.target!.slice(cut + 1), form.enabled === "on", reason);
+    } else if (path === "/models/cap") {
+      if ((form.enabled !== "on" && form.enabled !== "off") || !/^\d{1,9}$/.test(form.cents ?? "")) throw new AdminRefusal("请选择开关,金额要填整数。");
+      await db.call("spend_cap_set", form.enabled === "on", Number(form.cents), reason);
+    } else if (path === "/models/wallet") {
+      if ((form.enabled !== "on" && form.enabled !== "off") || !/^\d{1,8}$/.test(form.welcome ?? "")
+        || !/^[1-9]\d{0,5}$/.test(form.rate ?? "") || !/^\d{1,8}$/.test(form.floor ?? "")) throw new AdminRefusal("请选择开关,数量要填整数(每分积分至少 1)。");
+      await db.call("wallet_policy_set", form.enabled === "on", Number(form.welcome), Number(form.rate), Number(form.floor), reason);
+    } else if (path === "/models/credit") {
+      if (!ROUTES.uuid.test(form.owner ?? "") || !/^-?[1-9]\d{0,7}$/.test(form.credits ?? "")) throw new AdminRefusal("请填主人编号和不为 0 的整数积分。");
+      await db.call("wallet_adjust", form.owner, Number(form.credits), reason);
     } else if (path === "/models/quota") {
       if (!/^\d{1,6}$/.test(form.calls ?? "") || !/^\d{1,9}$/.test(form.cents ?? "")) throw new AdminRefusal("次数和金额要填整数。");
       await db.call("chat_quota_set", Number(form.calls), Number(form.cents), reason);

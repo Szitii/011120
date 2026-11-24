@@ -48,7 +48,9 @@ const fixtures = {
   } satisfies ChatPage as ChatPage,
   models: { switches: [{ scope: "MODEL", key: "claude/claude-small", enabled: false, note: NASTY, updatedAt: AT },
     { scope: "PROVIDER", key: "other", enabled: false, note: "outage", updatedAt: AT }, { scope: "ALL", key: "*", enabled: true, note: "back on", updatedAt: AT }],
-    quota: { dailyCalls: 200, dailyCostMinor: 100, currency: "USD", updatedAt: AT } } satisfies Models as Models,
+    quota: { dailyCalls: 200, dailyCostMinor: 100, currency: "USD", updatedAt: AT },
+    cap: { enabled: true, dailyCostMinor: 2000, currency: "USD", spentTodayMinor: 345, updatedAt: AT },
+    wallet: { enabled: false, welcomeCredits: 1000, creditsPerCent: 10, backgroundFloor: 200, updatedAt: AT } } satisfies Models as Models,
   spend: { from: "2026-11-17", to: "2026-11-23", totals: [{ currency: "USD", calls: 12, costMinor: 345 }],
     byDay: [{ day: "2026-11-23", provider: "claude", model: "claude-big", currency: "USD", calls: 12, failed: 1, inputTokens: 9000, outputTokens: 700, costMinor: 345 }],
     byCompanion: [{ companionId: COMPANION, ownerId: OWNER, displayName: "Mochi", currency: "USD", calls: 12, costMinor: 345 }] } satisfies Spend as Spend,
@@ -333,6 +335,8 @@ it("shows model switches, the quota and what was spent, and changes only what th
   assert.deepEqual([...page.body.matchAll(/<option value="((?:ALL|PROVIDER|MODEL):[^"]+)"/g)].map(m => m[1]),
     ["ALL:*", "PROVIDER:claude", "PROVIDER:other", "MODEL:claude/claude-big", "MODEL:claude/claude-small", "MODEL:other/other-chat"]);
   assert.match(page.body, /每天 200 次调用、1\.00 USD/);
+  assert.match(page.body, /每天 20\.00 USD,今天\(UTC\)已用 3\.45 USD/);
+  assert.match(page.body, /现在:关\(只按每个家机每天的免费额度限制\)。新主人送 1000 积分/);
   assert.match(page.body, /合计:12 次调用,3\.45 USD/);
   assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td>12</td><td>3.45 USD`));
   assert.ok(!page.body.includes("<script>alert"));
@@ -372,6 +376,21 @@ it("shows model switches, the quota and what was spent, and changes only what th
   assert.deepEqual(calls, []);
   assert.equal((await send("/models/quota", { form: change({ calls: "150", cents: "80" }) })).status, 303);
   assert.deepEqual(calls, [["chat_quota_set", 150, 80, "because"]]);
+  calls.length = 0;
+  const OWNER_ID = "00000000-0000-4000-8000-000000000001";
+  for (const [path, form] of [
+    ["/models/cap", change({ enabled: "maybe", cents: "2000" })], ["/models/cap", change({ enabled: "on", cents: "-1" })],
+    ["/models/wallet", change({ enabled: "on", welcome: "1000", rate: "0", floor: "200" })],
+    ["/models/wallet", change({ enabled: "on", welcome: "x", rate: "10", floor: "200" })],
+    ["/models/credit", change({ owner: "nobody", credits: "100" })], ["/models/credit", change({ owner: OWNER_ID, credits: "0" })],
+    ["/models/credit", change({ owner: OWNER_ID, credits: "1.5" })],
+  ] as const) assert.equal((await send(path, { form })).status, 409, `${path} ${JSON.stringify(form)}`);
+  assert.deepEqual(calls, []);
+  await send("/models/cap", { form: change({ enabled: "off", cents: "2500" }) });
+  await send("/models/wallet", { form: change({ enabled: "on", welcome: "500", rate: "10", floor: "0" }) });
+  await send("/models/credit", { form: change({ owner: OWNER_ID, credits: "-50" }) });
+  assert.deepEqual(calls, [["spend_cap_set", false, 2500, "because"], ["wallet_policy_set", true, 500, 10, 0, "because"],
+    ["wallet_adjust", OWNER_ID, -50, "because"]]);
 });
 
 it("pages through the log, for everyone or one Owner", async () => {

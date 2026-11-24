@@ -60,6 +60,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1chat-settings
   /chat-models:
     $ref: ./chat.yaml#/paths/~1chat-models
+  /wallet:
+    $ref: ./chat.yaml#/paths/~1wallet
   /companions/{companionId}/actions:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1actions
   /companions/{companionId}/diary:

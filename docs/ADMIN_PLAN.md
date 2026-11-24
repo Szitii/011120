@@ -1,6 +1,6 @@
 # 管理后台计划
 
-定于 2026-11-23。状态:PR 1(数据库部分,#23)和 PR 2(页面)已做完;PR 3(全平台上限)还没做。怎么启动和使用见 `docs/manual/ADMIN_CONSOLE.md`。产品总计划见 `docs/MVP_PLAN.md`。
+定于 2026-11-23。状态:PR 1(数据库部分,#23)和 PR 2(页面)已做完;PR 3(全平台上限)在迁移 0051 里做了,和积分钱包一起。怎么启动和使用见 `docs/manual/ADMIN_CONSOLE.md`。产品总计划见 `docs/MVP_PLAN.md`。
 
 ## 一、目标和范围
 

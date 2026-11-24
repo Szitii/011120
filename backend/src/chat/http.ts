@@ -20,6 +20,7 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET    /v0/wallet                                  the Owner's credits for platform models
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
  *
  * POST /v0/chats, POST .../messages and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
@@ -151,10 +152,11 @@ export async function handleChatRequest(
   const diarySettingsRoute = path[1] === "companions" && path[3] === "diary-settings" && path.length === 4;
   const anniversaryRoute = path[1] === "companions" && path[3] === "anniversary" && path.length === 4;
   const badgesRoute = path[1] === "badges" && path.length === 2;
+  const walletRoute = path[1] === "wallet" && path.length === 2;
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute && !diaryRoute
-    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute && !memoriesRoute && !connectionRoute)) return undefined;
+    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute && !walletRoute && !memoriesRoute && !connectionRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -163,6 +165,7 @@ export async function handleChatRequest(
   const method = request.method.toUpperCase();
 
   if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
+  if (walletRoute) return method === "GET" ? response(200, await port.wallet()) : notFound();
   if (badgesRoute) return method === "GET" ? response(200, await port.badges()) : notFound();
   if (anniversaryRoute) {
     const companionId = id(path[2]);

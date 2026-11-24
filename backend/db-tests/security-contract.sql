@@ -1945,4 +1945,18 @@ select public.test_assert(
   'diary entries are reachable only through the diary functions, and only the API server writes them'
 );
 
+select public.test_assert(
+  not exists(select 1 from (values ('companion_private.platform_spend_cap'), ('companion_private.wallet_policy'),
+      ('companion_private.wallets'), ('companion_private.wallet_entries'), ('companion_private.wallet_holds')) t(name)
+    cross join (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
+      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE'))
+  and has_function_privilege('authenticated', 'public.wallet_get()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.wallet_get()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.wallet_hold(uuid,uuid,uuid,bigint,text)'::regprocedure, 'EXECUTE')
+  and exists(select 1 from pg_trigger t where t.tgrelid = 'companion_private.wallet_entries'::regclass and not t.tgisinternal
+    and t.tgfoid = 'companion_private.reject_immutable_mutation()'::regprocedure),
+  'the wallet and the spend cap are reachable only through functions, and the wallet history is append-only'
+);
+
 drop function public.test_assert(boolean, text);

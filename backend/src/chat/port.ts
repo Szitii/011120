@@ -69,6 +69,8 @@ export interface ChatPort {
   remove(chatId: string): Promise<unknown>;
   /** The Owner has read up to this message (only moves forward); returns the chat. */
   markRead(chatId: string, messageId: string): Promise<unknown>;
+  /** The Owner's wallet (GET /v0/wallet). */
+  wallet(): Promise<unknown>;
   /** Every unread count for the tab badges. */
   badges(): Promise<unknown>;
   anniversary(companionId: string): Promise<unknown>;

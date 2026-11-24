@@ -35,6 +35,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     retry: async (...args) => { calls.push(["retry", ...args]); return { typing: [], replying }; },
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
     markRead: async (...args) => { calls.push(["markRead", ...args]); return {}; },
+    wallet: async () => { calls.push(["wallet"]); return { enabled: false }; },
     badges: async () => { calls.push(["badges"]); return {}; },
     anniversary: async (...args) => { calls.push(["anniversary", ...args]); return {}; },
     saveAnniversary: async (...args) => { calls.push(["saveAnniversary", ...args]); return {}; },
@@ -129,6 +130,13 @@ it("routes read state, badges and the anniversary", async () => {
     assert.equal(await refusal(port, req), "NOT_FOUND");
   }
   assert.equal(calls.length, 0);
+});
+
+it("routes the wallet", async () => {
+  const { port, calls } = fakePort();
+  assert.equal(await status(port, request("wallet")), 200);
+  assert.equal(await refusal(port, request("wallet", "POST")), "NOT_FOUND");
+  assert.deepEqual(calls, [["wallet"]]);
 });
 
 it("routes memories and refuses ones with credentials", async () => {
