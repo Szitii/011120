@@ -12,7 +12,7 @@ fly deploy --ha=false
 
 镜像在 Fly 的服务器上构建，本机不需要 Docker。看日志：`fly logs -a companion-social-api`。
 
-**新迁移**：数据库里没有"已执行迁移"记录表，按文件名顺序手动执行新增的文件。线上已执行到 `202611250054_post_likes_companion_delete.sql`（2026-11-25）；每次执行后更新这一行。
+**新迁移**：数据库里没有"已执行迁移"记录表，按文件名顺序手动执行新增的文件。线上已执行到 `202611250057_auto_posts_agent_drafts.sql`（2026-11-25）；每次执行后更新这一行。
 
 ```sh
 psql "$ADMIN_DB" -v ON_ERROR_STOP=1 -f backend/supabase/migrations/<新文件>.sql
