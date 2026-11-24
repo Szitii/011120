@@ -1,6 +1,7 @@
 import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
+import type { Clip } from "./voices.ts";
 
 /** What the server needs to write one Companion reply (from chat_claim). */
 export interface ChatClaim {
@@ -16,7 +17,11 @@ export interface ChatClaim {
   companion: { companionId: string; displayName: string; identity: unknown; settings: ChatSettings };
   members: { companionId: string; displayName: string }[];
   /** The last 30 shown messages, oldest first; companionId null is the Owner. An action has no body. */
-  history: { companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string }[];
+  history: {
+    companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string;
+    /** A voice message (the body is what was said). */
+    voice?: boolean;
+  }[];
 }
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
@@ -69,6 +74,10 @@ export interface ChatPort {
   remove(chatId: string): Promise<unknown>;
   /** The Owner has read up to this message (only moves forward); returns the chat. */
   markRead(chatId: string, messageId: string): Promise<unknown>;
+  /** The switches the operators control (groupChatCreate, groupChatSend). */
+  features(): Promise<unknown>;
+  /** The Owner's wallet (GET /v0/wallet). */
+  wallet(): Promise<unknown>;
   /** Every unread count for the tab badges. */
   badges(): Promise<unknown>;
   anniversary(companionId: string): Promise<unknown>;
@@ -89,8 +98,17 @@ export interface ChatPort {
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown>;
   /** Server only: the next reply to write, or null. */
   claim(chatId: string): Promise<ChatClaim | null>;
-  /** Server only: `bodies` are 1 to 3 messages for SENT, else null. False when the claim is stale. */
-  finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null): Promise<boolean>;
+  /**
+   * Server only: `bodies` are 1 to 3 messages for SENT, else null; `clips` (SENT only) has one entry
+   * per body, a Clip for a voice message or null for text. False when the claim is stale.
+   */
+  finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[]): Promise<boolean>;
+  /** Server only: how many voice messages the Owner may still get from Companions today, and send. */
+  voiceLeft(): Promise<{ companion: number; owner: number }>;
+  /** Server only: the Owner's voice message, `body` being what the server recognised in `recording`. */
+  sendVoice(chatId: string, body: string, recording: { mime: string; durationMs: number; bytes: Uint8Array }, keyHash: string): Promise<unknown>;
+  /** The audio of a shown voice message in the Owner's chat (NOT_FOUND otherwise). */
+  audio(chatId: string, messageId: string): Promise<{ mime: string; bytes: Uint8Array }>;
   /** Server only: book a model call and mark it started. */
   reserve(input: ChatReservation): Promise<ReservationDecision>;
   /** Server only: settle a started call with real usage (ok false: it failed). */

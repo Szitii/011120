@@ -1870,7 +1870,7 @@ reset role;
 -- Chat is private: no client role can touch its tables, and only the API server writes a Companion's words.
 select public.test_assert(
   not exists(select 1 from (values ('companion_private.chats'), ('companion_private.chat_members'),
-      ('companion_private.chat_messages'), ('companion_private.chat_settings')) t(name)
+      ('companion_private.chat_messages'), ('companion_private.chat_settings'), ('companion_private.chat_audio')) t(name)
     cross join (values ('anon'), ('authenticated')) r(role)
     where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
@@ -1878,13 +1878,19 @@ select public.test_assert(
 );
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_claim(uuid)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[])'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[])'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE'),
-  'Companion chat replies can only be written by the API server'
+  and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_send_voice(uuid,text,text,jsonb)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_send_voice(uuid,text,text,jsonb)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE'),
+  'Companion chat replies and their voice can only be written by the API server'
 );
 select public.test_assert(
   not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.admin_log'),
@@ -1943,6 +1949,37 @@ select public.test_assert(
   and has_function_privilege('authenticated', 'public.diary_list(uuid,timestamptz,uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.diary_list(uuid,timestamptz,uuid)'::regprocedure, 'EXECUTE'),
   'diary entries are reachable only through the diary functions, and only the API server writes them'
+);
+
+select public.test_assert(
+  not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.feature_switches', 'SELECT')
+      or has_table_privilege(r.role, 'companion_private.feature_switches', 'UPDATE'))
+  and has_function_privilege('authenticated', 'public.platform_features()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.platform_features()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.feature_on(text)'::regprocedure, 'EXECUTE')
+  and exists(select 1 from pg_trigger where tgrelid = 'companion_private.chats'::regclass and tgname = 'chats_group_create_guard')
+  and exists(select 1 from pg_trigger where tgrelid = 'companion_private.chat_messages'::regclass and tgname = 'chat_messages_group_send_guard'),
+  'feature switches are read through platform_features and enforced on the chat tables'
+);
+select public.test_assert(
+  companion_private.import_redact('{"candidates":[{"id":"a","approvable":true,"value":"ok"},{"id":"b","approvable":false,"value":"sk-secret"}],"x":1}')
+    = '{"candidates":[{"id":"a","approvable":true,"value":"ok"},{"id":"b","approvable":false,"value":null}],"x":1}'::jsonb
+  and companion_private.import_redact('{"x":1}') = '{"x":1}'::jsonb,
+  'a blocked import candidate keeps no text'
+);
+select public.test_assert(
+  not exists(select 1 from (values ('companion_private.platform_spend_cap'), ('companion_private.wallet_policy'),
+      ('companion_private.wallets'), ('companion_private.wallet_entries'), ('companion_private.wallet_holds')) t(name)
+    cross join (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
+      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE'))
+  and has_function_privilege('authenticated', 'public.wallet_get()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.wallet_get()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.wallet_hold(uuid,uuid,uuid,bigint,text)'::regprocedure, 'EXECUTE')
+  and exists(select 1 from pg_trigger t where t.tgrelid = 'companion_private.wallet_entries'::regclass and not t.tgisinternal
+    and t.tgfoid = 'companion_private.reject_immutable_mutation()'::regprocedure),
+  'the wallet and the spend cap are reachable only through functions, and the wallet history is append-only'
 );
 
 drop function public.test_assert(boolean, text);
