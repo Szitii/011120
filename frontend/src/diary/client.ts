@@ -1,11 +1,14 @@
 import type { DiaryPage, DiarySettings, DiaryWriteResult } from "../../../contracts/chat.ts";
 
+// Older servers omit autoWrite. Frequency-only saves leave the server's choice alone.
+export type DiaryPreferences = DiarySettings & { autoWrite?: boolean };
+
 export interface DiaryClient {
   list(companionId: string, cursor?: string): Promise<DiaryPage>;
   writeIfDue(companionId: string): Promise<DiaryWriteResult>;
   remove(companionId: string, entryId: string): Promise<{ deleted: true }>;
-  getSettings(companionId: string): Promise<DiarySettings>;
-  saveSettings(companionId: string, settings: DiarySettings): Promise<DiarySettings>;
+  getSettings(companionId: string): Promise<DiaryPreferences>;
+  saveSettings(companionId: string, settings: DiaryPreferences): Promise<DiaryPreferences>;
 }
 
 export function createDiaryClient(send: <T>(method: "GET" | "POST" | "DELETE" | "PUT", path: string, body?: unknown) => Promise<T>): DiaryClient {

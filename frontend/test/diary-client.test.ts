@@ -22,3 +22,16 @@ test("diary requests use owner routes, opaque cursors, and a bodyless generation
     ["PUT", "/v0/companions/companion%2F1/diary-settings", settings],
   ]);
 });
+
+test("saving background diary keeps the existing frequency and sends the revision with an explicit switch value", async () => {
+  const calls: unknown[][] = [];
+  const client = createDiaryClient(async <T>(...request: unknown[]) => {
+    calls.push(request);
+    return { frequency: "DAILY", autoWrite: false, revision: 8 } as T;
+  });
+  const values = { frequency: "DAILY", autoWrite: false, revision: 7 } as const;
+  const settings = await client.saveSettings("home", values);
+  assert.deepEqual(calls, [["PUT", "/v0/companions/home/diary-settings", values]]);
+  assert.equal(settings.autoWrite, false);
+  assert.equal(settings.revision, 8);
+});
