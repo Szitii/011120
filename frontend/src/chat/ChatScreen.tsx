@@ -14,8 +14,8 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import type { ChatMessage, ChatSendResult } from "../../../contracts/chat";
-import { makeIdempotencyKey, type ChatClient, type ChatVoiceInput, type VoiceChat, type VoiceMessage } from "./client";
+import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
+import { makeIdempotencyKey, type ChatClient } from "./client";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
@@ -24,7 +24,7 @@ import type { QuoteInput } from "../album/store";
 import { BottomSheet } from "../components/BottomSheet";
 import { CommunityButton } from "../community/components";
 import { VoiceComposer } from "./VoiceComposer";
-import { quotaMessage, type Wallet } from "../wallet/wallet";
+import { quotaMessage } from "../wallet/wallet";
 import { useVoicePlayback } from "./useVoicePlayback";
 import { useAppIsActive } from "../state/useAppIsActive";
 
@@ -41,8 +41,8 @@ const replyFailureMessages = {
   ERROR: "这条回复没发出来，可以重试",
 };
 
-function mergeLatestMessages(existing: VoiceMessage[], incoming: VoiceMessage[]): VoiceMessage[] {
-  const byId = new Map<string, VoiceMessage>();
+function mergeLatestMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>();
   for (const m of existing) byId.set(m.id, m);
   for (const m of incoming) byId.set(m.id, m);
   // Keep incoming newest order first, then any older paginated items not in incoming
@@ -85,10 +85,10 @@ export function ChatScreen({
   const { playback, toggle, stop: stopPlayback } = useVoicePlayback();
   const appActive = useAppIsActive();
   const wasActive = useRef(appActive);
-  const [chat, setChat] = useState<VoiceChat | null>(null);
+  const [chat, setChat] = useState<Chat | null>(null);
   const isGroup = chat?.direct === false;
   const groupReadOnly = isGroup && !groupSendEnabled;
-  const [messages, setMessages] = useState<VoiceMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [bootstrapRevision, setBootstrapRevision] = useState(0);
   const [loading, setLoading] = useState(true);

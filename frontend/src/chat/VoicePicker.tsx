@@ -1,6 +1,7 @@
 import { Text, View } from "react-native";
 import { CommunityButton, useCommunityStyles } from "../community/components";
-import type { ChatClient, VoiceInfo } from "./client";
+import type { VoiceInfo } from "../../../contracts/chat";
+import type { ChatClient } from "./client";
 import { useVoicePlayback } from "./useVoicePlayback";
 
 export function VoicePicker({ sample, voices, selected, onSelect, disabled }: {

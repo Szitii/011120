@@ -1,40 +1,18 @@
 import type {
   Anniversary, Badges, CompanionMemory, MemoryList, CompanionConnection, ConnectionInput, ConnectionSaveResult,
-  Chat, ChatMessage,
+  Chat,
   ChatModelList,
   ChatPage,
   ChatSendResult,
   ChatSettings,
+  ChatVoiceInput,
+  PlatformFeatures,
+  VoiceList,
+  Wallet,
   CompanionActionResult,
 } from "../../../contracts/chat.ts";
 
-import type { Wallet } from "../wallet/wallet.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-
-export type VoiceChat = Chat & { recording?: string[] };
-export type VoiceMessage = ChatMessage & { audio?: { durationMs: number } | null };
-export type VoiceSettings = ChatSettings & { voice?: string | null };
-type VoicePage = Omit<ChatPage, "chat" | "items"> & { chat: VoiceChat; items: VoiceMessage[] };
-
-export interface VoiceInfo {
-  id: string;
-  name: string;
-  gender: "FEMALE" | "MALE";
-  description: string;
-}
-
-export interface VoiceList {
-  items: VoiceInfo[];
-  available: boolean;
-  input?: boolean;
-}
-
-export interface ChatVoiceInput {
-  audio: string;
-  mime: "audio/mp4" | "audio/aac" | "audio/mpeg" | "audio/wav" | "audio/ogg";
-  durationMs: number;
-}
-type VoiceSendResult = Omit<ChatSendResult, "message"> & { message: VoiceMessage };
 
 export interface AudioClip {
   bytes: ArrayBuffer;
@@ -44,14 +22,6 @@ export interface AudioClip {
 interface ChatRetryResult {
   typing: string[];
   replying: boolean;
-}
-
-export type { ChatModelInfo as ChatModelItem, ChatModelList } from "../../../contracts/chat.ts";
-
-export interface PlatformFeatures {
-  groupChatCreate: boolean;
-  groupChatSend: boolean;
-  connections: boolean;
 }
 
 export interface AgentKey {
@@ -72,7 +42,7 @@ export interface ChatClient {
   listVoices?(): Promise<VoiceList>;
   voiceSample?(voiceId: string): Promise<AudioClip>;
   messageAudio?(chatId: string, messageId: string): Promise<AudioClip>;
-  sendVoice?(chatId: string, input: ChatVoiceInput, key: string): Promise<VoiceSendResult>;
+  sendVoice?(chatId: string, input: ChatVoiceInput, key: string): Promise<ChatSendResult>;
   wallet?(): Promise<Wallet>;
   features?(): Promise<PlatformFeatures>;
   badges?(): Promise<Badges>;
@@ -87,7 +57,7 @@ export interface ChatClient {
   removeConnection?(id: string): Promise<CompanionConnection>;
   listChats(): Promise<{ items: Chat[] }>;
   openChat(companionIds: string[], title?: string, key?: string): Promise<Chat>;
-  getChat(chatId: string, cursor?: string): Promise<VoicePage>;
+  getChat(chatId: string, cursor?: string): Promise<ChatPage>;
   deleteChat(chatId: string): Promise<{ deleted: true }>;
   sendMessage(
     chatId: string,
@@ -96,8 +66,8 @@ export interface ChatClient {
     idempotencyKey?: string,
   ): Promise<ChatSendResult>;
   retryMessage(chatId: string, messageId: string): Promise<ChatRetryResult>;
-  getChatSettings(companionId: string): Promise<VoiceSettings>;
-  updateChatSettings(companionId: string, settings: VoiceSettings): Promise<VoiceSettings>;
+  getChatSettings(companionId: string): Promise<ChatSettings>;
+  updateChatSettings(companionId: string, settings: ChatSettings): Promise<ChatSettings>;
   sendAction(companionId: string, action: CompanionAction, key: string): Promise<CompanionActionResult>;
   listModels?(): Promise<ChatModelList>;
 }
@@ -180,7 +150,7 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
     getChatSettings(companionId: string) {
       return send("GET", `/v0/companions/${encodeURIComponent(companionId)}/chat-settings`);
     },
-    updateChatSettings(companionId: string, settings: VoiceSettings) {
+    updateChatSettings(companionId: string, settings: ChatSettings) {
       return send("PUT", `/v0/companions/${encodeURIComponent(companionId)}/chat-settings`, settings);
     },
     sendAction(companionId, action, key) {

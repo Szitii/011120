@@ -1,15 +1,4 @@
-// Wire shape from the wallet endpoint. The server owns provisioning and balance changes.
-export type Wallet = { enabled: false } | {
-  enabled: true;
-  state: "ACTIVE" | "FROZEN";
-  available: number;
-  freeCredits: number;
-  paidCredits: number;
-  reserved: number;
-  creditsPerCent: number;
-  priceVersion: string;
-  version: number;
-};
+import type { Wallet } from "../../../contracts/chat.ts";
 
 export function quotaMessage(wallet?: Wallet): string {
   if (!wallet) return "本次回复已达额度限制，请稍后再试。";

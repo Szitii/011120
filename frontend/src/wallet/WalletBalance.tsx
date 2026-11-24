@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import type { ChatClient } from "../chat/client";
 import { useCommunityStyles } from "../community/components";
 import { useAppIsActive } from "../state/useAppIsActive";
-import type { Wallet } from "./wallet";
+import type { Wallet } from "../../../contracts/chat";
 
 export function WalletBalance({ client }: { client: ChatClient }) {
   const s = useCommunityStyles();

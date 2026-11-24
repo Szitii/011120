@@ -1,6 +1,6 @@
 import { WalletBalance } from "./src/wallet/WalletBalance";
-import type { ChatClient, PlatformFeatures } from "./src/chat/client";
-import type { Badges } from "../contracts/chat";
+import type { ChatClient } from "./src/chat/client";
+import type { Badges, PlatformFeatures } from "../contracts/chat";
 import { useAppIsActive } from "./src/state/useAppIsActive";
 import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
 import { useThemedStyles } from "./src/theme/SkinProvider";

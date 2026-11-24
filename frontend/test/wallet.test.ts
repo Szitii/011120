@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createChatClient } from "../src/chat/client.ts";
-import { quotaMessage, type Wallet } from "../src/wallet/wallet.ts";
+import type { Wallet } from "../../contracts/chat.ts";
+import { quotaMessage } from "../src/wallet/wallet.ts";
 
 const balance = {
   enabled: true, state: "ACTIVE", available: 0, freeCredits: 0, paidCredits: 0,

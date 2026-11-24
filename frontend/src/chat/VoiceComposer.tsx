@@ -8,7 +8,8 @@ import { File } from "expo-file-system";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, useCommunityStyles } from "../community/components";
 import { useAppIsActive } from "../state/useAppIsActive";
-import { makeIdempotencyKey, type ChatVoiceInput } from "./client";
+import type { ChatVoiceInput } from "../../../contracts/chat";
+import { makeIdempotencyKey } from "./client";
 
 const options = { ...RecordingPresets.HIGH_QUALITY, numberOfChannels: 1, bitRate: 32000, sampleRate: 16000 };
 const maxDuration = 60_000;

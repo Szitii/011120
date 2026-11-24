@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
-import type { ChatModelList } from "../../../contracts/chat";
+import type { ChatModelList, ChatSettings, VoiceList } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 import { AgentKeySettings } from "./AgentKeySettings";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
 import { VoicePicker } from "./VoicePicker";
-import type { ChatClient, VoiceList, VoiceSettings } from "./client";
+import type { ChatClient } from "./client";
 
 const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"]] as const;
 const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
@@ -18,7 +18,7 @@ export function ChatSettingsScreen({ client, companionId, connectionKind, connec
   connectionsEnabled: boolean; onAvailabilityChanged: () => void;
 }) {
   const s = useCommunityStyles();
-  const [form, setForm] = useState<VoiceSettings>();
+  const [form, setForm] = useState<ChatSettings>();
   const [voices, setVoices] = useState<VoiceList>();
   const [voiceChanged, setVoiceChanged] = useState(false);
   const [models, setModels] = useState<ChatModelList>();
