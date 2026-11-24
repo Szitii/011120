@@ -15,11 +15,14 @@
  *   POST   /v0/companions/{id}/diary                   write an entry if one is due (waits for the model)
  *   DELETE /v0/companions/{id}/diary/{entryId}         erase an entry
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
+ *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
+ *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
  *
  * POST /v0/chats, POST .../messages and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
+import { hasCredential } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { ChatModelList, ChatSettings, DiarySettings } from "../../../contracts/chat.ts";
@@ -116,8 +119,9 @@ export async function handleChatRequest(
   const actionsRoute = path[1] === "companions" && path[3] === "actions" && path.length === 4;
   const diaryRoute = path[1] === "companions" && path[3] === "diary" && (path.length === 4 || path.length === 5);
   const diarySettingsRoute = path[1] === "companions" && path[3] === "diary-settings" && path.length === 4;
+  const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
   if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute && !diaryRoute
-    && !diarySettingsRoute)) return undefined;
+    && !diarySettingsRoute && !memoriesRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -147,6 +151,16 @@ export async function handleChatRequest(
     if (method === "GET") return response(200, await port.diarySettings(companionId));
     if (method === "PUT") return response(200, await port.saveDiarySettings(companionId, diarySettings(request)));
     return notFound();
+  }
+  if (memoriesRoute) {
+    const companionId = id(path[2]);
+    if (path.length === 5) return method === "DELETE" ? response(200, await port.deleteMemory(companionId, id(path[4]))) : notFound();
+    if (method === "GET") return response(200, await port.memories(companionId));
+    if (method !== "POST") return notFound();
+    // A memory is sent to the model with every reply: no keys or passwords in it.
+    const memory = text(body(request, ["body"]).body, 500);
+    if (hasCredential(memory)) return invalid();
+    return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
   }
   if (diaryRoute) {
     const companionId = id(path[2]);

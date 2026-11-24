@@ -36,6 +36,18 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_delete($1) as payload", [chatId]);
   }
 
+  memories(companionId: string): Promise<unknown> {
+    return this.#object("select public.memory_list($1) as payload", [companionId]);
+  }
+
+  addMemory(companionId: string, body: string, keyHash: string): Promise<unknown> {
+    return this.#object("select public.memory_add($1,$2,$3) as payload", [companionId, body, keyHash]);
+  }
+
+  deleteMemory(companionId: string, memoryId: string): Promise<unknown> {
+    return this.#object("select public.memory_delete($1,$2) as payload", [companionId, memoryId]);
+  }
+
   settings(companionId: string): Promise<unknown> {
     return this.#object("select public.chat_get_settings($1) as payload", [companionId]);
   }

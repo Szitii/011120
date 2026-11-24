@@ -35,6 +35,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     retry: async (...args) => { calls.push(["retry", ...args]); return { typing: [], replying }; },
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
     settings: async (...args) => { calls.push(["settings", ...args]); return {}; },
+    memories: async (...args) => { calls.push(["memories", ...args]); return { items: [] }; },
+    addMemory: async (...args) => { calls.push(["addMemory", ...args]); return {}; },
+    deleteMemory: async (...args) => { calls.push(["deleteMemory", ...args]); return {}; },
     saveSettings: async (...args) => { calls.push(["saveSettings", ...args]); return {}; },
     claim: async () => turns.shift() ?? null,
     finish: async (replyId, _claim, outcome, bodies) => { finished.push([replyId, outcome, bodies]); return true; },
@@ -90,6 +93,27 @@ it("routes every chat request to the database as the signed-in Owner", async () 
   const act = calls.at(-1)!;
   assert.deepEqual(act.slice(0, 3), ["act", companion, "PAT_HEAD"]);
   assert.equal(act[3], send[4], "the retry key is hashed the same way as for messages");
+});
+
+it("routes memories and refuses ones with credentials", async () => {
+  const { port, calls } = fakePort();
+  const memoryId = "00000000-0000-0000-0000-00000000f001";
+  assert.equal(await status(port, request(`companions/${companion}/memories`)), 200);
+  assert.equal(await status(port, request(`companions/${companion}/memories`, "POST", { body: " 主人喜欢下雨天 " })), 201);
+  assert.equal(await status(port, request(`companions/${companion}/memories/${memoryId}`, "DELETE")), 200);
+  assert.deepEqual(calls.map(c => c.slice(0, 3)), [["memories", companion], ["addMemory", companion, "主人喜欢下雨天"], ["deleteMemory", companion, memoryId]]);
+  assert.match(calls[1]![3] as string, /^[a-f0-9]{64}$/);
+  calls.length = 0;
+  for (const req of [
+    request(`companions/${companion}/memories`, "POST", { body: "password: hunter2hunter2" }),
+    request(`companions/${companion}/memories`, "POST", { body: "长".repeat(501) }),
+    request(`companions/${companion}/memories`, "POST", { body: "ok", extra: 1 }),
+    request(`companions/${companion}/memories/not-a-uuid`, "DELETE"),
+  ]) assert.equal(await refusal(port, req), "INVALID_INPUT", JSON.stringify(req.body));
+  for (const req of [request(`companions/${companion}/memories`, "PUT"), request(`companions/${companion}/memories/${memoryId}`)]) {
+    assert.equal(await refusal(port, req), "NOT_FOUND");
+  }
+  assert.equal(calls.length, 0);
 });
 
 it("records home-room actions and starts the reply only when one may come", async () => {

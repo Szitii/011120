@@ -428,6 +428,91 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /companions/{companionId}/memories:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: listMemories
+      summary: Every long-term memory of the Companion, newest first (at most 200)
+      description: |
+        Memories are short things the Companion remembers, sent to the model with every reply and
+        diary entry. Only the Owner adds them: by hand (POST), or by approving `memory` candidates
+        one by one when importing a card. The model never adds memories by itself.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Memories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/CompanionMemory'}}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    post:
+      operationId: addMemory
+      summary: Add one memory by hand (1-500 characters, no keys or passwords); 409 past 200
+      description: The same Idempotency-Key returns the first memory; with other text it is a 409.
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              additionalProperties: false
+              properties:
+                body: {type: string, minLength: 1, maxLength: 500}
+      responses:
+        '201':
+          description: The memory
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionMemory'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+  /companions/{companionId}/memories/{memoryId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: memoryId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    delete:
+      operationId: deleteMemory
+      summary: Delete one memory; the text is gone
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {const: true}
+        '401': *problem
+        '403': *problem
+        '404': *problem
 components:
   securitySchemes:
     ownerBearer:
@@ -488,6 +573,14 @@ components:
         typing: {$ref: '#/components/schemas/Typing'}
         replying: {$ref: '#/components/schemas/Replying'}
         activeAt: {type: string, format: date-time}
+    CompanionMemory:
+      type: object
+      required: [id, body, source, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        body: {type: string}
+        source: {type: string, enum: [IMPORT, OWNER], description: 'IMPORT: approved from a card. OWNER: added by hand.'}
+        createdAt: {type: string, format: date-time}
     ChatPage:
       type: object
       required: [chat, items, nextCursor]
