@@ -1,3 +1,5 @@
+import { useThemedStyles, useSkin } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -12,7 +14,6 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
-import { PEARL_UI } from "../theme/skinTokens";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { RADIUS } from "../theme/layoutTokens";
 import type { AccountBinding, AccountView } from "./account-session";
@@ -41,6 +42,8 @@ function SignInScreen({ state, onSignIn, onRetrySignOut }: {
   onSignIn: (email: string, password: string) => void;
   onRetrySignOut: () => void;
 }) {
+  const { ui } = useSkin();
+  const styles = useThemedStyles(createStyles);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const formVisible = state.kind === "signed-out" || state.kind === "signing-in";
@@ -55,7 +58,7 @@ function SignInScreen({ state, onSignIn, onRetrySignOut }: {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
-      <LinearGradient pointerEvents="none" colors={PEARL_UI.background} style={StyleSheet.absoluteFill} />
+      <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.layout}>
         {formVisible ? (
           <>
@@ -79,7 +82,7 @@ function SignInScreen({ state, onSignIn, onRetrySignOut }: {
                 autoComplete="email"
                 keyboardType="email-address"
                 placeholder="输入登录邮箱"
-                placeholderTextColor={PEARL_UI.muted}
+                placeholderTextColor={ui.muted}
                 editable={state.kind === "signed-out"}
                 value={email}
                 onChangeText={setEmail}
@@ -91,7 +94,7 @@ function SignInScreen({ state, onSignIn, onRetrySignOut }: {
                 autoCapitalize="none"
                 autoComplete="current-password"
                 placeholder="输入密码"
-                placeholderTextColor={PEARL_UI.muted}
+                placeholderTextColor={ui.muted}
                 secureTextEntry
                 editable={state.kind === "signed-out"}
                 onSubmitEditing={submit}
@@ -127,7 +130,7 @@ function SignInScreen({ state, onSignIn, onRetrySignOut }: {
         ) : (
           <ActivityIndicator
             accessibilityLabel={state.kind === "restoring" ? "正在恢复登录" : "正在退出"}
-            color={PEARL_UI.accent}
+            color={ui.accent}
           />
         )}
       </ScrollView>
@@ -135,8 +138,8 @@ function SignInScreen({ state, onSignIn, onRetrySignOut }: {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: PEARL_UI.background[0] },
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: ui.background[0] },
   layout: {
     flexGrow: 1,
     justifyContent: "center",
@@ -154,42 +157,42 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     borderWidth: 2.5,
-    borderColor: "#FFFFFF",
-    backgroundColor: "#F6F5F0",
+    borderColor: ui.highlight,
+    backgroundColor: ui.background[0],
   },
-  title: { fontSize: 24, fontWeight: "700", color: PEARL_UI.ink, marginBottom: 4 },
-  subtitle: { fontSize: 13, color: PEARL_UI.muted },
+  title: { fontSize: 24, fontWeight: "700", color: ui.ink, marginBottom: 4 },
+  subtitle: { fontSize: 13, color: ui.muted },
   formCard: {
-    backgroundColor: PEARL_UI.white,
+    backgroundColor: ui.white,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
     padding: 20,
     gap: 8,
   },
-  label: { fontSize: 13, fontWeight: "600", color: PEARL_UI.ink, marginTop: 4 },
+  label: { fontSize: 13, fontWeight: "600", color: ui.ink, marginTop: 4 },
   input: {
     minHeight: 46,
     paddingHorizontal: 14,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: PEARL_UI.line,
-    color: PEARL_UI.ink,
-    backgroundColor: "#FAF9F7",
+    borderColor: ui.line,
+    color: ui.ink,
+    backgroundColor: ui.white,
     marginBottom: 6,
     fontSize: 14.5,
   },
-  message: { color: PEARL_UI.muted, fontSize: 13, lineHeight: 19, marginVertical: 4 },
+  message: { color: ui.muted, fontSize: 13, lineHeight: 19, marginVertical: 4 },
   button: {
     alignItems: "center",
     justifyContent: "center",
     minHeight: 48,
     borderRadius: RADIUS.pill,
-    backgroundColor: PEARL_UI.iceBlue,
+    backgroundColor: ui.iceBlue,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.85)",
+    borderColor: ui.highlight,
     marginTop: 8,
   },
   disabled: { opacity: 0.5 },
-  buttonText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  buttonText: { color: ui.onAccent, fontSize: 15, fontWeight: "700" },
 });

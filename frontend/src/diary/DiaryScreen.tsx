@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import type { DiaryEntry, DiaryWriteResult } from "../../../contracts/chat.ts";
 import { safeClientMessage } from "../adapters/real-api";
-import { CommunityButton, SecondaryHeading, communityStyles as s } from "../community/components";
+import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 import { useAppIsActive } from "../state/useAppIsActive";
 import type { DiaryClient } from "./client";
 
 export function DiaryScreen({ client, companionId, companionName }: {
   client: DiaryClient; companionId: string; companionName: string;
 }) {
+  const s = useCommunityStyles();
   const [items, setItems] = useState<DiaryEntry[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -77,7 +78,7 @@ export function DiaryScreen({ client, companionId, companionName }: {
       if (result.failure === "UNAVAILABLE") setNotice("即将推出");
       if (result.failure === "QUOTA") setNotice("今天累了，明天再写。");
     }).catch(() => {
-      // A failed generation request should leave the existing diary readable.
+      if (scope === session.current) setNotice("暂时无法确认日记是否写好，已有日记仍可阅读。");
     }).finally(() => {
       if (scope === session.current) setGenerating(false);
     });
@@ -96,7 +97,10 @@ export function DiaryScreen({ client, companionId, companionName }: {
     const tick = async () => {
       await read(undefined, true);
       if (active && --remaining > 0) timer = setTimeout(() => void tick(), 3000);
-      else if (active) setWritingElsewhere(false);
+      else if (active) {
+        setWritingElsewhere(false);
+        setNotice("日记暂时还未写完，稍后再打开看看。");
+      }
     };
     timer = setTimeout(() => void tick(), 3000);
     return () => { active = false; clearTimeout(timer); };

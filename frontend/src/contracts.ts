@@ -113,7 +113,7 @@ export interface ClientApi {
     id: string,
     viewer?: { kind: IdentityKind; id: string },
   ): Promise<CompanionProfile>;
-  lifeEventInbox(): Promise<LifeEventInboxCollection>;
+  lifeEventInbox(cursor?: NonNullable<LifeEventInboxCollection["nextCursor"]>): Promise<LifeEventInboxCollection>;
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem>;
   createCompanionImport(payload: Record<string, unknown>, idempotencyKey?: string): Promise<ImportReview>;
   approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string, idempotencyKey?: string): Promise<CompanionIdentity>;

@@ -5,7 +5,7 @@ export interface SupabaseConfig {
 
 export type AuthenticatedClientConfig = SupabaseConfig & { baseUrl: string; dataMode: "real" };
 
-export function readSupabaseConfig(env: NodeJS.ProcessEnv): SupabaseConfig {
+export function readSupabaseConfig(env: Readonly<Record<string, string | undefined>>): SupabaseConfig {
   const supabaseUrl = env.EXPO_PUBLIC_SUPABASE_URL;
   const publishableKey = env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
   if (!supabaseUrl || !publishableKey) {

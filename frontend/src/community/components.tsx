@@ -1,10 +1,11 @@
+import { useThemedStyles, useSkin } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { CommunityActor, CommunityComment, CommunityPost } from "../../../contracts/community.ts";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
-import { PEARL_UI } from "../theme/skinTokens";
 
 function formatRelativeTime(iso: string): string {
   const diffMin = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
@@ -30,6 +31,7 @@ export function CommunityButton({
   glass?: boolean;
   primary?: boolean;
 }) {
+  const communityStyles = useCommunityStyles();
   return (
     <Pressable
       accessibilityRole="button"
@@ -48,7 +50,6 @@ export function CommunityButton({
       {glass && (
         <LiquidGlassSurface
           glass
-          tint="light"
           style={[StyleSheet.absoluteFill, selected && communityStyles.selectedFilter]}
         />
       )}
@@ -71,15 +72,17 @@ export function ActorLine({
   subtitle,
 }: {
   actor: CommunityActor;
-  onPress: () => void;
+  onPress?: () => void;
   subtitle?: string;
 }) {
+  const communityStyles = useCommunityStyles();
   const isAi = actor.kind === "AI";
   const actorAvatar = "avatar" in actor && typeof (actor as { avatar?: unknown }).avatar === "string" ? (actor as { avatar?: string }).avatar : undefined;
+  const Container = onPress ? Pressable : View;
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`查看${actor.displayName}的主页`}
+    <Container
+      accessibilityRole={onPress ? "button" : undefined}
+      accessibilityLabel={onPress ? `查看${actor.displayName}的主页` : undefined}
       onPress={onPress}
       style={communityStyles.actorRow}
     >
@@ -95,7 +98,7 @@ export function ActorLine({
         </View>
         {subtitle ? <Text style={communityStyles.meta}>{subtitle}</Text> : null}
       </View>
-    </Pressable>
+    </Container>
   );
 }
 
@@ -112,6 +115,8 @@ export function ContentCard({
   onDelete: () => void;
   onReport?: () => void;
 }) {
+  const { ui } = useSkin();
+  const communityStyles = useCommunityStyles();
   const timeText = formatRelativeTime(item.createdAt);
   const subtitle = item.source === "OWNER_PROXY" ? `${timeText} · 由主人代发` : timeText;
 
@@ -127,7 +132,7 @@ export function ContentCard({
               onPress={onDetail}
               style={({ pressed }) => [communityStyles.actionChip, pressed && { opacity: 0.65 }]}
             >
-              <Ionicons name="chatbubble-outline" size={14} color={PEARL_UI.muted} />
+              <Ionicons name="chatbubble-outline" size={14} color={ui.muted} />
               <Text style={communityStyles.actionChipText}>{item.commentsCount}</Text>
             </Pressable>
           )}
@@ -148,7 +153,7 @@ export function ContentCard({
               onPress={onDelete}
               style={({ pressed }) => [communityStyles.textActionBtn, pressed && { opacity: 0.6 }]}
             >
-              <Text style={[communityStyles.textActionLabel, { color: "#984C59" }]}>删除</Text>
+              <Text style={[communityStyles.textActionLabel, communityStyles.error]}>删除</Text>
             </Pressable>
           )}
         </View>
@@ -158,47 +163,50 @@ export function ContentCard({
 }
 
 export function SecondaryHeading({ title }: { title: string }) {
+  const communityStyles = useCommunityStyles();
   return (
-    <LiquidGlassSurface glass tint="light" borderRadius={18} style={communityStyles.heading}>
+    <LiquidGlassSurface glass borderRadius={18} style={communityStyles.heading}>
       <Text accessibilityRole="header" style={communityStyles.title}>{title}</Text>
     </LiquidGlassSurface>
   );
 }
 
-export const communityStyles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: PEARL_UI.background[0] },
+export function useCommunityStyles() { return useThemedStyles(createCommunityStyles); }
+
+export const createCommunityStyles = (ui: UiPalette) => StyleSheet.create({
+  page: { flex: 1, backgroundColor: ui.background[0] },
   communityPage: { flex: 1 },
   content: { paddingHorizontal: CHROME.screenInset, paddingTop: 8, paddingBottom: 48, gap: 12 },
   feedContent: { paddingBottom: CHROME.scrollBottomClearance },
   heading: { paddingHorizontal: 16, paddingVertical: 12 },
-  title: { fontSize: 22, fontWeight: "700", color: PEARL_UI.ink, letterSpacing: -0.3 },
+  title: { fontSize: 22, fontWeight: "700", color: ui.ink, letterSpacing: -0.3 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" },
   button: {
     paddingHorizontal: 14,
     paddingVertical: 9,
     borderRadius: RADIUS.pill,
-    backgroundColor: "rgba(255,255,255,0.78)",
+    backgroundColor: ui.white,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
     minHeight: 38,
     justifyContent: "center",
     alignItems: "center",
   },
   glassFilter: { backgroundColor: "transparent", borderWidth: 0 },
-  selected: { backgroundColor: PEARL_UI.accentWash, borderColor: "transparent" },
-  selectedFilter: { backgroundColor: "rgba(123,144,172,0.82)" },
-  primaryBtn: { backgroundColor: PEARL_UI.accent, borderColor: "transparent" },
-  buttonText: { color: PEARL_UI.accentInk, fontSize: 13, fontWeight: "600" },
+  selected: { backgroundColor: ui.accentWash, borderColor: "transparent" },
+  selectedFilter: { backgroundColor: ui.accent },
+  primaryBtn: { backgroundColor: ui.accent, borderColor: "transparent" },
+  buttonText: { color: ui.accentInk, fontSize: 13, fontWeight: "600" },
   selectedText: { fontWeight: "700" },
-  primaryText: { color: "#FFFFFF", fontWeight: "600" },
+  primaryText: { color: ui.onAccent, fontWeight: "600" },
   card: {
-    backgroundColor: PEARL_UI.white,
+    backgroundColor: ui.white,
     padding: 16,
     borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
     gap: 10,
-    shadowColor: "#8A857C",
+    shadowColor: ui.shadow,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.06,
     shadowRadius: 10,
@@ -207,42 +215,33 @@ export const communityStyles = StyleSheet.create({
   actorRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   actorTextWrap: { flex: 1, minWidth: 0 },
   actorNameLine: { flexDirection: "row", alignItems: "center", gap: 6 },
-  author: { fontSize: 15, color: PEARL_UI.ink, fontWeight: "600", flexShrink: 1 },
-  roleTag: {
-    paddingHorizontal: 6,
-    paddingVertical: 1.5,
-    borderRadius: 999,
-    backgroundColor: PEARL_UI.background[1],
-  },
-  roleTagAi: { backgroundColor: PEARL_UI.accentWash },
-  roleTagText: { fontSize: 10, fontWeight: "600", color: PEARL_UI.muted },
-  roleTagAiText: { color: PEARL_UI.accentInk },
-  meta: { fontSize: 11.5, color: PEARL_UI.muted, lineHeight: 17, marginTop: 1 },
-  body: { fontSize: 15, lineHeight: 23, color: PEARL_UI.ink },
+  author: { fontSize: 15, color: ui.ink, fontWeight: "600", flexShrink: 1 },
+  meta: { fontSize: 11.5, color: ui.muted, lineHeight: 17, marginTop: 1 },
+  body: { fontSize: 15, lineHeight: 23, color: ui.ink },
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingTop: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(36, 35, 34, 0.05)",
+    borderTopColor: ui.line,
   },
   cardFooterLeft: { flexDirection: "row", alignItems: "center", gap: 14 },
   cardFooterRight: { flexDirection: "row", alignItems: "center", gap: 12 },
   actionChip: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4, paddingHorizontal: 2 },
-  actionChipText: { fontSize: 12.5, color: PEARL_UI.muted, fontWeight: "500" },
+  actionChipText: { fontSize: 12.5, color: ui.muted, fontWeight: "500" },
   textActionBtn: { paddingVertical: 4, paddingHorizontal: 4 },
-  textActionLabel: { fontSize: 12, color: PEARL_UI.muted, fontWeight: "500" },
+  textActionLabel: { fontSize: 12, color: ui.muted, fontWeight: "500" },
   input: {
     minHeight: 110,
     textAlignVertical: "top",
-    backgroundColor: PEARL_UI.white,
+    backgroundColor: ui.white,
     borderWidth: 1,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
     borderRadius: 16,
     padding: 14,
     fontSize: 15,
-    color: PEARL_UI.ink,
+    color: ui.ink,
   },
-  error: { color: "#984C59", fontSize: 13, lineHeight: 20 },
+  error: { color: ui.danger, fontSize: 13, lineHeight: 20 },
 });

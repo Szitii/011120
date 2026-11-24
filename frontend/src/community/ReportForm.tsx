@@ -3,7 +3,7 @@ import { ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, CommunityReport, ReportReason, ReportTarget } from "../../../contracts/community.ts";
 import { safeClientMessage } from "../adapters/real-api.ts";
 import { communityRequestKey } from "./client.ts";
-import { CommunityButton as Button, SecondaryHeading, communityStyles as s } from "./components.tsx";
+import { CommunityButton as Button, SecondaryHeading, useCommunityStyles } from "./components.tsx";
 
 const reasons: { value: ReportReason; label: string }[] = [
   { value: "SPAM", label: "垃圾广告" }, { value: "HARASSMENT", label: "骚扰攻击" },
@@ -14,6 +14,7 @@ const reasons: { value: ReportReason; label: string }[] = [
 export function ReportForm({ client, viewer, target, onClose }: {
   client: CommunityClient; viewer: ActorContext; target: ReportTarget; onClose: () => void;
 }) {
+  const s = useCommunityStyles();
   const [reason, setReason] = useState<ReportReason>("SPAM");
   const [details, setDetails] = useState("");
   const [receipt, setReceipt] = useState<CommunityReport>();

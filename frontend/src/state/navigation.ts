@@ -1,7 +1,16 @@
-export type RootTab = "world" | "home" | "my";
+export const ROOT_TABS = ["world", "home", "messages", "my"] as const;
+export type RootTab = typeof ROOT_TABS[number];
+
+export type CommunityTarget = { type: "detail" | "profile"; id: string } | { type: "blocks" };
 export type Route =
   | { type: "root"; tab: RootTab }
-  | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: "home" | "my" }
+  | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: RootTab }
+  | { type: "community-target"; target: CommunityTarget }
+  | { type: "compose-post" }
+  | { type: "create-group" }
+  | { type: "chat-settings"; companionId: string }
+  | { type: "community-follows"; direction: "following" | "followers" }
+  | { type: "album"; companionId: string }
   | { type: "diary"; companionId: string; companionName: string }
   | { type: "life-archive" }
   | { type: "edit-human-profile" }
@@ -9,7 +18,7 @@ export type Route =
   | { type: "agent-drafts" }
   | { type: "encounter"; encounterId: string }
   | { type: "profile"; companionId: string }
-  | { type: "bring-companion" }
+  | { type: "bring-companion"; companionId?: string }
   | {
       type: "social-activation";
       companionId: string;

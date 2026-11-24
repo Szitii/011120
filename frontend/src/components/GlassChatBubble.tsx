@@ -1,8 +1,9 @@
+import { useThemedStyles } from "../theme/SkinProvider";
+import { GLASS_MATERIAL, type UiPalette } from "../theme/skinTokens";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
-import { PEARL_UI } from "../theme/skinTokens";
 
 export function GlassChatBubble({
   senderRole,
@@ -11,6 +12,7 @@ export function GlassChatBubble({
   senderRole: "human" | "ai";
   text: string;
 }) {
+  const styles = useThemedStyles(createStyles);
   const { skin } = useSkin();
   const isHuman = senderRole === "human";
 
@@ -40,10 +42,10 @@ export function GlassChatBubble({
             styles.topGleam,
             {
               backgroundColor: isHuman
-                ? "rgba(255,255,255,0.34)"
+                ? GLASS_MATERIAL.bubbleGleam.mine
                 : skin.isDark
-                  ? "rgba(255,255,255,0.18)"
-                  : "rgba(255,255,255,0.92)",
+                  ? GLASS_MATERIAL.bubbleGleam.dark
+                  : GLASS_MATERIAL.bubbleGleam.light,
             },
           ]}
         />
@@ -55,7 +57,7 @@ export function GlassChatBubble({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (ui: UiPalette) => StyleSheet.create({
   row: {
     width: "100%",
     marginVertical: 5,
@@ -69,7 +71,7 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.bubble,
     borderWidth: 1,
     overflow: "hidden",
-    shadowColor: PEARL_UI.shadow,
+    shadowColor: ui.shadow,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.07,
     shadowRadius: 8,

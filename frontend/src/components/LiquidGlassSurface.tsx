@@ -2,6 +2,7 @@ import React from "react";
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
+import { GLASS_MATERIAL } from "../theme/skinTokens";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
 
@@ -18,7 +19,7 @@ export function LiquidGlassSurface({
   style?: StyleProp<ViewStyle>;
   children?: React.ReactNode;
 }) {
-  const { skin } = useSkin();
+  const { skin, ui } = useSkin();
   const isDark = tint ? tint === "dark" : skin.isDark;
 
   return (
@@ -26,8 +27,8 @@ export function LiquidGlassSurface({
       pointerEvents={children ? "auto" : "none"}
       style={[
         { borderRadius },
-        glass && styles.shadow,
-        !glass && { backgroundColor: skin.colors.surface },
+        glass && [styles.shadow, { shadowColor: ui.shadow }],
+        !glass && { backgroundColor: ui.white },
         style,
       ]}
     >
@@ -39,10 +40,8 @@ export function LiquidGlassSurface({
           {
             borderRadius,
             borderColor: glass
-              ? isDark
-                ? "rgba(255, 255, 255, 0.24)"
-                : "rgba(255, 255, 255, 0.92)"
-              : skin.colors.border,
+              ? (isDark === skin.isDark ? skin.glass.border : isDark ? GLASS_MATERIAL.darkBorder : GLASS_MATERIAL.lightBorder)
+              : ui.line,
           },
         ]}
       >
@@ -57,33 +56,12 @@ export function LiquidGlassSurface({
             <LinearGradient
               colors={
                 isDark
-                  ? ["rgba(255,255,255,0.16)", "rgba(255,255,255,0.04)", "rgba(255,255,255,0.10)"]
-                  : ["rgba(255,255,255,0.44)", "rgba(255,255,255,0.16)", "rgba(255,255,255,0.34)"]
+                  ? GLASS_MATERIAL.darkFinish
+                  : GLASS_MATERIAL.lightFinish
               }
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={StyleSheet.absoluteFill}
-            />
-            {/* Crisp top specular rim + soft bottom edge for real glass depth */}
-            <View
-              style={[
-                styles.topSpecular,
-                {
-                  backgroundColor: isDark
-                    ? "rgba(255, 255, 255, 0.28)"
-                    : "rgba(255, 255, 255, 0.95)",
-                },
-              ]}
-            />
-            <View
-              style={[
-                styles.bottomRim,
-                {
-                  backgroundColor: isDark
-                    ? "rgba(0, 0, 0, 0.24)"
-                    : "rgba(123, 144, 172, 0.16)",
-                },
-              ]}
             />
           </>
         )}
@@ -95,30 +73,13 @@ export function LiquidGlassSurface({
 
 const styles = StyleSheet.create({
   shadow: {
-    shadowColor: "#6B645A",
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.13,
     shadowRadius: 15,
     elevation: 3,
   },
   edge: {
-    borderWidth: 1.15,
+    borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
-  },
-  topSpecular: {
-    position: "absolute",
-    top: 0,
-    left: 14,
-    right: 14,
-    height: 1,
-    borderRadius: 1,
-  },
-  bottomRim: {
-    position: "absolute",
-    bottom: 0,
-    left: 14,
-    right: 14,
-    height: 1,
-    borderRadius: 1,
   },
 });

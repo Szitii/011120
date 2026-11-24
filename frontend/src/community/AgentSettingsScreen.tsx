@@ -4,14 +4,15 @@ import type { AgentSettingsView } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
 import { agentLimits, settingsForm, settingsPayload, type SettingsForm } from "./agent-settings.ts";
 import type { AgentViewer, CommunityClient } from "./client.ts";
-import { CommunityButton as Button, SecondaryHeading, communityStyles as s } from "./components.tsx";
+import { CommunityButton as Button, SecondaryHeading, useCommunityStyles } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
 
-const inputStyle = { ...s.input, minHeight: 44 };
 
 export function AgentSettingsScreen({ client, viewer, onOpenDrafts }: {
   client: CommunityClient; viewer: AgentViewer; onOpenDrafts: () => void;
 }) {
+  const s = useCommunityStyles();
+  const inputStyle = { ...s.input, minHeight: 44 };
   const [view, setView] = useState<AgentSettingsView>();
   const [form, setForm] = useState<SettingsForm>();
   const [message, setMessage] = useState("");

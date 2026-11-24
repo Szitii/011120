@@ -3,12 +3,13 @@ import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import type { AgentDraft, CommunityPost } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
 import type { AgentViewer, CommunityClient } from "./client.ts";
-import { CommunityButton as Button, SecondaryHeading, communityStyles as s } from "./components.tsx";
+import { CommunityButton as Button, SecondaryHeading, useCommunityStyles } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
 
 export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient; viewer: AgentViewer }) {
+  const s = useCommunityStyles();
   const [items, setItems] = useState<AgentDraft[]>();
-  const [previews, setPreviews] = useState<Record<string, CommunityPost | null>>({});
+  const [previews, setPreviews] = useState<Record<string, CommunityPost | null | "error">>({});
   const [loading, setLoading] = useState(true);
   const [actingOn, setActingOn] = useState<string>();
   const [message, setMessage] = useState("");
@@ -28,7 +29,7 @@ export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient;
       setPreviews({});
       const ids = new Set(next.flatMap(draft => draft.kind === "COMMENT" && draft.postId ? [draft.postId] : []));
       for (const id of ids) {
-        void client.detail(viewer, id).then(detail => detail.post, () => null).then(post => {
+        void client.detail(viewer, id).then(detail => detail.post, (error: unknown) => error instanceof ApiProblemError && error.status === 404 ? null : "error" as const).then(post => {
           if (current()) setPreviews(previous => ({ ...previous, [id]: post }));
         });
       }
@@ -91,7 +92,7 @@ export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient;
       const post = draft.postId ? previews[draft.postId] : null;
       return <View key={draft.id} style={s.card}>
         <Text style={s.meta}>{draft.kind === "POST" ? "发帖草稿" : "评论草稿"} · {new Date(draft.createdAt).toLocaleString()}</Text>
-        {draft.kind === "COMMENT" && (post
+        {draft.kind === "COMMENT" && (post === "error" ? <Text style={s.meta}>原帖暂时加载不出来，可下次刷新重试。</Text> : post
           ? <Text style={s.meta} numberOfLines={3}>原帖 · {post.author.displayName}　{post.body}</Text>
           : <Text style={s.meta}>{post === null ? "原帖不可用" : "正在加载原帖…"}</Text>)}
         <Text selectable style={s.body}>{draft.body}</Text>

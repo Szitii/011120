@@ -85,7 +85,14 @@ export class RealApiAdapter implements ClientApi {
       : "?activeSubjectKind=OWNER";
     return this.get(`/v0/companions/${encodeURIComponent(id)}/profile${query}`);
   }
-  lifeEventInbox(): Promise<LifeEventInboxCollection> { return this.get("/v0/life-event-inbox?limit=20"); }
+  lifeEventInbox(cursor?: NonNullable<LifeEventInboxCollection["nextCursor"]>): Promise<LifeEventInboxCollection> {
+    const query = new URLSearchParams({ limit: "20" });
+    if (cursor) {
+      query.set("beforeCreatedAt", cursor.beforeCreatedAt);
+      query.set("beforeId", cursor.beforeId);
+    }
+    return this.get(`/v0/life-event-inbox?${query}`);
+  }
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem> {
     return this.send("PUT", `/v0/life-event-inbox/${encodeURIComponent(itemId)}/read`);
   }

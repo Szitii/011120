@@ -1,6 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
+import { useThemedStyles } from "./src/theme/SkinProvider";
+import type { UiPalette } from "./src/theme/skinTokens";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
+  BackHandler,
   ActivityIndicator,
   Image,
   Modal,
@@ -18,8 +22,10 @@ import { RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
 import { AccountGate } from "./src/auth/AccountGate";
 import type { AccountBinding } from "./src/auth/account-session";
 import type { CommunityPost, CommunityProfile } from "../contracts/community";
-import { colors } from "./src/theme";
 import { SecondaryHeading } from "./src/community/components";
+import { ChatSettingsScreen } from "./src/chat/ChatSettingsScreen";
+import { CreateGroupScreen } from "./src/messages/CreateGroupScreen";
+import { ComposePostScreen } from "./src/community/ComposePostScreen";
 import { CommunityScreen } from "./src/community/CommunityScreen";
 import { AgentDraftsScreen } from "./src/community/AgentDraftsScreen";
 import { AgentSettingsScreen } from "./src/community/AgentSettingsScreen";
@@ -41,7 +47,6 @@ import type {
 import { ViewerSensitiveCache } from "./src/state/cache";
 import { toStage1MediaPresentation } from "./src/media";
 import {
-  BringCompanionScreen,
   ControlsScreen,
   SocialActivationScreen,
 } from "./src/stage1-surfaces";
@@ -53,20 +58,23 @@ import {
   scrollKey,
   selectTab,
   type NavigationState,
+  type RootTab,
+  type Route,
+  type CommunityTarget,
 } from "./src/state/navigation";
 import { SkinProvider, useSkin } from "./src/theme/SkinProvider";
-import { CHROME, RADIUS } from "./src/theme/layoutTokens";
-import { PEARL_UI } from "./src/theme/skinTokens";
+import { CHROME } from "./src/theme/layoutTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
 import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
-import { PearlInteractiveRoom } from "./src/components/PearlInteractiveRoom";
+import { PrivateHomeScreen } from "./src/home/PrivateHomeScreen";
+import { MessagesScreen } from "./src/messages/MessagesScreen";
+import { AlbumScreen } from "./src/album/AlbumScreen";
+import { addAlbumQuote } from "./src/album/store";
 import { BottomSheet } from "./src/components/BottomSheet";
 import { GlassChatBubble } from "./src/components/GlassChatBubble";
 import { DiaryScreen } from "./src/diary/DiaryScreen";
 import { ChatScreen } from "./src/chat/ChatScreen";
-import type { ChatClient } from "./src/chat/client";
-import { useHomeChat } from "./src/chat/useHomeChat";
 
 type LoadState<T> =
   | { kind: "idle" | "loading" }
@@ -143,7 +151,8 @@ function WorldApp({ client, account, isMockMode }: {
   isMockMode: boolean;
   account?: { email?: string; signOut: () => void };
 }) {
-  const { skin } = useSkin();
+  const styles = useThemedStyles(createStyles);
+  const { skin, ui } = useSkin();
   const [cache] = useState(() => new ViewerSensitiveCache());
   const [nav, setNav] = useState<NavigationState>(initialNavigationState);
   const [identity, setIdentity] = useState<LoadState<ActiveIdentityContext>>({ kind: "loading" });
@@ -158,7 +167,9 @@ function WorldApp({ client, account, isMockMode }: {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [mySettingsOpen, setMySettingsOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
-  const communityDraft = useRef<{ text: string; key: string } | undefined>(undefined);
+  const [communityRevision, setCommunityRevision] = useState(0);
+  const invalidateCommunity = useCallback(() => setCommunityRevision(value => value + 1), []);
+  const [createdHome, setCreatedHome] = useState<OwnerCompanionSummary>();
   const ownerCompanionsRequest = useRef(0);
   const worldScrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
@@ -172,7 +183,11 @@ function WorldApp({ client, account, isMockMode }: {
   const viewer = subject && { kind: subject.kind, id: subject.id };
   const agentViewer = isAgentViewer(viewer) ? viewer : undefined;
   const canUseChat = viewer?.kind === "OWNER" && !identitySwitchPending && !!client.api.chat;
-  const homeCompanion = ownerCompanions.kind === "success" ? ownerCompanions.value.items[0] : undefined;
+  const availableCompanions = ownerCompanions.kind === "success" ? ownerCompanions.value.items : [];
+  const homeCompanion = availableCompanions.find(item => item.companionId === createdHome?.companionId) ?? createdHome ?? availableCompanions[0];
+  const worldVisible = route.type === "root" && route.tab === "world";
+  const ownerId = viewer?.kind === "OWNER" && !identitySwitchPending ? identityValue?.viewer.ownerId : undefined;
+  const homeScope = ownerId && homeCompanion ? { ownerId, companionId: homeCompanion.companionId } : undefined;
   const diaryClient = viewer?.kind === "OWNER" && !identitySwitchPending ? client.api.diary : undefined;
   const profileId = route.type === "profile" ? route.companionId
     : route.type === "root" && route.tab === "my" && viewer?.kind === "COMPANION" ? viewer.id
@@ -265,7 +280,7 @@ function WorldApp({ client, account, isMockMode }: {
 
   async function loadOwnerCompanions() {
     const request = ++ownerCompanionsRequest.current;
-    setOwnerCompanions({ kind: "loading" });
+    setOwnerCompanions(previous => previous.kind === "success" ? previous : { kind: "loading" });
     try {
       const value = await client.api.ownerCompanions();
       if (request !== ownerCompanionsRequest.current) return;
@@ -386,11 +401,10 @@ function WorldApp({ client, account, isMockMode }: {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
-    if (target.kind !== "OWNER" && (route.type === "chat" || route.type === "diary")) {
+    if (target.kind !== "OWNER" && (route.type === "chat" || route.type === "diary" || route.type === "album")) {
       setNav((current) => selectTab(current, current.rootTab));
     }
     setIdentitySwitchPending(true);
-    communityDraft.current = undefined;
     setIdentity({ kind: "loading" });
     setWorld({ kind: "idle" });
     setLife({ kind: "idle" });
@@ -468,6 +482,36 @@ function WorldApp({ client, account, isMockMode }: {
     }
   }
 
+  useEffect(() => {
+    if (route.type === "root" || route.type === "compose-post" || route.type === "bring-companion") return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      goBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [route, nav, identityId, reducedMotion]);
+
+  function openCommunity(target: CommunityTarget) {
+    setNav(current => pushRoute(current, { type: "community-target", target }));
+  }
+
+  function openFollows(direction: FollowDirection) {
+    setNav(current => pushRoute(current, { type: "community-follows", direction }));
+  }
+
+  function openFromTab(tab: RootTab, next: Route) {
+    setNav(current => {
+      const top = current.stack.at(-1);
+      return top?.type === "root" && top.tab === tab ? pushRoute(current, next) : current;
+    });
+  }
+
+  function openDiary(companionId: string) {
+    if (!diaryClient || !homeCompanion || companionId !== homeCompanion.companionId) return;
+    openFromTab("home", { type: "diary", companionId, companionName: homeCompanion.displayName });
+  }
+
+  const messagesVisible = route.type === "root" && route.tab === "messages";
   const isMoment = route.type === "encounter" && momentMode && encounter.kind === "success";
   const currentKind = identityValue?.activeSubject.kind ?? "OWNER";
   const isSampleCompanion = currentKind !== "OWNER";
@@ -475,11 +519,11 @@ function WorldApp({ client, account, isMockMode }: {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: skin.colors.canvas }]}>
       <StatusBar style={skin.isDark ? "light" : "dark"} />
-      {skin.id === "default" && route.type === "root" && (
-        <LinearGradient pointerEvents="none" colors={PEARL_UI.background} style={StyleSheet.absoluteFill} />
+      {(route.type === "root" || route.type === "bring-companion") && (
+        <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
       )}
 
-      {!isMoment && route.type !== "chat" && (
+      {!isMoment && route.type !== "chat" && route.type !== "compose-post" && route.type !== "bring-companion" && (
         <AppHeader
           routeIsRoot={route.type === "root"}
           rootTab={nav.rootTab}
@@ -492,31 +536,29 @@ function WorldApp({ client, account, isMockMode }: {
         />
       )}
 
-      {route.type === "root" && route.tab === "world" && (
-        identityValue && client.api.community ? <CommunityScreen
-          key={`${identityValue.activeSubject.kind}:${identityId}`}
-          client={client.api.community}
-          viewer={{ kind: identityValue.activeSubject.kind, id: identityId }}
-          initialPostDraft={communityDraft.current}
-          onPostDraftChange={(draft) => { communityDraft.current = draft; }}
-          initialScrollY={nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0}
-          onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))}
-        /> : identitySwitchPending ? <ActivityIndicator accessibilityLabel="正在切换身份" /> :
-        <WorldScreen
-          state={world}
-          isMockMode={isMockMode}
-          scrollRef={worldScrollRef}
-          onScroll={(y) =>
-            setNav((current) => saveScroll(current, identityId, "world", y))
-          }
-          onOpenActor={openProfile}
-          onOpenEncounter={openEncounter}
-          onRetry={() => void loadWorld()}
-        />
+      {viewer && client.api.community && (
+        <View pointerEvents={worldVisible ? "auto" : "none"} aria-hidden={!worldVisible}
+          importantForAccessibility={worldVisible ? "auto" : "no-hide-descendants"}
+          accessibilityElementsHidden={!worldVisible}
+          style={worldVisible ? { flex: 1 } : styles.inactiveRoot}>
+          <CommunityScreen key={viewerKey} client={client.api.community} viewer={viewer}
+            onPublish={() => openFromTab("world", { type: "compose-post" })}
+            onNavigate={openCommunity} onFollowList={openFollows} onBack={goBack}
+            revision={communityRevision} onChanged={invalidateCommunity}
+            initialScrollY={nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0}
+            onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))} />
+        </View>
       )}
+      {worldVisible && !client.api.community && <WorldScreen
+        state={world} isMockMode={isMockMode} scrollRef={worldScrollRef}
+        onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))}
+        onOpenActor={openProfile} onOpenEncounter={openEncounter} onRetry={() => void loadWorld()} />}
 
       <View
         pointerEvents={route.type === "root" && route.tab === "home" ? "auto" : "none"}
+        aria-hidden={route.type !== "root" || route.tab !== "home"}
+        accessibilityElementsHidden={route.type !== "root" || route.tab !== "home"}
+        importantForAccessibility={route.type === "root" && route.tab === "home" ? "auto" : "no-hide-descendants"}
         style={
           route.type === "root" && route.tab === "home"
             ? { flex: 1 }
@@ -524,46 +566,95 @@ function WorldApp({ client, account, isMockMode }: {
         }
       >
         <PrivateHomeScreen
-          key={`${currentKind}:${identityId}`}
+          key={JSON.stringify([viewerKey, homeScope?.ownerId, homeCompanion?.companionId])}
           chatClient={canUseChat ? client.api.chat : undefined}
-          companionId={homeCompanion?.companionId}
+          scope={homeScope}
           isCompanion={isSampleCompanion}
-          isMockMode={isMockMode}
           isActive={route.type === "root" && route.tab === "home"}
-          userName={identityLabel(identityValue)}
           companionName={homeCompanion?.displayName ?? companionDisplayName}
-          onOpenDiary={diaryClient && homeCompanion ? () => setNav(current => {
-            const top = current.stack.at(-1);
-            if (top?.type !== "root" || top.tab !== "home") return current;
-            return pushRoute(current, {
-              type: "diary", companionId: homeCompanion.companionId, companionName: homeCompanion.displayName,
-            });
-          }) : undefined}
-          onOpenChat={(chatId, compId, compName, autoFocus) =>
-            setNav((current) =>
-              pushRoute(current, {
-                type: "chat",
-                chatId,
-                companionId: compId,
-                companionName: compName,
-                autoFocus,
-                fromTab: "home",
-              }),
-            )
-          }
+          onOpenDiary={diaryClient && homeScope ? () => openDiary(homeScope.companionId) : undefined}
+          onOpenAlbum={homeScope ? () => openFromTab("home", { type: "album", companionId: homeScope.companionId }) : undefined}
         />
       </View>
+
+      {viewer && (
+        <View
+          pointerEvents={messagesVisible ? "auto" : "none"}
+          aria-hidden={!messagesVisible}
+          accessibilityElementsHidden={!messagesVisible}
+          importantForAccessibility={messagesVisible ? "auto" : "no-hide-descendants"}
+          style={messagesVisible ? { flex: 1 } : styles.inactiveRoot}
+        >
+          <MessagesScreen
+            key={viewerKey}
+            api={client.api}
+            viewer={viewer}
+            chatClient={canUseChat ? client.api.chat : undefined}
+            companions={ownerCompanions.kind === "success" ? ownerCompanions.value.items : []}
+            visible={messagesVisible}
+            onChat={chat => openFromTab("messages", {
+              type: "chat", chatId: chat.id, companionId: chat.direct ? chat.members[0]?.companionId : undefined,
+              companionName: chat.title ?? chat.members.map(member => member.displayName).join("、"),
+              fromTab: "messages",
+            })}
+            onStartChat={companion => openFromTab("messages", {
+              type: "chat", companionId: companion.companionId, companionName: companion.displayName, fromTab: "messages",
+            })}
+            onCreateGroup={() => openFromTab("messages", { type: "create-group" })}
+            onCommunityTarget={target => openFromTab("messages", { type: "community-target", target })}
+            onLife={() => openFromTab("messages", { type: "life-archive" })}
+          />
+        </View>
+      )}
+
+      {route.type === "community-target" && viewer && client.api.community && (
+        <CommunityScreen key={JSON.stringify([viewerKey, route.target])} client={client.api.community}
+          viewer={viewer} initialTarget={route.target} onNavigate={openCommunity} onFollowList={openFollows}
+          onBack={goBack} revision={communityRevision} onChanged={invalidateCommunity} onScroll={() => {}} />
+      )}
+
+      {route.type === "compose-post" && viewer && identityValue && client.api.community && (
+        <ComposePostScreen key={viewerKey} client={client.api.community} viewer={viewer}
+          ownerId={identityValue.viewer.ownerId} onBack={goBack} onPublished={() => {
+            setCommunityRevision(value => value + 1);
+            goBack();
+          }} />
+      )}
+
+      {route.type === "community-follows" && viewer && client.api.community && (
+        <CommunityFollowList client={client.api.community} viewer={viewer} direction={route.direction}
+          onActor={id => openCommunity({ type: "profile", id })}
+          onChanged={invalidateCommunity} />
+      )}
+
+      {route.type === "album" && homeScope && route.companionId === homeScope.companionId && (
+        <AlbumScreen key={JSON.stringify(homeScope)} scope={homeScope} />
+      )}
+
+      {route.type === "create-group" && canUseChat && client.api.chat && (
+        <CreateGroupScreen client={client.api.chat} companions={availableCompanions} onCreated={chat => {
+          setNav(current => current.stack.at(-1) === route
+            ? pushRoute(popRoute(current), { type: "chat", chatId: chat.id, companionName: chat.title ?? "群聊", fromTab: "messages" })
+            : current);
+        }} />
+      )}
+
+      {route.type === "chat-settings" && canUseChat && client.api.chat && (
+        <ChatSettingsScreen key={route.companionId} client={client.api.chat} companionId={route.companionId} />
+      )}
 
       {route.type === "chat" && canUseChat && client.api.chat && (
         <ChatScreen
           key={JSON.stringify([viewerKey, route.chatId, route.companionId])}
           client={client.api.chat}
           initialChatId={route.chatId}
-          companionId={route.companionId ?? (ownerCompanions.kind === "success" ? ownerCompanions.value.items[0]?.companionId : undefined)}
+          companionId={route.companionId}
           companionName={route.companionName ?? companionDisplayName}
           ownerName={identityLabel(identityValue)}
           autoFocus={route.autoFocus === true}
-          backLabel={route.fromTab === "my" ? "返回" : "返回小家"}
+          backLabel={route.fromTab === "messages" ? "返回消息" : route.fromTab === "my" ? "返回" : "返回小家"}
+          onSaveQuote={ownerId && route.companionId ? quote => addAlbumQuote({ ownerId, companionId: route.companionId! }, quote) : undefined}
+          onOpenSettings={route.companionId ? () => setNav(current => pushRoute(current, { type: "chat-settings", companionId: route.companionId! })) : undefined}
           onBackToHome={goBack}
         />
       )}
@@ -586,6 +677,7 @@ function WorldApp({ client, account, isMockMode }: {
       {route.type === "root" && (
         <View
           pointerEvents={route.tab === "my" ? "auto" : "none"}
+          aria-hidden={route.tab !== "my"}
           style={
             route.tab === "my"
               ? { flex: 1 }
@@ -601,6 +693,7 @@ function WorldApp({ client, account, isMockMode }: {
           companions={ownerCompanions}
           selfProfile={profile}
           onOpenCompanionProfile={(item) => openProfile(item.companionId)}
+          onUpdateCompanion={(item) => setNav(current => pushRoute(current, { type: "bring-companion", companionId: item.companionId }))}
           onOpenCompanionChat={canUseChat ? (item) => setNav((current) => pushRoute(current, { type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my" })) : undefined}
           onControls={(item) => {
             setCompanionDisplayName(item.displayName);
@@ -618,6 +711,9 @@ function WorldApp({ client, account, isMockMode }: {
               approvedFields: item.approvedFields,
             }));
           }}
+          onFollowList={openFollows}
+          onPosts={id => openCommunity({ type: "profile", id })}
+          communityRevision={communityRevision}
           onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && client.api.community
             ? () => setNav(current => pushRoute(current, { type: "edit-human-profile" })) : undefined}
         />
@@ -662,15 +758,20 @@ function WorldApp({ client, account, isMockMode }: {
         />
       )}
 
-      {route.type === "bring-companion" && (
+      {route.type === "bring-companion" && viewer?.kind === "OWNER" && (
         <BringCompanionScreen
+          key={route.companionId ?? "new"}
+          onBack={goBack}
           api={client.api}
-          onResidencyChanged={() => {
+          existingCompanionId={route.companionId}
+          onCreated={(created, approvedFields) => {
+            setCreatedHome({
+              companionId: created.companionId, displayName: created.displayName, identityId: created.id,
+              identityVersion: created.version, approvedFields, status: "ACTIVE", socialReady: false,
+            });
             invalidateCompanionViews();
             void loadOwnerCompanions();
-          }}
-          onOpenCompanion={(identity) => {
-            openProfile(identity.companionId);
+            setNav(current => selectTab(current, "home"));
           }}
         />
       )}
@@ -701,6 +802,7 @@ function WorldApp({ client, account, isMockMode }: {
           companionName={companionDisplayName}
           onVisibilitySaved={invalidateCompanionViews}
           diaryClient={diaryClient}
+          onChatSettings={canUseChat ? () => setNav(current => pushRoute(current, { type: "chat-settings", companionId: route.companionId })) : undefined}
         />
       )}
 
@@ -726,6 +828,7 @@ function WorldApp({ client, account, isMockMode }: {
         isSampleCompanion={isSampleCompanion}
         account={account}
         onClose={() => setMySettingsOpen(false)}
+        onBlocks={viewer && client.api.community ? () => openCommunity({ type: "blocks" }) : undefined}
         onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
         onAgentSettings={
           agentViewer && client.api.community
@@ -748,7 +851,7 @@ function AppHeader({
   onOpenSettings,
 }: {
   routeIsRoot: boolean;
-  rootTab: "world" | "home" | "my";
+  rootTab: RootTab;
   identityTitle: string;
   isSampleCompanion: boolean;
   identity: LoadState<ActiveIdentityContext>;
@@ -756,13 +859,14 @@ function AppHeader({
   onIdentity: () => void;
   onOpenSettings: () => void;
 }) {
-  const { skin } = useSkin();
+  const styles = useThemedStyles(createStyles);
+  const { skin, ui } = useSkin();
   const avatar = identity.kind === "success" ? identity.value.activeSubject.presentation.avatar : undefined;
   const defaultSkin = skin.id === "default";
-  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
+  const ink = defaultSkin ? ui.ink : skin.colors.ink;
 
   return (
-    <View style={!routeIsRoot && { backgroundColor: skin.isDark ? skin.colors.canvas : PEARL_UI.background[0] }}>
+    <View style={!routeIsRoot && { backgroundColor: ui.background[0] }}>
       <View style={styles.topBar}>
         {routeIsRoot ? (
           <Pressable
@@ -821,6 +925,7 @@ function WorldScreen({
   onOpenEncounter: (item: WorldItem) => void;
   onRetry: () => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   if (state.kind === "loading" || state.kind === "idle") return <Loading />;
   if (state.kind === "empty") {
     return <Centered title="公共社区还没有可见内容" body="这里会展示真实发布或授权公开的社区记录。" />;
@@ -876,6 +981,8 @@ function FeedItem({
   onOpenActor?: () => void;
   onOpen: () => void;
 }) {
+  const { ui } = useSkin();
+  const styles = useThemedStyles(createStyles);
   const canOpen = item.viewerCapabilities.openDetail === true && item.source.type === "ENCOUNTER";
   const hasMedia = (item.media?.length ?? 0) > 0;
 
@@ -900,7 +1007,7 @@ function FeedItem({
         <Text style={styles.feedBody}>
           {item.body.split(/(#[^\s#]+)/g).map((seg, i) =>
             seg.startsWith("#") ? (
-              <Text key={i} style={{ color: PEARL_UI.accent, fontWeight: "600" }}>{seg}</Text>
+              <Text key={i} style={{ color: ui.accent, fontWeight: "600" }}>{seg}</Text>
             ) : (
               <Text key={i}>{seg}</Text>
             ),
@@ -975,6 +1082,7 @@ function EncounterScreen({
   momentMode: boolean;
   companionName: string;
 }) {
+  const styles = useThemedStyles(createStyles);
   if (state.kind === "loading" || state.kind === "idle") return <Loading />;
   if (state.kind === "error") {
     return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
@@ -1091,6 +1199,7 @@ function ProfileScreen({
   onRetry: () => void;
   onControls: () => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   if (state.kind === "loading" || state.kind === "idle") return <Loading />;
   if (state.kind === "error") {
     return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
@@ -1149,7 +1258,7 @@ function ProfileScreen({
       <View style={styles.profileSection}>
         {p.viewer.capabilities.openControls === true && (
           <Pressable style={styles.secondaryPill} onPress={onControls}>
-            <LiquidGlassSurface glass tint="light" style={StyleSheet.absoluteFill} />
+            <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
             <Text style={styles.secondaryPillText}>设置</Text>
           </Pressable>
         )}
@@ -1168,100 +1277,6 @@ function ProfileScreen({
   );
 }
 
-function PrivateHomeScreen({
-  chatClient,
-  companionId,
-  userName,
-  companionName,
-  isCompanion,
-  isMockMode,
-  isActive,
-  onOpenChat,
-  onOpenDiary,
-}: {
-  chatClient?: ChatClient;
-  companionId?: string;
-  userName: string;
-  companionName: string;
-  isCompanion: boolean;
-  isMockMode: boolean;
-  isActive: boolean;
-  onOpenDiary?: () => void;
-  onOpenChat: (chatId?: string, companionId?: string, companionName?: string, autoFocus?: boolean) => void;
-}) {
-  const { chatId: activeChatId, messages: latestMessages, submit } = useHomeChat(chatClient, companionId, isActive);
-  const previewBubbles = !chatClient ? [] : latestMessages.length > 0
-    ? latestMessages
-    : isMockMode
-      ? [
-          { id: "fallback-1", companionId: companionId ?? "comp", body: "今晚风大，回来喝杯热的。", mentions: [], status: "SENT" as const, failure: null, retryable: false, sentAt: "" },
-          { id: "fallback-2", companionId: null, body: "马上到家啦。", mentions: [], status: "SENT" as const, failure: null, retryable: false, sentAt: "" },
-        ]
-      : [];
-
-  return (
-    <ScrollView
-      style={styles.rootContent}
-      contentContainerStyle={[styles.privateHomePage, { paddingBottom: CHROME.scrollBottomClearance + 8 }]}
-      showsVerticalScrollIndicator={false}
-    >
-      <PearlInteractiveRoom
-        companionName={companionName}
-        isCompanionView={isCompanion}
-        isActive={isActive}
-        onOpenDiary={onOpenDiary}
-        onAction={action => submit.current?.(action)}
-      />
-
-      {/* Light Chat Preview Bubbles (tap to open full-screen chat) */}
-      {previewBubbles.length > 0 && (
-        <Pressable
-          onPress={() => onOpenChat(activeChatId, companionId, companionName, false)}
-          style={styles.homeChatPreviewWrap}
-          accessibilityRole="button"
-          accessibilityLabel={`打开与 ${companionName} 的聊天`}
-        >
-          {previewBubbles.map((msg) => {
-            const isMine = msg.companionId === null;
-            return (
-              <View key={msg.id} style={[styles.homeMsgRow, isMine && styles.homeMsgRowMine]}>
-                <PixelAvatar
-                  name={isMine ? userName : companionName}
-                  role={isMine ? "owner" : "companion"}
-                  size={30}
-                />
-                <View style={[styles.homeMsgBubble, isMine ? styles.homeMsgBubbleMine : styles.homeMsgBubbleOther]}>
-                  <Text style={[styles.homeMsgText, isMine && styles.homeMsgTextMine]} numberOfLines={2}>
-                    {msg.body ?? "（消息暂不可显示）"}
-                  </Text>
-                </View>
-              </View>
-            );
-          })}
-        </Pressable>
-      )}
-
-      {/* Clean Liquid Glass Input Bar (tapping auto-focuses keyboard in ChatScreen) */}
-      {chatClient && (
-        <Pressable
-          onPress={() => onOpenChat(activeChatId, companionId, companionName, true)}
-          style={({ pressed }) => [styles.homeComposerWrap, pressed && { transform: [{ scale: 0.99 }] }]}
-          accessibilityRole="button"
-          accessibilityLabel={`和 ${companionName} 说点什么`}
-        >
-          <LiquidGlassSurface glass borderRadius={RADIUS.pill}>
-            <View style={styles.homeComposerInner}>
-              <Text style={styles.homeComposerPlaceholder}>和 {companionName} 说点什么…</Text>
-              <View style={styles.homeComposerSendBtn}>
-                <Ionicons name="paper-plane-outline" size={15} color="#FFFFFF" />
-              </View>
-            </View>
-          </LiquidGlassSurface>
-        </Pressable>
-      )}
-    </ScrollView>
-  );
-}
 function LifeScreen({
   state,
   isCompanion,
@@ -1275,6 +1290,7 @@ function LifeScreen({
   onRetry: () => void;
   onOpenEncounter: (item: LifeContinuityItem) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   if (state.kind === "loading" || state.kind === "idle") return <Loading />;
   if (state.kind === "error") return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
 
@@ -1331,9 +1347,13 @@ function MyScreen({
   companions,
   selfProfile,
   onOpenCompanionProfile,
+  onUpdateCompanion,
   onOpenCompanionChat,
   onControls,
   onResumeCompanion,
+  onFollowList,
+  onPosts,
+  communityRevision,
   onEditHumanProfile,
 }: {
   community?: CommunityClient;
@@ -1343,17 +1363,20 @@ function MyScreen({
   companions: LoadState<OwnerCompanionCollection>;
   selfProfile: LoadState<CompanionProfile>;
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
+  onUpdateCompanion: (item: OwnerCompanionSummary) => void;
   onOpenCompanionChat?: (item: OwnerCompanionSummary) => void;
   onControls: (item: OwnerCompanionSummary) => void;
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
+  onFollowList: (direction: FollowDirection) => void;
+  communityRevision: number;
+  onPosts: (id: string) => void;
   onEditHumanProfile?: () => void;
 }) {
-  const { skin } = useSkin();
+  const styles = useThemedStyles(createStyles);
+  const { skin, ui } = useSkin();
 
   const [communityData, setCommunityData] = useState<LoadState<CommunityPost[]>>({ kind: "idle" });
   const [ownProfile, setOwnProfile] = useState<CommunityProfile>();
-  const [followDirection, setFollowDirection] = useState<FollowDirection>();
-  const [profileRefresh, setProfileRefresh] = useState(0);
   const subject = identity.kind === "success" ? identity.value.activeSubject : undefined;
   const actorKind = subject?.kind;
   const actorId = subject?.id;
@@ -1372,13 +1395,13 @@ function MyScreen({
       if (active) setCommunityData({ kind: "error", ...safeClientMessage(error) });
     });
     return () => { active = false; };
-  }, [community, actorKind, actorId, profileRefresh]);
+  }, [community, actorKind, actorId, communityRevision]);
   const displayName = ownProfile?.displayName ?? subject?.presentation.displayName
     ?? (isSampleCompanion ? companionName : "我的账号");
   const bio = ownProfile?.bio;
   const defaultSkin = skin.id === "default";
-  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
-  const muted = defaultSkin ? PEARL_UI.muted : skin.colors.inkSub;
+  const ink = defaultSkin ? ui.ink : skin.colors.ink;
+  const muted = defaultSkin ? ui.muted : skin.colors.inkSub;
 
   return (
     <ScrollView
@@ -1408,7 +1431,7 @@ function MyScreen({
             .map(([direction, label, count]) => (
               <Pressable key={direction} style={styles.statCol} accessibilityRole="button"
                 accessibilityLabel={`${label} ${count ?? "未加载"}`} disabled={!ownProfile}
-                onPress={() => setFollowDirection(direction)}>
+                onPress={() => onFollowList(direction)}>
                 <Text style={[styles.statNum, { color: ink }]}>{count ?? "—"}</Text>
                 <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>{label}</Text>
               </Pressable>
@@ -1421,7 +1444,7 @@ function MyScreen({
             style={({ pressed }) => [styles.editProfilePill, pressed && { transform: [{ scale: 0.95 }] }]}
           >
             <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-            <Ionicons name="create-outline" size={14} color={PEARL_UI.accentInk} />
+            <Ionicons name="create-outline" size={14} color={ui.accentInk} />
             <Text style={styles.editProfilePillText}>编辑资料</Text>
           </Pressable>
         )}
@@ -1431,7 +1454,7 @@ function MyScreen({
       {!isSampleCompanion && companions.kind === "success" && companions.value.items.map((item: OwnerCompanionSummary) => (
         <View
           key={item.companionId}
-          style={[styles.relationPillCard, { backgroundColor: defaultSkin ? PEARL_UI.white : skin.colors.surface, borderColor: skin.colors.border }]}
+          style={[styles.relationPillCard, { backgroundColor: defaultSkin ? ui.white : skin.colors.surface, borderColor: skin.colors.border }]}
         >
           <Pressable
             style={styles.relationMain}
@@ -1449,9 +1472,9 @@ function MyScreen({
             {onOpenCompanionChat && (
               <Pressable
                 onPress={() => onOpenCompanionChat(item)}
-                style={[styles.relControlBtn, { backgroundColor: PEARL_UI.iceBlue, borderColor: "#FFFFFF" }]}
+                style={[styles.relControlBtn, { backgroundColor: ui.iceBlue, borderColor: ui.highlight }]}
               >
-                <Text style={[styles.relControlText, { color: "#FFFFFF" }]}>聊天</Text>
+                <Text style={[styles.relControlText, { color: ui.accentInk }]}>聊天</Text>
               </Pressable>
             )}
             {item.socialReady && (
@@ -1466,7 +1489,17 @@ function MyScreen({
         </View>
       ))}
 
-      <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近动态</Text>
+      {!isSampleCompanion && companions.kind === "success" && companions.value.items.map(item => (
+        <Pressable key={item.companionId} accessibilityRole="button" onPress={() => onUpdateCompanion(item)}>
+          <Text style={[styles.heroBio, { color: muted }]}>更新 {item.displayName} 的资料</Text>
+        </Pressable>
+      ))}
+      <View style={styles.postSectionHeader}>
+        <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近动态</Text>
+        {ownProfile && <Pressable accessibilityRole="button" onPress={() => onPosts(ownProfile.id)}>
+          <Text style={[styles.heroBio, { color: ui.accentInk }]}>查看全部动态</Text>
+        </Pressable>}
+      </View>
       {communityData.kind === "loading" ? <ActivityIndicator /> : null}
       {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: muted }]}>{communityData.title}</Text> : null}
       {communityData.kind === "success" && communityData.value.length > 0 && (
@@ -1487,14 +1520,6 @@ function MyScreen({
         </View>
       )}
 
-      {followDirection && community && actorKind && actorId && (
-        <CommunityFollowList client={community} viewer={{ kind: actorKind, id: actorId }} direction={followDirection}
-          canFollow={ownProfile?.canPublish === true} onClose={changed => {
-            setFollowDirection(undefined);
-            if (changed) setProfileRefresh(current => current + 1);
-          }} />
-      )}
-
     </ScrollView>
   );
 }
@@ -1505,6 +1530,7 @@ function AppSettingsSheet({
   account,
   onClose,
   onBringCompanion,
+  onBlocks,
   onAgentSettings,
 }: {
   visible: boolean;
@@ -1512,13 +1538,15 @@ function AppSettingsSheet({
   account?: { email?: string; signOut: () => void };
   onClose: () => void;
   onBringCompanion: () => void;
+  onBlocks?: () => void;
   onAgentSettings?: () => void;
 }) {
-  const { skin, setSkinById, availableSkins } = useSkin();
+  const styles = useThemedStyles(createStyles);
+  const { skin, ui, setSkinById, availableSkins } = useSkin();
   const [colorModalOpen, setColorModalOpen] = useState(false);
   const defaultSkin = skin.id === "default";
-  const ink = defaultSkin ? PEARL_UI.ink : skin.colors.ink;
-  const muted = defaultSkin ? PEARL_UI.muted : skin.colors.inkSub;
+  const ink = defaultSkin ? ui.ink : skin.colors.ink;
+  const muted = defaultSkin ? ui.muted : skin.colors.inkSub;
 
   return (
     <>
@@ -1537,8 +1565,14 @@ function AppSettingsSheet({
               <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
             </Pressable>
           )}
+          {onBlocks && <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={() => { onClose(); onBlocks(); }}>
+            <Text style={[styles.cleanRowTitle, { color: ink }]}>屏蔽管理</Text>
+            <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
+          </Pressable>}
           {!isSampleCompanion && (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="添加陪伴成员"
               style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
               onPress={() => {
                 onClose();
@@ -1553,6 +1587,8 @@ function AppSettingsSheet({
             </Pressable>
           )}
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="基础外观配色"
             style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
             onPress={() => {
               onClose();
@@ -1629,6 +1665,7 @@ function IdentitySwitcher({
   onOwner: () => void;
   onCompanion: (item: OwnerCompanionSummary) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   const activeKind = identity.kind === "success" ? identity.value.activeSubject.kind : "OWNER";
   const activeId = identity.kind === "success" ? identity.value.activeSubject.id : undefined;
   const ownerActive = activeKind === "OWNER";
@@ -1640,10 +1677,11 @@ function IdentitySwitcher({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={() => undefined}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessible={false} />
+        <View style={styles.sheet}>
           <View style={styles.sheetHandle} />
-          <LiquidGlassSurface glass tint="light" borderRadius={16} style={styles.sheetHeading}>
+          <LiquidGlassSurface glass borderRadius={16} style={styles.sheetHeading}>
             <Text accessibilityRole="header" style={styles.sheetTitle}>切换身份</Text>
           </LiquidGlassSurface>
           <Text style={styles.sheetLabel}>现在是</Text>
@@ -1683,14 +1721,14 @@ function IdentitySwitcher({
             );
           })}
 
-
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
 
 function Loading() {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.center}>
       <ActivityIndicator />
@@ -1700,6 +1738,7 @@ function Loading() {
 }
 
 function Centered({ title, body }: { title: string; body?: string }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.center}>
       <Text style={styles.centerTitle}>{title}</Text>
@@ -1717,6 +1756,7 @@ function ErrorState({
   retry: boolean;
   onRetry: () => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.center}>
       <Text style={styles.centerTitle}>{title}</Text>
@@ -1729,11 +1769,13 @@ function ErrorState({
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.canvas },
-  content: { flex: 1, backgroundColor: colors.canvas },
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  postSectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" },
+  safe: { flex: 1, backgroundColor: ui.background[0] },
+  content: { flex: 1, backgroundColor: ui.background[0] },
 
   rootContent: { flex: 1 },
+  inactiveRoot: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, opacity: 0, zIndex: -1 },
   topBar: {
     minHeight: 58,
     paddingHorizontal: CHROME.screenInset,
@@ -1751,30 +1793,29 @@ const styles = StyleSheet.create({
     marginRight: 12,
     paddingHorizontal: 9,
   },
-  brand: { flexShrink: 1, fontSize: 14, fontWeight: "700", color: colors.ink, letterSpacing: -0.2 },
-  chevron: { color: colors.tertiary, fontSize: 15, marginTop: -3 },
+  brand: { flexShrink: 1, fontSize: 14, fontWeight: "700", color: ui.ink, letterSpacing: -0.2 },
+  chevron: { color: ui.placeholder, fontSize: 15, marginTop: -3 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 14 },
-  privateHomePage: { paddingHorizontal: CHROME.screenInset, paddingTop: 10, paddingBottom: 44 },
-  privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: colors.text },
+  privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: ui.ink },
   privateHomeRecordList: { marginTop: 12, gap: 9 },
-  privateHomeEmpty: { minHeight: 74, marginTop: 10, paddingHorizontal: 16, backgroundColor: "rgba(255,255,255,0.72)", borderWidth: 1, borderColor: PEARL_UI.highlight, borderRadius: 20, alignItems: "center", justifyContent: "center", gap: 8 },
-  privateHomeRecordRow: { minHeight: 70, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: PEARL_UI.white, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 20, flexDirection: "row", alignItems: "center", shadowColor: "#8A857C", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 10, elevation: 1 },
+  privateHomeEmpty: { minHeight: 74, marginTop: 10, paddingHorizontal: 16, backgroundColor: ui.white, borderWidth: 1, borderColor: ui.highlight, borderRadius: 20, alignItems: "center", justifyContent: "center", gap: 8 },
+  privateHomeRecordRow: { minHeight: 70, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: ui.white, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 20, flexDirection: "row", alignItems: "center", shadowColor: ui.shadow, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 10, elevation: 1 },
   privateHomeRecordText: { flex: 1 },
-  privateHomeRecordTitle: { fontSize: 14, fontWeight: "600", color: colors.text },
-  privateHomeRecordCaption: { marginTop: 5, fontSize: 11, color: colors.muted },
+  privateHomeRecordTitle: { fontSize: 14, fontWeight: "600", color: ui.ink },
+  privateHomeRecordCaption: { marginTop: 5, fontSize: 11, color: ui.muted },
 
   feed: { paddingBottom: 26 },
   feedHeading: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
-  feedTitle: { fontSize: 26, lineHeight: 32, fontWeight: "700", color: colors.ink, letterSpacing: -0.6 },
+  feedTitle: { fontSize: 26, lineHeight: 32, fontWeight: "700", color: ui.ink, letterSpacing: -0.6 },
   feedItem: {
-    backgroundColor: PEARL_UI.white,
+    backgroundColor: ui.white,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
     padding: 16,
     marginHorizontal: 16,
     marginBottom: 12,
-    shadowColor: "#8A857C",
+    shadowColor: ui.shadow,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.06,
     shadowRadius: 10,
@@ -1783,57 +1824,57 @@ const styles = StyleSheet.create({
   feedAuthorRow: { flexDirection: "row", alignItems: "center" },
   feedAuthorText: { flex: 1, marginLeft: 10 },
   feedAuthorLine: { flexDirection: "row", alignItems: "center", gap: 6 },
-  feedAuthorName: { fontSize: 14, fontWeight: "600", color: colors.text },
-  feedMeta: { marginTop: 2, fontSize: 11, color: colors.tertiary },
-  more: { fontSize: 15, color: colors.tertiary, letterSpacing: 1.5 },
-  feedBody: { marginTop: 12, fontSize: 15, lineHeight: 22, color: colors.text },
+  feedAuthorName: { fontSize: 14, fontWeight: "600", color: ui.ink },
+  feedMeta: { marginTop: 2, fontSize: 11, color: ui.placeholder },
+  more: { fontSize: 15, color: ui.placeholder, letterSpacing: 1.5 },
+  feedBody: { marginTop: 12, fontSize: 15, lineHeight: 22, color: ui.ink },
   mediaStack: { gap: 8, marginTop: 4 },
-  feedMediaImage: { width: "100%", height: 196, borderRadius: 16, backgroundColor: "#F2F2F7" },
-  mediaUnavailable: { minHeight: 120, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "#F7F7FA", gap: 6, padding: 16 },
+  feedMediaImage: { width: "100%", height: 196, borderRadius: 16, backgroundColor: ui.accentWash },
+  mediaUnavailable: { minHeight: 120, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: ui.background[0], gap: 6, padding: 16 },
   noMedia: {
     height: 150,
     marginTop: 13,
     borderRadius: 16,
-    backgroundColor: "#F7F7F9",
+    backgroundColor: ui.background[0],
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
+    borderColor: ui.line,
     alignItems: "center",
     justifyContent: "center",
   },
-  noMediaGlyph: { fontSize: 30, color: "#C7C7CC" },
-  noMediaText: { marginTop: 4, fontSize: 12, color: colors.tertiary },
+  noMediaGlyph: { fontSize: 30, color: ui.placeholder },
+  noMediaText: { marginTop: 4, fontSize: 12, color: ui.placeholder },
   feedActions: { marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  accentLink: { fontSize: 12, fontWeight: "600", color: colors.roseDark },
+  accentLink: { fontSize: 12, fontWeight: "600", color: ui.accentInk },
   feedEnd: { padding: 24, alignItems: "center" },
 
   encounterPage: { padding: 18, paddingBottom: 44 },
   encounterHero: { paddingVertical: 14, alignItems: "center" },
-  encounterKicker: { fontSize: 10, letterSpacing: 1.2, color: colors.roseDark, fontWeight: "700" },
-  encounterMeta: { marginTop: 6, fontSize: 12, color: colors.tertiary },
+  encounterKicker: { fontSize: 10, letterSpacing: 1.2, color: ui.accentInk, fontWeight: "700" },
+  encounterMeta: { marginTop: 6, fontSize: 12, color: ui.placeholder },
   participantRail: { marginTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "center" },
   participant: { flex: 1, minWidth: 0, alignItems: "center" },
-  participantName: { marginTop: 6, fontSize: 11, lineHeight: 15, textAlign: "center", color: colors.muted },
-  participantHandle: { marginTop: 3, fontSize: 10, lineHeight: 14, textAlign: "center", color: colors.tertiary },
-  connectionLine: { width: 18, height: StyleSheet.hairlineWidth, backgroundColor: "#D8D8DD" },
+  participantName: { marginTop: 6, fontSize: 11, lineHeight: 15, textAlign: "center", color: ui.muted },
+  participantHandle: { marginTop: 3, fontSize: 10, lineHeight: 14, textAlign: "center", color: ui.placeholder },
+  connectionLine: { width: 18, height: StyleSheet.hairlineWidth, backgroundColor: ui.line },
   encounterBadge: {
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 999,
-    backgroundColor: colors.roseWash,
+    backgroundColor: ui.iceBlue,
   },
-  encounterBadgeText: { fontSize: 10, color: colors.roseDark, fontWeight: "600" },
+  encounterBadgeText: { fontSize: 10, color: ui.accentInk, fontWeight: "600" },
   encounterPanel: {
     marginTop: 24,
     paddingVertical: 18,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
+    borderColor: ui.line,
   },
-  sectionLabel: { fontSize: 10, letterSpacing: 1.1, color: colors.tertiary, fontWeight: "600" },
-  encounterStatus: { marginTop: 8, fontSize: 22, fontWeight: "700", color: colors.text },
-  bodyText: { marginTop: 10, fontSize: 15, lineHeight: 23, color: colors.text },
-  warning: { marginTop: 10, fontSize: 12, color: "#8E652B" },
+  sectionLabel: { fontSize: 10, letterSpacing: 1.1, color: ui.placeholder, fontWeight: "600" },
+  encounterStatus: { marginTop: 8, fontSize: 22, fontWeight: "700", color: ui.ink },
+  bodyText: { marginTop: 10, fontSize: 15, lineHeight: 23, color: ui.ink },
+  warning: { marginTop: 10, fontSize: 12, color: ui.warning },
   actionStack: { marginTop: 22, gap: 10 },
   secondaryPill: {
     minHeight: 42,
@@ -1841,58 +1882,58 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: colors.canvas,
+    borderColor: ui.line,
+    backgroundColor: ui.background[0],
     alignItems: "center",
     justifyContent: "center",
   },
-  secondaryPillText: { color: colors.text, fontSize: 13, fontWeight: "600" },
+  secondaryPillText: { color: ui.ink, fontSize: 13, fontWeight: "600" },
   traceBlock: { marginTop: 26, gap: 6 },
 
-  moment: { flexGrow: 1, padding: 28, justifyContent: "center", backgroundColor: PEARL_UI.background[0] },
-  momentBrand: { position: "absolute", top: 18, right: 20, fontSize: 10, letterSpacing: 1.4, fontWeight: "800", color: colors.tertiary },
-  momentLabel: { fontSize: 10, letterSpacing: 1.4, color: PEARL_UI.accentInk, fontWeight: "700" },
-  momentTitle: { marginTop: 10, fontSize: 32, lineHeight: 38, fontWeight: "700", color: colors.ink },
-  momentDate: { marginTop: 8, fontSize: 12, color: colors.tertiary },
-  momentRule: { marginVertical: 22, height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
-  momentBody: { fontSize: 16, lineHeight: 25, color: colors.text, marginBottom: 24 },
+  moment: { flexGrow: 1, padding: 28, justifyContent: "center", backgroundColor: ui.background[0] },
+  momentBrand: { position: "absolute", top: 18, right: 20, fontSize: 10, letterSpacing: 1.4, fontWeight: "800", color: ui.placeholder },
+  momentLabel: { fontSize: 10, letterSpacing: 1.4, color: ui.accentInk, fontWeight: "700" },
+  momentTitle: { marginTop: 10, fontSize: 32, lineHeight: 38, fontWeight: "700", color: ui.ink },
+  momentDate: { marginTop: 8, fontSize: 12, color: ui.placeholder },
+  momentRule: { marginVertical: 22, height: StyleSheet.hairlineWidth, backgroundColor: ui.line },
+  momentBody: { fontSize: 16, lineHeight: 25, color: ui.ink, marginBottom: 24 },
 
 
-  secondaryPage: { flex: 1, backgroundColor: PEARL_UI.background[0] },
+  secondaryPage: { flex: 1, backgroundColor: ui.background[0] },
   profilePage: { padding: CHROME.screenInset, paddingBottom: 44 },
   profileTop: { marginBottom: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   profileAvatar: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: "#E7EEF0",
+    backgroundColor: ui.accentWash,
     alignItems: "center",
     justifyContent: "center",
   },
-  profileAvatarText: { fontSize: 28, fontWeight: "700", color: colors.text },
+  profileAvatarText: { fontSize: 28, fontWeight: "700", color: ui.ink },
   profileActions: { flexDirection: "row", gap: 8 },
-  accentSmallPill: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 999, backgroundColor: PEARL_UI.accentWash },
-  accentSmallPillText: { color: PEARL_UI.accentInk, fontSize: 13, fontWeight: "600" },
-  outlineSmallPill: { paddingHorizontal: 15, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: colors.line },
-  outlineSmallPillText: { color: colors.text, fontSize: 13, fontWeight: "600" },
-  profileHandle: { marginTop: 3, fontSize: 13, color: colors.muted },
+  accentSmallPill: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 999, backgroundColor: ui.accentWash },
+  accentSmallPillText: { color: ui.accentInk, fontSize: 13, fontWeight: "600" },
+  outlineSmallPill: { paddingHorizontal: 15, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: ui.line },
+  outlineSmallPillText: { color: ui.ink, fontSize: 13, fontWeight: "600" },
+  profileHandle: { marginTop: 3, fontSize: 13, color: ui.muted },
   profileMetaRow: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
-  profileMeta: { fontSize: 12, color: colors.muted },
-  profileDivider: { marginVertical: 20, height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
+  profileMeta: { fontSize: 12, color: ui.muted },
+  profileDivider: { marginVertical: 20, height: StyleSheet.hairlineWidth, backgroundColor: ui.line },
   profileSection: { gap: 7 },
 
   lifePage: { padding: CHROME.screenInset, paddingBottom: 44 },
-  lifeSub: { marginTop: 10, fontSize: 14, lineHeight: 22, color: colors.muted },
+  lifeSub: { marginTop: 10, fontSize: 14, lineHeight: 22, color: ui.muted },
   lifeTimelineList: { marginTop: 22, gap: 10 },
-  lifeContinuityCard: { padding: 16, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, backgroundColor: PEARL_UI.white },
-  lifeContinuityTitle: { marginTop: 7, fontSize: 16, lineHeight: 22, fontWeight: "700", color: colors.text },
-  timelineCard: { flex: 1, marginLeft: 10, padding: 16, borderRadius: 16, backgroundColor: PEARL_UI.white, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line },
-  accountHandle: { marginTop: 3, fontSize: 11, color: colors.tertiary },
-  accountArrow: { fontSize: 22, color: "#C7C7CC", fontWeight: "300" },
+  lifeContinuityCard: { padding: 16, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, backgroundColor: ui.white },
+  lifeContinuityTitle: { marginTop: 7, fontSize: 16, lineHeight: 22, fontWeight: "700", color: ui.ink },
+  timelineCard: { flex: 1, marginLeft: 10, padding: 16, borderRadius: 16, backgroundColor: ui.white, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line },
+  accountHandle: { marginTop: 3, fontSize: 11, color: ui.placeholder },
+  accountArrow: { fontSize: 22, color: ui.placeholder, fontWeight: "300" },
 
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.25)",
+    backgroundColor: ui.scrim,
     justifyContent: "flex-end",
   },
   sheet: {
@@ -1901,27 +1942,27 @@ const styles = StyleSheet.create({
     paddingBottom: 30,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: PEARL_UI.background[0],
+    backgroundColor: ui.background[0],
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
   },
-  sheetHandle: { alignSelf: "center", width: 38, height: 4, borderRadius: 2, backgroundColor: "#D1D1D6" },
+  sheetHandle: { alignSelf: "center", width: 38, height: 4, borderRadius: 2, backgroundColor: ui.line },
   sheetHeading: { marginTop: 12, paddingVertical: 8 },
-  sheetTitle: { fontSize: 22, fontWeight: "700", textAlign: "center", color: PEARL_UI.ink },
-  sheetLabel: { marginTop: 22, marginBottom: 8, fontSize: 11, color: colors.tertiary },
+  sheetTitle: { fontSize: 22, fontWeight: "700", textAlign: "center", color: ui.ink },
+  sheetLabel: { marginTop: 22, marginBottom: 8, fontSize: 11, color: ui.placeholder },
   switchAccountRow: {
     minHeight: 70,
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 16,
-    backgroundColor: PEARL_UI.white,
+    backgroundColor: ui.white,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
   },
   switchAccountText: { flex: 1, marginLeft: 12 },
-  switchAccountName: { fontSize: 14, fontWeight: "700", color: colors.text },
-  checkmark: { fontSize: 20, color: colors.ink },
+  switchAccountName: { fontSize: 14, fontWeight: "700", color: ui.ink },
+  checkmark: { fontSize: 20, color: ui.ink },
 
   inlineNotice: {
     alignSelf: "flex-start",
@@ -1929,13 +1970,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "#FFF6E8",
+    backgroundColor: ui.warningSurface,
   },
-  inlineNoticeText: { fontSize: 11, color: "#8E652B" },
-  center: { flex: 1, padding: 28, alignItems: "center", justifyContent: "center", gap: 12, backgroundColor: colors.canvas },
-  centerTitle: { fontSize: 22, lineHeight: 28, fontWeight: "700", textAlign: "center", color: colors.ink },
-  centerBody: { maxWidth: 360, fontSize: 14, lineHeight: 21, color: colors.muted, textAlign: "center" },
-  tinyMuted: { fontSize: 11, lineHeight: 17, color: colors.tertiary },
+  inlineNoticeText: { fontSize: 11, color: ui.warning },
+  center: { flex: 1, padding: 28, alignItems: "center", justifyContent: "center", gap: 12, backgroundColor: ui.background[0] },
+  centerTitle: { fontSize: 22, lineHeight: 28, fontWeight: "700", textAlign: "center", color: ui.ink },
+  centerBody: { maxWidth: 360, fontSize: 14, lineHeight: 21, color: ui.muted, textAlign: "center" },
+  tinyMuted: { fontSize: 11, lineHeight: 17, color: ui.placeholder },
   disabled: { opacity: 0.38 },
   skinPreviewBox: {
     borderRadius: 22,
@@ -2076,74 +2117,12 @@ const styles = StyleSheet.create({
   editProfilePillText: {
     fontSize: 12.5,
     fontWeight: "600",
-    color: PEARL_UI.accentInk,
+    color: ui.accentInk,
   },
   relControlText: {
     fontSize: 12,
     fontWeight: "600",
   },
 
-  homeChatPreviewWrap: {
-    marginTop: 14,
-    gap: 10,
-  },
-  homeMsgRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  homeMsgRowMine: {
-    flexDirection: "row-reverse",
-  },
-  homeMsgBubble: {
-    maxWidth: "74%",
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 18,
-    borderWidth: 1,
-  },
-  homeMsgBubbleOther: {
-    backgroundColor: "rgba(255,255,255,0.90)",
-    borderColor: PEARL_UI.highlight,
-    borderBottomLeftRadius: 6,
-  },
-  homeMsgBubbleMine: {
-    backgroundColor: PEARL_UI.iceBlue,
-    borderColor: "rgba(255,255,255,0.78)",
-    borderBottomRightRadius: 6,
-  },
-  homeMsgText: {
-    fontSize: 13.5,
-    lineHeight: 19,
-    color: PEARL_UI.ink,
-  },
-  homeMsgTextMine: {
-    color: "#FFFFFF",
-    fontWeight: "500",
-  },
-  homeComposerWrap: {
-    marginTop: 12,
-  },
-  homeComposerInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingLeft: 16,
-    paddingRight: 6,
-    paddingVertical: 6,
-  },
-  homeComposerPlaceholder: {
-    fontSize: 13.5,
-    color: PEARL_UI.muted,
-  },
-  homeComposerSendBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: PEARL_UI.iceBlue,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.82)",
-  },
+
 });

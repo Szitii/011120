@@ -1,7 +1,8 @@
+import { useSkin, useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, StyleSheet, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { PEARL_UI } from "../theme/skinTokens";
 
 /**
  * 极简液态珍珠加载动效：暖珍珠柔雾罩 + 冰雾蓝轻呼吸环 + 斜向流光
@@ -14,6 +15,8 @@ export function PearlTransitionLoader({
   visible: boolean;
   borderRadius?: number;
 }) {
+  const styles = useThemedStyles(createStyles);
+  const { ui } = useSkin();
   const [mounted, setMounted] = useState(visible);
   const fade = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const breath = useRef(new Animated.Value(0)).current;
@@ -86,7 +89,7 @@ export function PearlTransitionLoader({
       style={[styles.overlay, { borderRadius, opacity: fade }]}
     >
       <LinearGradient
-        colors={["rgba(246, 245, 240, 0.94)", "rgba(240, 233, 225, 0.96)"]}
+        colors={ui.background}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
@@ -103,7 +106,7 @@ export function PearlTransitionLoader({
         />
         <Animated.View style={[styles.pearlShell, { transform: [{ scale: orbScale }] }]}>
           <LinearGradient
-            colors={["rgba(255,255,255,0.96)", "rgba(180,192,212,0.55)"]}
+            colors={[ui.white, ui.iceBlue]}
             start={{ x: 0.2, y: 0.1 }}
             end={{ x: 0.9, y: 0.9 }}
             style={styles.pearlCore}
@@ -115,7 +118,7 @@ export function PearlTransitionLoader({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (ui: UiPalette) => StyleSheet.create({
   overlay: {
     position: "absolute",
     top: 0,
@@ -139,16 +142,16 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     borderWidth: 1.25,
-    borderColor: PEARL_UI.iceBlue,
+    borderColor: ui.iceBlue,
   },
   pearlShell: {
     width: 34,
     height: 34,
     borderRadius: 17,
     padding: 3,
-    backgroundColor: "rgba(255,255,255,0.82)",
+    backgroundColor: ui.white,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.96)",
+    borderColor: ui.highlight,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -162,6 +165,6 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: 3.5,
-    backgroundColor: PEARL_UI.accent,
+    backgroundColor: ui.accent,
   },
 });

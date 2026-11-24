@@ -1,20 +1,5 @@
-interface ObstacleBox {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-// Normalized furniture foot-collision boxes (0..1)
-const ROOM_OBSTACLES: ObstacleBox[] = [
-  { x1: 0.02, y1: 0.22, x2: 0.35, y2: 0.56 }, // Double bed
-  { x1: 0.33, y1: 0.28, x2: 0.45, y2: 0.43 }, // Nightstand
-  { x1: 0.65, y1: 0.22, x2: 0.98, y2: 0.43 }, // USM vinyl cabinet + floor lamp
-  { x1: 0.82, y1: 0.37, x2: 0.99, y2: 0.68 }, // Wavy mirror
-  { x1: 0.40, y1: 0.50, x2: 0.75, y2: 0.68 }, // Double sofa
-  { x1: 0.42, y1: 0.65, x2: 0.73, y2: 0.79 }, // Cloud coffee table
-  { x1: 0.03, y1: 0.56, x2: 0.23, y2: 0.83 }, // Olive plant
-];
+import { ROOM_OBSTACLES, type ObstacleBox, type RoomPoint } from "./geometry.ts";
+export type { RoomPoint } from "./geometry.ts";
 
 const GRID_COLS = 49;
 const GRID_ROWS = 51;
@@ -23,19 +8,23 @@ const WALK_MAX_X = 0.81;
 const WALK_MIN_Y = 0.42;
 const WALK_MAX_Y = 0.87;
 
+const FOOT_MARGIN_X = .016;
+const FOOT_MARGIN_Y = .012;
+
 function isPointBlocked(nx: number, ny: number): boolean {
   if (nx < WALK_MIN_X || nx > WALK_MAX_X || ny < WALK_MIN_Y || ny > WALK_MAX_Y) return true;
   for (const b of ROOM_OBSTACLES) {
-    if (nx >= b.x1 && nx <= b.x2 && ny >= b.y1 && ny <= b.y2) return true;
+    if (nx >= b.x1 - FOOT_MARGIN_X && nx <= b.x2 + FOOT_MARGIN_X &&
+      ny >= b.y1 - FOOT_MARGIN_Y && ny <= b.y2 + FOOT_MARGIN_Y) return true;
   }
   return false;
 }
 
-function segmentIntersectsBox(ax: number, ay: number, bx: number, by: number, b: ObstacleBox, pad = 0.012): boolean {
-  const x1 = b.x1 - pad;
-  const y1 = b.y1 - pad;
-  const x2 = b.x2 + pad;
-  const y2 = b.y2 + pad;
+function segmentIntersectsBox(ax: number, ay: number, bx: number, by: number, b: ObstacleBox): boolean {
+  const x1 = b.x1 - FOOT_MARGIN_X;
+  const y1 = b.y1 - FOOT_MARGIN_Y;
+  const x2 = b.x2 + FOOT_MARGIN_X;
+  const y2 = b.y2 + FOOT_MARGIN_Y;
   const dx = bx - ax;
   const dy = by - ay;
   let t0 = 0;
@@ -71,12 +60,10 @@ function isSegmentClear(ax: number, ay: number, bx: number, by: number): boolean
     return false;
   }
   for (const b of ROOM_OBSTACLES) {
-    if (segmentIntersectsBox(ax, ay, bx, by, b, 0.012)) return false;
+    if (segmentIntersectsBox(ax, ay, bx, by, b)) return false;
   }
   return true;
 }
-
-export type RoomPoint = { nx: number; ny: number };
 
 type GridPoint = RoomPoint & { index: number };
 

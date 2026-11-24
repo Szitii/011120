@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   initialNavigationState,
+  ROOT_TABS,
   popRoute,
   pushRoute,
   saveScroll,
@@ -9,7 +10,8 @@ import {
   selectTab,
 } from "../src/state/navigation.ts";
 
-test("mobile V2 root navigation has community, private home, and my", () => {
+test("root navigation has community, private home, messages, and my", () => {
+  assert.deepEqual(ROOT_TABS, ["world", "home", "messages", "my"]);
   const initial = initialNavigationState();
   assert.equal(initial.rootTab, "world");
   assert.deepEqual(initial.stack, [{ type: "root", tab: "world" }]);
@@ -23,7 +25,7 @@ test("mobile V2 root navigation has community, private home, and my", () => {
   assert.deepEqual(my.stack, [{ type: "root", tab: "my" }]);
 });
 
-test("Life archive is a detail route from private home, not a fourth root tab", () => {
+test("Life archive is a detail route from private home, rather than a separate root tab", () => {
   const home = selectTab(initialNavigationState(), "home");
   const archive = pushRoute(home, { type: "life-archive" });
   assert.deepEqual(archive.stack[1], { type: "life-archive" });
@@ -38,4 +40,23 @@ test("switching root tabs clears detail stack but preserves identity-specific sc
   assert.deepEqual(backToCommunity.stack, [{ type: "root", tab: "world" }]);
   assert.equal(backToCommunity.scrollByIdentityAndTab[scrollKey("owner-1", "world")], 248);
   assert.notEqual(scrollKey("owner-1", "world"), scrollKey("companion-2", "world"));
+});
+
+
+test("chat and notification targets both return to the messages root", () => {
+  const messages = selectTab(initialNavigationState(), "messages");
+  assert.deepEqual(popRoute(pushRoute(messages, { type: "chat", chatId: "chat", fromTab: "messages" })), messages);
+  assert.deepEqual(popRoute(pushRoute(messages, { type: "community-target", target: { type: "detail", id: "post" } })), messages);
+});
+
+test("community subroutes pop back to the exact prior profile or notification target", () => {
+  const root = initialNavigationState();
+  const profile = pushRoute(root, { type: "community-target", target: { type: "profile", id: "self" } });
+  const blocked = pushRoute(profile, { type: "community-target", target: { type: "blocks" } });
+  assert.deepEqual(popRoute(blocked), profile);
+  const messages = selectTab(root, "messages");
+  const detail = pushRoute(messages, { type: "community-target", target: { type: "detail", id: "post" } });
+  const author = pushRoute(detail, { type: "community-target", target: { type: "profile", id: "author" } });
+  assert.deepEqual(popRoute(author), detail);
+  assert.deepEqual(popRoute(detail), messages);
 });

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
 test("Expo release config rejects a development token and non-real builds", () => {
-  const check = (nodeEnv: string, mode: string, token?: string, easBuild = "false") => {
+  const check = (nodeEnv: "development" | "production", mode: string, token?: string, easBuild = "false") => {
     const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: nodeEnv, EXPO_PUBLIC_DATA_MODE: mode, EAS_BUILD: easBuild };
     delete env.EXPO_PUBLIC_OWNER_BEARER_TOKEN;
     if (token !== undefined) env.EXPO_PUBLIC_OWNER_BEARER_TOKEN = token;

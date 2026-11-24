@@ -1,6 +1,5 @@
 import React from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { PEARL_UI } from "../theme/skinTokens";
 import { useSkin } from "../theme/SkinProvider";
 
 export function BottomSheet({
@@ -16,14 +15,12 @@ export function BottomSheet({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  const { skin } = useSkin();
+  const { skin, ui } = useSkin();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable
-          style={[styles.panel, { backgroundColor: skin.id === "default" ? PEARL_UI.background[0] : skin.colors.canvas, borderColor: skin.colors.border }]}
-          onPress={() => undefined}
-        >
+      <View style={[styles.backdrop, { backgroundColor: ui.scrim }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessible={false} />
+        <View style={[styles.panel, { backgroundColor: ui.background[0], borderColor: skin.colors.border }]}>
           <View style={[styles.handle, { backgroundColor: skin.colors.border }]} />
           {title ? (
             <View style={styles.header}>
@@ -39,14 +36,14 @@ export function BottomSheet({
           <Pressable accessibilityRole="button" accessibilityLabel="关闭弹层" onPress={onClose} style={styles.close}>
             <Text style={{ color: skin.colors.ink }}>关闭</Text>
           </Pressable>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: "rgba(15,23,42,0.34)", justifyContent: "flex-end" },
+  backdrop: { flex: 1, justifyContent: "flex-end" },
   panel: { borderTopLeftRadius: 26, borderTopRightRadius: 26, borderTopWidth: 1, padding: 20, paddingBottom: 34 },
   handle: { width: 38, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 14 },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },

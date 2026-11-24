@@ -1,3 +1,5 @@
+import { useThemedStyles, useSkin } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -16,9 +18,11 @@ import type { Chat, ChatMessage } from "../../../contracts/chat";
 import { makeIdempotencyKey, type ChatClient } from "./client";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
-import { PEARL_UI } from "../theme/skinTokens";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { safeClientMessage } from "../adapters/real-api";
+import type { QuoteInput } from "../album/store";
+import { BottomSheet } from "../components/BottomSheet";
+import { CommunityButton } from "../community/components";
 import { useAppIsActive } from "../state/useAppIsActive";
 
 const actionLabels = {
@@ -54,6 +58,8 @@ export function ChatScreen({
   autoFocus = false,
   backLabel = "返回小家",
   onBackToHome,
+  onSaveQuote,
+  onOpenSettings,
 }: {
   client: ChatClient;
   initialChatId?: string;
@@ -63,17 +69,32 @@ export function ChatScreen({
   autoFocus?: boolean;
   backLabel?: string;
   onBackToHome: () => void;
+  onSaveQuote?: (quote: QuoteInput) => Promise<void>;
+  onOpenSettings?: () => void;
 }) {
+  const { ui } = useSkin();
+  const styles = useThemedStyles(createStyles);
   const appActive = useAppIsActive();
   const wasActive = useRef(appActive);
   const [chat, setChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [bootstrapRevision, setBootstrapRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [mentions, setMentions] = useState<string[]>([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const deletingRef = useRef(false);
+  const [quote, setQuote] = useState<QuoteInput>();
+  const [quoteSaving, setQuoteSaving] = useState(false);
+  const [quoteResult, setQuoteResult] = useState("");
+  const quotePending = useRef(false);
   const inputRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
   const chatIdRef = useRef<string | undefined>(initialChatId);
   const sessionRef = useRef(0);
@@ -129,7 +150,7 @@ export function ChatScreen({
           if (!active) return;
           const matched = companionId
             ? list.items.find((c) => c.direct && c.members.some((m) => m.companionId === companionId))
-            : list.items[0];
+            : undefined;
           if (matched) {
             targetId = matched.id;
           } else if (companionId) {
@@ -163,7 +184,7 @@ export function ChatScreen({
       chatIdRef.current = undefined;
       clearTimeout(focusTimer);
     };
-  }, [client, initialChatId, companionId, autoFocus, loadLatest]);
+  }, [client, initialChatId, companionId, autoFocus, loadLatest, bootstrapRevision]);
 
   // Serialized 1.5s polling whenever replying === true
   useEffect(() => {
@@ -196,24 +217,28 @@ export function ChatScreen({
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (!text || !targetId || sendingRef.current) return;
+    if (!text || !targetId || sendingRef.current || deletingRef.current) return;
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
     setDraft("");
+    const recipients = chat?.direct === false ? mentions : [];
+    const signature = JSON.stringify([text, recipients]);
 
     // Reuse Idempotency-Key if retrying the exact same pending draft after a transient error
     const key =
-      pendingSendRef.current && pendingSendRef.current.text === text
+      pendingSendRef.current && pendingSendRef.current.text === signature
         ? pendingSendRef.current.key
         : makeIdempotencyKey("chat-msg");
-    pendingSendRef.current = { text, key };
+    pendingSendRef.current = { text: signature, key };
 
     try {
-      const res = await client.sendMessage(targetId, text, undefined, key);
+      const res = await client.sendMessage(targetId, text, recipients, key);
       if (session !== sessionRef.current) return;
       reqVersionRef.current += 1;
       pendingSendRef.current = null;
+      setMentions([]);
+      setMentionOpen(false);
       setMessages((prev) => [res.message, ...prev.filter((m) => m.id !== res.message.id)]);
       setChat((prev) => (prev ? { ...prev, typing: res.typing, replying: res.replying } : prev));
       setError(null);
@@ -271,7 +296,46 @@ export function ChatScreen({
     }
   }
 
-  const title = chat?.title ?? chat?.members[0]?.displayName ?? companionName;
+  async function saveQuote() {
+    if (!quote || !onSaveQuote || quotePending.current) return;
+    const session = sessionRef.current;
+    quotePending.current = true;
+    setQuoteSaving(true);
+    setQuoteResult("");
+    try {
+      await onSaveQuote(quote);
+      if (session !== sessionRef.current) return;
+      setQuote(undefined);
+      setQuoteResult("已保存到小家相册。");
+    } catch {
+      if (session === sessionRef.current) setQuoteResult("这句话没保存成功，请再试一次。");
+    } finally {
+      quotePending.current = false;
+      if (session === sessionRef.current) setQuoteSaving(false);
+    }
+  }
+
+  async function deleteConversation() {
+    if (!chat || sendingRef.current || deletingRef.current) return;
+    const session = sessionRef.current;
+    deletingRef.current = true;
+    setDeleting(true);
+    setError(null);
+    try {
+      await client.deleteChat(chat.id);
+      if (session === sessionRef.current) onBackToHome();
+    } catch (problem) {
+      if (session === sessionRef.current) {
+        setConfirmDelete(false);
+        setError(safeClientMessage(problem).title);
+      }
+    } finally {
+      deletingRef.current = false;
+      if (session === sessionRef.current) setDeleting(false);
+    }
+  }
+
+  const title = chat?.title ?? (chat?.members.map(member => member.displayName).join("、") || companionName);
   const typingNames = (chat?.typing ?? [])
     .map((id) => chat?.members.find((m) => m.companionId === id)?.displayName ?? companionName)
     .join("、");
@@ -282,7 +346,7 @@ export function ChatScreen({
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
     >
-      <LinearGradient pointerEvents="none" colors={PEARL_UI.background} style={StyleSheet.absoluteFill} />
+      <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
 
       {/* Top Glass Header */}
       <View style={styles.header}>
@@ -293,9 +357,9 @@ export function ChatScreen({
           accessibilityLabel={backLabel}
         >
           <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
-          <Ionicons name="chevron-back" size={17} color={PEARL_UI.ink} />
+          <Ionicons name="chevron-back" size={17} color={ui.ink} />
           {backLabel === "返回小家" && (
-            <Ionicons name="home-outline" size={14} color={PEARL_UI.accentInk} />
+            <Ionicons name="home-outline" size={14} color={ui.accentInk} />
           )}
           <Text style={styles.backText}>{backLabel}</Text>
         </Pressable>
@@ -311,17 +375,24 @@ export function ChatScreen({
             ) : null}
           </View>
         </View>
+        {chat && <Pressable accessibilityRole="button" accessibilityLabel="会话操作"
+          onPress={() => { setConfirmDelete(false); setMenuOpen(true); }}>
+          <Ionicons name="ellipsis-horizontal" size={23} color={ui.ink} />
+        </Pressable>}
       </View>
 
       {error ? (
         <View style={styles.errorBanner}>
           <Text style={styles.errorText}>{error}</Text>
+          {!chat && !loading && <CommunityButton label="重新加载" onPress={() => setBootstrapRevision(value => value + 1)} />}
         </View>
       ) : null}
 
+      {quoteResult && !quote ? <Text accessibilityLiveRegion="polite" style={styles.quoteResult}>{quoteResult}</Text> : null}
+
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={PEARL_UI.accent} />
+          <ActivityIndicator color={ui.accent} />
           <Text style={styles.mutedText}>正在打开私密会话…</Text>
         </View>
       ) : (
@@ -338,7 +409,7 @@ export function ChatScreen({
             </View>
           }
           ListFooterComponent={
-            loadingOlder ? <ActivityIndicator size="small" color={PEARL_UI.accent} style={{ marginVertical: 12 }} /> : undefined
+            loadingOlder ? <ActivityIndicator size="small" color={ui.accent} style={{ marginVertical: 12 }} /> : undefined
           }
           renderItem={({ item }) => {
             if (item.action) return <Text style={styles.actionEvent}>{actionLabels[item.action]}</Text>;
@@ -346,6 +417,14 @@ export function ChatScreen({
             const senderName = isMine
               ? ownerName
               : chat?.members.find((m) => m.companionId === item.companionId)?.displayName ?? title;
+
+            const openQuote = onSaveQuote && chat && item.body && item.status === "SENT"
+              ? () => {
+                  if (!item.body) return;
+                  setQuoteResult("");
+                  setQuote({ chatId: chat.id, messageId: item.id, speaker: senderName, text: item.body, sentAt: item.sentAt });
+                }
+              : undefined;
 
             return (
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
@@ -369,9 +448,18 @@ export function ChatScreen({
                         )}
                       </View>
                     ) : (
-                      <Text style={[styles.msgText, isMine && styles.msgTextMine]}>
-                        {item.body ?? "（消息暂不可显示）"}
-                      </Text>
+                      <Pressable
+                        disabled={!openQuote}
+                        onLongPress={openQuote}
+                        accessibilityActions={openQuote ? [{ name: "save-quote", label: "保存到小家相册" }] : undefined}
+                        onAccessibilityAction={event => {
+                          if (event.nativeEvent.actionName === "save-quote") openQuote?.();
+                        }}
+                      >
+                        <Text style={[styles.msgText, isMine && styles.msgTextMine]}>
+                          {item.body ?? "（消息暂不可显示）"}
+                        </Text>
+                      </Pressable>
                     )}
                   </View>
                 </View>
@@ -381,37 +469,67 @@ export function ChatScreen({
         />
       )}
 
+      <BottomSheet visible={!!quote} title="保存聊天金句" onClose={() => { if (!quoteSaving) setQuote(undefined); }}>
+        {quote && <View style={styles.quoteSheet}>
+          <Text style={styles.msgText} numberOfLines={5}>{quote.text}</Text>
+          {quoteResult !== "" && <Text accessibilityRole="alert" style={styles.mutedText}>{quoteResult}</Text>}
+          <CommunityButton label="保存到相册" primary disabled={quoteSaving} onPress={() => void saveQuote()} />
+        </View>}
+      </BottomSheet>
+
+      <BottomSheet visible={menuOpen} title={confirmDelete ? "删除会话？" : "会话操作"}
+        onClose={() => { if (!deletingRef.current) setMenuOpen(false); }}>
+        {confirmDelete ? <>
+          <Text style={styles.mutedText}>删除后，这段会话将从消息列表移除。</Text>
+          <CommunityButton label={deleting ? "正在删除…" : "确认删除"} disabled={deleting || sending} onPress={() => void deleteConversation()} />
+        </> : <>
+          {onOpenSettings && <CommunityButton label="聊天设置" onPress={() => { setMenuOpen(false); onOpenSettings(); }} />}
+          <CommunityButton label="删除会话" disabled={sending} onPress={() => setConfirmDelete(true)} />
+        </>}
+      </BottomSheet>
+
+      {chat?.direct === false && (mentionOpen || mentions.length > 0) && <View style={styles.mentionsBar}>
+        {chat.members.map(member => <CommunityButton key={member.companionId}
+          label={`@${member.displayName}`} selected={mentions.includes(member.companionId)} disabled={sending || deleting}
+          onPress={() => setMentions(current => current.includes(member.companionId)
+            ? current.filter(id => id !== member.companionId) : [...current, member.companionId])} />)}
+      </View>}
       {/* Bottom Liquid Glass Composer */}
       <View style={styles.composerBar}>
         <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={styles.composerGlass}>
           <View style={styles.composerRow}>
+            {chat?.direct === false && <Pressable accessibilityRole="button" accessibilityLabel="提及家机"
+              accessibilityState={{ expanded: mentionOpen }} onPress={() => setMentionOpen(value => !value)}>
+              <Ionicons name="at-outline" size={22} color={ui.accentInk} />
+            </Pressable>}
             <TextInput
               ref={inputRef}
               value={draft}
               onChangeText={setDraft}
               placeholder={`和 ${title} 说点什么…`}
-              placeholderTextColor={PEARL_UI.muted}
+              placeholderTextColor={ui.muted}
               style={styles.input}
               multiline
+              editable={!!chat && !deleting}
               maxLength={2000}
               returnKeyType="send"
               onSubmitEditing={() => void handleSend()}
             />
             <Pressable
               onPress={() => void handleSend()}
-              disabled={!draft.trim() || sending}
+              disabled={!draft.trim() || sending || deleting || !chat}
               accessibilityRole="button"
               accessibilityLabel="发送消息"
               style={({ pressed }) => [
                 styles.sendBtn,
-                (!draft.trim() || sending) && styles.sendBtnDisabled,
+                (!draft.trim() || sending || deleting || !chat) && styles.sendBtnDisabled,
                 pressed && { transform: [{ scale: 0.92 }] },
               ]}
             >
               {sending ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ActivityIndicator size="small" color={ui.onAccent} />
               ) : (
-                <Ionicons name="paper-plane-outline" size={16} color="#FFFFFF" />
+                <Ionicons name="paper-plane-outline" size={16} color={ui.onAccent} />
               )}
             </Pressable>
           </View>
@@ -421,8 +539,11 @@ export function ChatScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  mentionsBar: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 14, gap: 6, paddingBottom: 6 },
   root: { flex: 1 },
+  quoteResult: { color: ui.muted, textAlign: "center", paddingVertical: 8 },
+  quoteSheet: { gap: 10 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -440,31 +561,31 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: RADIUS.pill,
   },
-  backText: { fontSize: 13, fontWeight: "600", color: PEARL_UI.ink },
+  backText: { fontSize: 13, fontWeight: "600", color: ui.ink },
   titleBlock: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1 },
-  titleText: { fontSize: 15, fontWeight: "700", color: PEARL_UI.ink },
-  typingText: { fontSize: 11, color: PEARL_UI.accent, marginTop: 1 },
+  titleText: { fontSize: 15, fontWeight: "700", color: ui.ink },
+  typingText: { fontSize: 11, color: ui.accent, marginTop: 1 },
   errorBanner: {
     marginHorizontal: CHROME.screenInset,
     marginBottom: 8,
     paddingHorizontal: 14,
     paddingVertical: 9,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.85)",
+    backgroundColor: ui.white,
     borderWidth: 1,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
   },
-  errorText: { fontSize: 12.5, color: "#984C59" },
+  errorText: { fontSize: 12.5, color: ui.danger },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
   emptyWrap: { paddingVertical: 48, alignItems: "center" },
-  mutedText: { fontSize: 13.5, color: PEARL_UI.muted },
+  mutedText: { fontSize: 13.5, color: ui.muted },
   listContent: { paddingHorizontal: CHROME.screenInset, paddingVertical: 14, gap: 12 },
-  actionEvent: { textAlign: "center", color: PEARL_UI.muted, fontSize: 12, paddingVertical: 7 },
+  actionEvent: { textAlign: "center", color: ui.muted, fontSize: 12, paddingVertical: 7 },
   msgRow: { flexDirection: "row", alignItems: "flex-end", gap: 8, marginBottom: 4 },
   msgRowMine: { flexDirection: "row-reverse" },
   bubbleWrap: { maxWidth: "74%" },
   bubbleWrapMine: { alignItems: "flex-end" },
-  senderLabel: { fontSize: 11, color: PEARL_UI.muted, marginBottom: 3, marginLeft: 4 },
+  senderLabel: { fontSize: 11, color: ui.muted, marginBottom: 3, marginLeft: 4 },
   bubble: {
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -472,26 +593,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   bubbleOther: {
-    backgroundColor: PEARL_UI.white,
-    borderColor: PEARL_UI.line,
+    backgroundColor: ui.white,
+    borderColor: ui.line,
     borderBottomLeftRadius: 6,
   },
   bubbleMine: {
-    backgroundColor: PEARL_UI.iceBlue,
-    borderColor: "rgba(255,255,255,0.75)",
+    backgroundColor: ui.iceBlue,
+    borderColor: ui.highlight,
     borderBottomRightRadius: 6,
   },
-  msgText: { fontSize: 14.5, lineHeight: 21, color: PEARL_UI.ink },
-  msgTextMine: { color: "#FFFFFF" },
+  msgText: { fontSize: 14.5, lineHeight: 21, color: ui.ink },
+  msgTextMine: { color: ui.mineInk },
   failedWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
-  failedText: { fontSize: 13, color: "#984C59" },
+  failedText: { fontSize: 13, color: ui.danger },
   retryBtn: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
-    backgroundColor: PEARL_UI.accentWash,
+    backgroundColor: ui.accentWash,
   },
-  retryText: { fontSize: 12, fontWeight: "600", color: PEARL_UI.accentInk },
+  retryText: { fontSize: 12, fontWeight: "600", color: ui.accentInk },
   composerBar: {
     paddingHorizontal: CHROME.screenInset,
     paddingTop: 8,
@@ -511,7 +632,7 @@ const styles = StyleSheet.create({
     minHeight: 36,
     maxHeight: 96,
     fontSize: 14.5,
-    color: PEARL_UI.ink,
+    color: ui.ink,
     paddingTop: 7,
     paddingBottom: 7,
   },
@@ -519,9 +640,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: PEARL_UI.accent,
+    backgroundColor: ui.accent,
     alignItems: "center",
     justifyContent: "center",
   },
-  sendBtnDisabled: { backgroundColor: "rgba(180, 192, 212, 0.55)" },
+  sendBtnDisabled: { backgroundColor: ui.accentWash },
 });

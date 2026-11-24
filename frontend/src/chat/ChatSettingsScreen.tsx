@@ -1,0 +1,86 @@
+import { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import type { ChatModelList, ChatSettings } from "../../../contracts/chat";
+import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
+import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
+import type { ChatClient } from "./client";
+
+const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"]] as const;
+const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
+const TIER = { ECONOMY: "经济", STANDARD: "均衡", PREMIUM: "高级" };
+
+export function ChatSettingsScreen({ client, companionId }: { client: ChatClient; companionId: string }) {
+  const s = useCommunityStyles();
+  const [form, setForm] = useState<ChatSettings>();
+  const [models, setModels] = useState<ChatModelList>();
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [modelError, setModelError] = useState(false);
+  const [reload, setReload] = useState(0);
+  const pending = useRef(false);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    let current = true;
+    mounted.current = true;
+    setBusy(true);
+    setNotice("");
+    void client.getChatSettings(companionId).then(value => { if (current) setForm(value); })
+      .catch(problem => { if (current) setNotice(safeClientMessage(problem).title); })
+      .finally(() => { if (current) setBusy(false); });
+    setModelError(false);
+    void client.listModels?.().then(value => { if (current) setModels(value); })
+      .catch(() => { if (current) setModelError(true); });
+    return () => { current = false; mounted.current = false; };
+  }, [client, companionId, reload]);
+
+  async function save() {
+    if (!form || busy || pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setNotice("");
+    try {
+      const saved = await client.updateChatSettings(companionId, form);
+      if (mounted.current) { setForm(saved); setNotice("聊天设置已保存。"); }
+    } catch (error) {
+      if (!mounted.current) return;
+      if (error instanceof ApiProblemError && error.status === 409) {
+        try {
+          const latest = await client.getChatSettings(companionId);
+          if (mounted.current) { setForm(latest); setNotice("设置已在另一台设备修改，请核对后再保存。"); }
+        } catch {
+          if (mounted.current) { setForm(undefined); setNotice("无法读取最新设置，请重新加载。"); }
+        }
+      } else setNotice(safeClientMessage(error).title);
+    } finally {
+      pending.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  }
+
+  return <ScrollView style={s.page} contentContainerStyle={s.content}>
+    <SecondaryHeading title="聊天设置" />
+    {!!notice && <Text accessibilityLiveRegion="polite" style={s.body}>{notice}</Text>}
+    {!form ? busy ? <ActivityIndicator accessibilityLabel="正在读取聊天设置" />
+      : <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />
+      : <>
+        <View style={s.card}>
+          <Text style={s.author}>群聊活跃度</Text>
+          <View style={s.row}>{ACTIVITY.map(([value, label]) => <CommunityButton key={value} label={label}
+            disabled={busy} selected={form.groupActivity === value} onPress={() => setForm({ ...form, groupActivity: value })} />)}</View>
+          <Text style={s.author}>家机互动倾向</Text>
+          <View style={s.row}>{INTERACTION.map(([value, label]) => <CommunityButton key={value} label={label}
+            disabled={busy} selected={form.companionInteraction === value} onPress={() => setForm({ ...form, companionInteraction: value })} />)}</View>
+        </View>
+        <View style={s.card}>
+          <Text style={s.author}>聊天模型</Text>
+          <CommunityButton label="使用平台默认" disabled={busy} selected={form.model === null} onPress={() => setForm({ ...form, model: null })} />
+          {models?.items.map(model => <CommunityButton key={model.id}
+            label={`${model.name} · ${TIER[model.tier]}${model.available ? "" : " · 暂不可用"}`}
+            selected={model.id === form.model} disabled={busy || !model.available} onPress={() => setForm({ ...form, model: model.id })} />)}
+          {modelError && <Text style={s.meta}>暂时无法读取模型列表，当前设置仍会保留。</Text>}
+        </View>
+        <CommunityButton primary label={busy ? "正在处理…" : "保存设置"} disabled={busy} onPress={() => void save()} />
+      </>}
+  </ScrollView>;
+}

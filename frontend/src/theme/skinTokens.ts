@@ -4,6 +4,7 @@ export interface SkinTheme {
   id: SkinId;
   name: string;
   isDark: boolean;
+  background: readonly [string, string];
   colors: {
     canvas: string;
     surface: string;
@@ -49,7 +50,7 @@ const LIGHT_BASE_COLORS = {
   accentSoft: "#EEF2F7",
   accentSoftFg: "#354760",
   tabActive: "#354760",
-  tabInactive: "#7A7672",
+  tabInactive: "#5E5A56",
 };
 
 /** 定稿前端色卡（暖珍珠浅底 × 清透液态毛玻璃 × 冰雾/雾霾灰蓝点缀） */
@@ -73,9 +74,10 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
     id: "default",
     name: "清透珍珠白",
     isDark: false,
+    background: PEARL_UI.background,
     colors: { ...LIGHT_BASE_COLORS },
     glass: {
-      activePillFill: "rgba(180,192,212,0.58)",
+      activePillFill: "rgba(180,192,212,0.46)",
       iconTint: PEARL_UI.accentInk,
       border: PEARL_UI.highlight,
       outerRing: "rgba(123,144,172,0.18)",
@@ -94,7 +96,8 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
     id: "glacier",
     name: "冰川银雾",
     isDark: false,
-    colors: { ...LIGHT_BASE_COLORS, accentSoft: "#EDF6F8", accentSoftFg: "#0F4C5C", tabActive: "#0284C7" },
+    background: ["#F2F8FB", "#DDEBF3"],
+    colors: { ...LIGHT_BASE_COLORS, border: "#D8E5ED", accent: "#397195", accentSoft: "#DBEEF7", accentSoftFg: "#0F4C5C", tabActive: "#0284C7" },
     glass: {
       activePillFill: "rgba(224,242,254,0.90)",
       iconTint: "#0284C7",
@@ -115,7 +118,8 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
     id: "pearl",
     name: "蜜桃珠光",
     isDark: false,
-    colors: { ...LIGHT_BASE_COLORS, accentSoft: "#FBF1F3", accentSoftFg: "#9F1239", tabActive: "#E11D48" },
+    background: ["#FBF5F5", "#F4E4E7"],
+    colors: { ...LIGHT_BASE_COLORS, border: "#EFDAE0", accent: "#A24B67", accentSoft: "#F8E5EB", accentSoftFg: "#8A3753", tabActive: "#A24B67" },
     glass: {
       activePillFill: "rgba(255,237,240,0.92)",
       iconTint: "#E11D48",
@@ -136,6 +140,7 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
     id: "titanium",
     name: "午夜钛黑",
     isDark: true,
+    background: ["#101218", "#171A24"],
     colors: {
       canvas: "#0B0C10",
       surface: "#16181E",
@@ -167,3 +172,41 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
     identityBadges: { avatarRing: "#525866" },
   },
 };
+
+export function themePalette(skin: SkinTheme) {
+  const tokens = skin.colors;
+  return {
+    background: skin.background,
+    white: skin.isDark ? tokens.surface : tokens.canvas,
+    ink: skin.id === "default" ? PEARL_UI.ink : tokens.ink,
+    muted: tokens.inkSub,
+    placeholder: skin.isDark ? "#929CB2" : "#746D67",
+    accent: tokens.accent,
+    accentInk: tokens.accentSoftFg,
+    accentWash: tokens.accentSoft,
+    iceBlue: skin.id === "default" ? PEARL_UI.iceBlue : tokens.accentSoft,
+    line: tokens.border,
+    onAccent: tokens.accentFg,
+    highlight: skin.glass.border,
+    shadow: skin.isDark ? "#000000" : PEARL_UI.shadow,
+    warning: skin.isDark ? "#E5BE83" : "#8E652B",
+    warningSurface: skin.isDark ? "#3A2F20" : "#FFF6E8",
+    mineInk: tokens.accentSoftFg,
+    roomNight: "rgba(26,34,58,0.24)",
+    danger: skin.isDark ? "#F6A7AF" : "#984C59",
+    affection: skin.isDark ? "#F6A7AF" : "#C87D87",
+    onDark: "#F8FAFC",
+    scrim: skin.isDark ? "rgba(0,0,0,0.58)" : "rgba(15,23,42,0.34)",
+    sheen: skin.isDark ? ["#303645", "#232734", "#363D50"] as const : PEARL_UI.sheen,
+  };
+}
+
+export type UiPalette = ReturnType<typeof themePalette>;
+
+export const GLASS_MATERIAL = {
+  lightBorder: "rgba(255,255,255,0.90)",
+  darkBorder: "rgba(255,255,255,0.2)",
+  lightFinish: ["rgba(255,255,255,0.44)", "rgba(255,255,255,0.16)", "rgba(255,255,255,0.34)"],
+  darkFinish: ["rgba(255,255,255,0.16)", "rgba(255,255,255,0.04)", "rgba(255,255,255,0.10)"],
+  bubbleGleam: { mine: "rgba(255,255,255,0.34)", dark: "rgba(255,255,255,0.18)", light: "rgba(255,255,255,0.92)" },
+} as const;
