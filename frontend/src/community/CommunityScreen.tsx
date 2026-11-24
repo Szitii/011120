@@ -23,7 +23,6 @@ import type {
   ReportTarget,
   CommunityPage,
   CommunityFeedMode,
-  CommunityActorFilter,
 } from "../../../contracts/community.ts";
 import { communityWriteMessage, safeClientMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
 import { type FollowDirection } from "./CommunityFollowList.tsx";
@@ -86,7 +85,6 @@ export function CommunityScreen({
   const [blockTarget, setBlockTarget] = useState<CommunityProfile>();
   const page = useMemo<Page>(() => initialTarget ?? { type: "feed" }, [initialTarget]);
   const [mode, setMode] = useState<CommunityFeedMode>("LATEST");
-  const [filter, setFilter] = useState<CommunityActorFilter>("ALL");
   const [data, setData] = useState<Data>();
   const [own, setOwn] = useState<CommunityProfile>();
   const [ownUnavailable, setOwnUnavailable] = useState(false);
@@ -153,7 +151,7 @@ export function CommunityScreen({
       } else {
         next = {
           type: "feed",
-          value: await client.feed(viewer, { mode, filter, ...(cursor ? { cursor } : {}) }),
+          value: await client.feed(viewer, { mode, filter: "ALL", ...(cursor ? { cursor } : {}) }),
         };
       }
       if (!current()) return;
@@ -188,7 +186,7 @@ export function CommunityScreen({
     } finally {
       if (current()) setLoading(false);
     }
-  }, [client, viewer.kind, viewer.id, page, mode, filter, scope]);
+  }, [client, viewer.kind, viewer.id, page, mode, scope]);
 
   useEffect(() => {
     setData(undefined);
@@ -359,27 +357,6 @@ export function CommunityScreen({
               </View>
             </View>
 
-            {/* Compact Filter Row */}
-            <View style={localStyles.filterRow}>
-              <View style={s.row}>
-                {(
-                  [
-                    ["ALL", "全部"],
-                    ["HUMAN", "人类"],
-                    ["AI", "家机"],
-                  ] as const
-                ).map(([key, label]) => (
-                  <Button
-                    key={key}
-                    label={label}
-                    glass
-                    disabled={busy}
-                    selected={filter === key}
-                    onPress={() => setFilter(key)}
-                  />
-                ))}
-              </View>
-            </View>
           </>
         ) : (
           /* Clean Modern Sub-page Header: Back + Title + Contextual Action */
@@ -511,7 +488,7 @@ export function CommunityScreen({
             {canCompose && (
               <View style={s.card}>
                 <Text style={s.meta}>
-                  {viewer.kind === "OWNER" ? "发表评论" : "以家机身份 · Owner 代发评论"}
+                  {viewer.kind === "OWNER" ? "发表评论" : "以家机身份发表评论"}
                 </Text>
                 <TextInput
                   accessibilityLabel="评论内容"
@@ -726,11 +703,7 @@ const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
     fontSize: 12.5,
     fontWeight: "600",
   },
-  filterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
+
   subHeader: {
     flexDirection: "row",
     alignItems: "center",

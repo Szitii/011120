@@ -112,14 +112,14 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     const action = spriteFor(actor);
     const sprites = (id === "user") !== isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
     const seated = actor.phase === "SIT";
-    const inBed = actor.furniture === "bed" && actor.point.nx < .314;
+    const inBed = actor.furniture === "bed" && actor.point.nx < .328 && actor.point.ny < .56;
     const zIndex = inBed ? 530 : actor.furniture === "sofa" ? 660 : depth(actor.point.ny) + 1;
-    // Pillow poses use their own scale so the folded quilt covers only the body.
-    const height = actor.phase === "SLEEP" ? .142 : seated ? .132 : .175;
+    // All poses share the same canvas and foot baseline.
+    const height = .175;
     const width = height;
     return <View key={id} testID={`room-actor-${id}`} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
       actor.point.ny - height * .973, width, height), {
-      zIndex, opacity: frame.duo ? 0 : actor.opacity ?? 1,
+      zIndex, opacity: frame.duo ? 0 : 1,
       transform: [{ scaleX: (seated ? id === "user" : action !== "sleep" && actor.facingLeft) ? -1 : 1 }],
     }]}>
       <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />
@@ -129,7 +129,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
   const sofa = ROOM_SLOTS.find(slot => slot.id === "slot_sofa")!;
   const bed = ROOM_SLOTS.find(slot => slot.id === "slot_bed")!;
   const companion = frame.actors.companion.point;
-  const quiltVisible = Object.values(frame.actors).some(actor => actor.furniture === "bed" && actor.point.nx < .314);
+  const quiltVisible = Object.values(frame.actors).some(actor => actor.furniture === "bed" && actor.point.nx < .328 && actor.point.ny < .56);
   const labelColor = night ? ui.onDark : skin.colors.ink;
   return <View style={[styles.frame, { borderColor: skin.colors.border, backgroundColor: skin.colors.canvas }]}
     onLayout={event => {

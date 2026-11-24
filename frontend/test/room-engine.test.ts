@@ -25,7 +25,11 @@ test("floor taps replan a single actor without teleporting or losing the walking
 
 test("sleep and seated phases stay anchored while a movement command uses walk sprites", () => {
   const engine = new RoomEngine();
+  const initial = engine.snapshot().actors;
   engine.furniture("bed");
+  engine.tick(16);
+  assert.notDeepEqual(engine.snapshot().actors.companion.point, initial.companion.point);
+  assert.notDeepEqual(engine.snapshot().actors.user.point, initial.user.point);
   for (let frame = 0; frame < 300; frame++) engine.tick(16);
   for (const id of ["companion", "user"] as const) {
     const actor = engine.snapshot().actors[id];
@@ -33,11 +37,14 @@ test("sleep and seated phases stay anchored while a movement command uses walk s
     assert.deepEqual(actor.point, FURNITURE.bed[id].anchor);
   }
   engine.wake();
-  for (let frame = 0; frame < 15; frame++) {
+  for (let frame = 0; frame < 180; frame++) {
+    const before = engine.snapshot().actors;
     engine.tick(16);
-    const { companion, user } = engine.snapshot().actors;
-    assert.equal(companion.phase, user.phase);
-    assert.ok((companion.opacity ?? 1) > 0 && (user.opacity ?? 1) > 0);
+    for (const id of ["companion", "user"] as const) {
+      const after = engine.snapshot().actors[id];
+      const point = before[id].point;
+      assert.ok(Math.hypot((after.point.nx - point.nx) * .8, after.point.ny - point.ny) <= .004001);
+    }
   }
   assert.deepEqual(engine.snapshot().actors.companion.point, WAKE_POINTS.companion);
   assert.deepEqual(engine.snapshot().actors.user.point, WAKE_POINTS.user);
@@ -87,9 +94,14 @@ test("seated actors leave the sofa from their respective openings before a duo a
   assert.equal(seated.user.phase, "SIT");
   assert.equal(seated.companion.phase, "SIT");
   engine.action("CUDDLE");
-  for (let frame = 0; frame < 15; frame++) engine.tick(16);
-  assert.equal(engine.snapshot().actors.user.point.nx, FURNITURE.sofa.user.approach.nx);
-  assert.equal(engine.snapshot().actors.companion.point.nx, FURNITURE.sofa.companion.approach.nx);
+  for (let frame = 0; frame < 15; frame++) {
+    const previous = engine.snapshot().actors;
+    engine.tick(16);
+    for (const id of ["companion", "user"] as const) {
+      const { point } = engine.snapshot().actors[id];
+      assert.ok(Math.hypot((point.nx - previous[id].point.nx) * .8, point.ny - previous[id].point.ny) <= .004001);
+    }
+  }
   settle();
   assert.deepEqual(engine.takeStartedActions(), ["CUDDLE"]);
   assert.deepEqual(engine.snapshot().actors.user.point, DUO_POINTS.user);

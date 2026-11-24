@@ -1,6 +1,6 @@
 import React from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { useSkin } from "../theme/SkinProvider";
+import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 
 export function BottomSheet({
   visible,
@@ -16,6 +16,7 @@ export function BottomSheet({
   children: React.ReactNode;
 }) {
   const { skin, ui } = useSkin();
+  const styles = useThemedStyles(createStyles);
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={[styles.backdrop, { backgroundColor: ui.scrim }]}>
@@ -42,7 +43,7 @@ export function BottomSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   backdrop: { flex: 1, justifyContent: "flex-end" },
   panel: { borderTopLeftRadius: 26, borderTopRightRadius: 26, borderTopWidth: 1, padding: 20, paddingBottom: 34 },
   handle: { width: 38, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 14 },

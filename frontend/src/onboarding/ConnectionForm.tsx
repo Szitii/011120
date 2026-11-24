@@ -10,9 +10,10 @@ import { connectionMessages, providerPresets, validateExternal, validateApiKey, 
 
 const providers = Object.keys(providerPresets) as Array<keyof typeof providerPresets>;
 
-export function ConnectionForm({ kind, onClose, submitConnection }: {
+export function ConnectionForm({ kind, onClose, closeLabel = "返回连接设置", submitConnection }: {
   kind: "key" | "external";
   onClose: () => void;
+  closeLabel?: string;
   submitConnection: (input: ConnectionInput) => Promise<ConnectionTest>;
 }) {
   const s = useThemedStyles(createStyles);
@@ -139,7 +140,7 @@ export function ConnectionForm({ kind, onClose, submitConnection }: {
     <Text style={s.body}>连通测试仅发送验证消息。启用后可在聊天设置里撤销连接。</Text>
     {result && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={s.notice}>{result}</Text>}
     <BringButton label={busy ? "正在测试…" : kind === "key" ? "测试并启用" : "测试并连通"} disabled={busy} onPress={() => void submit()} />
-    <BringButton label="返回连接设置" secondary disabled={busy} onPress={onClose} />
+    <BringButton label={closeLabel} secondary disabled={busy} onPress={onClose} />
   </>;
 }
 

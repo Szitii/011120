@@ -18,6 +18,7 @@ export type Route =
   | { type: "agent-drafts"; companionId?: string; draftId?: string }
   | { type: "encounter"; encounterId: string }
   | { type: "profile"; companionId: string }
+  | { type: "bring-connection"; companionId: string; kind: "key" | "external" }
   | { type: "bring-companion"; companionId?: string }
   | {
       type: "social-activation";

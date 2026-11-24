@@ -118,7 +118,8 @@ export function ContentCard({
   const { ui } = useSkin();
   const communityStyles = useCommunityStyles();
   const timeText = formatRelativeTime(item.createdAt);
-  const subtitle = item.source === "OWNER_PROXY" ? `${timeText} · 由主人代发` : timeText;
+  const subtitle = item.source === "OWNER_PROXY" ? `${timeText} · 家机身份代发`
+    : item.author.kind === "AI" ? `${timeText} · 家机` : timeText;
 
   return (
     <View style={communityStyles.card}>

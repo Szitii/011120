@@ -13,13 +13,13 @@ const bounds = ({ left, top, width, height }: typeof SOFA_SLOT): ObstacleBox =>
 export const FURNITURE = {
   sofa: {
     bounds: bounds(SOFA_SLOT),
-    user: { approach: point(.782, .657), anchor: point(.625, .646) },
-    companion: { approach: point(.38, .657), anchor: point(.535, .646) },
+    user: { approach: point(.782, .704), entry: point(.715, .686), anchor: point(.625, .646) },
+    companion: { approach: point(.395, .704), entry: point(.44, .686), anchor: point(.535, .646) },
   },
   bed: {
     bounds: { x1: .02, y1: .22, x2: .35, y2: .56 },
-    user: { approach: point(.42, .47), entry: point(.294, .45), anchor: point(.235, .390) },
-    companion: { approach: point(.39, .47), entry: point(.294, .427), anchor: point(.125, .390) },
+    user: { approach: point(.46, .475), entry: point(.294, .45), anchor: point(.235, .378) },
+    companion: { approach: point(.39, .47), entry: point(.294, .427), anchor: point(.125, .378) },
   },
 } satisfies Record<FurnitureId, { bounds: ObstacleBox } & Record<ActorId, { approach: RoomPoint; entry?: RoomPoint; anchor: RoomPoint }>>;
 

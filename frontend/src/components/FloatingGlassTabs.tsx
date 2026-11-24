@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
-import { useSkin } from "../theme/SkinProvider";
+import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { ROOT_TABS, type RootTab } from "../state/navigation";
 
@@ -16,6 +16,7 @@ export function FloatingGlassTabs({
   onSelect: (tab: RootTab) => void;
 }) {
   const { skin } = useSkin();
+  const styles = useThemedStyles(createStyles);
   const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -93,7 +94,7 @@ export function FloatingGlassTabs({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   badge: { position: "absolute", top: -3, right: -13, color: "#FFFFFF", backgroundColor: "#495C76",
     borderRadius: 10, overflow: "hidden", paddingHorizontal: 5, fontSize: 10, fontWeight: "700" },
   wrapper: { position: "absolute", zIndex: 30 },

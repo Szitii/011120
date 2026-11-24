@@ -1,8 +1,7 @@
-import { useThemedStyles, useSkin } from "../theme/SkinProvider";
+import { useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { useRef, useState, type ComponentRef } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import Ionicons from "@expo/vector-icons/Ionicons";
 import { saveRoomCapture } from "../album/capture";
 import { addAlbumPhoto } from "../album/store";
 import { useHomeAction } from "../chat/useHomeAction";
@@ -22,7 +21,6 @@ export function PrivateHomeScreen({ chatClient, scope, companionName, isCompanio
   onOpenDiary?: () => void;
   onOpenAlbum?: () => void;
 }) {
-  const { ui } = useSkin();
   const styles = useThemedStyles(createStyles);
   const submitAction = useHomeAction(chatClient, scope?.companionId, isActive);
   const pendingCapture = useRef(false);
@@ -67,7 +65,7 @@ export function PrivateHomeScreen({ chatClient, scope, companionName, isCompanio
         <Text style={styles.label}>日记</Text>
       </Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="相册" style={styles.card} disabled={capturing || !onOpenAlbum} onPress={onOpenAlbum}>
-        <Ionicons name="images-outline" size={28} color={ui.accentInk} />
+        <Image source={require("../../assets/album-polaroid.png")} style={styles.icon} resizeMode="contain" />
         <Text style={styles.label}>相册</Text>
       </Pressable>
     </View>}
