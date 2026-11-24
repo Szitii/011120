@@ -137,6 +137,99 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /chats/{chatId}/read:
+    parameters:
+    - *chatId
+    put:
+      operationId: markChatRead
+      summary: The Owner has read up to this message (kept on the server, so it carries across devices)
+      description: |
+        Send the newest message the Owner has seen. The read position only moves forward: an older
+        message than the saved one changes nothing, so devices may report in any order. Returns the
+        chat with its new unreadCount. 404 when the message is not a shown message of this chat.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messageId]
+              additionalProperties: false
+              properties:
+                messageId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: The chat
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Chat'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /badges:
+    get:
+      operationId: getBadges
+      summary: Every unread count for the tab badges in one call
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Counts
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Badges'}
+        '401': *problem
+        '403': *problem
+  /companions/{companionId}/anniversary:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: getAnniversary
+      summary: The day the Owner and this Companion count from (相伴起始日); startDate null when not set
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Anniversary
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Anniversary'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    put:
+      operationId: updateAnniversary
+      summary: Set the date, or clear it with startDate null; send the revision last read (a stale revision is a 409)
+      description: |
+        startDate is a calendar date in timeZone (an IANA name such as Asia/Shanghai), from 1900-01-01
+        up to today there; it may be long before the account existed.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startDate, timeZone, revision]
+              additionalProperties: false
+              properties:
+                startDate: {type: [string, 'null'], format: date}
+                timeZone: {type: string}
+                revision: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Anniversary'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
   /chats/{chatId}/messages:
     parameters:
     - *chatId
@@ -475,7 +568,7 @@ components:
         sentAt: {type: string, format: date-time}
     Chat:
       type: object
-      required: [id, title, direct, members, lastMessage, typing, replying, activeAt]
+      required: [id, title, direct, members, lastMessage, unreadCount, readUpTo, typing, replying, activeAt]
       properties:
         id: {type: string, format: uuid}
         title: {type: [string, 'null'], description: Group name; always null for a one-to-one chat.}
@@ -485,9 +578,36 @@ components:
           oneOf:
           - $ref: '#/components/schemas/ChatMessage'
           - type: 'null'
+        unreadCount: {type: integer, minimum: 0, description: Companion messages shown after the Owner's read position.}
+        readUpTo: {type: [string, 'null'], format: uuid, description: The last message the Owner read (PUT .../read); null before the first.}
         typing: {$ref: '#/components/schemas/Typing'}
         replying: {$ref: '#/components/schemas/Replying'}
         activeAt: {type: string, format: date-time}
+    Badges:
+      type: object
+      required: [chats, ownerInbox, community]
+      properties:
+        chats: {type: integer, minimum: 0, description: Unread Companion messages over every chat.}
+        ownerInbox: {type: integer, minimum: 0, description: Unread items of GET /v0/life-event-inbox.}
+        community:
+          type: array
+          description: Unread community notifications for each identity the Owner can act as (the Owner first).
+          items:
+            type: object
+            required: [actorKind, actorId, unread]
+            properties:
+              actorKind: {type: string, enum: [OWNER, COMPANION]}
+              actorId: {type: string, format: uuid, description: 'The Owner id or the Companion id, as used for ?actorKind=&actorId=.'}
+              unread: {type: integer, minimum: 0}
+    Anniversary:
+      type: object
+      required: [companionId, startDate, timeZone, revision, updatedAt]
+      properties:
+        companionId: {type: string, format: uuid}
+        startDate: {type: [string, 'null'], format: date, description: null when not set.}
+        timeZone: {type: string}
+        revision: {type: integer, minimum: 1}
+        updatedAt: {type: string, format: date-time}
     ChatPage:
       type: object
       required: [chat, items, nextCursor]

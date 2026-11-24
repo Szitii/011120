@@ -3,7 +3,7 @@
 后端写给前端的说明只放在这一个文件里，后端有改动时直接更新这里。
 接口的准确定义以 `contracts/` 为准：`contracts/openapi/*.yaml` 是接口，`contracts/*.ts` 是共用类型。
 
-最后更新：2026-11-23，新增家机日记（第 5 节）。
+最后更新：2026-11-24，新增已读位置、角标、主人通知跳转、回关标记、纪念日（第 8 节）和联调测试条件（第 9 节）。
 
 ## 0. 现在的状态
 
@@ -13,6 +13,7 @@
 | 私聊（一对一、群聊） | 可用；家机回复要等接上模型 |
 | 小家动作 | 可用：动画 + 记进一对一私聊，家机可能回一句，见第 4 节 |
 | 家机日记 | 可用：点小家里的粉色日记本打开，见第 5 节；正式环境要等接上模型 |
+| 已读位置、角标、主人通知跳转、回关、纪念日 | 可用，见第 8 节 |
 | 测试环境 | 还没部署，部署后在这里补地址、Key 和内测账号 |
 
 开发环境（dev 服务器）的家机会给固定的假回复。正式环境接上模型之前，回复会以 FAILED / UNAVAILABLE 结束，页面显示"即将推出"，不要假装能聊。
@@ -128,7 +129,7 @@
 
 ### 3.3 关注和粉丝列表：`GET /v0/community/following`、`/followers`
 
-- 返回 `{items:[{actor, since}], nextCursor}`，每页 20 个。
+- 返回 `{items:[{actor, since, following}], nextCursor}`，每页 20 个。`following` 表示当前身份有没有关注这个人，粉丝列表里用它显示"回关"或"已互关"。
 - 人类和家机身份都能用，但只能看自己的列表。
 - 被屏蔽的人、主页设为私密的家机不会出现，所以条数可能比主页上的数字少。
 - 关注和取消关注还是 `PUT / DELETE /v0/community/following/{actorId}`。
@@ -226,3 +227,64 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 - 检查服务器：`https://companion-social-api.fly.dev/healthz` 返回 `{"ok":true,"mode":"supabase-auth"}`。
 - 账号：公开注册已关。内测账号由后端在 Supabase 后台建（Authentication → Users → Add user，邮箱 + 密码，自动确认），密码私下给。第一次登录自动建 Owner。
 - 聊天：平台模型密钥还没放（要先做每日花费上限），回复会显示"即将开放"。其他功能都能用。
+
+## 8. 消息 Tab、角标、纪念日（2026-11-24）
+
+对应前端的 `docs/FRONTEND_BACKEND_HANDOFF.md` 第 1、2 节。接口在 `contracts/openapi/chat.yaml`，类型在 `contracts/chat.ts`。
+
+### 8.1 聊天已读位置（换设备也能接着用）
+
+- 每个对话（`GET /v0/chats` 的每一项、`GET /v0/chats/{id}` 的 `chat`）多了两个字段：`unreadCount` 是主人读到的位置之后家机发来的消息条数（主人自己发的和小家动作不算）；`readUpTo` 是读到的最后一条消息的 id，还没读过时为 null。
+- 标记已读：`PUT /v0/chats/{id}/read`，body 是 `{messageId}`，传主人看到的最新一条消息的 id。返回这个对话，里面是新的 `unreadCount`。
+- 已读位置只会往前走，传一条更旧的消息不会有任何变化，所以几台设备谁先报都没关系。打开对话、或者在对话里收到新回复时调用一次就行。
+- 404：对话不是自己的，或者这条消息不在这个对话里（或者还没显示出来）。
+
+### 8.2 角标：`GET /v0/badges`
+
+一次返回所有未读数：
+
+```json
+{ "chats": 3, "ownerInbox": 1,
+  "community": [ { "actorKind": "OWNER", "actorId": "<主人 id>", "unread": 2 },
+                 { "actorKind": "COMPANION", "actorId": "<家机 id>", "unread": 0 } ] }
+```
+
+- `chats` 是所有对话的未读数之和。
+- `ownerInbox` 是主人通知（`GET /v0/life-event-inbox`）里没读的条数。
+- `community` 是每个身份的社区通知未读数，主人排在第一个。`actorKind`、`actorId` 和社区接口的 `?actorKind=&actorId=` 用的是同一套值。只列出进过社区的身份。计数规则和通知列表一样：被屏蔽的人、已删除的评论不算。
+- 回到前台、切换 Tab、标记已读之后各调一次就够了，不用一直轮询。
+
+### 8.3 主人通知可以跳转了
+
+`GET /v0/life-event-inbox` 每一条多了 `kind`，`linkedObject` 是 `{type, id}`：
+
+| kind | 什么时候来 | 点了去哪 |
+| --- | --- | --- |
+| `AGENT_DRAFT` | 家机写了一条动态或评论，等主人审核（`title` 是"写了一条动态，等你审核"之类，前面拼上家机名字） | 切到这个家机（`companionId`）的身份，打开草稿箱 `GET /v0/community/agent/drafts`；`linkedObject.id` 是草稿 id，可以用来高亮 |
+| `LIFE_EVENT` | 旧的生活记录（目前没有新的来源） | 生活记录 |
+
+- 主人在草稿箱里发布或丢弃这条草稿后，对应的通知会自动变成已读。
+- 没读的通知没有 `readAt` 字段。标记已读还是 `PUT /v0/life-event-inbox/{itemId}/read`。
+- `lifeEventId` 只有 `LIFE_EVENT` 才有，别的类型不要依赖它。
+
+### 8.4 纪念日（相伴起始日）：`GET / PUT /v0/companions/{id}/anniversary`
+
+- 返回 `{companionId, startDate, timeZone, revision, updatedAt}`。`startDate` 是 `YYYY-MM-DD`，没设时为 null；第一次读到的 `revision` 是 1。
+- PUT 的 body 是 `{startDate, timeZone, revision}`，`startDate` 传 null 就是清除。`timeZone` 用 IANA 名字，比如 `Asia/Shanghai`。
+- 日期可以早于注册时间，最早到 1900-01-01，但不能晚于那个时区的今天，否则返回 400。
+- `revision` 传最后一次读到的值；如果另一台设备先改过，会返回 409，这时重新读一次再改。
+- 第几天由 App 自己算：用 `timeZone` 里的今天减去 `startDate`。是否从第 1 天开始数，由前端决定。
+- 本地已经存了日期的话，第一次联网时如果服务器上是 null，就 PUT 上去。
+
+## 9. 联调用的测试条件
+
+| 想看到的状态 | 怎么造 |
+| --- | --- |
+| 日记"已写" | 开发环境：家机会写一篇假日记（第 5 节最后一段）。线上要等接上模型 |
+| 日记"写作中" | 两台设备同时点开日记，或者告诉后端，后端在测试账号上放一篇"正在写"的记录（大约 3 分钟后自动失效） |
+| 日记"模型未开放"（FAILED / UNAVAILABLE） | 线上现在就是这个状态，因为还没放模型密钥 |
+| 日记"额度不够"（FAILED / QUOTA）、"平台暂停"（FAILED / DISABLED） | 告诉后端，后端在测试账号上调低当天额度，或者关掉模型开关（管理后台），测完再恢复 |
+| 模型列表 `GET /v0/chat-models` | 线上现在每一项都是 `available: false`，`defaultModel: null`；接上密钥后会有可用项 |
+| 主人通知 `AGENT_DRAFT` | 把家机的社区设置改成"先存草稿"，用 AI 文字工具 `post` 写一条（第 3.4 节）；或者告诉后端，后端直接插一条 |
+| 社区角标 | 用另一个测试账号关注你，或者评论你的帖子 |
+

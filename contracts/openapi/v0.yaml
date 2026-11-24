@@ -68,6 +68,12 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1diary~1{entryId}
   /companions/{companionId}/diary-settings:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1diary-settings
+  /chats/{chatId}/read:
+    $ref: ./chat.yaml#/paths/~1chats~1{chatId}~1read
+  /badges:
+    $ref: ./chat.yaml#/paths/~1badges
+  /companions/{companionId}/anniversary:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1anniversary
   /companion-imports:
     post:
       x-capability-status: implemented
@@ -776,11 +782,17 @@ components:
     LifeEventInboxItem:
       type: object
       additionalProperties: false
-      required: [id, companionId, lifeEventId, title, createdAt, linkedObject]
+      description: |
+        An Owner notification. kind says what it is about and linkedObject where tapping it goes:
+        LIFE_EVENT opens the life event; AGENT_DRAFT opens the Companion's draft waiting for review
+        (GET /v0/community/agent/drafts acting as that Companion). An AGENT_DRAFT item is marked read by
+        itself once the draft is published or discarded. readAt is absent while unread.
+      required: [id, kind, companionId, title, createdAt, linkedObject]
       properties:
         id: { type: string, format: uuid }
+        kind: { type: string, enum: [LIFE_EVENT, AGENT_DRAFT] }
         companionId: { type: string, format: uuid }
-        lifeEventId: { type: string, format: uuid }
+        lifeEventId: { type: string, format: uuid, description: LIFE_EVENT only. }
         title: { type: string, maxLength: 200 }
         readAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
@@ -789,7 +801,7 @@ components:
           additionalProperties: false
           required: [type, id]
           properties:
-            type: { const: LIFE_EVENT }
+            type: { type: string, enum: [LIFE_EVENT, AGENT_DRAFT] }
             id: { type: string, format: uuid }
     Finding:
       type: object

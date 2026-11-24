@@ -36,6 +36,22 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_delete($1) as payload", [chatId]);
   }
 
+  markRead(chatId: string, messageId: string): Promise<unknown> {
+    return this.#object("select public.chat_mark_read($1,$2) as payload", [chatId, messageId]);
+  }
+
+  badges(): Promise<unknown> {
+    return this.#object("select public.home_badges() as payload", []);
+  }
+
+  anniversary(companionId: string): Promise<unknown> {
+    return this.#object("select public.anniversary_get($1) as payload", [companionId]);
+  }
+
+  saveAnniversary(companionId: string, startDate: string | null, timeZone: string, revision: number): Promise<unknown> {
+    return this.#object("select public.anniversary_save($1,$2::date,$3,$4) as payload", [companionId, startDate, timeZone, revision]);
+  }
+
   settings(companionId: string): Promise<unknown> {
     return this.#object("select public.chat_get_settings($1) as payload", [companionId]);
   }

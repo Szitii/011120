@@ -34,6 +34,10 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     act: async (...args) => { calls.push(["act", ...args]); return { chatId, message: {}, typing: [], replying }; },
     retry: async (...args) => { calls.push(["retry", ...args]); return { typing: [], replying }; },
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
+    markRead: async (...args) => { calls.push(["markRead", ...args]); return {}; },
+    badges: async () => { calls.push(["badges"]); return {}; },
+    anniversary: async (...args) => { calls.push(["anniversary", ...args]); return {}; },
+    saveAnniversary: async (...args) => { calls.push(["saveAnniversary", ...args]); return {}; },
     settings: async (...args) => { calls.push(["settings", ...args]); return {}; },
     saveSettings: async (...args) => { calls.push(["saveSettings", ...args]); return {}; },
     claim: async () => turns.shift() ?? null,
@@ -90,6 +94,34 @@ it("routes every chat request to the database as the signed-in Owner", async () 
   const act = calls.at(-1)!;
   assert.deepEqual(act.slice(0, 3), ["act", companion, "PAT_HEAD"]);
   assert.equal(act[3], send[4], "the retry key is hashed the same way as for messages");
+});
+
+it("routes read state, badges and the anniversary", async () => {
+  const { port, calls } = fakePort();
+  assert.equal(await status(port, request(`chats/${chatId}/read`, "PUT", { messageId })), 200);
+  assert.equal(await status(port, request("badges")), 200);
+  assert.equal(await status(port, request(`companions/${companion}/anniversary`)), 200);
+  assert.equal(await status(port, request(`companions/${companion}/anniversary`, "PUT",
+    { startDate: "2024-02-29", timeZone: "Asia/Shanghai", revision: 1 })), 200);
+  assert.equal(await status(port, request(`companions/${companion}/anniversary`, "PUT",
+    { startDate: null, timeZone: "Europe/London", revision: 2 })), 200);
+  assert.deepEqual(calls, [
+    ["markRead", chatId, messageId], ["badges"], ["anniversary", companion],
+    ["saveAnniversary", companion, "2024-02-29", "Asia/Shanghai", 1], ["saveAnniversary", companion, null, "Europe/London", 2],
+  ]);
+  calls.length = 0;
+  for (const req of [
+    request(`chats/${chatId}/read`, "PUT", { messageId: "nope" }),
+    request(`chats/${chatId}/read`, "PUT", { messageId, extra: 1 }),
+    request(`companions/${companion}/anniversary`, "PUT", { startDate: "2024-13-01", timeZone: "Asia/Shanghai", revision: 1 }),
+    request(`companions/${companion}/anniversary`, "PUT", { startDate: "2024-01-01", timeZone: "", revision: 1 }),
+    request(`companions/${companion}/anniversary`, "PUT", { startDate: "2024-01-01", timeZone: "Asia/Shanghai", revision: 0 }),
+    request(`companions/${companion}/anniversary`, "PUT", { startDate: "2024-01-01", timeZone: "Asia/Shanghai" }),
+  ]) assert.equal(await refusal(port, req), "INVALID_INPUT", JSON.stringify(req.body));
+  for (const req of [request("badges", "POST"), request(`companions/${companion}/anniversary`, "DELETE"), request(`chats/${chatId}/read`)]) {
+    assert.equal(await refusal(port, req), "NOT_FOUND");
+  }
+  assert.equal(calls.length, 0);
 });
 
 it("records home-room actions and starts the reply only when one may come", async () => {
