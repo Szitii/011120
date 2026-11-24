@@ -1,5 +1,6 @@
 import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+import type { StoredConnection } from "../connections/model.ts";
 
 /** What the server needs to write one Companion reply (from chat_claim). */
 export interface ChatClaim {
@@ -71,6 +72,14 @@ export interface ChatPort {
   memories(companionId: string): Promise<unknown>;
   addMemory(companionId: string, body: string, keyHash: string): Promise<unknown>;
   deleteMemory(companionId: string, memoryId: string): Promise<unknown>;
+  /** How the Companion speaks, without the secret. */
+  connectionView(companionId: string): Promise<unknown>;
+  /** Server only: save a tested connection; `secret` is already sealed. */
+  saveConnection(companionId: string, connection: StoredConnection, hint: string): Promise<unknown>;
+  /** Back to the platform's models. */
+  removeConnection(companionId: string): Promise<unknown>;
+  /** Server only: the connection with its sealed secret, or null for the platform. */
+  connection(companionId: string): Promise<StoredConnection | null>;
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown>;
   /** Server only: the next reply to write, or null. */
   claim(chatId: string): Promise<ChatClaim | null>;

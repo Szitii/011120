@@ -72,6 +72,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories
   /companions/{companionId}/memories/{memoryId}:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories~1{memoryId}
+  /companions/{companionId}/connection:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1connection
   /companion-imports:
     post:
       x-capability-status: implemented

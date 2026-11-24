@@ -66,11 +66,16 @@ async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiK
     signal: request.signal,
   });
   if (!response.ok) throw new Error(`${model.provider} answered HTTP ${response.status}`);
-  const body = await response.json() as {
+  return readCompletion(await response.json());
+}
+
+/** An OpenAI-style /chat/completions answer (also what Owners' own providers and agents return). */
+export function readCompletion(answer: unknown): ModelResult {
+  const body = (answer ?? {}) as {
     choices?: { message?: { content?: unknown }; finish_reason?: unknown }[];
     usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
   };
-  const choice = body.choices?.[0];
+  const choice = Array.isArray(body.choices) ? body.choices[0] : undefined;
   return {
     text: typeof choice?.message?.content === "string" ? choice.message.content : "",
     inputTokens: count(body.usage?.prompt_tokens),

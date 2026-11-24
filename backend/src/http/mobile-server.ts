@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Connections } from "../connections/model.ts";
 import { MAX_IMPORT_BYTES } from "../companion-import/policy.ts";
 import type { ChatCatalog } from "../chat/models.ts";
 import { ChatReplies, devChatModel } from "../chat/replies.ts";
@@ -79,13 +80,14 @@ const writeTransportProblem = (response: ServerResponse, error: unknown): void =
 export const createMobileHttpServer = (
   sessions: OwnerSessionResolver,
   mode: "stage1-mobile-dev" | "supabase-auth",
-  chat: { readonly replies: ChatReplies; readonly catalog?: ChatCatalog } =
+  chat: { readonly replies: ChatReplies; readonly catalog?: ChatCatalog; readonly connections?: Connections } =
     { replies: new ChatReplies(mode === "stage1-mobile-dev" ? devChatModel : undefined) },
 ) => {
   const api = new MvpApiBoundary({
     sessions,
     replies: chat.replies,
     ...(chat.catalog === undefined ? {} : { catalog: chat.catalog }),
+    ...(chat.connections === undefined ? {} : { connections: chat.connections }),
   });
 
   return createServer(async (request, response) => {

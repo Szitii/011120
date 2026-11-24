@@ -131,6 +131,29 @@ export function replyPrompt(turn: ChatClaim, memories: readonly string[] = []): 
   return { system, user };
 }
 
+/**
+ * For an Owner's own agent (an EXTERNAL connection): it has its own persona and memory, so it gets
+ * the conversation as chat messages (its own words as "assistant", everyone else's as "user") and
+ * only the house rules. Like the transcript, the Owner's words have keys and passwords masked.
+ */
+export function agentMessages(turn: ChatClaim): { role: "system" | "user" | "assistant"; content: string }[] {
+  const name = turn.companion.displayName;
+  const self = turn.companion.companionId;
+  const rules = [
+    `你在 011120 的小家里，以「${name}」的身份和主人聊天。${setting(turn)}`,
+    "像用微信聊天：短句、口语；一次 1 到 3 条消息，每条单独一行，开头不要加名字。",
+    ...(turn.optional ? [`如果最后的消息和你无关、你也不想说话，只输出 ${PASS}。`] : []),
+  ].join("\n");
+  const said = turn.history.slice(-30).map(message => {
+    if (message.companionId === self) return { role: "assistant" as const, content: message.body ?? "" };
+    const body = message.action !== null ? `（${ACTION_TEXT[message.action]}）`
+      : message.companionId === null ? maskCredentials(message.body ?? "") : message.body ?? "";
+    return { role: "user" as const, content: turn.direct && message.companionId === null ? body : `【${nameOf(turn, message.companionId)}】${body}` };
+  }).filter(message => message.content.length > 0);
+  if (said.length === 0 || said.at(-1)!.role === "assistant") said.push({ role: "user", content: `（现在轮到你，${name}。）` });
+  return [{ role: "system", content: rules }, ...said];
+}
+
 /** For the cheap decision model: does the latest message call for this Companion to speak? */
 export function decisionPrompt(turn: ChatClaim): { system: string; user: string } {
   const name = turn.companion.displayName;
