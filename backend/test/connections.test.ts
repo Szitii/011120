@@ -5,7 +5,7 @@ import { handleChatRequest } from "../src/chat/http.ts";
 import type { ChatClaim, ChatPort, DiaryJob } from "../src/chat/port.ts";
 import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { checkUrl, createPostJson, isPublicAddress, publicLookup, type PostJson } from "../src/connections/guard.ts";
-import { checkConnection, ConnectedChatModel, Connections, testConnection, type StoredConnection } from "../src/connections/model.ts";
+import { checkConnection, ConnectedChatModel, Connections, testConnection, type Connection } from "../src/connections/model.ts";
 import { SecretBox } from "../src/connections/secret-box.ts";
 import { chatFromEnvironment } from "../src/chat/setup.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
@@ -133,8 +133,9 @@ const turn = (overrides: Partial<ChatClaim> = {}): ChatClaim => ({
 });
 const job: DiaryJob = { status: "WRITE", entryId: "e", claimId: "k", companion: turn().companion, messages: [], posts: [] };
 
-function storePort(stored: StoredConnection | null) {
-  return { connection: async () => stored, memories: async () => ({ items: [{ body: "主人怕黑" }] }) } as unknown as ChatPort;
+function storePort(stored: Connection | null, switchedOn = true) {
+  return { connection: async () => stored, memories: async () => ({ items: [{ body: "主人怕黑" }] }),
+    modelsEnabled: async (models: unknown[]) => models.map(() => switchedOn) } as unknown as ChatPort;
 }
 
 it("answers through the Owner's key or agent, and through the platform without a connection", async () => {
@@ -144,7 +145,7 @@ it("answers through the Owner's key or agent, and through the platform without a
     return { status: 200, body: completion(text, finish) };
   };
   const signal = new AbortController().signal;
-  const byok: StoredConnection = { kind: "BYOK", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat",
+  const byok: Connection = { kind: "BYOK", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat",
     name: null, secret: box.seal("sk-ds-1234", companion) };
   const model = new ConnectedChatModel(devChatModel, box, post("好呀\n走吧"));
   assert.deepEqual(await model.reply(turn(), { port: storePort(byok), signal }), { messages: ["好呀", "走吧"] });
@@ -153,7 +154,7 @@ it("answers through the Owner's key or agent, and through the platform without a
   assert.equal(sent[0]!.body.model, "deepseek-chat");
   assert.match(sent[0]!.body.messages[0]!.content, /主人怕黑/, "BYOK uses the platform prompt with memories");
 
-  const external: StoredConnection = { kind: "EXTERNAL", provider: null, baseUrl: "https://agent.example.com/run", model: null,
+  const external: Connection = { kind: "EXTERNAL", provider: null, baseUrl: "https://agent.example.com/run", model: null,
     name: "本体", secret: box.seal("", companion) };
   sent.length = 0;
   const agent = new ConnectedChatModel(undefined, box, post("嗯嗯"));
@@ -178,6 +179,12 @@ it("answers through the Owner's key or agent, and through the platform without a
   await assert.rejects(new ConnectedChatModel(undefined, box, post("半句", "length")).reply(turn(), { port: storePort(byok), signal }), /cut off/);
   await assert.rejects(new ConnectedChatModel(undefined, box, async () => ({ status: 502, body: {} })).reply(turn(), { port: storePort(byok), signal }), /502/);
   await assert.rejects(new ConnectedChatModel(undefined, box, async () => ({ status: 200, body: undefined })).reply(turn(), { port: storePort(byok), signal }), /JSON/);
+
+  // The operators' kill switch stops Owners' keys and agents too.
+  sent.length = 0;
+  assert.deepEqual(await model.reply(turn(), { port: storePort(byok, false), signal }), { failed: "DISABLED" });
+  assert.deepEqual(await model.diary(job, { port: storePort(external, false), signal }), { failed: "DISABLED" });
+  assert.equal(sent.length, 0, "nothing is sent while switched off");
 
   // Diary
   sent.length = 0;
@@ -227,7 +234,7 @@ it("routes connections: tests before saving, never returns the key, 501 without 
   const saved = await handle(request("PUT", byok));
   assert.deepEqual(saved!.body, { result: "CONNECTED", connection: { kind: "BYOK", keyHint: "1234" } });
   const save = calls.find(c => c[0] === "save")!;
-  const stored = save[2] as StoredConnection;
+  const stored = save[2] as Connection;
   assert.equal(box.open(stored.secret, companion), "sk-glm-abcd1234", "sealed for this Companion");
   assert.doesNotMatch(JSON.stringify(saved!.body), /sk-glm/);
   await handle(request("PUT", { ...byok, apiKey: "sk-short1" }));

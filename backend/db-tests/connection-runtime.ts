@@ -73,7 +73,12 @@ try {
   assert.deepEqual([external.data.connection.kind, external.data.connection.name, external.data.connection.provider], ["EXTERNAL", "我的本体", null]);
   assert.equal(await lastReply("本体在吗"), "来自主人自己的模型");
   assert.deepEqual(outside.at(-1), { url: "https://agent.example.com/v1/chat/completions", auth: "Bearer tok-12345" });
-  passed("replies come from the Owner's own model or agent, and are kept in the chat");
+  await pool.query("insert into companion_private.model_switches(scope, key, enabled) values ('PROVIDER', 'owner-agent', false)");
+  const before = outside.length;
+  assert.equal(await lastReply("关掉了吗"), null, "switched off: no reply");
+  assert.equal(outside.length, before, "and no outside call");
+  await pool.query("delete from companion_private.model_switches where key = 'owner-agent'");
+  passed("replies come from the Owner's own model or agent, are kept in the chat, and stop when the operators switch them off");
 
   for (const [method, body] of [["GET", undefined], ["DELETE", undefined],
     ["PUT", { kind: "BYOK", provider: "qwen", model: "qwen-plus", apiKey: "sk-bbbbbbbb", consent: true }]] as const) {
