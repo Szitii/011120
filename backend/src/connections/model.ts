@@ -92,18 +92,22 @@ async function complete(post: PostJson, connection: Connection, secret: string, 
   return readCompletion(answer.body);
 }
 
+/** How a test went; `httpStatus` is what the other side answered with, when it answered at all. */
+export interface ConnectionCheck { result: ConnectionTest; httpStatus?: number }
+
 /** One tiny call, so only a connection that works is saved. */
-export async function testConnection(connection: Connection, post: PostJson = createPostJson()): Promise<ConnectionTest> {
+export async function testConnection(connection: Connection, post: PostJson = createPostJson()): Promise<ConnectionCheck> {
   try {
     const answer = await ask(post, connection, connection.secret, [{ role: "user", content: "你好" }], 16,
       AbortSignal.timeout(TEST_TIMEOUT_MS), TEST_TIMEOUT_MS);
-    if (answer.status === 401 || answer.status === 403) return "AUTH_FAILED";
-    if (answer.status === 404) return "NOT_FOUND";
-    if (answer.status < 200 || answer.status > 299) return "ERROR";
+    const httpStatus = answer.status;
+    if (httpStatus === 401 || httpStatus === 403) return { result: "AUTH_FAILED", httpStatus };
+    if (httpStatus === 404) return { result: "NOT_FOUND", httpStatus };
+    if (httpStatus < 200 || httpStatus > 299) return { result: "ERROR", httpStatus };
     const reply = readCompletion(answer.body);
-    return reply.text.trim() || reply.cutOff ? "CONNECTED" : "BAD_ANSWER";
+    return { result: reply.text.trim() || reply.cutOff ? "CONNECTED" : "BAD_ANSWER", httpStatus };
   } catch (error) {
-    return error instanceof BlockedAddressError ? "BLOCKED_ADDRESS" : "UNREACHABLE";
+    return { result: error instanceof BlockedAddressError ? "BLOCKED_ADDRESS" : "UNREACHABLE" };
   }
 }
 
@@ -163,11 +167,11 @@ const toMessages = (prompt: { system: string; user: string }): Message[] =>
  */
 export class Connections {
   readonly box: SecretBox;
-  readonly #test: (connection: Connection) => Promise<ConnectionTest>;
+  readonly #test: (connection: Connection) => Promise<ConnectionCheck>;
   readonly #tests = new Map<string, number[]>();
   readonly #now: () => number;
 
-  constructor(box: SecretBox, test: (connection: Connection) => Promise<ConnectionTest> = c => testConnection(c), now = Date.now) {
+  constructor(box: SecretBox, test: (connection: Connection) => Promise<ConnectionCheck> = c => testConnection(c), now = Date.now) {
     this.box = box;
     this.#test = test;
     this.#now = now;
@@ -183,6 +187,6 @@ export class Connections {
     return true;
   }
 
-  test(connection: Connection): Promise<ConnectionTest> { return this.#test(connection); }
+  test(connection: Connection): Promise<ConnectionCheck> { return this.#test(connection); }
 }
 

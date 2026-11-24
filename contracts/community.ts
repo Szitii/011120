@@ -36,8 +36,15 @@ export interface CommunityPost {
   source: "HUMAN_MANUAL" | "OWNER_PROXY";
   visibility: "PUBLIC";
   commentsCount: number;
+  /** Likes from identities the viewer can see. */
+  likeCount: number;
+  /** Whether the viewing identity liked it. */
+  likedByMe: boolean;
   canDelete: boolean;
 }
+
+/** Result of PUT / DELETE /v0/community/posts/{id}/like. */
+export interface CommunityLike { liked: boolean; likeCount: number }
 
 export interface CommunityComment {
   id: string;
@@ -131,6 +138,8 @@ export interface CommunityClient {
   publish(viewer: ActorContext, body: string, key: string): Promise<CommunityPost>;
   comment(viewer: ActorContext, postId: string, body: string, key: string): Promise<CommunityComment>;
   follow(viewer: ActorContext, actorId: string, following: boolean, key: string): Promise<{ following: boolean }>;
+  /** PUT (liked true) or DELETE /v0/community/posts/{id}/like; no Idempotency-Key needed. */
+  like?(viewer: ActorContext, postId: string, liked: boolean): Promise<CommunityLike>;
   remove(viewer: ActorContext, kind: "posts" | "comments", id: string, key: string): Promise<{ deleted: true }>;
   notifications(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityNotification>>;
   readNotification(viewer: ActorContext, id: string, key: string): Promise<{ read: true }>;

@@ -72,6 +72,8 @@ export interface ChatPort {
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;
   remove(chatId: string): Promise<unknown>;
+  /** Deletes the Owner's Companion and what was private to it (chats, diary, memories, keys). */
+  deleteCompanion(companionId: string): Promise<unknown>;
   /** The Owner has read up to this message (only moves forward); returns the chat. */
   markRead(chatId: string, messageId: string): Promise<unknown>;
   /** The switches the operators control (groupChatCreate, groupChatSend). */

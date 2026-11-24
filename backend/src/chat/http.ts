@@ -29,6 +29,7 @@
  *   GET|POST /v0/companions/{id}/agent-keys             keys for the Owner's own agent to check in (agent/heartbeat.ts)
  *   DELETE /v0/companions/{id}/agent-keys/{keyId}      revoke one
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
+ *   DELETE /v0/companions/{id}                         delete the Companion and what was private to it
  *
  * POST /v0/chats, POST .../messages, POST .../voice and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
@@ -169,13 +170,17 @@ function diarySettings(request: MvpHttpRequest): DiarySettings {
   return { frequency, revision, ...(autoWrite === undefined ? {} : { autoWrite }) } as DiarySettings;
 }
 
-/** The catalog with what can be used right now: enabled, key configured, not switched off. */
+/**
+ * The models the platform offers: enabled in the catalog with a key configured. One the operators
+ * switched off for now stays listed as not available, so a Companion that chose it still shows it.
+ */
 async function models(port: ChatPort, catalog: ChatCatalog | undefined): Promise<ChatModelList> {
-  if (catalog === undefined) return { items: [], defaultModel: null };
-  const switchedOn = await port.modelsEnabled(catalog.models);
-  const items = catalog.models.map((m, i) => ({
+  const offered = catalog?.models.filter(m => catalog.usable(m)) ?? [];
+  if (catalog === undefined || offered.length === 0) return { items: [], defaultModel: null };
+  const switchedOn = await port.modelsEnabled(offered);
+  const items = offered.map((m, i) => ({
     id: m.id, name: m.name, provider: m.provider, tier: m.tier, inputPerMTok: m.inputPerMTok, outputPerMTok: m.outputPerMTok,
-    available: catalog.usable(m) && switchedOn[i] === true,
+    available: switchedOn[i] === true,
   }));
   const fallback = catalog.defaultModel();
   return { items, defaultModel: items.find(item => item.id === fallback?.id && item.available)?.id ?? null };
@@ -214,7 +219,8 @@ export async function handleChatRequest(
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
   const agentKeysRoute = path[1] === "companions" && path[3] === "agent-keys" && (path.length === 4 || path.length === 5);
-  const chatRoute = path[1] === "chats" || [settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
+  const deleteCompanionRoute = path[1] === "companions" && path.length === 3 && request.method.toUpperCase() === "DELETE";
+  const chatRoute = path[1] === "chats" || [deleteCompanionRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
     badgesRoute, featuresRoute, walletRoute, memoriesRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
@@ -224,6 +230,7 @@ export async function handleChatRequest(
   if (!port) return response(501, { code: "CHAT_UNAVAILABLE" });
   const method = request.method.toUpperCase();
 
+  if (deleteCompanionRoute) return response(200, await port.deleteCompanion(id(path[2])));
   if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
   if (walletRoute) return method === "GET" ? response(200, await port.wallet()) : notFound();
   if (featuresRoute) {
@@ -284,8 +291,11 @@ export async function handleChatRequest(
     if (checked === "INVALID_INPUT" || checked === "INVALID_URL") return invalid();
     if (checked === "BLOCKED_ADDRESS") return response(200, { result: "BLOCKED_ADDRESS", connection: current } satisfies ConnectionSaveResult);
     if (!connections.allow(session.ownerId)) return response(429, { code: "TOO_MANY_TESTS" });
-    const result = await connections.test(checked);
-    if (result !== "CONNECTED") return response(200, { result, connection: current } satisfies ConnectionSaveResult);
+    const { result, httpStatus } = await connections.test(checked);
+    // The status the Owner's provider or agent answered with tells them what to fix on their side.
+    if (result !== "CONNECTED") {
+      return response(200, { result, connection: current, ...(httpStatus === undefined ? {} : { httpStatus }) } satisfies ConnectionSaveResult);
+    }
     const saved = await port.saveConnection(companionId, { ...checked, secret: connections.box.seal(checked.secret, companionId) },
       // The last 4 characters help the Owner recognise the key; a short one shows nothing, so it is never stored in clear.
       checked.secret.length >= 12 ? checked.secret.slice(-4) : "");

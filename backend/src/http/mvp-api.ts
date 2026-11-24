@@ -208,6 +208,10 @@ const mapError = (error: unknown, traceId: string): MvpHttpResponse => {
     return problem(400, error.code, "The Companion import is invalid.", traceId);
   }
   if (error instanceof PostgresPersistenceError) {
+    // The one limit the app tells apart, so it can lead the Owner to delete a Companion first.
+    if (error.code === "INVALID_STATE" && error.message === "companion limit reached") {
+      return problem(409, "COMPANION_LIMIT", "The Owner already has the most Companions allowed.", traceId);
+    }
     const mapped = {
       NOT_FOUND,
       INVALID_INPUT: [400, "INVALID_REQUEST", "The request is invalid."],

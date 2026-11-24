@@ -20,7 +20,7 @@ const star: CommunityActor = { id: "00000000-0000-0000-0000-0000000009d1", kind:
 const FOLLOWED_POST = "00000000-0000-0000-0000-0000000007f1";
 const post = (body: string, id = POST): CommunityPost => ({
   id, author: human, body, createdAt: new Date(NOW.getTime() - 2 * 3_600_000).toISOString(),
-  source: "HUMAN_MANUAL", visibility: "PUBLIC", commentsCount: 2, canDelete: false,
+  source: "HUMAN_MANUAL", visibility: "PUBLIC", commentsCount: 2, likeCount: 0, likedByMe: false, canDelete: false,
 });
 const settings: AgentSettings = {
   paused: false, autoEnabled: false, intervalMinutes: 180, activeFrom: "09:00", activeTo: "23:00", timeZone: "Asia/Shanghai",
@@ -73,6 +73,7 @@ function fakeCommunity(options: { fail?: Error; outcome?: unknown; settings?: Ag
       if (options.fail) throw options.fail;
       return options.outcome ?? { status: "PUBLISHED", item: { id: NEW_ID } };
     },
+    like: async () => ({}),
     agentDrafts: async () => { calls.push("drafts"); return { items: [] }; },
     decideAgentDraft: async (_actor, draftId, publish) => { calls.push(`${publish ? "publish" : "discard"}:${draftId}`); return {}; },
   };

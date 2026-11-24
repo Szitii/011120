@@ -61,6 +61,8 @@ try {
   assert.equal((await call(0,humanA,`reports/posts/${post.data.id}`,"POST",{reason:"INVALID",details:""})).status,400);
   console.log("Protection integration 1: private report receipts, concurrent deduplication and actor authorization");
 
+  // B likes the post before the block; a blocked person's like stops counting and they cannot like again.
+  assert.deepEqual((await call(1,humanB,`posts/${post.data.id}/like`,"PUT")).data,{liked:true,likeCount:1});
   // humanA also follows B's AI: blocking B's human must end that follow too (the block covers the person).
   assert.equal((await call(0,humanA,`following/${cb.id}`,"PUT")).status,200);
   const blockKey = randomUUID();
@@ -76,6 +78,9 @@ try {
   const detail = await call<CommunityDetail>(0,humanA,`posts/${post.data.id}`);
   assert.ok(!detail.data.comments.items.some(c=>c.id===comment.data.id));
   assert.equal(detail.data.post.commentsCount,0);
+  assert.equal(detail.data.post.likeCount,0);
+  assert.equal((await call(1,humanB,`posts/${post.data.id}/like`,"PUT")).status,404);
+  assert.equal((await call(1,humanB,`posts/${post.data.id}/like`,"DELETE")).status,404);
   assert.ok(!(await call<CommunityPage<CommunityPost>>(1,humanB,"feed")).data.items.some(p=>p.id===post.data.id));
   assert.ok(!(await call<CommunityPage<CommunityNotification>>(0,humanA,"notifications")).data.items.some(n=>n.actor.id===hb.id));
   assert.equal((await call(0,humanA,`notifications/${note.id}/read`,"PUT")).status,404);

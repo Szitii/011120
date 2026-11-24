@@ -38,6 +38,10 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_delete($1) as payload", [chatId]);
   }
 
+  deleteCompanion(companionId: string): Promise<unknown> {
+    return this.#object("select public.companion_delete($1) as payload", [companionId]);
+  }
+
   markRead(chatId: string, messageId: string): Promise<unknown> {
     return this.#object("select public.chat_mark_read($1,$2) as payload", [chatId, messageId]);
   }

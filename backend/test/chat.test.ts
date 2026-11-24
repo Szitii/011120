@@ -36,6 +36,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     act: async (...args) => { calls.push(["act", ...args]); return { chatId, message: {}, typing: [], replying }; },
     retry: async (...args) => { calls.push(["retry", ...args]); return { typing: [], replying }; },
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
+    deleteCompanion: async (...args) => { calls.push(["deleteCompanion", ...args]); return { deleted: true }; },
     markRead: async (...args) => { calls.push(["markRead", ...args]); return {}; },
     features: async () => { calls.push(["features"]); return { groupChatCreate: false, groupChatSend: true }; },
     wallet: async () => { calls.push(["wallet"]); return { enabled: false }; },
@@ -86,6 +87,15 @@ const status = async (port: ChatPort, req: MvpHttpRequest) =>
   (await handleChatRequest(req, session(port), "trace", replies))?.status;
 const refusal = async (port: ChatPort, req: MvpHttpRequest) =>
   handleChatRequest(req, session(port), "trace", replies).then(() => "ok", (error: PostgresPersistenceError) => error.code);
+
+it("deletes a Companion through its own route", async () => {
+  const { port, calls } = fakePort();
+  assert.equal(await status(port, request(`companions/${companion}`, "DELETE")), 200);
+  assert.deepEqual(calls, [["deleteCompanion", companion]]);
+  assert.equal(await refusal(port, request("companions/not-a-uuid", "DELETE")), "INVALID_INPUT");
+  assert.equal(await handleChatRequest(request(`companions/${companion}`), session(port), "trace", replies), undefined,
+    "other methods on a Companion are not chat routes");
+});
 
 it("routes every chat request to the database as the signed-in Owner", async () => {
   const { port, calls } = fakePort();
@@ -361,6 +371,7 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   await adapter.send(chatId, "hi", [], "k");
   await adapter.retry(chatId, messageId);
   await adapter.remove(chatId);
+  await adapter.deleteCompanion(companion);
   await adapter.settings(companion);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: "m", revision: 1 });
   assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1]);
