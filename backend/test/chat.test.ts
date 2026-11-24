@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import { handleChatRequest } from "../src/chat/http.ts";
+import { sha256 } from "../src/companion-import/canonical.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { ChatReplies, devChatModel, type ChatModel } from "../src/chat/replies.ts";
 import type { ChatClaim, ChatOutcome, ChatPort } from "../src/chat/port.ts";
@@ -48,6 +49,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     connectionView: async (...args) => { calls.push(["connectionView", ...args]); return { kind: "PLATFORM" }; },
     saveConnection: async (...args) => { calls.push(["saveConnection", ...args]); return { kind: args[1].kind }; },
     removeConnection: async (...args) => { calls.push(["removeConnection", ...args]); return { kind: "PLATFORM" }; },
+    createAgentKey: async (...args) => { calls.push(["createAgentKey", ...args]); return { id: "k1", name: args[1] }; },
+    agentKeys: async (...args) => { calls.push(["agentKeys", ...args]); return { items: [] }; },
+    revokeAgentKey: async (...args) => { calls.push(["revokeAgentKey", ...args]); return { active: false }; },
     connection: async () => null,
     saveSettings: async (...args) => { calls.push(["saveSettings", ...args]); return {}; },
     claim: async () => turns.shift() ?? null,
@@ -153,6 +157,25 @@ it("routes the wallet", async () => {
   assert.equal(await status(port, request("wallet")), 200);
   assert.equal(await refusal(port, request("wallet", "POST")), "NOT_FOUND");
   assert.deepEqual(calls, [["wallet"]]);
+});
+
+it("routes agent keys: the token is shown once and only its hash reaches the database", async () => {
+  const { port, calls } = fakePort();
+  const created = await handleChatRequest(request(`companions/${companion}/agent-keys`, "POST", { name: " 我的 Agent " }), session(port), "trace", replies);
+  assert.equal(created?.status, 201);
+  const token = (created?.body as { token: string }).token;
+  assert.match(token, /^cak_/);
+  assert.deepEqual(calls.at(-1), ["createAgentKey", companion, "我的 Agent", sha256(token), 30]);
+  assert.equal(await status(port, request(`companions/${companion}/agent-keys`, "POST", { name: "短期", days: 7 })), 201);
+  assert.equal((calls.at(-1) as unknown[])[4], 7);
+  assert.equal(await status(port, request(`companions/${companion}/agent-keys`)), 200);
+  assert.equal(await status(port, request(`companions/${companion}/agent-keys/${messageId}`, "DELETE")), 200);
+  assert.deepEqual(calls.slice(-2), [["agentKeys", companion], ["revokeAgentKey", companion, messageId]]);
+  for (const body of [{ name: "" }, { name: "x".repeat(41) }, { name: "a", days: 0 }, { name: "a", days: 366 }, { name: "a", days: 1.5 }, { name: "a", scope: "ALL" }]) {
+    assert.equal(await refusal(port, request(`companions/${companion}/agent-keys`, "POST", body)), "INVALID_INPUT", JSON.stringify(body));
+  }
+  assert.equal(await refusal(port, request(`companions/${companion}/agent-keys`, "PUT", {})), "NOT_FOUND");
+  assert.equal(await refusal(port, request(`companions/${companion}/agent-keys/${messageId}`)), "NOT_FOUND");
 });
 
 it("routes memories and refuses ones with credentials", async () => {

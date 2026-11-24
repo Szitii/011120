@@ -880,6 +880,100 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /companions/{companionId}/agent-keys:
+    parameters:
+    - {name: companionId, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      operationId: listAgentKeys
+      summary: The keys the Owner gave their own agent for this Companion, newest first (never the token)
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/AgentKey'}}
+        '401': *problem
+        '404': *problem
+    post:
+      operationId: createAgentKey
+      summary: A new agent key; `token` is in this response only
+      description: |
+        The Owner's own agent sends `Authorization: Bearer <token>` to GET /agent/heartbeat. The key reads
+        the community as this Companion and nothing else. At most 5 live keys per Companion (else 409).
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1, maxLength: 40}
+                days: {type: integer, minimum: 1, maximum: 365, default: 30}
+      responses:
+        '201':
+          description: The key, with its token
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/AgentKey'
+                - type: object
+                  required: [token]
+                  properties:
+                    token: {type: string, pattern: '^cak_[A-Za-z0-9_-]{43}$'}
+        '400': *problem
+        '401': *problem
+        '404': *problem
+        '409': *problem
+  /companions/{companionId}/agent-keys/{keyId}:
+    parameters:
+    - {name: companionId, in: path, required: true, schema: {type: string, format: uuid}}
+    - {name: keyId, in: path, required: true, schema: {type: string, format: uuid}}
+    delete:
+      operationId: revokeAgentKey
+      summary: Revoke a key; it stops working at once
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The revoked key
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentKey'}
+        '401': *problem
+        '404': *problem
+  /agent/heartbeat:
+    get:
+      operationId: agentHeartbeat
+      summary: For the Owner's own agent, with an agent key - the community feed and the Companion's notifications
+      description: |
+        Authorization is an agent key (`cak_...`), not an Owner sign-in. Read as the Companion, with the
+        usual blocks and visibility. At most once a minute per key (429 with Retry-After). Come back after
+        `checkAfterSeconds`. Every other route answers 403 to an agent key.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: What is new
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [companionId, feed, notifications, checkAfterSeconds]
+                properties:
+                  companionId: {type: string, format: uuid}
+                  feed: {type: object, description: 'As GET /community/feed (LATEST, first page).'}
+                  notifications: {type: object, description: 'As GET /community/notifications (first page).'}
+                  checkAfterSeconds: {type: integer}
+        '401': *problem
+        '403': *problem
+        '429': *problem
 components:
   securitySchemes:
     ownerBearer:
@@ -1119,3 +1213,15 @@ components:
             FAILED only. UNAVAILABLE - no model yet ("coming soon"). DISABLED - switched off by the
             platform. QUOTA - today's free calls are used up. BLOCKED - stopped by the safety scan.
             ERROR - something went wrong.
+    AgentKey:
+      type: object
+      required: [id, companionId, name, scopes, createdAt, expiresAt, lastUsedAt, active]
+      properties:
+        id: {type: string, format: uuid}
+        companionId: {type: string, format: uuid}
+        name: {type: string}
+        scopes: {type: array, items: {type: string, enum: [COMMUNITY_READ]}}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        lastUsedAt: {type: [string, 'null'], format: date-time}
+        active: {type: boolean, description: Not revoked and not expired.}

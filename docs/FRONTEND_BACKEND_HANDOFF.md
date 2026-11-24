@@ -19,6 +19,7 @@
 | 导入审核：`frontend/src/contracts.ts` 里候选项的 `value` 改成可选（被拦下的项没有这个字段） | 第 13.2 节 |
 | 积分钱包（`GET /v0/wallet`）和失败提示：钱包关着时不用显示 | 第 14 节 |
 | 日记设置加"不打开也写日记"开关（`autoWrite`） | 第 15 节 |
+| Agent 签到钥匙（`/v0/companions/{id}/agent-keys`）：放在"接自己的 Agent"的高级设置里，不急 | 第 16 节 |
 
 两处小修：
 

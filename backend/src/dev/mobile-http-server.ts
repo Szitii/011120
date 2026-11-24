@@ -6,6 +6,7 @@ import {
   type AuthenticatedOwnerSession,
   type OwnerSessionResolver,
 } from "../http/types.ts";
+import { AgentKeyResolver } from "../agent/heartbeat.ts";
 import { createMobileHttpServer } from "../http/mobile-server.ts";
 import { PostgresChatAdapter } from "../chat/postgres.ts";
 import { chatFromEnvironment } from "../chat/setup.ts";
@@ -52,7 +53,7 @@ export const createMobileDevHttpServer = (input: {
   readonly ownerId: string;
   /** Default: the fixed fake reply and no catalog (what tests use). */
   readonly chat?: Parameters<typeof createMobileHttpServer>[2];
-}) => createMobileHttpServer(new DevOwnerSessionResolver(input), "stage1-mobile-dev", input.chat);
+}) => createMobileHttpServer(new AgentKeyResolver(input.pool, new DevOwnerSessionResolver(input)), "stage1-mobile-dev", input.chat);
 
 const main = async (): Promise<void> => {
   if (process.env.NODE_ENV === "production" || process.env.SUPABASE_URL || process.env.SUPABASE_PUBLISHABLE_KEY) {

@@ -91,6 +91,11 @@ export interface ChatPort {
   connectionView(companionId: string): Promise<unknown>;
   /** Server only: save a tested connection; `secret` is already sealed. */
   saveConnection(companionId: string, connection: Connection, hint: string): Promise<unknown>;
+  /** Server only: a new agent key (only its hash is stored); the key without its token. */
+  createAgentKey(companionId: string, name: string, tokenHash: string, days: number): Promise<unknown>;
+  /** The Companion's agent keys, newest first ({ items }). */
+  agentKeys(companionId: string): Promise<unknown>;
+  revokeAgentKey(companionId: string, keyId: string): Promise<unknown>;
   /** Back to the platform's models. */
   removeConnection(companionId: string): Promise<unknown>;
   /** Server only: the connection with its sealed secret, or null for the platform. */
