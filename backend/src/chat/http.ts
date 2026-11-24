@@ -184,7 +184,8 @@ export async function handleChatRequest(
     const result = await connections.test(checked);
     if (result !== "CONNECTED") return response(200, { result, connection: current } satisfies ConnectionSaveResult);
     const saved = await port.saveConnection(companionId, { ...checked, secret: connections.box.seal(checked.secret, companionId) },
-      Array.from(checked.secret).slice(-4).join(""));
+      // The last 4 characters help the Owner recognise the key; a short one shows nothing, so it is never stored in clear.
+      checked.secret.length >= 12 ? checked.secret.slice(-4) : "");
     return response(200, { result, connection: saved as CompanionConnection } satisfies ConnectionSaveResult);
   }
   if (memoriesRoute) {

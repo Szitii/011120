@@ -32,9 +32,11 @@ it("seals secrets so only this key opens them, and only for the same Companion",
 it("only lets the server call public https addresses on port 443", () => {
   for (const address of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"]) assert.ok(isPublicAddress(address), address);
   for (const address of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0",
-    "224.0.0.1", "::1", "::", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "2002:a00:1::", "not-an-ip"]) {
+    "224.0.0.1", "::1", "::", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "2002:a00:1::", "::7f00:1", "::ffff:0:7f00:1", "4000::1", "not-an-ip"]) {
     assert.ok(!isPublicAddress(address), address);
   }
+  assert.ok(isPublicAddress("::ffff:8.8.8.8"), "a mapped public IPv4");
+  assert.equal(checkUrl("https://[::127.0.0.1]/v1"), "BLOCKED_ADDRESS");
   assert.ok(checkUrl("https://api.deepseek.com/v1") instanceof URL);
   assert.ok(checkUrl("https://agent.example.com:443/v1/chat/completions") instanceof URL);
   for (const bad of ["http://api.example.com", "https://user:pw@api.example.com", "https://api.example.com/?key=1", "https://api.example.com/#x",
@@ -68,14 +70,14 @@ it("refuses a name that resolves to any private address, at connection time", as
 });
 
 it("checks what the app sends before anything is called", () => {
-  const byok = { kind: "BYOK", provider: "deepseek", model: "deepseek-chat", apiKey: "sk-abc", consent: true } as const;
+  const byok = { kind: "BYOK", provider: "deepseek", model: "deepseek-chat", apiKey: "sk-abcdef", consent: true } as const;
   assert.deepEqual(checkConnection(byok),
-    { kind: "BYOK", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", name: null, secret: "sk-abc" });
+    { kind: "BYOK", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", name: null, secret: "sk-abcdef" });
   assert.equal((checkConnection({ ...byok, baseUrl: "https://evil.example.com" }) as { baseUrl: string }).baseUrl,
     "https://api.deepseek.com/v1", "a preset's base cannot be changed");
   assert.equal((checkConnection({ ...byok, provider: "custom", baseUrl: "https://llm.example.com/v1/" }) as { baseUrl: string }).baseUrl,
     "https://llm.example.com/v1");
-  for (const bad of [{ consent: false }, { provider: "nope" }, { model: "bad model" }, { apiKey: "has space" }, { apiKey: "" }, { provider: "custom" }]) {
+  for (const bad of [{ consent: false }, { provider: "nope" }, { model: "bad model" }, { apiKey: "has space" }, { apiKey: "" }, { apiKey: "short" }, { provider: "custom" }]) {
     assert.equal(checkConnection({ ...byok, ...bad } as never), "INVALID_INPUT", JSON.stringify(bad));
   }
   assert.equal(checkConnection({ ...byok, provider: "custom", baseUrl: "http://x.example.com" }), "INVALID_URL");
@@ -93,13 +95,13 @@ it("checks what the app sends before anything is called", () => {
 const completion = (text: string, finish = "stop") => ({ choices: [{ message: { content: text }, finish_reason: finish }] });
 
 it("tests a connection with one tiny call and says why it failed", async () => {
-  const connection = checkConnection({ kind: "BYOK", provider: "kimi", model: "moonshot-v1-8k", apiKey: "sk-kimi", consent: true }) as never;
+  const connection = checkConnection({ kind: "BYOK", provider: "kimi", model: "moonshot-v1-8k", apiKey: "sk-kimi-123", consent: true }) as never;
   const seen: unknown[][] = [];
   const answer = (status: number, body: unknown): PostJson => async (...args) => { seen.push(args); return { status, body }; };
   assert.equal(await testConnection(connection, answer(200, completion("你好呀"))), "CONNECTED");
   const [url, headers, body] = seen[0]!;
   assert.equal(String(url), "https://api.moonshot.cn/v1/chat/completions");
-  assert.deepEqual(headers, { authorization: "Bearer sk-kimi" });
+  assert.deepEqual(headers, { authorization: "Bearer sk-kimi-123" });
   assert.equal((body as { model: string }).model, "moonshot-v1-8k");
   assert.equal(await testConnection(connection, answer(200, completion("", "length"))), "CONNECTED");
   assert.equal(await testConnection(connection, answer(401, {})), "AUTH_FAILED");
@@ -143,11 +145,11 @@ it("answers through the Owner's key or agent, and through the platform without a
   };
   const signal = new AbortController().signal;
   const byok: StoredConnection = { kind: "BYOK", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat",
-    name: null, secret: box.seal("sk-ds", companion) };
+    name: null, secret: box.seal("sk-ds-1234", companion) };
   const model = new ConnectedChatModel(devChatModel, box, post("好呀\n走吧"));
   assert.deepEqual(await model.reply(turn(), { port: storePort(byok), signal }), { messages: ["好呀", "走吧"] });
   assert.equal(sent[0]!.url, "https://api.deepseek.com/v1/chat/completions");
-  assert.deepEqual(sent[0]!.headers, { authorization: "Bearer sk-ds" });
+  assert.deepEqual(sent[0]!.headers, { authorization: "Bearer sk-ds-1234" });
   assert.equal(sent[0]!.body.model, "deepseek-chat");
   assert.match(sent[0]!.body.messages[0]!.content, /主人怕黑/, "BYOK uses the platform prompt with memories");
 
@@ -215,7 +217,7 @@ it("routes connections: tests before saving, never returns the key, 501 without 
   let result: "CONNECTED" | "AUTH_FAILED" = "AUTH_FAILED";
   const connections = new Connections(box, async () => result);
   const handle = (req: MvpHttpRequest, c: Connections | undefined = connections) => handleChatRequest(req, session, "t", replies, undefined, c);
-  const byok = { kind: "BYOK", provider: "glm", model: "glm-4-flash", apiKey: "sk-glm-1234", consent: true };
+  const byok = { kind: "BYOK", provider: "glm", model: "glm-4-flash", apiKey: "sk-glm-abcd1234", consent: true };
 
   assert.deepEqual((await handle(request("GET")))!.body, { kind: "PLATFORM" });
   assert.deepEqual((await handle(request("DELETE")))!.body, { kind: "PLATFORM" });
@@ -226,8 +228,10 @@ it("routes connections: tests before saving, never returns the key, 501 without 
   assert.deepEqual(saved!.body, { result: "CONNECTED", connection: { kind: "BYOK", keyHint: "1234" } });
   const save = calls.find(c => c[0] === "save")!;
   const stored = save[2] as StoredConnection;
-  assert.equal(box.open(stored.secret, companion), "sk-glm-1234", "sealed for this Companion");
+  assert.equal(box.open(stored.secret, companion), "sk-glm-abcd1234", "sealed for this Companion");
   assert.doesNotMatch(JSON.stringify(saved!.body), /sk-glm/);
+  await handle(request("PUT", { ...byok, apiKey: "sk-short1" }));
+  assert.equal(calls.at(-1)![3], "", "a key under 12 characters gets no hint, so it is never stored in clear");
   assert.deepEqual((await handle(request("PUT", { ...byok, provider: "custom", baseUrl: "https://10.0.0.1/v1" })))!.body,
     { result: "BLOCKED_ADDRESS", connection: { kind: "PLATFORM" } });
   assert.equal((await handleChatRequest(request("PUT", byok), session, "t", replies))!.status, 501);

@@ -69,14 +69,14 @@ try {
   assert.equal(await lastReply("用我自己的模型回"), "来自主人自己的模型");
   assert.deepEqual(outside.at(-1), { url: "https://api.deepseek.com/v1/chat/completions", auth: "Bearer sk-owner-secret-9876" });
   const external = await call<ConnectionSaveResult>(0, path, "PUT",
-    { kind: "EXTERNAL", name: "我的本体", endpoint: "https://agent.example.com/v1/chat/completions", bearerToken: "tok-1", consent: true });
+    { kind: "EXTERNAL", name: "我的本体", endpoint: "https://agent.example.com/v1/chat/completions", bearerToken: "tok-12345", consent: true });
   assert.deepEqual([external.data.connection.kind, external.data.connection.name, external.data.connection.provider], ["EXTERNAL", "我的本体", null]);
   assert.equal(await lastReply("本体在吗"), "来自主人自己的模型");
-  assert.deepEqual(outside.at(-1), { url: "https://agent.example.com/v1/chat/completions", auth: "Bearer tok-1" });
+  assert.deepEqual(outside.at(-1), { url: "https://agent.example.com/v1/chat/completions", auth: "Bearer tok-12345" });
   passed("replies come from the Owner's own model or agent, and are kept in the chat");
 
   for (const [method, body] of [["GET", undefined], ["DELETE", undefined],
-    ["PUT", { kind: "BYOK", provider: "qwen", model: "qwen-plus", apiKey: "sk-b", consent: true }]] as const) {
+    ["PUT", { kind: "BYOK", provider: "qwen", model: "qwen-plus", apiKey: "sk-bbbbbbbb", consent: true }]] as const) {
     assert.equal((await call(1, path, method, body)).status, 404, `${method} another Owner's Companion`);
   }
   const calls = outside.length;

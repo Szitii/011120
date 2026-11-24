@@ -50,7 +50,8 @@ const DIARY_TOKENS = 2_000;
 const TEST_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 90_000;
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
-const SECRET = /^[\x21-\x7e]{1,512}$/;
+/** A key or token: 8 to 512 printable characters, no spaces. */
+const SECRET = /^[\x21-\x7e]{8,512}$/;
 
 /** The endpoint a connection posts to: BYOK adds /chat/completions to the API base; EXTERNAL is the endpoint itself. */
 function endpoint(connection: { kind: string; baseUrl: string }): URL {

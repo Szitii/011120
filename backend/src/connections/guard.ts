@@ -23,10 +23,16 @@ for (const [net, prefix] of [
   ["2001:db8::", 32], ["2002::", 16], ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
 ] as const) blocked.addSubnet(net, prefix, "ipv6");
 
+// IPv6 must also be global unicast (2000::/3): this refuses the old IPv4-compatible (::a.b.c.d)
+// and translated (::ffff:0:a.b.c.d) forms and every other special range at once.
+const globalV6 = new BlockList();
+globalV6.addSubnet("2000::", 3, "ipv6");
+
 /** A public unicast address: not private, loopback, link-local (cloud metadata), shared, reserved or multicast. */
 export function isPublicAddress(address: string): boolean {
   const family = isIP(address);
   if (family === 0) return false;
+  if (family === 6 && !/^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(address) && !globalV6.check(address, "ipv6")) return false;
   return !blocked.check(address, family === 4 ? "ipv4" : "ipv6");
 }
 
