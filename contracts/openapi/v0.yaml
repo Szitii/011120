@@ -68,6 +68,12 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1diary~1{entryId}
   /companions/{companionId}/diary-settings:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1diary-settings
+  /chats/{chatId}/read:
+    $ref: ./chat.yaml#/paths/~1chats~1{chatId}~1read
+  /badges:
+    $ref: ./chat.yaml#/paths/~1badges
+  /companions/{companionId}/anniversary:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1anniversary
   /companion-imports:
     post:
       x-capability-status: implemented
