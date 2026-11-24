@@ -3,21 +3,22 @@ import { ActivityIndicator, Switch, Text, View } from "react-native";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, useCommunityStyles } from "../community/components";
 import { useSkin } from "../theme/SkinProvider";
-import type { DiaryClient, DiaryPreferences } from "./client";
+import type { DiarySettings } from "../../../contracts/chat";
+import type { DiaryClient } from "./client";
 
 const options = [["OFF", "不写"], ["RARE", "偶尔"], ["DAILY", "每天"], ["OFTEN", "常写"]] as const;
 
 export function DiaryFrequency({ client, companionId }: { client: DiaryClient; companionId: string }) {
   const s = useCommunityStyles();
   const { skin } = useSkin();
-  const [settings, setSettings] = useState<DiaryPreferences>();
+  const [settings, setSettings] = useState<DiarySettings>();
   const [busy, setBusy] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState("");
   const pending = useRef(false);
   const session = useRef(0);
 
-  async function update(change?: Partial<Pick<DiaryPreferences, "frequency" | "autoWrite">>) {
+  async function update(change?: Partial<Pick<DiarySettings, "frequency" | "autoWrite">>) {
     if (pending.current || (change && !settings)) return;
     const scope = session.current;
     pending.current = true;
