@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RoomEngine } from "../src/room/roomEngine.ts";
-import { FURNITURE } from "../src/room/geometry.ts";
+import { findSafePath } from "../src/room/pathfinding.ts";
+import { DUO_POINTS, DUO_SLOT, FURNITURE, SOFA_SLOT, TABLE_SLOT, WAKE_POINTS } from "../src/room/geometry.ts";
 
 test("floor taps replan a single actor without teleporting or losing the walking cycle", () => {
   const engine = new RoomEngine();
@@ -32,7 +33,14 @@ test("sleep and seated phases stay anchored while a movement command uses walk s
     assert.deepEqual(actor.point, FURNITURE.bed[id].anchor);
   }
   engine.wake();
-  assert.equal(engine.snapshot().actors.companion.phase, "WALK");
+  for (let frame = 0; frame < 15; frame++) {
+    engine.tick(16);
+    const { companion, user } = engine.snapshot().actors;
+    assert.equal(companion.phase, user.phase);
+    assert.ok((companion.opacity ?? 1) > 0 && (user.opacity ?? 1) > 0);
+  }
+  assert.deepEqual(engine.snapshot().actors.companion.point, WAKE_POINTS.companion);
+  assert.deepEqual(engine.snapshot().actors.user.point, WAKE_POINTS.user);
   for (let frame = 0; frame < 300; frame++) engine.tick(16);
   engine.furniture("sofa");
   for (let frame = 0; frame < 300; frame++) engine.tick(16);
@@ -57,4 +65,33 @@ test("a duo action reports once when both actors arrive and ignores competing fl
     if (starts && !engine.snapshot().duo) break;
   }
   assert.equal(starts, 1);
+});
+
+test("furniture rectangles block the feet margin and duo sprites clear the coffee table", () => {
+  const start = { nx: .60, ny: .46 };
+  assert.equal(findSafePath(start, { nx: .755, ny: .60 }, true), null);
+  assert.equal(findSafePath(start, { nx: .57, ny: .805 }, true), null);
+  const route = findSafePath(start, { nx: .58, ny: .85 }, true);
+  assert.ok(route?.some(point => point.nx < SOFA_SLOT.left || point.nx > SOFA_SLOT.left + SOFA_SLOT.width));
+  assert.ok(DUO_SLOT.top + DUO_SLOT.height < Math.min(SOFA_SLOT.top, TABLE_SLOT.top));
+  for (const point of Object.values(DUO_POINTS)) assert.ok(findSafePath(start, point, true));
+});
+
+test("seated actors leave the sofa from their respective openings before a duo action", () => {
+  const engine = new RoomEngine();
+  const settle = () => { for (let frame = 0; frame < 300; frame++) engine.tick(16); };
+  engine.furniture("sofa");
+  settle();
+  const seated = engine.snapshot().actors;
+  assert.equal(seated.user.point.ny, seated.companion.point.ny);
+  assert.equal(seated.user.phase, "SIT");
+  assert.equal(seated.companion.phase, "SIT");
+  engine.action("CUDDLE");
+  for (let frame = 0; frame < 15; frame++) engine.tick(16);
+  assert.equal(engine.snapshot().actors.user.point.nx, FURNITURE.sofa.user.approach.nx);
+  assert.equal(engine.snapshot().actors.companion.point.nx, FURNITURE.sofa.companion.approach.nx);
+  settle();
+  assert.deepEqual(engine.takeStartedActions(), ["CUDDLE"]);
+  assert.deepEqual(engine.snapshot().actors.user.point, DUO_POINTS.user);
+  assert.deepEqual(engine.snapshot().actors.companion.point, DUO_POINTS.companion);
 });

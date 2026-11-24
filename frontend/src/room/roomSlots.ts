@@ -1,3 +1,4 @@
+import { SOFA_SLOT, TABLE_SLOT } from "./geometry";
 export type RoomImage = number;
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 
@@ -137,10 +138,7 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
     name: "双人沙发",
     layer: "dynamic_y",
     source: require("../../assets/room_v2/slot_sofa.png"),
-    left: 0.41,
-    top: 0.50,
-    width: 0.34,
-    height: 0.18,
+    ...SOFA_SLOT,
     sortY: 0.58,
   },
   {
@@ -148,10 +146,7 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
     name: "玻璃茶几",
     layer: "dynamic_y",
     source: require("../../assets/room_v2/slot_table.png"),
-    left: 0.44,
-    top: 0.66,
-    width: 0.28,
-    height: 0.14,
+    ...TABLE_SLOT,
     sortY: 0.78,
   },
   {

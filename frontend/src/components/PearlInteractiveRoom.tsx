@@ -4,7 +4,7 @@ import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { BED_QUILT_OVERLAY, BOY_SPRITES, DUO_SPRITES, GIRL_SPRITES, ROOM_BASE_IMAGE, ROOM_SLOTS, SOFA_FRONT, type CharacterAction, type RoomImage } from "../room/roomSlots";
-import { DUO_POINTS, type ActorId } from "../room/geometry";
+import { DUO_SLOT, type ActorId } from "../room/geometry";
 import { RoomEngine, type ActorFrame } from "../room/roomEngine";
 import { useAppIsActive } from "../state/useAppIsActive";
 import { useSkin } from "../theme/SkinProvider";
@@ -117,9 +117,9 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     // Pillow poses use their own scale so the folded quilt covers only the body.
     const height = actor.phase === "SLEEP" ? .142 : seated ? .132 : .175;
     const width = height;
-    return <View key={id} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
+    return <View key={id} testID={`room-actor-${id}`} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
       actor.point.ny - height * .973, width, height), {
-      zIndex, opacity: frame.duo ? 0 : 1,
+      zIndex, opacity: frame.duo ? 0 : actor.opacity ?? 1,
       transform: [{ scaleX: (seated ? id === "user" : action !== "sleep" && actor.facingLeft) ? -1 : 1 }],
     }]}>
       <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />
@@ -128,7 +128,6 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
 
   const sofa = ROOM_SLOTS.find(slot => slot.id === "slot_sofa")!;
   const bed = ROOM_SLOTS.find(slot => slot.id === "slot_bed")!;
-  const duoX = (DUO_POINTS.user.nx + DUO_POINTS.companion.nx) / 2;
   const companion = frame.actors.companion.point;
   const quiltVisible = Object.values(frame.actors).some(actor => actor.furniture === "bed" && actor.point.nx < .314);
   const labelColor = night ? ui.onDark : skin.colors.ink;
@@ -147,7 +146,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
       <View pointerEvents="none" style={[box(size, bed.left, bed.top, bed.width, bed.height), { zIndex: 531, opacity: quiltVisible ? 1 : 0 }]}>
         <SceneImage source={BED_QUILT_OVERLAY} onLoad={onLoad} />
       </View>
-      <View pointerEvents="none" style={[box(size, duoX - .133, DUO_POINTS.user.ny - .173, .266, .175), { zIndex: 843 }]}>
+      <View testID="room-duo-sprite" pointerEvents="none" style={[box(size, DUO_SLOT.left, DUO_SLOT.top, DUO_SLOT.width, DUO_SLOT.height), { zIndex: depth(DUO_SLOT.top + DUO_SLOT.height) + 1 }]}>
         <SpriteFrames sources={DUO_TEXTURES} current={frame.duo ? `${frame.duo.action}:${frame.duo.frame}` : ""} onLoad={onLoad} />
       </View>
       {night && <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.night, { backgroundColor: ui.roomNight }]} />}
@@ -164,8 +163,13 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     {ready && awake && <>
       <Pressable accessibilityLabel="点击木地板走动" style={styles.hitLayer}
         onPress={event => {
+          // Web Pressable delivers click offsets on the empty hit layer.
+          const tap = event.nativeEvent as typeof event.nativeEvent & { offsetX?: number; offsetY?: number };
+          const x = tap.locationX ?? tap.offsetX;
+          const y = tap.locationY ?? tap.offsetY;
+          if (x === undefined || y === undefined || !Number.isFinite(x) || !Number.isFinite(y)) return;
           setMenu(false);
-          engine.floor({ nx: event.nativeEvent.locationX / size.width, ny: event.nativeEvent.locationY / size.height });
+          engine.floor({ nx: x / size.width, ny: y / size.height });
         }} />
       <Pressable accessibilityRole="button" accessibilityLabel={sleeping ? "从床上起身" : "在床上休息"}
         style={[box(size, bed.left, bed.top, bed.width, bed.height), styles.target]}

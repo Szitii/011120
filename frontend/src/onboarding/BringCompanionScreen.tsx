@@ -2,7 +2,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable,
+  ActivityIndicator, BackHandler, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, View,
 } from "react-native";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
@@ -11,6 +11,7 @@ import type { ClientApi, CompanionIdentity, ImportReview } from "../contracts";
 import { useCommandKeys } from "../state/useCommandKeys";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import { BringButton, BringField, Check, Choice, GlassCard, GlassIcon, createStyles } from "./BringControls";
+import { importCardName, normalizeImportCard } from "./import-card";
 import { ConnectionForm } from "./ConnectionForm";
 import { extendedImportAvailability } from "./connection-client";
 
@@ -47,6 +48,9 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
   const [description, setDescription] = useState("");
   const [personality, setPersonality] = useState("");
   const [raw, setRaw] = useState("");
+  const [file, setFile] = useState<{ name: string; size: number; text: string }>();
+  const [missingName, setMissingName] = useState(false);
+  const [importName, setImportName] = useState("");
   const [review, setReview] = useState<ImportReview>();
   const [selected, setSelected] = useState<string[]>([]);
   const [selfKey, setSelfKey] = useState(false);
@@ -94,7 +98,12 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     try {
       await work();
     } catch (error) {
-      if (mounted.current) setMessage(importMessage(error));
+      if (mounted.current) {
+        if (method === "card" && error instanceof ApiProblemError && error.code === "IMPORT_NAME_REQUIRED") {
+          setMissingName(true);
+        }
+        setMessage(importMessage(error));
+      }
     } finally {
       pending.current = false;
       if (mounted.current) setBusy(false);
@@ -112,11 +121,17 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
         : extendedImportAvailability().message);
       return;
     }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    const card = normalizeImportCard(payload, method === "card" ? importName : "");
+    if (!card) {
       setMessage("请选择包含一位家机资料的 JSON 文件。");
       return;
     }
-    const result = await api.createCompanionImport(payload as Record<string, unknown>, keys.forRequest("import", payload));
+    if (!importCardName(card)) {
+      setMissingName(true);
+      setMessage("请在上方补填家机名字，再核对资料。");
+      return;
+    }
+    const result = await api.createCompanionImport(card, keys.forRequest("import", card));
     if (!mounted.current) return;
     keys.complete("import");
     setReview(result);
@@ -126,6 +141,7 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
   }
 
   function pickFile() {
+    Keyboard.dismiss();
     void run(async () => {
       const pick = await DocumentPicker.getDocumentAsync({
         type: ["application/json", "text/plain", "text/markdown", "application/octet-stream"],
@@ -141,10 +157,17 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
         setMessage("请选择不超过 256 KB 的 .json 角色卡。");
         return;
       }
-      const value = item.file ? await item.file.text() : await new File(item.uri).text();
+      const localFile = item.file ?? new File(item.uri);
+      const size = item.size ?? localFile.size;
+      if (size > 256 * 1024) {
+        setMessage("请选择不超过 256 KB 的 .json 角色卡。");
+        return;
+      }
+      const value = await localFile.text();
       if (!mounted.current) return;
-      setRaw(value);
-      await inspect(value);
+      setFile({ name: item.name, size, text: value });
+      setImportName("");
+      setMissingName(false);
     });
   }
 
@@ -177,16 +200,17 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
       <GlassIcon label="返回" icon="chevron-back" onPress={back} disabled={busy} />
       {step === "entry" && <GlassIcon label="接入方式帮助" icon="information-circle-outline" onPress={() => setHelp(true)} />}
     </View>
-    <ScrollView key={step} style={s.flex} contentContainerStyle={s.page} keyboardShouldPersistTaps="handled">
+    <ScrollView key={step} style={s.flex} contentContainerStyle={s.page} keyboardShouldPersistTaps="handled"
+      keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}>
       {step !== "entry" && step !== "external" && !existingCompanionId && <View style={s.progress} accessible
         accessibilityLabel={step === "details" || step === "review" ? "第 1 步，共 2 步" : "第 2 步，共 2 步"}>
         <View style={[s.segment, s.segmentCurrent]} />
         <View style={[s.segment, (step === "reply" || step === "key") && s.segmentCurrent]} />
       </View>}
-      <View style={s.heading}>
+      <Pressable accessible={false} onPress={Keyboard.dismiss} style={s.heading}>
         <Text accessibilityRole="header" style={s.title}>{heading}</Text>
         <Text style={s.body}>{subtitle}</Text>
-      </View>
+      </Pressable>
 
       {step === "entry" && options.filter(option => !existingCompanionId || option.id !== "external").map(option => (
         <Choice key={option.id} icon={option.icon} title={existingCompanionId && option.id === "manual" ? "手动填写" : option.title}
@@ -206,10 +230,25 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
             onPress={() => void run(() => inspect(JSON.stringify({ name: name.trim(), description, personality })))} />
         </> : <>
           <BringButton label="选择角色卡文件" secondary disabled={busy} onPress={pickFile} />
-          <Text style={s.body}>目前支持 JSON 角色卡。Markdown 和纯文本记忆待开放。请先移除密码、密钥和私人聊天记录。</Text>
-          <BringField label="粘贴角色卡" placeholder="粘贴角色卡内容" value={raw} onChangeText={setRaw}
-            editable={!busy} multiline autoCapitalize="none" autoCorrect={false} />
-          <BringButton label="核对角色卡" disabled={busy || !raw.trim()} onPress={() => void run(() => inspect(raw))} />
+          <Text style={s.body}>目前支持 JSON 角色卡。私密记忆库不会导入。请先移除密码、密钥和私人聊天记录。</Text>
+          {missingName && <BringField label="家机名字" placeholder="请补填家机名字" value={importName}
+            onChangeText={setImportName} editable={!busy} maxLength={200} />}
+          {file ? <View style={s.fileRow}>
+            <View style={s.flex}>
+              <Text numberOfLines={1} style={s.label}>{file.name}</Text>
+              <Text style={s.note}>{file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KB`}</Text>
+            </View>
+            <GlassIcon icon="close" label="清除已选文件" disabled={busy} onPress={() => {
+              setFile(undefined);
+              setImportName("");
+              setMissingName(false);
+              setMessage("");
+            }} />
+          </View> : <BringField label="粘贴角色卡" placeholder="粘贴角色卡内容" value={raw}
+            onChangeText={value => { setRaw(value); setMessage(""); }}
+            editable={!busy} multiline scrollEnabled style={s.pasteInput} autoCapitalize="none" autoCorrect={false} />}
+          <BringButton label="核对角色卡" disabled={busy || !(file?.text ?? raw).trim()}
+            onPress={() => { Keyboard.dismiss(); void run(() => inspect(file?.text ?? raw)); }} />
         </>}
       </GlassCard>}
 

@@ -103,6 +103,8 @@ export function createStyles(ui: UiPalette) {
     field: { gap: 6 },
     label: { color: ui.ink, fontSize: 14, fontWeight: "600" },
     input: { minHeight: 46, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: ui.line, borderRadius: 14, backgroundColor: ui.white, color: ui.ink, fontSize: 15 },
+    pasteInput: { height: 140, maxHeight: 180 },
+    fileRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 8, borderRadius: 14, borderWidth: 1, borderColor: ui.line },
     multiline: { minHeight: 74, textAlignVertical: "top" },
     button: { alignItems: "center", justifyContent: "center", minHeight: 50, borderRadius: 26, padding: 12, borderWidth: 1 },
     buttonPrimary: { backgroundColor: ui.iceBlue, borderColor: ui.accent },

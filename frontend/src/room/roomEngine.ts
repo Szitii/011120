@@ -1,7 +1,8 @@
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import { DUO_POINTS, FURNITURE, SPAWN, type ActorId, type FurnitureId, type RoomPoint } from "./geometry.ts";
+import { DUO_POINTS, FURNITURE, SPAWN, WAKE_POINTS, type ActorId, type FurnitureId, type RoomPoint } from "./geometry.ts";
 import { findSafePath } from "./pathfinding.ts";
 
+const PLACEMENT_MS = 240;
 const ACTORS = ["companion", "user"] as const;
 export type DuoAction = Exclude<CompanionAction, "WAVE">;
 type Phase = "IDLE" | "WALK" | "SIT" | "SLEEP" | "DUO";
@@ -12,9 +13,10 @@ export type ActorFrame = {
   facingLeft: boolean;
   furniture?: FurnitureId;
   wave?: boolean;
+  opacity?: number;
 };
-type Step = { point: RoomPoint; furniture?: FurnitureId; pose?: Phase };
-type Track = { frame: ActorFrame; steps: Step[]; travelled: number };
+type Step = { point: RoomPoint; furniture?: FurnitureId; pose?: Phase; placement?: boolean };
+type Track = { frame: ActorFrame; steps: Step[]; travelled: number; placementElapsed?: number };
 type Effect = { id: number; type: "heart" | "ripple"; point: RoomPoint; start: number };
 export type RoomFrame = {
   actors: Record<ActorId, ActorFrame>;
@@ -29,8 +31,7 @@ const makeTrack = (point: RoomPoint): Track => ({ frame: { point, phase: "IDLE",
 
 export class RoomEngine {
   private tracks = { user: makeTrack(SPAWN.user), companion: makeTrack(SPAWN.companion) };
-  private task?: { plans: Plan[]; action?: DuoAction; started?: number };
-  private waveUntil = 0;
+  private task?: { plans: Plan[]; action?: CompanionAction; started?: number };
   private time = 0;
   private changed = false;
   private effects: Effect[] = [];
@@ -42,7 +43,7 @@ export class RoomEngine {
   }
 
   get isAnimating() {
-    return this.locked || this.sleeping || this.waveUntil > this.time || this.effects.length > 0 ||
+    return this.locked || this.sleeping || this.effects.length > 0 ||
       ACTORS.some(actor => this.tracks[actor].steps.length > 0);
   }
 
@@ -76,19 +77,15 @@ export class RoomEngine {
 
   wake() {
     if (this.locked || !this.sleeping) return;
-    const plans = ACTORS.map(actor => this.plan(actor, SPAWN[actor]));
-    if (!plans[0] || !plans[1]) return;
-    this.begin([plans[0], { ...plans[1], delay: this.duration(plans[0]) }]);
+    this.begin(ACTORS.map(actor => ({
+      actor,
+      start: this.tracks[actor].frame,
+      steps: [{ point: WAKE_POINTS[actor], placement: true }],
+    })));
   }
 
   action(action: CompanionAction) {
     if (this.locked || this.sleeping) return;
-    if (action === "WAVE") {
-      if (this.waveUntil > this.time) return;
-      this.waveUntil = this.time + 720;
-      this.startedActions.push(action);
-      return;
-    }
     const companion = this.plan("companion", DUO_POINTS.companion, undefined, true);
     const user = this.plan("user", DUO_POINTS.user, undefined, true);
     if (!companion || !user) return;
@@ -109,23 +106,27 @@ export class RoomEngine {
     const steps = path.map(point => ({ point }) as Step);
     if (start.furniture) {
       const exit = FURNITURE[start.furniture][actor];
-      steps.unshift({ point: exit.entry, furniture: start.furniture }, { point: exit.approach, furniture: start.furniture });
+      steps.unshift({ point: exit.approach, placement: true });
     }
-    if (dock) steps.push({ point: dock.entry, furniture }, { point: dock.anchor, furniture, pose: furniture === "bed" ? "SLEEP" : "SIT" });
+    if (dock) {
+      const entry = furniture === "bed" ? FURNITURE.bed[actor].entry : undefined;
+      if (entry) steps.push({ point: entry, furniture });
+      steps.push({ point: dock.anchor, furniture, pose: furniture === "bed" ? "SLEEP" : "SIT", placement: furniture === "sofa" });
+    }
     return { actor, start, steps };
   }
 
   private duration(plan: Plan) {
     let point = plan.start.point;
-    let length = 0;
+    let milliseconds = 40;
     for (const step of plan.steps) {
-      length += distance(point, step.point);
+      milliseconds += step.placement ? PLACEMENT_MS : distance(point, step.point) / .00025;
       point = step.point;
     }
-    return length / .00025 + 40;
+    return milliseconds;
   }
 
-  private begin(plans: Plan[], action?: DuoAction) {
+  private begin(plans: Plan[], action?: CompanionAction) {
     this.task = { plans: plans.filter(plan => (plan.delay ?? 0) > 0).map(plan => ({ ...plan, delay: this.time + plan.delay! })), action };
     plans.filter(plan => !plan.delay).forEach(plan => this.apply(plan));
   }
@@ -135,13 +136,32 @@ export class RoomEngine {
     const track = this.tracks[plan.actor];
     track.steps = plan.steps;
     if (track.frame.phase !== "WALK") track.travelled = 0;
-    track.frame = { ...track.frame, phase: "WALK", step: Math.floor(track.travelled / .026) % 4, wave: false };
+    track.placementElapsed = undefined;
+    if (!plan.steps[0].placement) {
+      track.frame = { ...track.frame, phase: "WALK", step: Math.floor(track.travelled / .026) % 4 };
+    }
   }
 
   private advance(track: Track, milliseconds: number) {
     let remaining = milliseconds * .00025;
-    while (track.steps.length && remaining > 0) {
+    while (track.steps.length && remaining > 1e-8) {
       const next = track.steps[0];
+      if (next.placement) {
+        const before = track.placementElapsed ?? 0;
+        const elapsed = Math.min(PLACEMENT_MS, before + remaining / .00025);
+        const progress = elapsed / PLACEMENT_MS;
+        const switched = progress >= .5;
+        track.frame = {
+          ...track.frame,
+          ...(switched ? { point: next.point, phase: next.pose ?? "IDLE", furniture: next.furniture } : {}),
+          // Keep both actors visible while the foreground layer covers the pose change.
+          opacity: .35 + .65 * Math.abs(2 * progress - 1),
+        };
+        remaining -= (elapsed - before) * .00025;
+        track.placementElapsed = progress === 1 ? undefined : elapsed;
+        if (progress === 1) track.steps.shift();
+        continue;
+      }
       const previous = track.frame.point;
       const length = distance(previous, next.point);
       const travelled = Math.min(remaining, length);
@@ -182,9 +202,9 @@ export class RoomEngine {
       else if (task.started === undefined) {
         task.started = this.time;
         for (const actor of ACTORS) this.tracks[actor].frame = { ...this.tracks[actor].frame, phase: "DUO" };
-        this.addEffect("heart", { nx: .527, ny: .66 });
+        if (task.action !== "WAVE") this.addEffect("heart", { nx: DUO_POINTS.user.nx - .04, ny: DUO_POINTS.user.ny - .18 });
         this.startedActions.push(task.action);
-      } else if (this.time - task.started >= 1680) {
+      } else if (this.time - task.started >= (task.action === "WAVE" ? 720 : 1680)) {
         this.task = undefined;
         for (const actor of ACTORS) this.tracks[actor].frame = { ...this.tracks[actor].frame, phase: "IDLE" };
       }
@@ -198,9 +218,9 @@ export class RoomEngine {
     return {
       actors: {
         companion: this.tracks.companion.frame,
-        user: { ...this.tracks.user.frame, wave: this.time < this.waveUntil && this.tracks.user.frame.phase === "IDLE" },
+        user: { ...this.tracks.user.frame, wave: task?.action === "WAVE" && task.started !== undefined },
       },
-      duo: task?.action && task.started !== undefined ? { action: task.action, frame: Math.floor((this.time - task.started) / 280) % 2 } : undefined,
+      duo: task?.action && task.action !== "WAVE" && task.started !== undefined ? { action: task.action, frame: Math.floor((this.time - task.started) / 280) % 2 } : undefined,
       effects: this.effects.map(effect => ({ ...effect, progress: (this.time - effect.start) / 720 })),
       time: this.time,
     };
