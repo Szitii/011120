@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { DiaryScheduler } from "../src/chat/diary-scheduler.ts";
+import { BackgroundScheduler } from "../src/chat/background-scheduler.ts";
 import type { ChatPort } from "../src/chat/port.ts";
 import type { SqlExecutor } from "../src/persistence/postgres/types.ts";
 
@@ -17,16 +17,16 @@ function setup(rows: unknown[] | Error, fail: string[] = []) {
       return { rows: rows as Row[] };
     },
   };
-  const scheduler = new DiaryScheduler({
+  const scheduler = new BackgroundScheduler({
     server,
     portFor: subject => ({ subject }) as unknown as ChatPort,
-    replies: {
-      writeDiary: async (companionId, port) => {
-        written.push([companionId, (port as unknown as { subject: string }).subject]);
-        await gate;
-        if (fail.includes(companionId)) throw new Error("model down");
-        return { status: "WRITTEN", entry: null, nextAt: null, failure: null };
-      },
+    due: "diary_due",
+    what: "diary",
+    write: async (companionId, port) => {
+      written.push([companionId, (port as unknown as { subject: string }).subject]);
+      await gate;
+      if (fail.includes(companionId)) throw new Error("model down");
+      return { status: "WRITTEN", entry: null, nextAt: null, failure: null };
     },
     platform: false,
     batch: 5,

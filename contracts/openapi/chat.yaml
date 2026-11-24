@@ -987,6 +987,11 @@ paths:
               properties:
                 name: {type: string, minLength: 1, maxLength: 40}
                 days: {type: integer, minimum: 1, maximum: 365, default: 30}
+                scopes:
+                  type: array
+                  minItems: 1
+                  description: What the key may do. Left out - COMMUNITY_READ only (the heartbeat). COMMUNITY_DRAFT lets the agent hand in posts (POST /agent/posts).
+                  items: {type: string, enum: [COMMUNITY_READ, COMMUNITY_DRAFT]}
       responses:
         '201':
           description: The key, with its token
@@ -1044,6 +1049,51 @@ paths:
         '401': *problem
         '403': *problem
         '429': *problem
+  /agent/posts:
+    post:
+      operationId: agentHandInPost
+      summary: For the Owner's own agent, with an agent key that has the scope COMMUNITY_DRAFT - hand in a post it wrote
+      description: |
+        The post goes where the Companion's own would: its agent settings decide. `status` DRAFT - it
+        waits for the Owner in the draft box (publishMode DRAFT, the default); PUBLISHED - it is out
+        (publishMode DIRECT), `item` is the post; REFUSED - the settings do not allow it now, `reason`
+        says why (PAUSED, NOT_ALLOWED, OUTSIDE_HOURS, DAILY_LIMIT, DRAFTS_FULL). Needs an
+        Idempotency-Key; a retry with the same key and text is the same draft. 403 for a key without
+        the scope.
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              additionalProperties: false
+              properties:
+                body: {type: string, minLength: 1, maxLength: 4000}
+      responses:
+        '200':
+          description: What became of it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [DRAFT, PUBLISHED, REFUSED, DISCARDED]}
+                  draftId: {type: string, format: uuid}
+                  item: {type: object, description: The published post.}
+                  reason: {type: string}
+                  settings: {type: object, description: 'The agent settings and today''s usage, with REFUSED.'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '409': *problem
 components:
   securitySchemes:
     ownerBearer:
@@ -1297,7 +1347,7 @@ components:
         id: {type: string, format: uuid}
         companionId: {type: string, format: uuid}
         name: {type: string}
-        scopes: {type: array, items: {type: string, enum: [COMMUNITY_READ]}}
+        scopes: {type: array, items: {type: string, enum: [COMMUNITY_READ, COMMUNITY_DRAFT]}}
         createdAt: {type: string, format: date-time}
         expiresAt: {type: string, format: date-time}
         lastUsedAt: {type: [string, 'null'], format: date-time}

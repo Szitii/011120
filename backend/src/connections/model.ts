@@ -10,11 +10,11 @@
  * The operators' kill switches stop these too: "all models off", or the provider `owner-key`
  * (every BYOK connection) or `owner-agent` (every EXTERNAL one).
  */
-import { diaryPrompt, parseReply, replyPrompt, agentMessages } from "../chat/prompt.ts";
+import { diaryPrompt, parsePost, parseReply, postPrompt, replyPrompt, agentMessages } from "../chat/prompt.ts";
 import { memoriesOf } from "../chat/platform.ts";
 import { readCompletion, type ModelResult } from "../chat/providers.ts";
-import type { ChatClaim, ChatPort, DiaryJob } from "../chat/port.ts";
-import type { Answer, ChatModel, DiaryAnswer } from "../chat/replies.ts";
+import type { ChatClaim, ChatPort, DiaryJob, PostJob } from "../chat/port.ts";
+import type { Answer, ChatModel, DiaryAnswer, PostAnswer } from "../chat/replies.ts";
 import type { ConnectionInput, ConnectionTest } from "../../../contracts/chat.ts";
 import { BlockedAddressError, checkUrl, createPostJson, type PostJson } from "./guard.ts";
 import type { SecretBox } from "./secret-box.ts";
@@ -44,6 +44,7 @@ export interface Connection {
 
 const REPLY_TOKENS = 2_000;
 const DIARY_TOKENS = 2_000;
+const POST_TOKENS = 1_000;
 const TEST_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 90_000;
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
@@ -155,6 +156,21 @@ export class ConnectedChatModel implements ChatModel {
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the entry was cut off");
     return { text: result.text };
+  }
+
+  /** A community post of its own: the same prompt for a key and an agent (an agent keeps its own memories). */
+  async post(job: PostJob, context: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer> {
+    const companionId = job.companion.companionId;
+    const stored = await connectionOf(context.port, companionId);
+    if (stored === null) return this.#platform?.post ? this.#platform.post(job, context) : { failed: "UNAVAILABLE" };
+    if (stored === "DISABLED") return { failed: "DISABLED" };
+    const secret = this.#box.open(stored.secret, companionId);
+    const prompt = postPrompt(job, stored.kind === "BYOK" ? await memoriesOf(context.port, companionId) : []);
+    const result = await complete(this.#post, stored, secret, toMessages(prompt), POST_TOKENS, context.signal);
+    if (result.refused) return { refused: true };
+    if (result.cutOff) throw new Error("the post was cut off");
+    const text = parsePost(result.text);
+    return text === null ? { pass: true } : { text };
   }
 }
 

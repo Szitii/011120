@@ -67,6 +67,14 @@ returns jsonb language sql stable security definer set search_path='' as $$
   from public.community_comments c where c.id=p_comment
 $$;
 
+-- The app released before this migration shows every notification that is not a FOLLOW as
+-- "commented on your post". So LIKE and MENTION notices are written from now on but stay hidden
+-- (list and badges) until the operators turn this switch on, once the app knows the new kinds.
+alter table companion_private.feature_switches drop constraint feature_switches_key_check;
+alter table companion_private.feature_switches add constraint feature_switches_key_check
+  check (key in ('GROUP_CHAT_CREATE', 'GROUP_CHAT_SEND', 'COMMUNITY_NEW_NOTICES'));
+insert into companion_private.feature_switches(key, enabled) values ('COMMUNITY_NEW_NOTICES', false);
+
 -- Whether a notification is shown to its recipient (the list and the badges use this one rule).
 -- Same as in 0046 for FOLLOW and COMMENT, with the post's visibility; LIKE while the like stands;
 -- MENTION while the post (and the comment, if it was in one) is still there and visible.
@@ -76,9 +84,11 @@ returns boolean language sql stable security definer set search_path='' as $$
     and (nt.kind = 'FOLLOW' and exists(select 1 from public.community_follows f where f.actor_id = nt.actor_id and f.target_id = nt.recipient_id)
       or nt.kind = 'COMMENT' and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
         and exists(select 1 from public.community_comments c where c.id = nt.comment_id and c.deleted_at is null)
-      or nt.kind = 'LIKE' and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
+      or nt.kind = 'LIKE' and companion_private.feature_on('COMMUNITY_NEW_NOTICES')
+        and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
         and exists(select 1 from public.community_likes l where l.post_id = nt.post_id and l.actor_id = nt.actor_id)
-      or nt.kind = 'MENTION' and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
+      or nt.kind = 'MENTION' and companion_private.feature_on('COMMUNITY_NEW_NOTICES')
+        and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
         and (nt.comment_id is null or exists(select 1 from public.community_comments c where c.id = nt.comment_id and c.deleted_at is null)))
 $$;
 

@@ -78,6 +78,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys
   /companions/{companionId}/agent-keys/{keyId}:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys~1{keyId}
+  /agent/posts:
+    $ref: ./chat.yaml#/paths/~1agent~1posts
   /agent/heartbeat:
     $ref: ./chat.yaml#/paths/~1agent~1heartbeat
   /companions/{companionId}/actions:

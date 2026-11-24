@@ -68,6 +68,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     diaryBegin: async () => ({ status: "OFF" }),
     diaryReserve: async () => ({ decision: "STALE" }),
     diaryFinish: async () => null,
+    postBegin: async () => ({ status: "OFF" }),
+    postReserve: async () => ({ decision: "STALE" }),
+    postFinish: async () => null,
     voiceLeft: async () => ({ companion: 0, owner: 0 }),
     sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
     audio: async (...args) => { calls.push(["audio", ...args]); return { mime: "audio/mpeg", bytes: new Uint8Array([1, 2, 3, 4, 5]) }; },
@@ -190,9 +193,15 @@ it("routes agent keys: the token is shown once and only its hash reaches the dat
   assert.equal(created?.status, 201);
   const token = (created?.body as { token: string }).token;
   assert.match(token, /^cak_/);
-  assert.deepEqual(calls.at(-1), ["createAgentKey", companion, "我的 Agent", sha256(token), 30]);
+  assert.deepEqual(calls.at(-1), ["createAgentKey", companion, "我的 Agent", sha256(token), 30, ["COMMUNITY_READ"]], "read only unless asked");
   assert.equal(await status(port, request(`companions/${companion}/agent-keys`, "POST", { name: "短期", days: 7 })), 201);
   assert.equal((calls.at(-1) as unknown[])[4], 7);
+  assert.equal(await status(port, request(`companions/${companion}/agent-keys`, "POST",
+    { name: "能交稿", scopes: ["COMMUNITY_DRAFT", "COMMUNITY_READ", "COMMUNITY_DRAFT"] })), 201);
+  assert.deepEqual((calls.at(-1) as unknown[])[5], ["COMMUNITY_DRAFT", "COMMUNITY_READ"]);
+  for (const scopes of [[], ["CHAT"], "COMMUNITY_READ", [7]]) {
+    assert.equal(await refusal(port, request(`companions/${companion}/agent-keys`, "POST", { name: "x", scopes })), "INVALID_INPUT", JSON.stringify(scopes));
+  }
   assert.equal(await status(port, request(`companions/${companion}/agent-keys`)), 200);
   assert.equal(await status(port, request(`companions/${companion}/agent-keys/${messageId}`, "DELETE")), 200);
   assert.deepEqual(calls.slice(-2), [["agentKeys", companion], ["revokeAgentKey", companion, messageId]]);

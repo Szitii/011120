@@ -45,7 +45,7 @@ import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
 import type { ConnectionInput, ConnectionSaveResult, CompanionConnection } from "../../../contracts/chat.ts";
-import type { ChatPort } from "./port.ts";
+import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 import { RECORDING_TYPES, type Heard, type RecordingType, type Voices } from "./voices.ts";
 
@@ -317,11 +317,15 @@ export async function handleChatRequest(
     if (path.length === 5) return method === "DELETE" ? response(200, await port.revokeAgentKey(companionId, id(path[4]))) : notFound();
     if (method === "GET") return response(200, await port.agentKeys(companionId));
     if (method !== "POST") return notFound();
-    const input = body(request, ["name", "days"]);
+    const input = body(request, ["name", "days", "scopes"]);
     const days = input.days === undefined ? 30 : input.days;
     if (!Number.isInteger(days) || (days as number) < 1 || (days as number) > 365) return invalid();
+    // Read only unless the Owner asks for more: COMMUNITY_DRAFT lets the agent hand in posts.
+    const scopes = input.scopes === undefined ? ["COMMUNITY_READ"] : input.scopes;
+    if (!Array.isArray(scopes) || scopes.length < 1 || scopes.some(scope => !(AGENT_SCOPES as readonly unknown[]).includes(scope))) return invalid();
     const { token, hash } = newAgentToken();
-    const key = await port.createAgentKey(companionId, text(input.name, 40), hash, days as number) as Record<string, unknown>;
+    const key = await port.createAgentKey(companionId, text(input.name, 40), hash, days as number,
+      [...new Set(scopes as AgentScope[])]) as Record<string, unknown>;
     // The only time the token is shown.
     return response(201, { ...key, token });
   }

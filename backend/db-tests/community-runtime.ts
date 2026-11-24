@@ -264,10 +264,17 @@ try {
   await call(1,humanB,`following/${ha.id}`,"DELETE");
   assert.equal(await sees(1,humanB,forFollowers.data.id),false,"unfollowing closes it again");
   const notesA = async () => (await call<CommunityPage<CommunityNotification>>(0,humanA,"notifications")).data.items;
-  assert.ok((await notesA()).some(n=>n.kind==="LIKE"&&n.postId===forFollowers.data.id),"the author still sees the like on their own post");
+  assert.ok(!(await notesA()).some(n=>n.kind==="LIKE"),"like and mention notices stay hidden until the operators switch them on");
   passed("post visibility: public, followers only, private; feed, detail, counts, comments and likes agree");
 
   // ---- mentions and like notices ----
+  // Hidden (list and badges) until the app knows the new kinds; the operators turn them on.
+  const unreadA = async () => (await fetch(`${bases[0]}/v0/badges`,{ headers:{ Authorization:"Bearer test-0" } }).then(r=>r.json()) as
+    { community:{ actorKind:string; unread:number }[] }).community.find(c=>c.actorKind==="OWNER")!.unread;
+  const hiddenUnread = await unreadA();
+  await pool.query("update companion_private.feature_switches set enabled=true where key='COMMUNITY_NEW_NOTICES'");
+  assert.ok((await notesA()).some(n=>n.kind==="LIKE"&&n.postId===forFollowers.data.id),"switched on: the author sees the like on their own post");
+  assert.equal(await unreadA(),hiddenUnread+1,"and the badge counts it, by the same rule");
   const named = await publish(0,humanA,{ body:"@B 你看这个", mentions:[hb.id,hb.id,ha.id,randomUUID()] });
   assert.deepEqual(named.data.mentions!.map(m=>m.id),[hb.id],"repeats, the author and unknown ids are dropped");
   const notesB = async (actor: ActorContext = humanB) => (await call<CommunityPage<CommunityNotification>>(1,actor,"notifications")).data.items;
@@ -299,6 +306,7 @@ try {
   assert.equal((await call(0,humanA,`posts/${named.data.id}`,"DELETE")).status,200);
   assert.ok(!(await notesB()).some(n=>n.postId===named.data.id) && !(await notesB(aiB)).some(n=>n.postId===named.data.id));
   for (const id of [onlyMe.data.id,forFollowers.data.id,quiet.data.id]) assert.equal((await call(0,humanA,`posts/${id}`,"DELETE")).status,200);
+  await pool.query("update companion_private.feature_switches set enabled=false where key='COMMUNITY_NEW_NOTICES'");
   passed("mentions tell each named identity that can see the post; a like tells the author once");
 
   await pool.query("delete from companion_private.agent_settings"); // later suites start from the defaults
