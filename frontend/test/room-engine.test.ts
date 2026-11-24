@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RoomEngine } from "../src/room/roomEngine.ts";
 import { findSafePath } from "../src/room/pathfinding.ts";
-import { DUO_POINTS, DUO_SLOT, FURNITURE, SOFA_SLOT, TABLE_SLOT, WAKE_POINTS } from "../src/room/geometry.ts";
+import { BED_FLOOR_EDGE, DUO_POINTS, DUO_SLOT, FURNITURE, SOFA_SLOT, TABLE_SLOT, WAKE_POINTS } from "../src/room/geometry.ts";
 
 test("floor taps replan a single actor without teleporting or losing the walking cycle", () => {
   const engine = new RoomEngine();
@@ -43,6 +43,9 @@ test("sleep and seated phases stay anchored while a movement command uses walk s
     for (const id of ["companion", "user"] as const) {
       const after = engine.snapshot().actors[id];
       const point = before[id].point;
+      if (frame === 0) assert.equal(after.phase, "SIT");
+      assert.notEqual(after.phase, "SLEEP");
+      if (after.point.ny < BED_FLOOR_EDGE) assert.notEqual(after.phase, "WALK");
       assert.ok(Math.hypot((after.point.nx - point.nx) * .8, after.point.ny - point.ny) <= .004001);
     }
   }

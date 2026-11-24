@@ -1,5 +1,5 @@
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import { DUO_POINTS, FURNITURE, SPAWN, WAKE_POINTS, type ActorId, type FurnitureId, type RoomPoint } from "./geometry.ts";
+import { BED_FLOOR_EDGE, DUO_POINTS, FURNITURE, SPAWN, WAKE_POINTS, type ActorId, type FurnitureId, type RoomPoint } from "./geometry.ts";
 import { findSafePath } from "./pathfinding.ts";
 
 const ACTORS = ["companion", "user"] as const;
@@ -81,13 +81,18 @@ export class RoomEngine {
 
   wake() {
     if (this.locked || !this.sleeping) return;
-    this.begin(ACTORS.map(actor => ({
-      actor,
-      steps: [
-        { point: { ...FURNITURE.bed[actor].anchor, ny: .54 }, transition: "SLEEP", furniture: "bed", pose: "SIT" },
-        { point: WAKE_POINTS[actor], transition: "SIT", furniture: "bed", pose: "IDLE" },
-      ],
-    })));
+    this.begin(ACTORS.map(actor => {
+      const pillow = FURNITURE.bed[actor].anchor;
+      const floor = WAKE_POINTS[actor];
+      return {
+        actor,
+        steps: [
+          { point: pillow, furniture: "bed", pose: "SIT" },
+          { point: { nx: floor.nx, ny: BED_FLOOR_EDGE }, transition: "SIT", furniture: "bed" },
+          { point: floor, pose: "IDLE" },
+        ],
+      };
+    }));
   }
 
   action(action: CompanionAction) {
