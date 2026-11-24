@@ -62,13 +62,13 @@ export function PixelAvatar({
 
 const createStyles = (ui: UiPalette) => StyleSheet.create({
   frame: {
-    backgroundColor: "#FAF8F5",
+    backgroundColor: ui.background[0],
     borderWidth: 1.5,
     borderColor: ui.highlight,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
-    shadowColor: "#8A857C",
+    shadowColor: ui.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 6,

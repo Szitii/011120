@@ -50,7 +50,7 @@ const LIGHT_BASE_COLORS = {
   accentSoft: "#EEF2F7",
   accentSoftFg: "#354760",
   tabActive: "#354760",
-  tabInactive: "#7A7672",
+  tabInactive: "#5E5A56",
 };
 
 /** 定稿前端色卡（暖珍珠浅底 × 清透液态毛玻璃 × 冰雾/雾霾灰蓝点缀） */
@@ -77,7 +77,7 @@ export const BUILTIN_SKINS: Record<SkinId, SkinTheme> = {
     background: PEARL_UI.background,
     colors: { ...LIGHT_BASE_COLORS },
     glass: {
-      activePillFill: "rgba(180,192,212,0.58)",
+      activePillFill: "rgba(180,192,212,0.46)",
       iconTint: PEARL_UI.accentInk,
       border: PEARL_UI.highlight,
       outerRing: "rgba(123,144,172,0.18)",
@@ -189,6 +189,10 @@ export function themePalette(skin: SkinTheme) {
     onAccent: tokens.accentFg,
     highlight: skin.glass.border,
     shadow: skin.isDark ? "#000000" : PEARL_UI.shadow,
+    warning: skin.isDark ? "#E5BE83" : "#8E652B",
+    warningSurface: skin.isDark ? "#3A2F20" : "#FFF6E8",
+    mineInk: tokens.accentSoftFg,
+    roomNight: "rgba(26,34,58,0.24)",
     danger: skin.isDark ? "#F6A7AF" : "#984C59",
     affection: skin.isDark ? "#F6A7AF" : "#C87D87",
     onDark: "#F8FAFC",
@@ -198,3 +202,11 @@ export function themePalette(skin: SkinTheme) {
 }
 
 export type UiPalette = ReturnType<typeof themePalette>;
+
+export const GLASS_MATERIAL = {
+  lightBorder: "rgba(255,255,255,0.90)",
+  darkBorder: "rgba(255,255,255,0.2)",
+  lightFinish: ["rgba(255,255,255,0.44)", "rgba(255,255,255,0.16)", "rgba(255,255,255,0.34)"],
+  darkFinish: ["rgba(255,255,255,0.16)", "rgba(255,255,255,0.04)", "rgba(255,255,255,0.10)"],
+  bubbleGleam: { mine: "rgba(255,255,255,0.34)", dark: "rgba(255,255,255,0.18)", light: "rgba(255,255,255,0.92)" },
+} as const;

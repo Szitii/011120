@@ -1256,7 +1256,7 @@ function ProfileScreen({
       <View style={styles.profileSection}>
         {p.viewer.capabilities.openControls === true && (
           <Pressable style={styles.secondaryPill} onPress={onControls}>
-            <LiquidGlassSurface glass tint="light" style={StyleSheet.absoluteFill} />
+            <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
             <Text style={styles.secondaryPillText}>设置</Text>
           </Pressable>
         )}
@@ -1675,10 +1675,11 @@ function IdentitySwitcher({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={() => undefined}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessible={false} />
+        <View style={styles.sheet}>
           <View style={styles.sheetHandle} />
-          <LiquidGlassSurface glass tint="light" borderRadius={16} style={styles.sheetHeading}>
+          <LiquidGlassSurface glass borderRadius={16} style={styles.sheetHeading}>
             <Text accessibilityRole="header" style={styles.sheetTitle}>切换身份</Text>
           </LiquidGlassSurface>
           <Text style={styles.sheetLabel}>现在是</Text>
@@ -1718,9 +1719,8 @@ function IdentitySwitcher({
             );
           })}
 
-
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -1872,7 +1872,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   sectionLabel: { fontSize: 10, letterSpacing: 1.1, color: ui.placeholder, fontWeight: "600" },
   encounterStatus: { marginTop: 8, fontSize: 22, fontWeight: "700", color: ui.ink },
   bodyText: { marginTop: 10, fontSize: 15, lineHeight: 23, color: ui.ink },
-  warning: { marginTop: 10, fontSize: 12, color: "#8E652B" },
+  warning: { marginTop: 10, fontSize: 12, color: ui.warning },
   actionStack: { marginTop: 22, gap: 10 },
   secondaryPill: {
     minHeight: 42,
@@ -1968,9 +1968,9 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "#FFF6E8",
+    backgroundColor: ui.warningSurface,
   },
-  inlineNoticeText: { fontSize: 11, color: "#8E652B" },
+  inlineNoticeText: { fontSize: 11, color: ui.warning },
   center: { flex: 1, padding: 28, alignItems: "center", justifyContent: "center", gap: 12, backgroundColor: ui.background[0] },
   centerTitle: { fontSize: 22, lineHeight: 28, fontWeight: "700", textAlign: "center", color: ui.ink },
   centerBody: { maxWidth: 360, fontSize: 14, lineHeight: 21, color: ui.muted, textAlign: "center" },

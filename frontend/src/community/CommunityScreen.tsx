@@ -1,6 +1,6 @@
 import { useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -795,10 +795,5 @@ const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
     color: ui.muted,
     textAlign: "center",
     lineHeight: 20,
-  },
-  sheetActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 8,
   },
 });

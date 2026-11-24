@@ -18,11 +18,9 @@ export function BottomSheet({
   const { skin, ui } = useSkin();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={[styles.backdrop, { backgroundColor: ui.scrim }]} onPress={onClose}>
-        <Pressable
-          style={[styles.panel, { backgroundColor: ui.background[0], borderColor: skin.colors.border }]}
-          onPress={() => undefined}
-        >
+      <View style={[styles.backdrop, { backgroundColor: ui.scrim }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessible={false} />
+        <View style={[styles.panel, { backgroundColor: ui.background[0], borderColor: skin.colors.border }]}>
           <View style={[styles.handle, { backgroundColor: skin.colors.border }]} />
           {title ? (
             <View style={styles.header}>
@@ -38,8 +36,8 @@ export function BottomSheet({
           <Pressable accessibilityRole="button" accessibilityLabel="关闭弹层" onPress={onClose} style={styles.close}>
             <Text style={{ color: skin.colors.ink }}>关闭</Text>
           </Pressable>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

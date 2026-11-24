@@ -1,5 +1,5 @@
 import { useThemedStyles } from "../theme/SkinProvider";
-import type { UiPalette } from "../theme/skinTokens";
+import { GLASS_MATERIAL, type UiPalette } from "../theme/skinTokens";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { useSkin } from "../theme/SkinProvider";
@@ -13,7 +13,7 @@ export function GlassChatBubble({
   text: string;
 }) {
   const styles = useThemedStyles(createStyles);
-  const { skin, ui } = useSkin();
+  const { skin } = useSkin();
   const isHuman = senderRole === "human";
 
   return (
@@ -42,10 +42,10 @@ export function GlassChatBubble({
             styles.topGleam,
             {
               backgroundColor: isHuman
-                ? "rgba(255,255,255,0.34)"
+                ? GLASS_MATERIAL.bubbleGleam.mine
                 : skin.isDark
-                  ? "rgba(255,255,255,0.18)"
-                  : "rgba(255,255,255,0.92)",
+                  ? GLASS_MATERIAL.bubbleGleam.dark
+                  : GLASS_MATERIAL.bubbleGleam.light,
             },
           ]}
         />

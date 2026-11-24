@@ -2,6 +2,7 @@ import React from "react";
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
+import { GLASS_MATERIAL } from "../theme/skinTokens";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
 
@@ -39,7 +40,7 @@ export function LiquidGlassSurface({
           {
             borderRadius,
             borderColor: glass
-              ? (isDark === skin.isDark ? skin.glass.border : isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.90)")
+              ? (isDark === skin.isDark ? skin.glass.border : isDark ? GLASS_MATERIAL.darkBorder : GLASS_MATERIAL.lightBorder)
               : ui.line,
           },
         ]}
@@ -55,8 +56,8 @@ export function LiquidGlassSurface({
             <LinearGradient
               colors={
                 isDark
-                  ? ["rgba(255,255,255,0.16)", "rgba(255,255,255,0.04)", "rgba(255,255,255,0.10)"]
-                  : ["rgba(255,255,255,0.44)", "rgba(255,255,255,0.16)", "rgba(255,255,255,0.34)"]
+                  ? GLASS_MATERIAL.darkFinish
+                  : GLASS_MATERIAL.lightFinish
               }
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}

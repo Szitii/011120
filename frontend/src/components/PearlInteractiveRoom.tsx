@@ -114,7 +114,8 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     const seated = actor.phase === "SIT";
     const inBed = actor.furniture === "bed" && actor.point.nx < .314;
     const zIndex = inBed ? 530 : actor.furniture === "sofa" ? 660 : depth(actor.point.ny) + 1;
-    const height = seated ? .132 : .175;
+    // Pillow poses use their own scale so the folded quilt covers only the body.
+    const height = actor.phase === "SLEEP" ? .142 : seated ? .132 : .175;
     const width = height;
     return <View key={id} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
       actor.point.ny - height * .973, width, height), {
@@ -149,7 +150,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
       <View pointerEvents="none" style={[box(size, duoX - .133, DUO_POINTS.user.ny - .173, .266, .175), { zIndex: 843 }]}>
         <SpriteFrames sources={DUO_TEXTURES} current={frame.duo ? `${frame.duo.action}:${frame.duo.frame}` : ""} onLoad={onLoad} />
       </View>
-      {night && <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.night]} />}
+      {night && <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.night, { backgroundColor: ui.roomNight }]} />}
       {sleeping && <Text style={[styles.zzz, { left: size.width * .17, top: size.height * .29,
         opacity: .5 + Math.sin(frame.time / 400) * .3, color: labelColor }]}>Zzz</Text>}
       {frame.effects.map(effect => <View key={effect.id} pointerEvents="none"
@@ -215,7 +216,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
 
 const styles = StyleSheet.create({
   frame: { width: "100%", aspectRatio: .8, borderRadius: 28, borderWidth: 1, overflow: "hidden" },
-  night: { backgroundColor: "rgba(26,34,58,0.24)", zIndex: 950 },
+  night: { zIndex: 950 },
   zzz: { position: "absolute", zIndex: 960, fontSize: 14, fontWeight: "700" },
   effect: { position: "absolute", zIndex: 970 },
   ripple: { width: 28, height: 17, borderWidth: 1.5, borderRadius: 16 },

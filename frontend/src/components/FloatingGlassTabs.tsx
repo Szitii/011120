@@ -13,7 +13,7 @@ export function FloatingGlassTabs({
   current: RootTab;
   onSelect: (tab: RootTab) => void;
 }) {
-  const { skin, ui } = useSkin();
+  const { skin } = useSkin();
   const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -54,9 +54,7 @@ export function FloatingGlassTabs({
           {ROOT_TABS.map((key) => {
             const item = items[key];
             const active = current === key;
-            const color = skin.id === "default"
-              ? (active ? ui.accentInk : "#5E5A56")
-              : (active ? skin.colors.tabActive : skin.colors.tabInactive);
+            const color = active ? skin.colors.tabActive : skin.colors.tabInactive;
             return (
               <Pressable
                 key={key}
@@ -67,9 +65,10 @@ export function FloatingGlassTabs({
                 style={({ pressed }) => [
                   styles.tab,
                   active && styles.activeLens,
-                  active && skin.id !== "default" && {
+                  active && {
                     backgroundColor: skin.glass.activePillFill,
                     borderColor: skin.glass.border,
+                    shadowColor: skin.colors.accent,
                   },
                   pressed && { transform: [{ scale: 0.94 }] },
                 ]}
@@ -100,10 +99,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   activeLens: {
-    backgroundColor: "rgba(180, 192, 212, 0.46)",
-    borderColor: "rgba(255, 255, 255, 0.90)",
     borderWidth: 1,
-    shadowColor: "#7B90AC",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.16,
     shadowRadius: 8,

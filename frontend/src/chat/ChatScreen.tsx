@@ -603,7 +603,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderBottomRightRadius: 6,
   },
   msgText: { fontSize: 14.5, lineHeight: 21, color: ui.ink },
-  msgTextMine: { color: "#FFFFFF" },
+  msgTextMine: { color: ui.mineInk },
   failedWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
   failedText: { fontSize: 13, color: ui.danger },
   retryBtn: {

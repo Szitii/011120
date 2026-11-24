@@ -1,3 +1,4 @@
+import { useSkin } from "../theme/SkinProvider";
 import { useLayoutEffect, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../contracts/community.ts";
@@ -10,6 +11,7 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
   onClose: (saved: boolean) => void;
 }) {
   const s = useCommunityStyles();
+  const { ui } = useSkin();
   const [settings, setSettings] = useState<HumanProfileSettings>();
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
@@ -92,7 +94,7 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
 
   return <ScrollView style={s.page} keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
     <SecondaryHeading title="编辑资料" />
-    {loading && <ActivityIndicator accessibilityLabel="正在加载资料" color="#9C6D79" />}
+    {loading && <ActivityIndicator accessibilityLabel="正在加载资料" color={ui.accent} />}
     {settings && <View style={s.card}>
       <Text style={s.author}>社区昵称</Text>
       <TextInput accessibilityLabel="社区昵称" autoCapitalize="none" autoCorrect={false}

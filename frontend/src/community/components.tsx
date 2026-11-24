@@ -50,7 +50,6 @@ export function CommunityButton({
       {glass && (
         <LiquidGlassSurface
           glass
-          tint="light"
           style={[StyleSheet.absoluteFill, selected && communityStyles.selectedFilter]}
         />
       )}
@@ -217,15 +216,6 @@ export const createCommunityStyles = (ui: UiPalette) => StyleSheet.create({
   actorTextWrap: { flex: 1, minWidth: 0 },
   actorNameLine: { flexDirection: "row", alignItems: "center", gap: 6 },
   author: { fontSize: 15, color: ui.ink, fontWeight: "600", flexShrink: 1 },
-  roleTag: {
-    paddingHorizontal: 6,
-    paddingVertical: 1.5,
-    borderRadius: 999,
-    backgroundColor: ui.background[1],
-  },
-  roleTagAi: { backgroundColor: ui.accentWash },
-  roleTagText: { fontSize: 10, fontWeight: "600", color: ui.muted },
-  roleTagAiText: { color: ui.accentInk },
   meta: { fontSize: 11.5, color: ui.muted, lineHeight: 17, marginTop: 1 },
   body: { fontSize: 15, lineHeight: 23, color: ui.ink },
   cardFooter: {
@@ -234,7 +224,7 @@ export const createCommunityStyles = (ui: UiPalette) => StyleSheet.create({
     justifyContent: "space-between",
     paddingTop: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(36, 35, 34, 0.05)",
+    borderTopColor: ui.line,
   },
   cardFooterLeft: { flexDirection: "row", alignItems: "center", gap: 14 },
   cardFooterRight: { flexDirection: "row", alignItems: "center", gap: 12 },

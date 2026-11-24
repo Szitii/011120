@@ -13,8 +13,8 @@ export const FURNITURE = {
   },
   bed: {
     bounds: { x1: .02, y1: .22, x2: .35, y2: .56 },
-    user: { approach: point(.42, .47), entry: point(.294, .45), anchor: point(.235, .45) },
-    companion: { approach: point(.39, .47), entry: point(.294, .427), anchor: point(.125, .45) },
+    user: { approach: point(.42, .47), entry: point(.294, .45), anchor: point(.235, .390) },
+    companion: { approach: point(.39, .47), entry: point(.294, .427), anchor: point(.125, .390) },
   },
 } satisfies Record<FurnitureId, { bounds: ObstacleBox } & Record<ActorId, { approach: RoomPoint; entry: RoomPoint; anchor: RoomPoint }>>;
 
