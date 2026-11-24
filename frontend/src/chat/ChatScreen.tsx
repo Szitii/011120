@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -27,6 +28,16 @@ import { VoiceComposer } from "./VoiceComposer";
 import { quotaMessage } from "../wallet/wallet";
 import { useVoicePlayback } from "./useVoicePlayback";
 import { useAppIsActive } from "../state/useAppIsActive";
+import {
+  BUBBLE_SKINS,
+  CHAT_BACKGROUNDS,
+  loadChatTheme,
+  resolveChatThemeStyles,
+  saveChatTheme,
+  type ChatThemePreference,
+} from "../theme/chatThemes";
+
+const QUICK_EMOJIS = ["😊", "🥺", "❤️", "😂", "🫂", "✨", "👍", "🌙", "☕️", "🐶", "😭", "🫶"];
 
 const actionLabels = {
   WAVE: "你向 TA 挥了挥手",
@@ -45,7 +56,6 @@ function mergeLatestMessages(existing: ChatMessage[], incoming: ChatMessage[]): 
   const byId = new Map<string, ChatMessage>();
   for (const m of existing) byId.set(m.id, m);
   for (const m of incoming) byId.set(m.id, m);
-  // Keep incoming newest order first, then any older paginated items not in incoming
   const incomingIds = new Set(incoming.map((m) => m.id));
   const older = existing.filter((m) => !incomingIds.has(m.id));
   return [...incoming.map((m) => byId.get(m.id)!), ...older];
@@ -57,8 +67,9 @@ export function ChatScreen({
   companionId,
   companionName,
   ownerName,
+  ownerId,
   autoFocus = false,
-  backLabel = "返回小家",
+  backLabel = "返回",
   onBackToHome,
   onSaveQuote,
   onOpenSettings,
@@ -71,6 +82,7 @@ export function ChatScreen({
   companionId?: string;
   companionName: string;
   ownerName: string;
+  ownerId: string;
   autoFocus?: boolean;
   backLabel?: string;
   onBackToHome: () => void;
@@ -96,15 +108,30 @@ export function ChatScreen({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voiceInput, setVoiceInput] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [tray, setTray] = useState<"none" | "emoji" | "plus">("none");
+  const [themePref, setThemePref] = useState<ChatThemePreference>({ bubbleSkin: "default", background: "pearl" });
+  const [themeSheetOpen, setThemeSheetOpen] = useState(false);
+  const [attachNotice, setAttachNotice] = useState("");
+
   useEffect(() => {
-    if (Platform.OS === "web" || !appActive || !client.sendVoice) return;
+    if (Platform.OS === "web" || !appActive || !client.sendVoice) { setVoiceInput(false); return; }
     let current = true;
     void client.listVoices?.().then(result => {
       if (current) setVoiceInput(result.input === true);
     }).catch(() => { if (current) setVoiceInput(false); });
     return () => { current = false; };
   }, [appActive, client]);
+
+  useEffect(() => {
+    const id = chat?.id ?? initialChatId;
+    if (!id) return;
+    let current = true;
+    void loadChatTheme(ownerId, id).then(pref => { if (current) setThemePref(pref); });
+    return () => { current = false; };
+  }, [chat?.id, initialChatId, ownerId]);
+
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -127,7 +154,6 @@ export function ChatScreen({
   const cursorExhaustedRef = useRef(false);
   const pendingSendRef = useRef<{ text: string; key: string } | null>(null);
 
-  // Look up the current wallet once for the latest failed reply, not for older quota failures.
   const latestReply = messages.find(item => item.companionId !== null);
   const quotaId = latestReply?.status === "FAILED" && latestReply.failure === "QUOTA" ? latestReply.id : undefined;
   const [quotaWallet, setQuotaWallet] = useState<{ messageId: string; wallet: Wallet }>();
@@ -136,8 +162,8 @@ export function ChatScreen({
     let current = true;
     void client.wallet().then(wallet => {
       if (current) setQuotaWallet({ messageId: quotaId, wallet });
-    }).catch(error => {
-      if (current && error instanceof ApiProblemError && error.status === 404) {
+    }).catch(err => {
+      if (current && err instanceof ApiProblemError && err.status === 404) {
         setQuotaWallet({ messageId: quotaId, wallet: { enabled: false } });
       }
     });
@@ -163,10 +189,8 @@ export function ChatScreen({
       if (session !== sessionRef.current) return;
       lastRead.current = key;
       onRead?.();
-      // Recheck after releasing the lock in case another reply arrived meanwhile.
       bumpReadRevision(value => value + 1);
     }, () => {
-      // The next refresh or reopening the chat can retry.
       sendingRead.current = undefined;
     });
   }, [client, appActive, chat, latestMessage, onRead, readRevision]);
@@ -183,7 +207,6 @@ export function ChatScreen({
 
     try {
       const page = await client.getChat(targetChatId);
-      // Discard stale poll response if chat changed or a newer send/load occurred while in flight
       if (!current()) return;
       setChat(page.chat);
       setMessages((prev) => (silent && prev.length > 0 ? mergeLatestMessages(prev, page.items) : page.items));
@@ -251,7 +274,6 @@ export function ChatScreen({
     };
   }, [client, initialChatId, companionId, autoFocus, loadLatest, bootstrapRevision]);
 
-  // Serialized 1.5s polling whenever replying === true
   useEffect(() => {
     if (!appActive || !chat?.replying || !chatIdRef.current) return;
     let cancelled = false;
@@ -279,26 +301,26 @@ export function ChatScreen({
     wasActive.current = appActive;
   }, [appActive, loadLatest]);
 
-  function writeError(error: unknown) {
-    if (isGroup && error instanceof ApiProblemError && error.status === 409 && error.code === "INVALID_STATE") {
+  function writeError(err: unknown) {
+    if (isGroup && err instanceof ApiProblemError && err.status === 409 && err.code === "INVALID_STATE") {
       onAvailabilityChanged();
       return "群聊暂时无法发送消息，请稍后再试。";
     }
-    return safeClientMessage(error).title;
+    return safeClientMessage(err).title;
   }
 
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (groupReadOnly || voiceBusy || !text || !targetId || sendingRef.current || deletingRef.current) return;
+    if (groupReadOnly || voiceBusy || !text || text.length > 2000 || !targetId || sendingRef.current || deletingRef.current) return;
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
     setDraft("");
+    setTray("none");
     const recipients = chat?.direct === false ? mentions : [];
     const signature = JSON.stringify([text, recipients]);
 
-    // Reuse Idempotency-Key if retrying the exact same pending draft after a transient error
     const key =
       pendingSendRef.current && pendingSendRef.current.text === signature
         ? pendingSendRef.current.key
@@ -340,11 +362,11 @@ export function ChatScreen({
     try {
       const response = await client.sendVoice(targetId, input, key);
       if (session === sessionRef.current) acceptSent(response, targetId);
-    } catch (error) {
-      if (session === sessionRef.current && isGroup && error instanceof ApiProblemError && error.status === 409) {
+    } catch (err) {
+      if (session === sessionRef.current && isGroup && err instanceof ApiProblemError && err.status === 409) {
         onAvailabilityChanged();
       }
-      throw error;
+      throw err;
     } finally {
       sendingRef.current = false;
     }
@@ -430,6 +452,14 @@ export function ChatScreen({
     }
   }
 
+  function updateTheme(patch: Partial<ChatThemePreference>) {
+    const next = { ...themePref, ...patch };
+    setThemePref(next);
+    const id = chat?.id ?? initialChatId;
+    if (id) void saveChatTheme(ownerId, id, next);
+  }
+
+  const theme = resolveChatThemeStyles(themePref, ui);
   const title = chat?.title ?? (chat?.members.map(member => member.displayName).join("、") || companionName);
   const nameFor = (id: string) => chat?.members.find(member => member.companionId === id)?.displayName ?? companionName;
   const speakingIds = chat?.recording ?? [];
@@ -437,6 +467,8 @@ export function ChatScreen({
   const typingNames = (chat?.typing ?? []).filter(id => !speakingIds.includes(id)).map(nameFor).join("、");
   const replyStatus = [speakingNames && `${speakingNames} 正在说话…`, typingNames && `${typingNames} 正在输入…`]
     .filter(Boolean).join("  ");
+  const showVoiceComposer = voiceMode && voiceInput && !!chat && mentions.length === 0;
+  const hasDraft = Boolean(draft.trim()) && !showVoiceComposer;
 
   return (
     <KeyboardAvoidingView
@@ -444,39 +476,41 @@ export function ChatScreen({
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
     >
-      <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
+      <LinearGradient pointerEvents="none" colors={[theme.background[0], theme.background[1]]} style={StyleSheet.absoluteFill} />
 
-      {/* Top Glass Header */}
+      {/* Minimal Top Glass Header: icon-only back button */}
       <View style={styles.header}>
         <Pressable
           onPress={onBackToHome}
-          style={({ pressed }) => [styles.backPill, pressed && { opacity: 0.78 }]}
+          style={({ pressed }) => [styles.backCircle, pressed && { opacity: 0.78 }]}
           accessibilityRole="button"
           accessibilityLabel={backLabel}
         >
           <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
-          <Ionicons name="chevron-back" size={17} color={ui.ink} />
-          {backLabel === "返回小家" && (
-            <Ionicons name="home-outline" size={14} color={ui.accentInk} />
-          )}
-          <Text style={styles.backText}>{backLabel}</Text>
+          <Ionicons name="chevron-back" size={19} color={ui.ink} />
         </Pressable>
 
         <View style={styles.titleBlock}>
-          <PixelAvatar name={title} role="companion" size={28} />
+          <PixelAvatar name={title} role="companion" size={30} />
           <View>
             <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
-            {replyStatus ? (
-              <Text style={styles.typingText}>
-                {replyStatus}
-              </Text>
-            ) : null}
+            {replyStatus ? <Text style={styles.typingText}>{replyStatus}</Text> : null}
           </View>
         </View>
-        {chat && <Pressable accessibilityRole="button" accessibilityLabel="会话操作"
-          onPress={() => { setConfirmDelete(false); setMenuOpen(true); }}>
-          <Ionicons name="ellipsis-horizontal" size={23} color={ui.ink} />
-        </Pressable>}
+
+        {chat ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="会话操作"
+            style={({ pressed }) => [styles.backCircle, pressed && { opacity: 0.78 }]}
+            onPress={() => { setConfirmDelete(false); setMenuOpen(true); }}
+          >
+            <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
+            <Ionicons name="ellipsis-horizontal" size={19} color={ui.ink} />
+          </Pressable>
+        ) : (
+          <View style={styles.headerSpacer} />
+        )}
       </View>
 
       {error ? (
@@ -530,12 +564,19 @@ export function ChatScreen({
 
             return (
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
-                <PixelAvatar name={senderName} role={isMine ? "owner" : "companion"} size={30} />
+                <PixelAvatar name={senderName} role={isMine ? "owner" : "companion"} size={32} />
                 <View style={[styles.bubbleWrap, isMine && styles.bubbleWrapMine]}>
                   {!isMine && !chat?.direct ? (
                     <Text style={styles.senderLabel}>{senderName}</Text>
                   ) : null}
-                  <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther]}>
+                  <View
+                    style={[
+                      styles.bubble,
+                      isMine
+                        ? { backgroundColor: theme.mineBg, borderColor: theme.mineBorder, borderBottomRightRadius: 6 }
+                        : { backgroundColor: theme.otherBg, borderColor: theme.otherBorder, borderBottomLeftRadius: 6 },
+                    ]}
+                  >
                     {item.status === "BLOCKED" ? (
                       <Text style={styles.failedText}>这条回复没有通过安全检查</Text>
                     ) : item.status === "FAILED" ? (
@@ -551,31 +592,41 @@ export function ChatScreen({
                           </Pressable>
                         )}
                       </View>
-                    ) : (<>
-                      {audioLength > 0 && <View style={styles.voiceRow}>
-                        <Text style={styles.voiceMeta}>{isMine ? "语音" : "AI 语音"} · {audioLength} 秒</Text>
-                        {client.messageAudio && chat && voiceStatus !== "expired" &&
-                          <Pressable accessibilityRole="button" accessibilityLabel={voiceLabel} disabled={voiceBusy} style={styles.voiceButton}
-                            onPress={() => void toggle(item.id, () => client.messageAudio!(chat.id, item.id))}>
-                            <Ionicons name={voiceStatus === "playing" ? "stop-circle-outline" : "play-circle-outline"} size={21} color={ui.accentInk} />
-                            <Text style={styles.voiceMeta}>{voiceLabel}</Text>
-                          </Pressable>}
-                        {voiceStatus === "expired" && <Text style={styles.voiceMeta}>语音已过期</Text>}
-                        {voiceStatus === "error" && <Text accessibilityRole="alert" style={styles.voiceMeta}>播放失败，可重试</Text>}
-                      </View>}
-                      <Pressable
-                        disabled={!openQuote}
-                        onLongPress={openQuote}
-                        accessibilityActions={openQuote ? [{ name: "save-quote", label: "保存到小家相册" }] : undefined}
-                        onAccessibilityAction={event => {
-                          if (event.nativeEvent.actionName === "save-quote") openQuote?.();
-                        }}
-                      >
-                        <Text style={[styles.msgText, isMine && styles.msgTextMine]}>
-                          {item.body ?? "（消息暂不可显示）"}
-                        </Text>
-                      </Pressable>
-                    </>)}
+                    ) : (
+                      <>
+                        {audioLength > 0 && (
+                          <View style={styles.voiceRow}>
+                            <Text style={styles.voiceMeta}>{isMine ? "语音" : "AI 语音"} · {audioLength} 秒</Text>
+                            {client.messageAudio && chat && voiceStatus !== "expired" && (
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={voiceLabel}
+                                disabled={voiceBusy}
+                                style={styles.voiceButton}
+                                onPress={() => void toggle(item.id, () => client.messageAudio!(chat.id, item.id))}
+                              >
+                                <Ionicons name={voiceStatus === "playing" ? "stop-circle-outline" : "play-circle-outline"} size={21} color={ui.accentInk} />
+                                <Text style={styles.voiceMeta}>{voiceLabel}</Text>
+                              </Pressable>
+                            )}
+                            {voiceStatus === "expired" && <Text style={styles.voiceMeta}>语音已过期</Text>}
+                            {voiceStatus === "error" && <Text accessibilityRole="alert" style={styles.voiceMeta}>播放失败，可重试</Text>}
+                          </View>
+                        )}
+                        <Pressable
+                          disabled={!openQuote}
+                          onLongPress={openQuote}
+                          accessibilityActions={openQuote ? [{ name: "save-quote", label: "保存到小家相册" }] : undefined}
+                          onAccessibilityAction={event => {
+                            if (event.nativeEvent.actionName === "save-quote") openQuote?.();
+                          }}
+                        >
+                          <Text style={[styles.msgText, isMine && { color: theme.mineText }]}>
+                            {item.body ?? "（消息暂不可显示）"}
+                          </Text>
+                        </Pressable>
+                      </>
+                    )}
                   </View>
                 </View>
               </View>
@@ -585,73 +636,220 @@ export function ChatScreen({
       )}
 
       <BottomSheet visible={!!quote} title="保存聊天金句" onClose={() => { if (!quoteSaving) setQuote(undefined); }}>
-        {quote && <View style={styles.quoteSheet}>
-          <Text style={styles.msgText} numberOfLines={5}>{quote.text}</Text>
-          {quoteResult !== "" && <Text accessibilityRole="alert" style={styles.mutedText}>{quoteResult}</Text>}
-          <CommunityButton label="保存到相册" primary disabled={quoteSaving} onPress={() => void saveQuote()} />
-        </View>}
-      </BottomSheet>
-
-      <BottomSheet visible={menuOpen} title={confirmDelete ? "删除会话？" : "会话操作"}
-        onClose={() => { if (!deletingRef.current) setMenuOpen(false); }}>
-        {confirmDelete ? <>
-          <Text style={styles.mutedText}>删除后，这段会话将从消息列表移除。</Text>
-          <CommunityButton label={deleting ? "正在删除…" : "确认删除"} disabled={deleting || sending} onPress={() => void deleteConversation()} />
-        </> : <>
-          {onOpenSettings && <CommunityButton label="聊天设置" onPress={() => { setMenuOpen(false); onOpenSettings(); }} />}
-          <CommunityButton label="删除会话" disabled={sending} onPress={() => setConfirmDelete(true)} />
-        </>}
-      </BottomSheet>
-
-      {isGroup && !groupReadOnly && (mentionOpen || mentions.length > 0) && <View style={styles.mentionsBar}>
-        {chat.members.map(member => <CommunityButton key={member.companionId}
-          label={`@${member.displayName}`} selected={mentions.includes(member.companionId)} disabled={sending || deleting || voiceBusy}
-          onPress={() => setMentions(current => current.includes(member.companionId)
-            ? current.filter(id => id !== member.companionId) : [...current, member.companionId])} />)}
-      </View>}
-      {!groupReadOnly && voiceInput && chat && mentions.length === 0 && <VoiceComposer disabled={sending || deleting}
-        onRecord={stopPlayback} onChange={setVoiceBusy} onSend={sendVoice} />}
-      {/* Bottom Liquid Glass Composer */}
-      {groupReadOnly ? <Text style={styles.quoteResult}>群聊暂未开放发言，可以查看记录或删除会话。</Text> : <View style={styles.composerBar}>
-        <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={styles.composerGlass}>
-          <View style={styles.composerRow}>
-            {chat?.direct === false && <Pressable accessibilityRole="button" accessibilityLabel="提及家机"
-              accessibilityState={{ expanded: mentionOpen }} disabled={voiceBusy} onPress={() => setMentionOpen(value => !value)}>
-              <Ionicons name="at-outline" size={22} color={ui.accentInk} />
-            </Pressable>}
-            <TextInput
-              ref={inputRef}
-              value={draft}
-              onChangeText={setDraft}
-              placeholder={`和 ${title} 说点什么…`}
-              placeholderTextColor={ui.muted}
-              style={styles.input}
-              multiline
-              editable={!!chat && !deleting && !voiceBusy}
-              maxLength={2000}
-              returnKeyType="send"
-              onSubmitEditing={() => void handleSend()}
-            />
-            <Pressable
-              onPress={() => void handleSend()}
-              disabled={!draft.trim() || sending || deleting || voiceBusy || !chat}
-              accessibilityRole="button"
-              accessibilityLabel="发送消息"
-              style={({ pressed }) => [
-                styles.sendBtn,
-                (!draft.trim() || sending || deleting || voiceBusy || !chat) && styles.sendBtnDisabled,
-                pressed && { transform: [{ scale: 0.92 }] },
-              ]}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color={ui.onAccent} />
-              ) : (
-                <Ionicons name="paper-plane-outline" size={16} color={ui.onAccent} />
-              )}
-            </Pressable>
+        {quote && (
+          <View style={styles.quoteSheet}>
+            <Text style={styles.msgText} numberOfLines={5}>{quote.text}</Text>
+            {quoteResult !== "" && <Text accessibilityRole="alert" style={styles.mutedText}>{quoteResult}</Text>}
+            <CommunityButton label="保存到相册" primary disabled={quoteSaving} onPress={() => void saveQuote()} />
           </View>
-        </LiquidGlassSurface>
-      </View>}
+        )}
+      </BottomSheet>
+
+      <BottomSheet
+        visible={menuOpen}
+        title={confirmDelete ? "删除会话？" : "会话操作"}
+        onClose={() => { if (!deletingRef.current) setMenuOpen(false); }}
+      >
+        {confirmDelete ? (
+          <>
+            <Text style={styles.mutedText}>删除后，这段会话将从消息列表移除。</Text>
+            <CommunityButton label={deleting ? "正在删除…" : "确认删除"} disabled={deleting || sending} onPress={() => void deleteConversation()} />
+          </>
+        ) : (
+          <>
+            {onOpenSettings && <CommunityButton label="聊天设置" onPress={() => { setMenuOpen(false); onOpenSettings(); }} />}
+            <CommunityButton label="气泡皮肤与聊天背景" onPress={() => { setMenuOpen(false); setThemeSheetOpen(true); }} />
+            <CommunityButton label="删除会话" disabled={sending} onPress={() => setConfirmDelete(true)} />
+          </>
+        )}
+      </BottomSheet>
+
+      <BottomSheet visible={themeSheetOpen} title="气泡皮肤与聊天背景" onClose={() => setThemeSheetOpen(false)}>
+        <View style={{ gap: 14 }}>
+          <View style={{ gap: 8 }}>
+            <Text style={styles.sheetLabel}>气泡皮肤</Text>
+            <View style={styles.sheetRow}>
+              {BUBBLE_SKINS.map(skin => (
+                <CommunityButton
+                  key={skin.id}
+                  label={skin.label}
+                  selected={themePref.bubbleSkin === skin.id}
+                  onPress={() => updateTheme({ bubbleSkin: skin.id })}
+                />
+              ))}
+            </View>
+          </View>
+          <View style={{ gap: 8 }}>
+            <Text style={styles.sheetLabel}>聊天背景</Text>
+            <View style={styles.sheetRow}>
+              {CHAT_BACKGROUNDS.map(bg => (
+                <CommunityButton
+                  key={bg.id}
+                  label={bg.label}
+                  selected={themePref.background === bg.id}
+                  onPress={() => updateTheme({ background: bg.id })}
+                />
+              ))}
+            </View>
+          </View>
+        </View>
+      </BottomSheet>
+
+      {isGroup && !groupReadOnly && (mentionOpen || mentions.length > 0) && (
+        <View style={styles.mentionsBar}>
+          {chat.members.map(member => (
+            <CommunityButton
+              key={member.companionId}
+              label={`@${member.displayName}`}
+              selected={mentions.includes(member.companionId)}
+              disabled={sending || deleting || voiceBusy}
+              onPress={() => setMentions(current => current.includes(member.companionId)
+                ? current.filter(id => id !== member.companionId) : [...current, member.companionId])}
+            />
+          ))}
+        </View>
+      )}
+
+      {/* WeChat-style single-row bottom bar */}
+      {groupReadOnly ? (
+        <Text style={styles.quoteResult}>群聊暂未开放发言，可以查看记录或删除会话。</Text>
+      ) : (
+        <View style={styles.composerWrap}>
+          {!!attachNotice && <Text style={styles.attachNotice}>{attachNotice}</Text>}
+          <View style={styles.wechatBar}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={voiceMode ? "切换打字" : "切换语音"}
+              disabled={voiceBusy || sending || deleting}
+              onPress={() => {
+                if (!voiceInput) {
+                  setAttachNotice("当前环境或服务端暂未开启语音输入，可直接打字。");
+                  return;
+                }
+                setAttachNotice("");
+                setTray("none");
+                setVoiceMode(prev => !prev);
+              }}
+              style={styles.iconBtn}
+            >
+              <Ionicons name={voiceMode ? "keypad-outline" : "mic-outline"} size={23} color={ui.ink} />
+            </Pressable>
+
+            {showVoiceComposer ? (
+              <View style={{ flex: 1 }}>
+                <VoiceComposer disabled={sending || deleting} onRecord={stopPlayback} onChange={setVoiceBusy} onSend={sendVoice} />
+              </View>
+            ) : (
+              <View style={styles.inputPill}>
+                {chat?.direct === false && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="提及家机"
+                    disabled={voiceBusy}
+                    onPress={() => setMentionOpen(value => !value)}
+                  >
+                    <Ionicons name="at-outline" size={20} color={ui.accentInk} />
+                  </Pressable>
+                )}
+                <TextInput
+                  ref={inputRef}
+                  value={draft}
+                  onChangeText={val => { setDraft(val); setAttachNotice(""); }}
+                  onFocus={() => setTray("none")}
+                  placeholder="发消息…"
+                  placeholderTextColor={ui.muted}
+                  style={styles.input}
+                  multiline
+                  editable={!!chat && !deleting && !voiceBusy}
+                  maxLength={2000}
+                  returnKeyType="send"
+                  onSubmitEditing={() => void handleSend()}
+                />
+              </View>
+            )}
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="表情"
+              disabled={voiceBusy || sending || deleting}
+              onPress={() => {
+                setVoiceMode(false);
+                setAttachNotice("");
+                setTray(prev => (prev === "emoji" ? "none" : "emoji"));
+              }}
+              style={styles.iconBtn}
+            >
+              <Ionicons name="happy-outline" size={23} color={ui.ink} />
+            </Pressable>
+
+            {hasDraft ? (
+              <Pressable
+                onPress={() => void handleSend()}
+                disabled={sending || deleting || voiceBusy || !chat}
+                accessibilityRole="button"
+                accessibilityLabel="发送消息"
+                style={({ pressed }) => [styles.sendBtn, pressed && { transform: [{ scale: 0.94 }] }]}
+              >
+                {sending ? (
+                  <ActivityIndicator size="small" color={ui.onAccent} />
+                ) : (
+                  <Ionicons name="paper-plane-outline" size={16} color={ui.onAccent} />
+                )}
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="更多功能"
+                disabled={voiceBusy || sending || deleting}
+                onPress={() => {
+                  setVoiceMode(false);
+                  setAttachNotice("");
+                  setTray(prev => (prev === "plus" ? "none" : "plus"));
+                }}
+                style={styles.iconBtn}
+              >
+                <Ionicons name="add-circle-outline" size={25} color={ui.ink} />
+              </Pressable>
+            )}
+          </View>
+
+          {tray === "emoji" && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.emojiTray}>
+              {QUICK_EMOJIS.map(emoji => (
+                <Pressable
+                  key={emoji}
+                  onPress={() => setDraft(prev => (prev + emoji).length <= 2000 ? prev + emoji : prev)}
+                  style={styles.emojiBtn}
+                >
+                  <Text style={styles.emojiText}>{emoji}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+
+          {tray === "plus" && (
+            <View style={styles.plusTray}>
+              {[
+                { icon: "image-outline" as const, label: "照片" },
+                { icon: "camera-outline" as const, label: "拍照" },
+                { icon: "document-outline" as const, label: "文件" },
+              ].map(item => (
+                <Pressable
+                  key={item.label}
+                  accessibilityRole="button"
+                  onPress={() => setAttachNotice(`${item.label}消息需要后端多媒体接口就绪后开放发送，目前已在排期中。`)}
+                  style={styles.plusItem}
+                >
+                  <View style={styles.plusIconBox}>
+                    <Ionicons name={item.icon} size={24} color={ui.accentInk} />
+                  </View>
+                  <Text style={styles.plusLabel}>{item.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -659,11 +857,13 @@ export function ChatScreen({
 const createStyles = (ui: UiPalette) => StyleSheet.create({
   voiceRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 7, marginBottom: 4 },
   voiceMeta: { fontSize: 12, color: ui.accentInk },
-  voiceButton: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44, paddingHorizontal: 4 },
+  voiceButton: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 40, paddingHorizontal: 4 },
   mentionsBar: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 14, gap: 6, paddingBottom: 6 },
   root: { flex: 1 },
   quoteResult: { color: ui.muted, textAlign: "center", paddingVertical: 8 },
   quoteSheet: { gap: 10 },
+  sheetLabel: { fontSize: 13.5, fontWeight: "700", color: ui.ink },
+  sheetRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -673,17 +873,16 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     paddingBottom: 10,
     gap: 10,
   },
-  backPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 13,
-    paddingVertical: 8,
+  backCircle: {
+    width: 38,
+    height: 38,
     borderRadius: RADIUS.pill,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  backText: { fontSize: 13, fontWeight: "600", color: ui.ink },
+  headerSpacer: { width: 38 },
   titleBlock: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1 },
-  titleText: { fontSize: 15, fontWeight: "700", color: ui.ink },
+  titleText: { fontSize: 16, fontWeight: "700", color: ui.ink },
   typingText: { fontSize: 11, color: ui.accent, marginTop: 1 },
   errorBanner: {
     marginHorizontal: CHROME.screenInset,
@@ -712,18 +911,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderRadius: 18,
     borderWidth: 1,
   },
-  bubbleOther: {
-    backgroundColor: ui.white,
-    borderColor: ui.line,
-    borderBottomLeftRadius: 6,
-  },
-  bubbleMine: {
-    backgroundColor: ui.iceBlue,
-    borderColor: ui.highlight,
-    borderBottomRightRadius: 6,
-  },
   msgText: { fontSize: 14.5, lineHeight: 21, color: ui.ink },
-  msgTextMine: { color: ui.mineInk },
   failedWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
   failedText: { fontSize: 13, color: ui.danger },
   retryBtn: {
@@ -733,28 +921,46 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     backgroundColor: ui.accentWash,
   },
   retryText: { fontSize: 12, fontWeight: "600", color: ui.accentInk },
-  composerBar: {
-    paddingHorizontal: CHROME.screenInset,
+  composerWrap: {
+    backgroundColor: ui.white,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: ui.line,
+    paddingHorizontal: 12,
     paddingTop: 8,
-    paddingBottom: Platform.OS === "ios" ? 18 : 12,
-  },
-  composerGlass: { width: "100%" },
-  composerRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    paddingLeft: 16,
-    paddingRight: 6,
-    paddingVertical: 6,
+    paddingBottom: Platform.OS === "ios" ? 20 : 12,
     gap: 8,
+  },
+  attachNotice: { fontSize: 12, color: ui.accentInk, textAlign: "center" },
+  wechatBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  iconBtn: {
+    width: 34,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inputPill: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: ui.background[0],
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: ui.line,
+    paddingHorizontal: 14,
+    minHeight: 40,
+    gap: 6,
   },
   input: {
     flex: 1,
-    minHeight: 36,
+    minHeight: 38,
     maxHeight: 96,
     fontSize: 14.5,
     color: ui.ink,
-    paddingTop: 7,
-    paddingBottom: 7,
+    paddingVertical: 8,
   },
   sendBtn: {
     width: 36,
@@ -764,5 +970,36 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  sendBtnDisabled: { backgroundColor: ui.accentWash },
+  emojiTray: {
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    gap: 10,
+  },
+  emojiBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: ui.background[0],
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emojiText: { fontSize: 20 },
+  plusTray: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  plusItem: { alignItems: "center", gap: 6 },
+  plusIconBox: {
+    width: 54,
+    height: 54,
+    borderRadius: 16,
+    backgroundColor: ui.background[0],
+    borderWidth: 1,
+    borderColor: ui.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  plusLabel: { fontSize: 12, color: ui.muted },
 });
