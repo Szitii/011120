@@ -23,3 +23,11 @@ test("preserves standard V2 layout for firewall review and accepts a manually su
   assert.deepEqual(card.data, { name: "家机", description: "简介", personality: "性格", system_prompt: "待防火墙检查" });
   assert.equal(normalizeImportCard(["不是角色卡"]), undefined);
 });
+
+test("custom exports pass the supported memory list to the firewall while retaining the private vault locally", () => {
+  const card = normalizeImportCard({
+    identity: { display_name: "阿宁" }, memories: ["一起去看海", { private: true }],
+    private_memory_vault: ["不随请求发送"],
+  });
+  assert.deepEqual(card, { name: "阿宁", description: "", personality: "", memories: ["一起去看海"] });
+});

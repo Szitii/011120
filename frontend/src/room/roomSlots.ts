@@ -8,9 +8,9 @@ export const DUO_SPRITES = {
   CUDDLE: [require("../../assets/room_v2/duo_cuddle_1.png"), require("../../assets/room_v2/duo_cuddle_2.png")],
 } satisfies Record<Exclude<CompanionAction, "WAVE">, readonly [RoomImage, RoomImage]>;
 
-export type RoomLayerKind = "floor_base" | "wall_back" | "dynamic_y";
+type RoomLayerKind = "floor_base" | "wall_back" | "dynamic_y";
 
-export interface RoomSlotSpec {
+interface RoomSlotSpec {
   id: string;
   name: string;
   layer: RoomLayerKind;

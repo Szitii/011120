@@ -6,9 +6,11 @@ import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { makeIdempotencyKey, type ChatClient } from "../chat/client";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 
-export function CreateGroupScreen({ client, companions, onCreated }: {
+export function CreateGroupScreen({ client, companions, enabled, onAvailabilityChanged, onCreated }: {
   client: ChatClient;
   companions: OwnerCompanionSummary[];
+  enabled: boolean;
+  onAvailabilityChanged: () => void;
   onCreated: (chat: Chat) => void;
 }) {
   const s = useCommunityStyles();
@@ -21,7 +23,7 @@ export function CreateGroupScreen({ client, companions, onCreated }: {
   const count = Array.from(title.trim()).length;
 
   async function create() {
-    if (pending.current || ids.length < 2 || ids.length > 8 || count > 40) return;
+    if (!enabled || pending.current || ids.length < 2 || ids.length > 8 || count > 40) return;
     pending.current = true;
     setBusy(true);
     setError("");
@@ -30,8 +32,10 @@ export function CreateGroupScreen({ client, companions, onCreated }: {
     try {
       onCreated(await client.openChat(ids, title.trim() || undefined, request.current.key));
     } catch (problem) {
-      setError(problem instanceof ApiProblemError && problem.status === 409
-        ? "暂时无法创建群聊，请确认群聊数量后再试。" : safeClientMessage(problem).title);
+      if (problem instanceof ApiProblemError && problem.status === 409 && problem.code === "INVALID_STATE") {
+        onAvailabilityChanged();
+        setError("暂时无法创建群聊，请稍后再试。");
+      } else setError(safeClientMessage(problem).title);
     } finally {
       pending.current = false;
       setBusy(false);
@@ -40,19 +44,21 @@ export function CreateGroupScreen({ client, companions, onCreated }: {
 
   return <ScrollView style={s.page} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
     <SecondaryHeading title="新建群聊" />
-    <Text style={s.meta}>从自己的家机中选 2–8 位。已选 {ids.length} 位</Text>
-    <View style={s.card}>
-      <TextInput accessibilityLabel="群聊名称" placeholder="群聊名称（可选）" value={title} onChangeText={setTitle} editable={!busy} style={s.input} />
-      {count > 40 && <Text style={s.error}>群聊名称最多 40 字。</Text>}
-    </View>
-    {companions.map(item => <View key={item.companionId} style={s.card}>
-      <CommunityButton label={item.displayName} selected={ids.includes(item.companionId)}
-        disabled={busy || ids.length >= 8 && !ids.includes(item.companionId)}
-        onPress={() => setIds(current => current.includes(item.companionId)
-          ? current.filter(id => id !== item.companionId) : [...current, item.companionId])} />
-    </View>)}
-    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-    <CommunityButton primary label={busy ? "正在创建…" : "创建群聊"} disabled={busy || ids.length < 2 || count > 40}
-      onPress={() => void create()} />
+    {!enabled ? <Text style={s.meta}>新建群聊暂未开放。</Text> : <>
+      <Text style={s.meta}>从自己的家机中选 2–8 位。已选 {ids.length} 位</Text>
+      <View style={s.card}>
+        <TextInput accessibilityLabel="群聊名称" placeholder="群聊名称（可选）" value={title} onChangeText={setTitle} editable={!busy} style={s.input} />
+        {count > 40 && <Text style={s.error}>群聊名称最多 40 字。</Text>}
+      </View>
+      {companions.map(item => <View key={item.companionId} style={s.card}>
+        <CommunityButton label={item.displayName} selected={ids.includes(item.companionId)}
+          disabled={busy || ids.length >= 8 && !ids.includes(item.companionId)}
+          onPress={() => setIds(current => current.includes(item.companionId)
+            ? current.filter(id => id !== item.companionId) : [...current, item.companionId])} />
+      </View>)}
+      {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+      <CommunityButton primary label={busy ? "正在创建…" : "创建群聊"} disabled={busy || ids.length < 2 || count > 40}
+        onPress={() => void create()} />
+    </>}
   </ScrollView>;
 }

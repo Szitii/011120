@@ -4,12 +4,14 @@ import type { DiaryEntry, DiaryWriteResult } from "../../../contracts/chat.ts";
 import { safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 import { useAppIsActive } from "../state/useAppIsActive";
+import { DiaryFrequency } from "./DiaryFrequency";
 import type { DiaryClient } from "./client";
 
 export function DiaryScreen({ client, companionId, companionName }: {
   client: DiaryClient; companionId: string; companionName: string;
 }) {
   const s = useCommunityStyles();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [items, setItems] = useState<DiaryEntry[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -130,6 +132,9 @@ export function DiaryScreen({ client, companionId, companionName }: {
   return (
     <ScrollView style={s.page} contentContainerStyle={s.content}>
       <SecondaryHeading title={`${companionName}的日记`} />
+      <CommunityButton label={settingsOpen ? "收起日记设置" : "日记设置"} selected={settingsOpen}
+        onPress={() => setSettingsOpen(open => !open)} />
+      {settingsOpen && <DiaryFrequency client={client} companionId={companionId} />}
       {writing && <Text accessibilityLiveRegion="polite" style={s.meta}>TA 正在写日记…</Text>}
       {notice !== "" && <Text accessibilityLiveRegion="polite" style={s.meta}>{notice}</Text>}
       {loading && <ActivityIndicator accessibilityLabel="正在读取日记" />}

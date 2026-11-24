@@ -11,7 +11,7 @@ import type { CommunityTarget } from "../state/navigation";
 import { useAppIsActive } from "../state/useAppIsActive";
 import { CHROME } from "../theme/layoutTokens";
 
-export function MessagesScreen({ api, viewer, chatClient, companions, visible, onChat, onStartChat, onCreateGroup, onCommunityTarget, onLife }: {
+export function MessagesScreen({ api, viewer, chatClient, companions, visible, onChat, onStartChat, onCreateGroup, onCommunityTarget, onLife, onRead }: {
   api: ClientApi;
   viewer: ActorContext;
   chatClient?: ChatClient;
@@ -20,8 +20,9 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
   onCommunityTarget: (target: CommunityTarget) => void;
-  onLife: () => void;
-  onCreateGroup: () => void;
+  onLife: (item: LifeEventInboxItem) => void;
+  onRead: () => void;
+  onCreateGroup?: () => void;
 }) {
   const s = useCommunityStyles();
   const [section, setSection] = useState<"chats" | "notices">(chatClient ? "chats" : "notices");
@@ -45,10 +46,10 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
       client={chatClient} companions={companions} active={active} onChat={onChat} onStartChat={onStartChat} onCreateGroup={onCreateGroup}
     />}
     {section === "notices" && source === "community" && (api.community
-      ? <CommunityNotices client={api.community} viewer={viewer} visible={visible} onOpen={onCommunityTarget} />
+      ? <CommunityNotices client={api.community} viewer={viewer} visible={active} onOpen={onCommunityTarget} onRead={onRead} />
       : <Text style={[s.meta, styles.heading]}>连接社区后可以查看通知。</Text>)}
     {section === "notices" && source === "owner" && viewer.kind === "OWNER" &&
-      <OwnerNotices api={api} visible={visible} onOpen={onLife} />}
+      <OwnerNotices api={api} visible={active} onOpen={onLife} onRead={onRead} companions={companions} />}
   </View>;
 }
 
@@ -58,7 +59,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
   active: boolean;
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
-  onCreateGroup: () => void;
+  onCreateGroup?: () => void;
 }) {
   const s = useCommunityStyles();
   const [items, setItems] = useState<Chat[]>();
@@ -83,7 +84,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
 
   return <ScrollView contentContainerStyle={styles.content}>
     <Button label="刷新" disabled={loading} onPress={() => setReload(value => value + 1)} />
-    {companions.length >= 2 && <Button label="新建群聊" primary onPress={onCreateGroup} />}
+    {onCreateGroup && companions.length >= 2 && <Button label="新建群聊" primary onPress={onCreateGroup} />}
     {error !== "" && <Text accessibilityRole="alert" style={s.meta}>{error}</Text>}
     {!items && !error && <ActivityIndicator accessibilityLabel="正在读取会话" />}
     {items?.map(chat => {
@@ -91,7 +92,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
       const last = chat.lastMessage;
       const preview = last?.action ? "小家互动" : last?.status === "SENT" && last.body ? last.body : "打开会话";
       return <Pressable key={chat.id} style={s.card} accessibilityRole="button" onPress={() => onChat(chat)}>
-        <Text style={s.author} numberOfLines={2}>{title}{chat.direct ? "" : " · 群聊"}</Text>
+        <Text style={s.author} numberOfLines={2}>{title}{chat.direct ? "" : " · 群聊"}{chat.unreadCount ? ` · ${chat.unreadCount} 条未读` : ""}</Text>
         <Text style={s.meta} numberOfLines={1}>{preview}</Text>
       </Pressable>;
     })}
@@ -101,12 +102,13 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
   </ScrollView>;
 }
 
-function CommunityNotices({ client, viewer, visible, onOpen }: {
-  client: CommunityClient; viewer: ActorContext; visible: boolean; onOpen: (target: CommunityTarget) => void;
+function CommunityNotices({ client, viewer, visible, onOpen, onRead }: {
+  client: CommunityClient; viewer: ActorContext; visible: boolean; onOpen: (target: CommunityTarget) => void; onRead: () => void;
 }) {
   const load = useCallback((cursor?: string) => client.notifications(viewer, cursor), [client, viewer.kind, viewer.id]);
   const acknowledge = async (note: CommunityNotification) => {
     await client.readNotification(viewer, note.id, communityRequestKey());
+    onRead();
     return { ...note, readAt: new Date().toISOString() };
   };
 
@@ -117,13 +119,22 @@ function CommunityNotices({ client, viewer, visible, onOpen }: {
   />;
 }
 
-function OwnerNotices({ api, visible, onOpen }: { api: ClientApi; visible: boolean; onOpen: () => void }) {
+function OwnerNotices({ api, visible, onOpen, onRead, companions }: {
+  api: ClientApi; visible: boolean; onOpen: (item: LifeEventInboxItem) => void;
+  onRead: () => void; companions: OwnerCompanionSummary[];
+}) {
   const s = useCommunityStyles();
   type Cursor = NonNullable<LifeEventInboxCollection["nextCursor"]>;
   const load = useCallback((cursor?: Cursor) => api.lifeEventInbox(cursor), [api]);
-  return <NoticeList load={load} acknowledge={(item: LifeEventInboxItem) => api.acknowledgeLifeEvent(item.id)}
-    visible={visible} onOpen={onOpen} renderSummary={item => <Text style={s.author}>{item.title}</Text>}
-  />;
+  return <NoticeList load={load} acknowledge={async (item: LifeEventInboxItem) => {
+    const value = await api.acknowledgeLifeEvent(item.id);
+    onRead();
+    return value;
+  }} visible={visible} onOpen={onOpen} renderSummary={item => {
+    const isDraft = item.kind === "AGENT_DRAFT" || item.linkedObject?.type === "AGENT_DRAFT";
+    const name = isDraft ? companions.find(c => c.companionId === item.companionId)?.displayName : undefined;
+    return <Text style={s.author}>{name && !item.title.startsWith(name) ? `${name} · ${item.title}` : item.title}</Text>;
+  }} />;
 }
 
 function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ load, acknowledge, renderSummary, visible, onOpen }: {
@@ -177,7 +188,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
   }, []);
 
   useEffect(() => {
-    if (visible && !items) void read();
+    if (visible) void read();
   }, [load, visible]);
 
   function act(item: T, open = false) {
@@ -186,7 +197,6 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
       const next = item.readAt ? item : await acknowledge(item);
       if (!mounted.current) return;
       setItems(current => current?.map(value => value.id === item.id ? next : value));
-
     });
   }
 

@@ -13,8 +13,15 @@
         "expo-image-picker",
         {
           "photosPermission": "允许从系统相册选择照片，保存到你的小家相册。",
-          "cameraPermission": false,
-          "microphonePermission": false
+          "cameraPermission": false
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "允许 Companion World 在你按住说话时录制语音。",
+          "recordAudioAndroid": true,
+          "enableBackgroundPlayback": false
         }
       ]
     ]

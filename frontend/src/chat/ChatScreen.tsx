@@ -14,15 +14,18 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import type { Chat, ChatMessage } from "../../../contracts/chat";
-import { makeIdempotencyKey, type ChatClient } from "./client";
+import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
+import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
-import { safeClientMessage } from "../adapters/real-api";
+import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import type { QuoteInput } from "../album/store";
 import { BottomSheet } from "../components/BottomSheet";
 import { CommunityButton } from "../community/components";
+import { VoiceComposer } from "./VoiceComposer";
+import { quotaMessage } from "../wallet/wallet";
+import { useVoicePlayback } from "./useVoicePlayback";
 import { useAppIsActive } from "../state/useAppIsActive";
 
 const actionLabels = {
@@ -35,7 +38,6 @@ const actionLabels = {
 const replyFailureMessages = {
   UNAVAILABLE: "即将推出",
   DISABLED: "平台模型暂时关闭",
-  QUOTA: "今天的免费回复用完了，明天再来",
   ERROR: "这条回复没发出来，可以重试",
 };
 
@@ -60,6 +62,9 @@ export function ChatScreen({
   onBackToHome,
   onSaveQuote,
   onOpenSettings,
+  onRead,
+  groupSendEnabled,
+  onAvailabilityChanged,
 }: {
   client: ChatClient;
   initialChatId?: string;
@@ -70,13 +75,19 @@ export function ChatScreen({
   backLabel?: string;
   onBackToHome: () => void;
   onSaveQuote?: (quote: QuoteInput) => Promise<void>;
+  groupSendEnabled: boolean;
+  onAvailabilityChanged: () => void;
+  onRead?: () => void;
   onOpenSettings?: () => void;
 }) {
   const { ui } = useSkin();
   const styles = useThemedStyles(createStyles);
+  const { playback, toggle, stop: stopPlayback } = useVoicePlayback();
   const appActive = useAppIsActive();
   const wasActive = useRef(appActive);
   const [chat, setChat] = useState<Chat | null>(null);
+  const isGroup = chat?.direct === false;
+  const groupReadOnly = isGroup && !groupSendEnabled;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [bootstrapRevision, setBootstrapRevision] = useState(0);
@@ -84,6 +95,16 @@ export function ChatScreen({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [voiceInput, setVoiceInput] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  useEffect(() => {
+    if (Platform.OS === "web" || !appActive || !client.sendVoice) return;
+    let current = true;
+    void client.listVoices?.().then(result => {
+      if (current) setVoiceInput(result.input === true);
+    }).catch(() => { if (current) setVoiceInput(false); });
+    return () => { current = false; };
+  }, [appActive, client]);
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -105,6 +126,50 @@ export function ChatScreen({
   const reqVersionRef = useRef(0);
   const cursorExhaustedRef = useRef(false);
   const pendingSendRef = useRef<{ text: string; key: string } | null>(null);
+
+  // Look up the current wallet once for the latest failed reply, not for older quota failures.
+  const latestReply = messages.find(item => item.companionId !== null);
+  const quotaId = latestReply?.status === "FAILED" && latestReply.failure === "QUOTA" ? latestReply.id : undefined;
+  const [quotaWallet, setQuotaWallet] = useState<{ messageId: string; wallet: Wallet }>();
+  useEffect(() => {
+    if (!appActive || !quotaId || !client.wallet) return;
+    let current = true;
+    void client.wallet().then(wallet => {
+      if (current) setQuotaWallet({ messageId: quotaId, wallet });
+    }).catch(error => {
+      if (current && error instanceof ApiProblemError && error.status === 404) {
+        setQuotaWallet({ messageId: quotaId, wallet: { enabled: false } });
+      }
+    });
+    return () => { current = false; };
+  }, [appActive, client, quotaId]);
+
+  const sendingRead = useRef<string | undefined>(undefined);
+  const lastRead = useRef<string | undefined>(undefined);
+  const [readRevision, bumpReadRevision] = useState(0);
+  const latestMessage = messages[0];
+  useEffect(() => {
+    if (!client.markRead || !appActive || !chat || chatIdRef.current !== chat.id) return;
+    const messageToRead = chatReadTarget(chat, latestMessage);
+    if (!messageToRead) return;
+    const chatId = chat.id;
+    const key = `${chatId}:${messageToRead}`;
+    if (sendingRead.current || lastRead.current === key) return;
+    sendingRead.current = key;
+    const session = sessionRef.current;
+
+    void client.markRead(chatId, messageToRead).then(() => {
+      sendingRead.current = undefined;
+      if (session !== sessionRef.current) return;
+      lastRead.current = key;
+      onRead?.();
+      // Recheck after releasing the lock in case another reply arrived meanwhile.
+      bumpReadRevision(value => value + 1);
+    }, () => {
+      // The next refresh or reopening the chat can retry.
+      sendingRead.current = undefined;
+    });
+  }, [client, appActive, chat, latestMessage, onRead, readRevision]);
 
   const loadLatest = useCallback(async (targetChatId: string, silent = false) => {
     if (silent && pollInFlightRef.current) return;
@@ -214,10 +279,18 @@ export function ChatScreen({
     wasActive.current = appActive;
   }, [appActive, loadLatest]);
 
+  function writeError(error: unknown) {
+    if (isGroup && error instanceof ApiProblemError && error.status === 409 && error.code === "INVALID_STATE") {
+      onAvailabilityChanged();
+      return "群聊暂时无法发送消息，请稍后再试。";
+    }
+    return safeClientMessage(error).title;
+  }
+
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (!text || !targetId || sendingRef.current || deletingRef.current) return;
+    if (groupReadOnly || voiceBusy || !text || !targetId || sendingRef.current || deletingRef.current) return;
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
@@ -235,29 +308,51 @@ export function ChatScreen({
     try {
       const res = await client.sendMessage(targetId, text, recipients, key);
       if (session !== sessionRef.current) return;
-      reqVersionRef.current += 1;
       pendingSendRef.current = null;
       setMentions([]);
       setMentionOpen(false);
-      setMessages((prev) => [res.message, ...prev.filter((m) => m.id !== res.message.id)]);
-      setChat((prev) => (prev ? { ...prev, typing: res.typing, replying: res.replying } : prev));
-      setError(null);
-      if (res.replying) {
-        void loadLatest(targetId, true);
-      }
+      acceptSent(res, targetId);
     } catch (e) {
       if (session !== sessionRef.current) return;
       setDraft(current => current || text);
-      setError(safeClientMessage(e).title);
+      setError(writeError(e));
     } finally {
       sendingRef.current = false;
       if (session === sessionRef.current) setSending(false);
     }
   }
 
+  function acceptSent(result: ChatSendResult, targetId: string) {
+    reqVersionRef.current++;
+    setMessages(previous => [result.message, ...previous.filter(message => message.id !== result.message.id)]);
+    setChat(previous => previous ? { ...previous, typing: result.typing, replying: result.replying } : previous);
+    setError(null);
+    if (result.replying) void loadLatest(targetId, true);
+  }
+
+  async function sendVoice(input: ChatVoiceInput, key: string) {
+    const targetId = chatIdRef.current;
+    if (!targetId || !client.sendVoice || groupReadOnly || sendingRef.current || deletingRef.current) {
+      throw new ApiProblemError(409, "INVALID_STATE", "CONFLICT", "DO_NOT_RETRY", "local");
+    }
+    const session = sessionRef.current;
+    sendingRef.current = true;
+    try {
+      const response = await client.sendVoice(targetId, input, key);
+      if (session === sessionRef.current) acceptSent(response, targetId);
+    } catch (error) {
+      if (session === sessionRef.current && isGroup && error instanceof ApiProblemError && error.status === 409) {
+        onAvailabilityChanged();
+      }
+      throw error;
+    } finally {
+      sendingRef.current = false;
+    }
+  }
+
   async function handleRetry(messageId: string) {
     const targetId = chatIdRef.current;
-    if (!targetId || retryingRef.current.has(messageId)) return;
+    if (groupReadOnly || !targetId || retryingRef.current.has(messageId)) return;
     const session = sessionRef.current;
     retryingRef.current.add(messageId);
     try {
@@ -267,7 +362,7 @@ export function ChatScreen({
       setChat((prev) => (prev ? { ...prev, typing: res.typing, replying: res.replying } : prev));
       void loadLatest(targetId, true);
     } catch (e) {
-      if (session === sessionRef.current) setError(safeClientMessage(e).title);
+      if (session === sessionRef.current) setError(writeError(e));
     } finally {
       retryingRef.current.delete(messageId);
     }
@@ -336,9 +431,12 @@ export function ChatScreen({
   }
 
   const title = chat?.title ?? (chat?.members.map(member => member.displayName).join("、") || companionName);
-  const typingNames = (chat?.typing ?? [])
-    .map((id) => chat?.members.find((m) => m.companionId === id)?.displayName ?? companionName)
-    .join("、");
+  const nameFor = (id: string) => chat?.members.find(member => member.companionId === id)?.displayName ?? companionName;
+  const speakingIds = chat?.recording ?? [];
+  const speakingNames = speakingIds.map(nameFor).join("、");
+  const typingNames = (chat?.typing ?? []).filter(id => !speakingIds.includes(id)).map(nameFor).join("、");
+  const replyStatus = [speakingNames && `${speakingNames} 正在说话…`, typingNames && `${typingNames} 正在输入…`]
+    .filter(Boolean).join("  ");
 
   return (
     <KeyboardAvoidingView
@@ -368,9 +466,9 @@ export function ChatScreen({
           <PixelAvatar name={title} role="companion" size={28} />
           <View>
             <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
-            {typingNames ? (
+            {replyStatus ? (
               <Text style={styles.typingText}>
-                {`${typingNames} 正在输入…`}
+                {replyStatus}
               </Text>
             ) : null}
           </View>
@@ -405,7 +503,7 @@ export function ChatScreen({
           onEndReachedThreshold={0.2}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
-              <Text style={styles.mutedText}>和小家里的 {title} 说第一句话吧。</Text>
+              <Text style={styles.mutedText}>{groupReadOnly ? "还没有群聊消息。" : `和小家里的 ${title} 说第一句话吧。`}</Text>
             </View>
           }
           ListFooterComponent={
@@ -418,6 +516,10 @@ export function ChatScreen({
               ? ownerName
               : chat?.members.find((m) => m.companionId === item.companionId)?.displayName ?? title;
 
+            const voiceStatus = playback?.id === item.id ? playback.status : undefined;
+            const audioLength = item.audio ? Math.max(1, Math.ceil(item.audio.durationMs / 1000)) : 0;
+            const voiceLabel = voiceStatus === "loading" ? "取消加载"
+              : voiceStatus === "playing" ? "停止播放" : "播放语音";
             const openQuote = onSaveQuote && chat && item.body && item.status === "SENT"
               ? () => {
                   if (!item.body) return;
@@ -439,15 +541,28 @@ export function ChatScreen({
                     ) : item.status === "FAILED" ? (
                       <View style={styles.failedWrap}>
                         <Text style={styles.failedText}>
-                          {replyFailureMessages[item.failure ?? "ERROR"]}
+                          {item.failure === "QUOTA"
+                            ? quotaMessage(quotaId === item.id && quotaWallet?.messageId === item.id ? quotaWallet.wallet : undefined)
+                            : replyFailureMessages[item.failure ?? "ERROR"]}
                         </Text>
-                        {item.failure === "ERROR" && item.retryable && (
+                        {item.failure === "ERROR" && item.retryable && !groupReadOnly && (
                           <Pressable onPress={() => void handleRetry(item.id)} style={styles.retryBtn}>
                             <Text style={styles.retryText}>重试</Text>
                           </Pressable>
                         )}
                       </View>
-                    ) : (
+                    ) : (<>
+                      {audioLength > 0 && <View style={styles.voiceRow}>
+                        <Text style={styles.voiceMeta}>{isMine ? "语音" : "AI 语音"} · {audioLength} 秒</Text>
+                        {client.messageAudio && chat && voiceStatus !== "expired" &&
+                          <Pressable accessibilityRole="button" accessibilityLabel={voiceLabel} disabled={voiceBusy} style={styles.voiceButton}
+                            onPress={() => void toggle(item.id, () => client.messageAudio!(chat.id, item.id))}>
+                            <Ionicons name={voiceStatus === "playing" ? "stop-circle-outline" : "play-circle-outline"} size={21} color={ui.accentInk} />
+                            <Text style={styles.voiceMeta}>{voiceLabel}</Text>
+                          </Pressable>}
+                        {voiceStatus === "expired" && <Text style={styles.voiceMeta}>语音已过期</Text>}
+                        {voiceStatus === "error" && <Text accessibilityRole="alert" style={styles.voiceMeta}>播放失败，可重试</Text>}
+                      </View>}
                       <Pressable
                         disabled={!openQuote}
                         onLongPress={openQuote}
@@ -460,7 +575,7 @@ export function ChatScreen({
                           {item.body ?? "（消息暂不可显示）"}
                         </Text>
                       </Pressable>
-                    )}
+                    </>)}
                   </View>
                 </View>
               </View>
@@ -488,18 +603,20 @@ export function ChatScreen({
         </>}
       </BottomSheet>
 
-      {chat?.direct === false && (mentionOpen || mentions.length > 0) && <View style={styles.mentionsBar}>
+      {isGroup && !groupReadOnly && (mentionOpen || mentions.length > 0) && <View style={styles.mentionsBar}>
         {chat.members.map(member => <CommunityButton key={member.companionId}
-          label={`@${member.displayName}`} selected={mentions.includes(member.companionId)} disabled={sending || deleting}
+          label={`@${member.displayName}`} selected={mentions.includes(member.companionId)} disabled={sending || deleting || voiceBusy}
           onPress={() => setMentions(current => current.includes(member.companionId)
             ? current.filter(id => id !== member.companionId) : [...current, member.companionId])} />)}
       </View>}
+      {!groupReadOnly && voiceInput && chat && mentions.length === 0 && <VoiceComposer disabled={sending || deleting}
+        onRecord={stopPlayback} onChange={setVoiceBusy} onSend={sendVoice} />}
       {/* Bottom Liquid Glass Composer */}
-      <View style={styles.composerBar}>
+      {groupReadOnly ? <Text style={styles.quoteResult}>群聊暂未开放发言，可以查看记录或删除会话。</Text> : <View style={styles.composerBar}>
         <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={styles.composerGlass}>
           <View style={styles.composerRow}>
             {chat?.direct === false && <Pressable accessibilityRole="button" accessibilityLabel="提及家机"
-              accessibilityState={{ expanded: mentionOpen }} onPress={() => setMentionOpen(value => !value)}>
+              accessibilityState={{ expanded: mentionOpen }} disabled={voiceBusy} onPress={() => setMentionOpen(value => !value)}>
               <Ionicons name="at-outline" size={22} color={ui.accentInk} />
             </Pressable>}
             <TextInput
@@ -510,19 +627,19 @@ export function ChatScreen({
               placeholderTextColor={ui.muted}
               style={styles.input}
               multiline
-              editable={!!chat && !deleting}
+              editable={!!chat && !deleting && !voiceBusy}
               maxLength={2000}
               returnKeyType="send"
               onSubmitEditing={() => void handleSend()}
             />
             <Pressable
               onPress={() => void handleSend()}
-              disabled={!draft.trim() || sending || deleting || !chat}
+              disabled={!draft.trim() || sending || deleting || voiceBusy || !chat}
               accessibilityRole="button"
               accessibilityLabel="发送消息"
               style={({ pressed }) => [
                 styles.sendBtn,
-                (!draft.trim() || sending || deleting || !chat) && styles.sendBtnDisabled,
+                (!draft.trim() || sending || deleting || voiceBusy || !chat) && styles.sendBtnDisabled,
                 pressed && { transform: [{ scale: 0.92 }] },
               ]}
             >
@@ -534,12 +651,15 @@ export function ChatScreen({
             </Pressable>
           </View>
         </LiquidGlassSurface>
-      </View>
+      </View>}
     </KeyboardAvoidingView>
   );
 }
 
 const createStyles = (ui: UiPalette) => StyleSheet.create({
+  voiceRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 7, marginBottom: 4 },
+  voiceMeta: { fontSize: 12, color: ui.accentInk },
+  voiceButton: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44, paddingHorizontal: 4 },
   mentionsBar: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 14, gap: 6, paddingBottom: 6 },
   root: { flex: 1 },
   quoteResult: { color: ui.muted, textAlign: "center", paddingVertical: 8 },

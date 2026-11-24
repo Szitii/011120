@@ -12,13 +12,12 @@ import {
 } from "react-native";
 import type {
   ClientApi,
-  CompanionIdentity,
   ControlsPatch,
   ControlsResource,
   ProjectionSelection,
 } from "./contracts.ts";
 import { CommunityButton, SecondaryHeading, createCommunityStyles } from "./community/components.tsx";
-import { ApiProblemError, safeClientMessage } from "./adapters/real-api.ts";
+import { safeClientMessage } from "./adapters/real-api.ts";
 
 import { useCommandKeys } from "./state/useCommandKeys";
 import { DiaryFrequency } from "./diary/DiaryFrequency";
@@ -45,7 +44,7 @@ function ErrorBlock({
       <Text style={styles.h2}>{title}</Text>
       {retry && (
         <Pressable style={styles.secondaryPill} onPress={onRetry}>
-          <Text style={styles.secondaryText}>RETRY RETRY</Text>
+          <Text style={styles.secondaryText}>重试</Text>
         </Pressable>
       )}
     </View>
@@ -435,44 +434,46 @@ export function SocialActivationScreen({
   );
 }
 
-const createStyles = (ui: UiPalette) => StyleSheet.create({
-  screen: createCommunityStyles(ui).page,
-  page: { ...createCommunityStyles(ui).content, gap: 0 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 28 },
-  eyebrow: { fontSize: 10, letterSpacing: 1.2, color: ui.accentInk, fontWeight: "700" },
-  h2: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink, textAlign: "center" },
-  bodyMuted: { marginTop: 6, fontSize: 13, lineHeight: 20, color: ui.muted },
-  micro: { marginTop: 4, fontSize: 11, lineHeight: 17, color: ui.muted },
-  stack: { marginTop: 22, gap: 10 },
-  card: createCommunityStyles(ui).card,
-  cardTitle: { fontSize: 15, fontWeight: "700", color: ui.ink },
-  section: { marginTop: 26, gap: 10 },
-  sectionTitle: { fontSize: 13, fontWeight: "700", color: ui.ink },
-  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  infoButton: { width: 18, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },
-  infoButtonText: { fontSize: 11, fontWeight: "700", color: ui.muted },
-  helpCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, padding: 13, borderRadius: 14, backgroundColor: ui.white, gap: 7 },
-  helpLine: { fontSize: 12, lineHeight: 18, color: ui.muted },
-  helpStrong: { fontWeight: "700", color: ui.ink },
-  helpFootnote: { marginTop: 2, fontSize: 11, lineHeight: 17, color: ui.muted },
-  pillWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  choicePill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line },
-  choicePillSelected: { backgroundColor: ui.accentWash, borderColor: ui.accent },
-  choiceText: { fontSize: 12, color: ui.ink },
-  choiceTextSelected: { fontSize: 12, color: ui.accentInk, fontWeight: "600" },
-  toggleRow: { backgroundColor: ui.white, minHeight: 66, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  toggle: { width: 44, height: 26, borderRadius: 13, backgroundColor: ui.line, padding: 3 },
-  toggleOn: { backgroundColor: ui.accent },
-  toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: ui.white },
-  toggleKnobOn: { alignSelf: "flex-end" },
-  activationBlock: { marginTop: 26, paddingTop: 22, borderTopWidth: 1, borderColor: ui.line },
-  activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink },
-  fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: ui.ink },
-  shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 14, color: ui.ink, fontSize: 13 },
-  primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: ui.accentWash, alignItems: "center", justifyContent: "center" },
-  primaryText: { color: ui.accentInk, fontSize: 14, fontWeight: "600" },
-  secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },
-  secondaryText: { color: ui.ink, fontSize: 13, fontWeight: "600" },
-  message: { marginTop: 18, textAlign: "center", fontSize: 13, color: ui.ink },
-  disabled: { opacity: 0.38 },
-});
+const createStyles = (ui: UiPalette) => {
+  const community = createCommunityStyles(ui);
+  return StyleSheet.create({
+    screen: community.page,
+    page: { ...community.content, gap: 0 },
+    center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 28 },
+    eyebrow: { fontSize: 10, letterSpacing: 1.2, color: ui.accentInk, fontWeight: "700" },
+    h2: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink, textAlign: "center" },
+    bodyMuted: { marginTop: 6, fontSize: 13, lineHeight: 20, color: ui.muted },
+    micro: { marginTop: 4, fontSize: 11, lineHeight: 17, color: ui.muted },
+    card: community.card,
+    cardTitle: { fontSize: 15, fontWeight: "700", color: ui.ink },
+    section: { marginTop: 26, gap: 10 },
+    sectionTitle: { fontSize: 13, fontWeight: "700", color: ui.ink },
+    sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+    infoButton: { width: 18, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },
+    infoButtonText: { fontSize: 11, fontWeight: "700", color: ui.muted },
+    helpCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, padding: 13, borderRadius: 14, backgroundColor: ui.white, gap: 7 },
+    helpLine: { fontSize: 12, lineHeight: 18, color: ui.muted },
+    helpStrong: { fontWeight: "700", color: ui.ink },
+    helpFootnote: { marginTop: 2, fontSize: 11, lineHeight: 17, color: ui.muted },
+    pillWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+    choicePill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line },
+    choicePillSelected: { backgroundColor: ui.accentWash, borderColor: ui.accent },
+    choiceText: { fontSize: 12, color: ui.ink },
+    choiceTextSelected: { fontSize: 12, color: ui.accentInk, fontWeight: "600" },
+    toggleRow: { backgroundColor: ui.white, minHeight: 66, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    toggle: { width: 44, height: 26, borderRadius: 13, backgroundColor: ui.line, padding: 3 },
+    toggleOn: { backgroundColor: ui.accent },
+    toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: ui.white },
+    toggleKnobOn: { alignSelf: "flex-end" },
+    activationBlock: { marginTop: 26, paddingTop: 22, borderTopWidth: 1, borderColor: ui.line },
+    activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink },
+    fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: ui.ink },
+    shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 14, color: ui.ink, fontSize: 13 },
+    primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: ui.accentWash, alignItems: "center", justifyContent: "center" },
+    primaryText: { color: ui.accentInk, fontSize: 14, fontWeight: "600" },
+    secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },
+    secondaryText: { color: ui.ink, fontSize: 13, fontWeight: "600" },
+    message: { marginTop: 18, textAlign: "center", fontSize: 13, color: ui.ink },
+    disabled: { opacity: 0.38 },
+  });
+};

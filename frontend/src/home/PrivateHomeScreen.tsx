@@ -60,7 +60,7 @@ export function PrivateHomeScreen({ chatClient, scope, companionName, isCompanio
       onCapture={scope ? scene => void capture(scene) : undefined}
       capturing={capturing}
     />
-    {scope && <AnniversaryPill scope={scope} />}
+    {scope && <AnniversaryPill scope={scope} client={chatClient} active={isActive} />}
     {scope && <View style={styles.cards}>
       <Pressable accessibilityRole="button" accessibilityLabel="日记" style={styles.card} onPress={openDiary}>
         <Image source={DIARY_SLOT_IMAGE} style={styles.icon} resizeMode="contain" />

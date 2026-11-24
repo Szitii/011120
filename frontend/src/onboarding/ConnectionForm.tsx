@@ -1,14 +1,20 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import React, { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { BringButton, BringField, Check, GlassCard } from "./BringControls";
-import { providerPresets, testAndConnectExternal, testAndEnableApiKey, type ProviderId } from "./connection-client";
+import type { ConnectionInput, ConnectionTest } from "../../../contracts/chat";
+import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
+import { connectionMessages, providerPresets, validateExternal, validateApiKey, type ProviderId } from "./connection-client";
 
 const providers = Object.keys(providerPresets) as Array<keyof typeof providerPresets>;
 
-export function ConnectionForm({ kind, onPlatform }: { kind: "key" | "external"; onPlatform: () => void }) {
+export function ConnectionForm({ kind, onClose, submitConnection }: {
+  kind: "key" | "external";
+  onClose: () => void;
+  submitConnection: (input: ConnectionInput) => Promise<ConnectionTest>;
+}) {
   const s = useThemedStyles(createStyles);
   const { ui } = useSkin();
   const [provider, setProvider] = useState<ProviderId | "">("");
@@ -20,7 +26,14 @@ export function ConnectionForm({ kind, onPlatform }: { kind: "key" | "external";
   const [model, setModel] = useState("");
   const [editModel, setEditModel] = useState(false);
   const [consent, setConsent] = useState(false);
-  const [result, setResult] = useState<ReturnType<typeof testAndEnableApiKey>>();
+  const [result, setResult] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   function selectProvider(id: ProviderId) {
     setProvider(id);
@@ -34,19 +47,36 @@ export function ConnectionForm({ kind, onPlatform }: { kind: "key" | "external";
     setResult(undefined);
   }
 
-  function submit() {
+  async function submit() {
+    if (pending.current) return;
     const outcome = kind === "key"
-      ? testAndEnableApiKey({ provider, baseUrl: endpoint, apiKey: secret, model, consent })
-      : testAndConnectExternal({ name, endpoint, bearerToken: secret, consent });
-    setResult(outcome);
-    if (outcome.status === "UNAVAILABLE") {
-      setSecret("");
-      setShowKey(false);
+      ? validateApiKey({ provider, baseUrl: endpoint, apiKey: secret, model, consent })
+      : validateExternal({ name, endpoint, bearerToken: secret, consent });
+    if (outcome.status !== "READY") {
+      setResult(outcome.message);
+      return;
+    }
+    pending.current = true;
+    setBusy(true);
+    setResult(undefined);
+    setSecret("");
+    setShowKey(false);
+    try {
+      const status = await submitConnection(outcome.input);
+      if (mounted.current) setResult(connectionMessages[status]);
+    } catch (error) {
+      if (!mounted.current) return;
+      setResult(error instanceof ApiProblemError && error.status === 501 ? "线上暂未开放模型连接。你可以先返回使用平台托管。"
+        : error instanceof ApiProblemError && error.status === 429 ? "测试次数已达上限，请稍后再试。"
+        : safeClientMessage(error).title);
+    } finally {
+      pending.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
 
   const preset = provider && provider !== "custom" ? providerPresets[provider] : null;
-  const urlInput = <BringField label="接口地址（HTTPS）" placeholder="请输入 HTTPS 接口地址" value={endpoint}
+  const urlInput = <BringField label="接口地址（HTTPS）" placeholder="请输入 HTTPS 接口地址" editable={!busy} value={endpoint}
     onChangeText={value => { setEndpoint(value); setConsent(false); setResult(undefined); }}
     autoCapitalize="none" autoCorrect={false} keyboardType="url" />;
 
@@ -54,7 +84,7 @@ export function ConnectionForm({ kind, onPlatform }: { kind: "key" | "external";
     <GlassCard>
       {kind === "key" ? <>
         <Text style={s.label}>1. 选择服务商</Text>
-        <Pressable accessibilityRole="button" accessibilityState={{ expanded: chooseProvider }}
+        <Pressable disabled={busy} accessibilityRole="button" accessibilityState={{ expanded: chooseProvider }}
           onPress={() => setChooseProvider(value => !value)} style={s.dropdown}>
           <Text style={s.body}>
             {provider === "custom" ? "自定义" : preset?.label ?? "选择服务商（已预设官方地址）"}
@@ -62,22 +92,22 @@ export function ConnectionForm({ kind, onPlatform }: { kind: "key" | "external";
           <Ionicons name={chooseProvider ? "chevron-up" : "chevron-down"} size={17} color={ui.accentInk} />
         </Pressable>
         {chooseProvider && <View style={s.options} accessibilityRole="radiogroup">
-          {providers.map(id => <Pressable key={id} accessibilityRole="radio" accessibilityState={{ checked: provider === id }}
+          {providers.map(id => <Pressable key={id} disabled={busy} accessibilityRole="radio" accessibilityState={{ checked: provider === id }}
             style={s.option} onPress={() => selectProvider(id)}>
             <Text style={s.label}>{providerPresets[id].label}</Text>
             {provider === id && <Ionicons name="checkmark" size={18} color={ui.accentInk} />}
           </Pressable>)}
-          <Pressable accessibilityRole="radio" accessibilityState={{ checked: provider === "custom" }}
+          <Pressable disabled={busy} accessibilityRole="radio" accessibilityState={{ checked: provider === "custom" }}
             style={s.option} onPress={() => selectProvider("custom")}>
             <Text style={s.label}>自定义（兼容接口）</Text>
           </Pressable>
         </View>}
         {provider === "custom" && urlInput}
         <View style={s.secret}>
-          <BringField label="2. 粘贴 API Key" placeholder="请输入 API Key" value={secret}
+          <BringField label="2. 粘贴 API Key" placeholder="请输入 API Key" editable={!busy} value={secret}
             onChangeText={value => { setSecret(value); setResult(undefined); }}
             secureTextEntry={!showKey} autoCapitalize="none" autoCorrect={false} autoComplete="off" style={s.secretField} />
-          <Pressable accessibilityRole="button" accessibilityLabel={showKey ? "隐藏密钥" : "显示密钥"}
+          <Pressable disabled={busy} accessibilityRole="button" accessibilityLabel={showKey ? "隐藏密钥" : "显示密钥"}
             onPress={() => setShowKey(value => !value)} style={s.eye}>
             <Ionicons name={showKey ? "eye-off-outline" : "eye-outline"} size={20} color={ui.accentInk} />
           </Pressable>
@@ -85,31 +115,31 @@ export function ConnectionForm({ kind, onPlatform }: { kind: "key" | "external";
         <View style={s.modelRow}>
           <Text style={[s.body, s.model]} numberOfLines={2}>{preset && model === preset.model
             ? "推荐模型 · 已自动匹配" : model || "推荐模型 · 待选择"}</Text>
-          <Pressable accessibilityRole="button" accessibilityState={{ expanded: editModel }} disabled={!provider}
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded: editModel }} disabled={busy || !provider}
             onPress={() => setEditModel(value => !value)} style={s.changeModel}>
             <Text style={s.link}>更换模型 ›</Text>
           </Pressable>
         </View>
-        {editModel && <BringField label="模型名称" placeholder="请输入模型名称" value={model}
+        {editModel && <BringField label="模型名称" placeholder="请输入模型名称" editable={!busy} value={model}
           onChangeText={value => { setModel(value); setResult(undefined); }} autoCapitalize="none" autoCorrect={false} />}
       </> : <>
-        <BringField label="家机名称" placeholder="请输入家机名称" value={name}
+        <BringField label="家机名称" placeholder="请输入家机名称" editable={!busy} value={name}
           onChangeText={value => { setName(value); setResult(undefined); }} maxLength={200} />
         {urlInput}
-        <BringField label="访问密钥（Bearer Token）" placeholder="选填" value={secret}
+        <BringField label="访问密钥（Bearer Token）" placeholder="选填" editable={!busy} value={secret}
           onChangeText={value => { setSecret(value); setResult(undefined); }}
           secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="off" />
       </>}
     </GlassCard>
     {kind === "external" && <Text style={s.notice}>直连后由你自己的服务端驱动，不消耗平台对话额度</Text>}
-    <Check checked={consent} onPress={() => { setConsent(value => !value); setResult(undefined); }}
+    <Check checked={consent} disabled={busy} onPress={() => { setConsent(value => !value); setResult(undefined); }}
       label={kind === "key"
-        ? "单聊时会将近期对话与人设发往你选择的服务商；测试期间仅发验证消息，不传真实聊天。"
-        : "已知晓对话请求将直接发往我填写的外部接口"} />
-    {result && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={s.notice}>{result.message}</Text>}
-    <BringButton label={kind === "key" ? "测试并启用" : "测试并连通"} onPress={submit} />
-    {result?.status === "UNAVAILABLE" && <BringButton label={kind === "key" ? "返回平台托管" : "返回接入方式"}
-      secondary onPress={onPlatform} />}
+        ? "我同意将近期聊天、家机人设及记忆发给选定服务商。内容可能包含群聊中其他家机的消息，也可能用于日记生成。"
+        : "我同意将近期聊天发给填写的外部接口，内容可能包含群聊中其他家机的消息及写日记用的聊天记录。"} />
+    <Text style={s.body}>连通测试仅发送验证消息。启用后可在聊天设置里撤销连接。</Text>
+    {result && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={s.notice}>{result}</Text>}
+    <BringButton label={busy ? "正在测试…" : kind === "key" ? "测试并启用" : "测试并连通"} disabled={busy} onPress={() => void submit()} />
+    <BringButton label="返回连接设置" secondary disabled={busy} onPress={onClose} />
   </>;
 }
 

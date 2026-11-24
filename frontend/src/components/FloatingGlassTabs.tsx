@@ -9,8 +9,10 @@ import { ROOT_TABS, type RootTab } from "../state/navigation";
 export function FloatingGlassTabs({
   current,
   onSelect,
+  unread = 0,
 }: {
   current: RootTab;
+  unread?: number;
   onSelect: (tab: RootTab) => void;
 }) {
   const { skin } = useSkin();
@@ -55,11 +57,13 @@ export function FloatingGlassTabs({
             const item = items[key];
             const active = current === key;
             const color = active ? skin.colors.tabActive : skin.colors.tabInactive;
+            const count = key === "messages" ? unread : 0;
             return (
               <Pressable
                 key={key}
                 accessibilityRole="tab"
                 accessibilityLabel={item.label}
+                accessibilityHint={count ? `${count} 条未读` : undefined}
                 accessibilityState={{ selected: active }}
                 onPress={() => onSelect(key)}
                 style={({ pressed }) => [
@@ -75,6 +79,7 @@ export function FloatingGlassTabs({
               >
                 <Animated.View style={[styles.tabInner, active && { transform: [{ scale: pulse }] }]}>
                   <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
+                  {count > 0 && <Text style={styles.badge}>{count > 99 ? "99+" : count}</Text>}
                   <Text style={[styles.label, { color, fontWeight: active ? "700" : "500" }]}>
                     {item.label}
                   </Text>
@@ -89,6 +94,8 @@ export function FloatingGlassTabs({
 }
 
 const styles = StyleSheet.create({
+  badge: { position: "absolute", top: -3, right: -13, color: "#FFFFFF", backgroundColor: "#495C76",
+    borderRadius: 10, overflow: "hidden", paddingHorizontal: 5, fontSize: 10, fontWeight: "700" },
   wrapper: { position: "absolute", zIndex: 30 },
   row: { flexDirection: "row", alignItems: "center", padding: 5, gap: 5 },
   tab: {

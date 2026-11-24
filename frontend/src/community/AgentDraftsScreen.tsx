@@ -6,7 +6,7 @@ import type { AgentViewer, CommunityClient } from "./client.ts";
 import { CommunityButton as Button, SecondaryHeading, useCommunityStyles } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
 
-export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient; viewer: AgentViewer }) {
+export function AgentDraftsScreen({ client, viewer, draftId, onChanged }: { client: CommunityClient; viewer: AgentViewer; draftId?: string; onChanged?: () => void }) {
   const s = useCommunityStyles();
   const [items, setItems] = useState<AgentDraft[]>();
   const [previews, setPreviews] = useState<Record<string, CommunityPost | null | "error">>({});
@@ -56,6 +56,7 @@ export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient;
       if (publish) await client.publishAgentDraft(viewer, draft.id);
       else await client.discardAgentDraft(viewer, draft.id);
       if (!active.current) return;
+      onChanged?.();
       setItems(current => current?.filter(item => item.id !== draft.id));
       setMessage(publish ? "草稿已发布。" : "草稿已丢弃。");
       await load();
@@ -88,9 +89,10 @@ export function AgentDraftsScreen({ client, viewer }: { client: CommunityClient;
     {loadError !== "" && <Text accessibilityRole="alert" style={s.error}>{loadError}</Text>}
     {!loading && items?.length === 0 && <Text style={s.meta}>暂无待处理草稿。</Text>}
     <Button glass label="刷新草稿" disabled={loading || actingOn !== undefined} onPress={() => { setMessage(""); void load(); }} />
-    {items?.map(draft => {
+    {items?.slice().sort((a, b) => Number(b.id === draftId) - Number(a.id === draftId)).map(draft => {
       const post = draft.postId ? previews[draft.postId] : null;
       return <View key={draft.id} style={s.card}>
+        {draft.id === draftId && <Text style={s.author}>来自通知</Text>}
         <Text style={s.meta}>{draft.kind === "POST" ? "发帖草稿" : "评论草稿"} · {new Date(draft.createdAt).toLocaleString()}</Text>
         {draft.kind === "COMMENT" && (post === "error" ? <Text style={s.meta}>原帖暂时加载不出来，可下次刷新重试。</Text> : post
           ? <Text style={s.meta} numberOfLines={3}>原帖 · {post.author.displayName}　{post.body}</Text>

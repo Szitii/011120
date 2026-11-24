@@ -1,6 +1,7 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator, BackHandler, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, View,
@@ -12,10 +13,9 @@ import { useCommandKeys } from "../state/useCommandKeys";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import { BringButton, BringField, Check, Choice, GlassCard, GlassIcon, createStyles } from "./BringControls";
 import { importCardName, normalizeImportCard } from "./import-card";
-import { ConnectionForm } from "./ConnectionForm";
 import { extendedImportAvailability } from "./connection-client";
 
-type Step = "entry" | "details" | "review" | "reply" | "key" | "external";
+type Step = "entry" | "details" | "review" | "reply";
 type Method = "card" | "manual";
 
 const options = [
@@ -26,17 +26,19 @@ const options = [
   { id: "external", icon: "link-outline", title: "连接自建家机",
     description: "已有运行中的本体或外部 Agent，填入 HTTPS 接口地址",
     tags: "HTTPS 端点 · 独立驱动",
-    help: "适合已搭建独立运行的家机或私有后台的人。人设、记忆和模型由你的服务管理。HTTPS 连接功能待开放。" },
+    help: "适合已搭建独立运行的家机或私有后台的人。人设、记忆和模型由你的服务管理。创建家机后，可在聊天设置中测试 HTTPS 连接。" },
   { id: "manual", icon: "person-add-outline", title: "从零创建",
     description: "还没有现成资料？写下名字和性格，记忆可以以后慢慢攒",
     tags: "新手推荐 · 30 秒完成",
     help: "第一次来、还没有现成资料，填写名字和性格就能开始。记忆可以在日常相处里慢慢积累。" },
 ] as const;
 
-export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBack }: {
+export function BringCompanionScreen({ api, existingCompanionId, ownerId, canConfigureConnection, onCreated, onBack }: {
   api: ClientApi;
   existingCompanionId?: string;
-  onCreated: (identity: CompanionIdentity, approvedFields: string[]) => void;
+  ownerId?: string;
+  canConfigureConnection: boolean;
+  onCreated: (identity: CompanionIdentity, approvedFields: string[], connectionKind?: "key" | "external") => void;
   onBack: () => void;
 }) {
   const s = useThemedStyles(createStyles);
@@ -51,9 +53,11 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
   const [file, setFile] = useState<{ name: string; size: number; text: string }>();
   const [missingName, setMissingName] = useState(false);
   const [importName, setImportName] = useState("");
+  const [savedImportId, setSavedImportId] = useState<string>();
+  const reviewKey = ownerId ? `companion:import-review:v1:${ownerId}:${existingCompanionId ?? "new"}` : undefined;
   const [review, setReview] = useState<ImportReview>();
   const [selected, setSelected] = useState<string[]>([]);
-  const [selfKey, setSelfKey] = useState(false);
+  const [connectionKind, setConnectionKind] = useState<"key" | "external">();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const pending = useRef(false);
@@ -65,16 +69,53 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     return () => { mounted.current = false; };
   }, []);
 
+  useEffect(() => {
+    if (!reviewKey || !api.getCompanionImport) return;
+    let current = true;
+    void AsyncStorage.getItem(reviewKey).then(value => {
+      if (current && value) setSavedImportId(value);
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [api, reviewKey]);
+
+  function showReview(result: ImportReview) {
+    setReview(result);
+    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.value != null && item.field === "displayName").map(item => item.id));
+    setStep("review");
+  }
+
+  async function clearSavedReview() {
+    if (reviewKey) await AsyncStorage.removeItem(reviewKey).catch(() => undefined);
+    if (mounted.current) setSavedImportId(undefined);
+  }
+
+  function resumeReview() {
+    if (!savedImportId || !api.getCompanionImport) return;
+    const id = savedImportId;
+    void run(async () => {
+      try {
+        const result = await api.getCompanionImport!(id);
+        if (!mounted.current) return;
+        if (result.status === "REVIEWABLE") showReview(result);
+        else {
+          await clearSavedReview();
+          if (mounted.current) setMessage("这次审核已结束，可以重新导入。");
+        }
+      } catch (error) {
+        if (error instanceof ApiProblemError && error.status === 404) await clearSavedReview();
+        throw error;
+      }
+    });
+  }
+
   function back() {
     if (pending.current) return;
     setMessage("");
     switch (step) {
       case "entry": onBack(); break;
-      case "details":
-      case "external": setStep("entry"); break;
+      case "details": setStep("entry"); break;
       case "review": setStep("details"); break;
       case "reply": setStep("review"); break;
-      case "key": setStep("reply"); break;
     }
   }
 
@@ -86,9 +127,10 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     return () => subscription.remove();
   }, [step, onBack]);
 
+  const selectedConnection = canConfigureConnection ? connectionKind : undefined;
   const candidates = review?.draft?.candidates ?? [];
-  const required = candidates.find(item => item.field === "displayName" && item.approvable);
-  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格" };
+  const required = candidates.find(item => item.field === "displayName" && item.approvable && item.value != null);
+  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格", memory: "记忆" };
 
   async function run(work: () => Promise<void>) {
     if (pending.current) return;
@@ -134,10 +176,12 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     const result = await api.createCompanionImport(card, keys.forRequest("import", card));
     if (!mounted.current) return;
     keys.complete("import");
-    setReview(result);
-    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.field === "displayName").map(item => item.id));
-    setSelfKey(false);
-    setStep("review");
+    if (reviewKey && result.status === "REVIEWABLE") {
+      await AsyncStorage.setItem(reviewKey, result.id).catch(() => undefined);
+      if (!mounted.current) return;
+      setSavedImportId(result.id);
+    }
+    showReview(result);
   }
 
   function pickFile() {
@@ -171,28 +215,26 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     });
   }
 
-  function approve() {
+  function approve(kind?: "key" | "external") {
     if (!review || !required) return;
     const ids = [...selected].sort();
     void run(async () => {
       const identity = await api.approveCompanionImport(review.id, ids, existingCompanionId,
         keys.forRequest("approve", [review.id, ids, existingCompanionId]));
-      if (mounted.current) onCreated(identity, candidates.filter(item => ids.includes(item.id)).map(item => item.field));
+      await clearSavedReview();
+      if (mounted.current) onCreated(identity, candidates.filter(item => ids.includes(item.id)).map(item => item.field), kind);
     });
   }
 
   const heading = step === "entry" ? (existingCompanionId ? "更新家机资料" : "接入你的家机")
     : step === "details" ? (method === "manual" ? (existingCompanionId ? "填写家机资料" : "从零创建") : "导入人设与记忆")
     : step === "review" ? "核对家机资料"
-    : step === "reply" ? "选择 TA 的回复方式"
-    : step === "key" ? "自带 API Key" : "连接自建家机";
+    : "选择 TA 的回复方式";
   const subtitle = {
     entry: existingCompanionId ? "选择这次更新资料的方式" : "选一种最适合你们的方式",
     details: method === "manual" ? "从名字和性格开始，记忆可以慢慢积累" : "先核对资料，再决定要带入哪些内容",
     review: "这些资料默认只留在你的小家",
-    reply: "随时可在聊天设置里切换",
-    key: "三步完成配置，随时可切回平台托管",
-    external: "接入你自己的外部 Agent 或本体服务",
+    reply: "先创建家机，之后可在聊天设置里连接或更换模型",
   }[step];
 
   return <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -202,22 +244,24 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
     </View>
     <ScrollView key={step} style={s.flex} contentContainerStyle={s.page} keyboardShouldPersistTaps="handled"
       keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}>
-      {step !== "entry" && step !== "external" && !existingCompanionId && <View style={s.progress} accessible
+      {step !== "entry" && !existingCompanionId && <View style={s.progress} accessible
         accessibilityLabel={step === "details" || step === "review" ? "第 1 步，共 2 步" : "第 2 步，共 2 步"}>
         <View style={[s.segment, s.segmentCurrent]} />
-        <View style={[s.segment, (step === "reply" || step === "key") && s.segmentCurrent]} />
+        <View style={[s.segment, step === "reply" && s.segmentCurrent]} />
       </View>}
       <Pressable accessible={false} onPress={Keyboard.dismiss} style={s.heading}>
         <Text accessibilityRole="header" style={s.title}>{heading}</Text>
         <Text style={s.body}>{subtitle}</Text>
       </Pressable>
 
-      {step === "entry" && options.filter(option => !existingCompanionId || option.id !== "external").map(option => (
+      {step === "entry" && savedImportId && <BringButton label="继续上次审核" secondary disabled={busy} onPress={resumeReview} />}
+      {step === "entry" && options.filter(option => option.id !== "external" || (!existingCompanionId && canConfigureConnection)).map(option => (
         <Choice key={option.id} icon={option.icon} title={existingCompanionId && option.id === "manual" ? "手动填写" : option.title}
           description={option.description} note={option.tags} onPress={() => {
             setMessage("");
-            if (option.id === "external") setStep("external");
-            else { setMethod(option.id); setStep("details"); }
+            setConnectionKind(option.id === "external" ? "external" : undefined);
+            setMethod(option.id === "card" ? "card" : "manual");
+            setStep("details");
           }} />
       ))}
 
@@ -255,36 +299,36 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
       {step === "review" && <>
         {candidates.map(item => <GlassCard key={item.id}>
           <Text style={s.label}>{labels[item.field] ?? "资料"}</Text>
-          <Text style={s.body}>{item.approvable
+          <Text style={s.body}>{item.approvable && item.value != null
             ? (Array.isArray(item.value) ? item.value.join("、") : String(item.value))
             : "该项未通过检查，无法带入。"}</Text>
-          {item.approvable && item.id !== required?.id && <Check label="保留这项" checked={selected.includes(item.id)}
+          {item.approvable && item.value != null && item.id !== required?.id && <Check label="保留这项" checked={selected.includes(item.id)}
             onPress={() => setSelected(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])}
             disabled={busy} />}
         </GlassCard>)}
         {review && review.findings.length > 0 && <Text style={s.body}>有 {review.findings.length} 项检查提示。敏感内容和额外资料不会带入。</Text>}
         {!required && <Text accessibilityRole="alert" style={s.body}>请返回修改名字，再提交核对。</Text>}
         <BringButton label={existingCompanionId ? "确认更新" : "下一步"} disabled={busy || !required}
-          onPress={existingCompanionId ? approve : () => setStep("reply")} />
+          onPress={existingCompanionId ? () => approve() : () => setStep("reply")} />
       </>}
 
       {step === "reply" && <>
         <View accessibilityRole="radiogroup" style={s.replyOptions}>
-          <Choice icon="cloud-outline" title="平台托管" badge="默认" selected={!selfKey}
+          <Choice icon="cloud-outline" title="平台托管" badge="默认" selected={!selectedConnection}
             description="使用平台模型回复，无需自己配置"
             note="新手体验额度与余额功能待开放，当前以平台可用额度为准"
-            onPress={() => { if (!pending.current) setSelfKey(false); }} />
-          <Choice icon="key-outline" title="自带 API Key" selected={selfKey}
+            onPress={() => { if (!pending.current) setConnectionKind(undefined); }} />
+          {canConfigureConnection && <Choice icon="key-outline" title="自带 API Key" selected={connectionKind === "key"}
             description="填写你自己的服务商密钥，使用个人账号额度"
-            note="支持常用服务商 · 服务端接入待开放"
-            onPress={() => { if (!pending.current) setSelfKey(true); }} />
+            note="填写密钥后由服务端测试，支持常用服务商"
+            onPress={() => { if (!pending.current) setConnectionKind("key"); }} />}
+          {canConfigureConnection && <Choice icon="link-outline" title="自建家机" selected={connectionKind === "external"}
+            description="创建完成后，填写并验证你的接口地址" note="服务端连接失败时可以稍后重试"
+            onPress={() => { if (!pending.current) setConnectionKind("external"); }} />}
         </View>
-        <BringButton label={selfKey ? "继续配置" : "完成入驻"} disabled={busy || !required}
-          onPress={selfKey ? () => { setMessage(""); setStep("key"); } : approve} />
+        <BringButton label={selectedConnection ? "创建并配置连接" : "完成入驻"} disabled={busy || !required}
+          onPress={() => approve(selectedConnection)} />
       </>}
-
-      {(step === "key" || step === "external") && <ConnectionForm kind={step}
-        onPlatform={() => { setSelfKey(false); setStep(step === "key" ? "reply" : "entry"); }} />}
 
       {busy && <ActivityIndicator color={ui.accent} accessibilityLabel="正在处理家机资料" />}
       {message !== "" && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={s.alert}>{message}</Text>}
@@ -300,7 +344,7 @@ export function BringCompanionScreen({ api, existingCompanionId, onCreated, onBa
             <GlassIcon label="关闭" icon="close" onPress={() => setHelp(false)} />
           </View>
           <ScrollView contentContainerStyle={s.helpContent}>
-            {options.filter(option => !existingCompanionId || option.id !== "external").map(option => (
+            {options.filter(option => option.id !== "external" || (!existingCompanionId && canConfigureConnection)).map(option => (
               <View key={option.id} style={s.helpItem}>
                 <Text style={s.label}>{option.title}</Text>
                 <Text style={s.body}>{option.help}</Text>

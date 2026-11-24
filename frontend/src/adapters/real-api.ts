@@ -19,7 +19,7 @@ import type {
   WorldCollection,
 } from "../contracts.ts";
 import { createCommunityClient, type CommunityClient } from "../community/client.ts";
-import { createChatClient, type ChatClient } from "../chat/client.ts";
+import { createChatClient, type AudioClip, type ChatClient } from "../chat/client.ts";
 
 import { createDiaryClient, type DiaryClient } from "../diary/client.ts";
 
@@ -62,7 +62,7 @@ export class RealApiAdapter implements ClientApi {
       : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}));
     this.chat = createChatClient((method, path, body, key) => method === "GET"
       ? this.get(path)
-      : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}));
+      : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}), path => this.getAudio(path));
   }
 
   async identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext> {
@@ -95,6 +95,9 @@ export class RealApiAdapter implements ClientApi {
   }
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem> {
     return this.send("PUT", `/v0/life-event-inbox/${encodeURIComponent(itemId)}/read`);
+  }
+  getCompanionImport(id: string): Promise<ImportReview> {
+    return this.get(`/v0/companion-imports/${encodeURIComponent(id)}`);
   }
   createCompanionImport(payload: Record<string, unknown>, idempotencyKey?: string): Promise<ImportReview> {
     return this.send("POST", "/v0/companion-imports", payload, { "Idempotency-Key": idempotencyKey ?? createCommandKey("import") });
@@ -151,7 +154,22 @@ export class RealApiAdapter implements ClientApi {
     return this.request(method, path, body, extraHeaders);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
+  private getAudio(path: string): Promise<AudioClip> {
+    return this.request("GET", path, undefined, { Accept: "audio/*" }, async response => {
+      const mime = response.headers.get("content-type")?.split(";")[0]?.trim();
+      const maxBytes = 2 * 1024 * 1024;
+      if ((mime !== "audio/mpeg" && mime !== "audio/wav" && mime !== "audio/mp4" && mime !== "audio/aac" && mime !== "audio/ogg") || Number(response.headers.get("content-length")) > maxBytes) {
+        throw new Error("Unexpected audio response.");
+      }
+      const bytes = await response.arrayBuffer();
+      if (!bytes.byteLength || bytes.byteLength > maxBytes) throw new Error("Invalid audio length.");
+      return { bytes, mime };
+    });
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown,
+    extraHeaders: Record<string, string> = {}, read?: (response: Response) => Promise<T>,
+  ): Promise<T> {
     const session = "session" in this.config ? this.config.session : undefined;
     const signal = session?.signal;
     const ensureCurrent = () => {
@@ -171,6 +189,11 @@ export class RealApiAdapter implements ClientApi {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      if (response.ok && read) {
+        const data = await read(response);
+        ensureCurrent();
+        return { response, data, payload: undefined };
+      }
       const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
       ensureCurrent();
       return { response, payload };
@@ -194,7 +217,7 @@ export class RealApiAdapter implements ClientApi {
         String(result.payload?.traceId ?? "unknown"),
       );
     }
-    return result.payload as T;
+    return read ? result.data as T : result.payload as T;
   }
 }
 

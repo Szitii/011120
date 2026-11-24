@@ -165,3 +165,44 @@ test("keeps the old account hidden if local removal fails and permits switching 
   await session.signIn("bob@example.test", "fixture");
   assert.equal(binding(session).email, "bob@example.test");
 });
+
+test("voice requests retry with the refreshed owner token and decode binary responses", async t => {
+  const { session, emit, driver } = fixture(account("alice"));
+  t.mock.method(driver, "refreshSession", async () => {
+    const rotated = account("alice", "voice-token");
+    emit("TOKEN_REFRESHED", rotated);
+    return { data: { session: rotated }, error: null };
+  });
+  const urls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    const headers = new Headers(options.headers);
+    urls.push(url);
+    assert.equal(headers.get("Accept"), "audio/*");
+    if (headers.get("Authorization") === "Bearer alice") return Response.json({ code: "INVALID_TOKEN" }, { status: 401 });
+    assert.equal(headers.get("Authorization"), "Bearer voice-token");
+    return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "audio/wav" } });
+  });
+  const api = new RealApiAdapter({ baseUrl: "https://api.example.test", session: binding(session).tokens });
+  const clip = await api.chat.messageAudio!("chat/id", "message/id");
+  assert.equal(clip.mime, "audio/wav");
+  assert.deepEqual(new Uint8Array(clip.bytes), new Uint8Array([1, 2, 3]));
+  assert.deepEqual(urls, Array(2).fill("https://api.example.test/v0/chats/chat%2Fid/messages/message%2Fid/audio"));
+  await api.chat.voiceSample!("voice/id");
+  assert.equal(urls.at(-1), "https://api.example.test/v0/voices/voice%2Fid/sample");
+});
+
+test("an in-flight voice response is discarded after sign-out", async t => {
+  const { session } = fixture(account("alice"));
+  const api = new RealApiAdapter({ baseUrl: "https://api.example.test", session: binding(session).tokens });
+  const started = Promise.withResolvers<void>();
+  const delayed = Promise.withResolvers<Response>();
+  t.mock.method(globalThis, "fetch", async () => {
+    started.resolve();
+    return delayed.promise;
+  });
+  const request = api.chat.voiceSample!("voice");
+  await started.promise;
+  await session.signOut();
+  delayed.resolve(new Response(new Uint8Array([1]), { headers: { "Content-Type": "audio/mpeg" } }));
+  await assert.rejects(request, /session changed/);
+});
