@@ -1,11 +1,11 @@
-import type { ImageSourcePropType } from "react-native";
+export type RoomImage = number;
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 
 export const DUO_SPRITES = {
   PAT_HEAD: [require("../../assets/room_v2/duo_pat_1.png"), require("../../assets/room_v2/duo_pat_2.png")],
   HUG: [require("../../assets/room_v2/duo_hug_1.png"), require("../../assets/room_v2/duo_hug_2.png")],
   CUDDLE: [require("../../assets/room_v2/duo_cuddle_1.png"), require("../../assets/room_v2/duo_cuddle_2.png")],
-} satisfies Record<Exclude<CompanionAction, "WAVE">, readonly [ImageSourcePropType, ImageSourcePropType]>;
+} satisfies Record<Exclude<CompanionAction, "WAVE">, readonly [RoomImage, RoomImage]>;
 
 export type RoomLayerKind = "floor_base" | "wall_back" | "dynamic_y";
 
@@ -13,7 +13,7 @@ export interface RoomSlotSpec {
   id: string;
   name: string;
   layer: RoomLayerKind;
-  source: ImageSourcePropType;
+  source: RoomImage;
   /** Fractional coordinates relative to the 4:5 room frame (0..1) */
   left: number;
   top: number;
@@ -24,9 +24,9 @@ export interface RoomSlotSpec {
   interactive?: "diary" | "pet";
 }
 
-export const DIARY_SLOT_IMAGE: ImageSourcePropType = require("../../assets/room_v2/slot_diary.png");
-export const ROOM_BASE_IMAGE: ImageSourcePropType = require("../../assets/room_v2/room_base.png");
-export const BED_QUILT_OVERLAY: ImageSourcePropType = require("../../assets/room_v2/slot_bed_quilt.png");
+export const DIARY_SLOT_IMAGE: RoomImage = require("../../assets/room_v2/slot_diary.png");
+export const ROOM_BASE_IMAGE: RoomImage = require("../../assets/room_v2/room_base.png");
+export const BED_QUILT_OVERLAY: RoomImage = require("../../assets/room_v2/slot_bed_quilt.png");
 
 export const ROOM_SLOTS: RoomSlotSpec[] = [
   // Floor layer (always under characters)
@@ -181,7 +181,7 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
 
 export type CharacterAction = "idle" | "walk_1" | "walk_2" | "walk_3" | "walk_4" | "sit" | "wave" | "sleep";
 
-export const BOY_SPRITES: Record<CharacterAction, ImageSourcePropType> = {
+export const BOY_SPRITES: Record<CharacterAction, RoomImage> = {
   idle: require("../../assets/room_v2/boy_idle.png"),
   walk_1: require("../../assets/room_v2/boy_walk_1.png"),
   walk_2: require("../../assets/room_v2/boy_walk_2.png"),
@@ -192,7 +192,7 @@ export const BOY_SPRITES: Record<CharacterAction, ImageSourcePropType> = {
   sleep: require("../../assets/room_v2/boy_sleep.png"),
 };
 
-export const GIRL_SPRITES: Record<CharacterAction, ImageSourcePropType> = {
+export const GIRL_SPRITES: Record<CharacterAction, RoomImage> = {
   idle: require("../../assets/room_v2/girl_idle.png"),
   walk_1: require("../../assets/room_v2/girl_walk_1.png"),
   walk_2: require("../../assets/room_v2/girl_walk_2.png"),
@@ -202,3 +202,5 @@ export const GIRL_SPRITES: Record<CharacterAction, ImageSourcePropType> = {
   wave: require("../../assets/room_v2/girl_wave.png"),
   sleep: require("../../assets/room_v2/girl_sleep.png"),
 };
+
+export const SOFA_FRONT: RoomImage = require("../../assets/room_v2/slot_sofa_front.png");

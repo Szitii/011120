@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 import type { DiarySettings } from "../../../contracts/chat.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
-import { CommunityButton, communityStyles as s } from "../community/components";
+import { CommunityButton, useCommunityStyles } from "../community/components";
 import type { DiaryClient } from "./client";
 
 const options = [["OFF", "不写"], ["RARE", "偶尔"], ["DAILY", "每天"], ["OFTEN", "常写"]] as const;
 
 export function DiaryFrequency({ client, companionId }: { client: DiaryClient; companionId: string }) {
+  const s = useCommunityStyles();
   const [settings, setSettings] = useState<DiarySettings>();
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState("");

@@ -1,14 +1,15 @@
 import { useLayoutEffect, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
-import { CommunityButton, SecondaryHeading, communityStyles as s } from "./components.tsx";
+import { CommunityButton, SecondaryHeading, useCommunityStyles } from "./components.tsx";
 
 export function HumanProfileEditor({ client, viewer, onClose }: {
   client: CommunityClient;
   viewer: ActorContext;
   onClose: (saved: boolean) => void;
 }) {
+  const s = useCommunityStyles();
   const [settings, setSettings] = useState<HumanProfileSettings>();
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
@@ -95,7 +96,7 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
     {settings && <View style={s.card}>
       <Text style={s.author}>社区昵称</Text>
       <TextInput accessibilityLabel="社区昵称" autoCapitalize="none" autoCorrect={false}
-        editable={!loading && !saving} style={styles.name} value={displayName} onChangeText={setDisplayName} />
+        editable={!loading && !saving} style={[s.input, { minHeight: 48, textAlignVertical: "center" }]} value={displayName} onChangeText={setDisplayName} />
       <Text style={nameLength > 80 ? s.error : s.meta}>{nameLength} / 80</Text>
       <Text style={s.author}>简介</Text>
       <TextInput accessibilityLabel="简介" editable={!loading && !saving} multiline style={s.input} value={bio} onChangeText={setBio} />
@@ -110,5 +111,3 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
     </View>
   </ScrollView>;
 }
-
-const styles = StyleSheet.create({ name: { ...s.input, minHeight: 48, textAlignVertical: "center" } });

@@ -4,13 +4,14 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { BottomSheet } from "../components/BottomSheet";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
-import { CommunityButton, communityStyles as s } from "../community/components";
+import { CommunityButton, useCommunityStyles } from "../community/components";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
 import { daysTogether, type Anniversary } from "./anniversary";
 import { homeStorageKey, type HomeScope } from "./keys";
 
 export function AnniversaryPill({ scope }: { scope: HomeScope }) {
+  const s = useCommunityStyles();
   const { skin } = useSkin();
   const key = homeStorageKey(scope, "anniversary");
   const [anniversary, setAnniversary] = useState<Anniversary>();

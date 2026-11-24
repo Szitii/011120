@@ -1,7 +1,8 @@
+import { useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, StyleSheet, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { PEARL_UI } from "../theme/skinTokens";
 
 /**
  * 极简液态珍珠加载动效：暖珍珠柔雾罩 + 冰雾蓝轻呼吸环 + 斜向流光
@@ -14,6 +15,7 @@ export function PearlTransitionLoader({
   visible: boolean;
   borderRadius?: number;
 }) {
+  const styles = useThemedStyles(createStyles);
   const [mounted, setMounted] = useState(visible);
   const fade = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const breath = useRef(new Animated.Value(0)).current;
@@ -115,7 +117,7 @@ export function PearlTransitionLoader({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (ui: UiPalette) => StyleSheet.create({
   overlay: {
     position: "absolute",
     top: 0,
@@ -139,7 +141,7 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     borderWidth: 1.25,
-    borderColor: PEARL_UI.iceBlue,
+    borderColor: ui.iceBlue,
   },
   pearlShell: {
     width: 34,
@@ -162,6 +164,6 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: 3.5,
-    backgroundColor: PEARL_UI.accent,
+    backgroundColor: ui.accent,
   },
 });

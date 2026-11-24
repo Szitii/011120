@@ -1,1129 +1,231 @@
-import React, { useEffect, useRef, useState } from "react";
-import {
-  Animated,
-  Easing,
-  Image,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  type GestureResponderEvent,
-  type LayoutChangeEvent,
-} from "react-native";
+import { memo, useEffect, useRef, useState, type ComponentRef } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+import { BED_QUILT_OVERLAY, BOY_SPRITES, DUO_SPRITES, GIRL_SPRITES, ROOM_BASE_IMAGE, ROOM_SLOTS, SOFA_FRONT, type CharacterAction, type RoomImage } from "../room/roomSlots";
+import { DUO_POINTS, type ActorId } from "../room/geometry";
+import { RoomEngine, type ActorFrame } from "../room/roomEngine";
+import { useAppIsActive } from "../state/useAppIsActive";
+import { useSkin } from "../theme/SkinProvider";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { PearlTransitionLoader } from "./PearlTransitionLoader";
-import { PEARL_UI } from "../theme/skinTokens";
-import { RADIUS } from "../theme/layoutTokens";
-import {
-  BED_QUILT_OVERLAY,
-  BOY_SPRITES,
-  DUO_SPRITES,
-  GIRL_SPRITES,
-  ROOM_BASE_IMAGE,
-  ROOM_SLOTS,
-  type CharacterAction,
-} from "../room/roomSlots";
 
-import { findSafePath, type RoomPoint } from "../room/pathfinding";
-import { useAppIsActive } from "../state/useAppIsActive";
+const ACTIONS = [["WAVE", "挥手"], ["PAT_HEAD", "摸头"], ["HUG", "抱抱"], ["CUDDLE", "贴贴"]] as const;
+const WALK = ["walk_1", "walk_2", "walk_3", "walk_4"] as const;
+const STATIC_IMAGES = [ROOM_BASE_IMAGE, ...ROOM_SLOTS.map(slot => slot.source), SOFA_FRONT, BED_QUILT_OVERLAY];
+const REQUIRED_IMAGES = new Set([...STATIC_IMAGES, ...Object.values(BOY_SPRITES), ...Object.values(GIRL_SPRITES), ...Object.values(DUO_SPRITES).flat()]).size;
+type Size = { width: number; height: number };
 
-import type { CompanionAction } from "../../../contracts/companion-actions.ts";
+const depth = (ny: number) => Math.round(ny * 1000);
+const box = (size: Size, left: number, top: number, width: number, height: number) => ({
+  position: "absolute" as const, left: Math.round(size.width * left), top: Math.round(size.height * top),
+  width: Math.round(size.width * width), height: Math.round(size.height * height),
+});
 
-const DUO_BASELINE = 0.84;
-const DUO_CENTER = 0.525;
-const DUO_ACTIONS = ["PAT_HEAD", "HUG", "CUDDLE"] as const;
-const COMPANION_MENU = [["WAVE", "挥手"], ["PAT_HEAD", "摸头"], ["HUG", "抱抱"], ["CUDDLE", "贴贴"]] as const;
+const SceneImage = memo(function SceneImage({ source, onLoad }: { source: RoomImage; onLoad: (source: RoomImage) => void }) {
+  return <Image source={source} style={StyleSheet.absoluteFill} contentFit="contain" transition={0}
+    cachePolicy="memory" onLoad={() => onLoad(source)} />;
+});
 
-interface FloatingHeart {
-  id: number;
-  x: number;
-  y: number;
-  anim: Animated.Value;
+const Furniture = memo(function Furniture({ size, onLoad }: { size: Size; onLoad: (source: RoomImage) => void }) {
+  return <>
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}><SceneImage source={ROOM_BASE_IMAGE} onLoad={onLoad} /></View>
+    {ROOM_SLOTS.map(slot => {
+      const zIndex = slot.layer === "floor_base" ? 2 : slot.layer === "wall_back" ? 6 : depth(slot.sortY);
+      return <View key={slot.id} pointerEvents="none" style={[box(size, slot.left, slot.top, slot.width, slot.height), { zIndex }]}>
+        <SceneImage source={slot.source} onLoad={onLoad} />
+      </View>;
+    })}
+  </>;
+});
+
+const SpriteFrames = memo(function SpriteFrames({ sources, current, onLoad }: {
+  sources: Record<string, RoomImage>; current: string; onLoad: (source: RoomImage) => void;
+}) {
+  return <>{Object.entries(sources).map(([key, source]) => <View key={key} pointerEvents="none"
+    style={[StyleSheet.absoluteFill, { opacity: key === current ? 1 : 0 }]}>
+    <SceneImage source={source} onLoad={onLoad} />
+  </View>)}</>;
+});
+
+const DUO_TEXTURES = Object.fromEntries(Object.entries(DUO_SPRITES).flatMap(([action, images]) =>
+  images.map((source, index) => [`${action}:${index}`, source])));
+
+function spriteFor(frame: ActorFrame): CharacterAction {
+  if (frame.phase === "WALK") return WALK[frame.step];
+  if (frame.phase === "SLEEP") return "sleep";
+  if (frame.phase === "SIT") return "sit";
+  return frame.wave ? "wave" : "idle";
 }
 
-type SeatKind = "none" | "sofa" | "bed";
-
-function actionForSeat(seat: SeatKind): CharacterAction {
-  return seat === "bed" ? "sleep" : seat === "sofa" ? "sit" : "idle";
-}
-
-const WALK_FRAMES: CharacterAction[] = ["walk_1", "walk_2", "walk_3", "walk_4"];
-// Base room + all slots + both characters' idle sprites
-const TOTAL_ROOM_ASSETS = 1 + ROOM_SLOTS.length + 2;
-
-export function PearlInteractiveRoom({
-  companionName,
-  isCompanionView,
-  isActive = true,
-  onAction,
-  onOpenDiary,
-  onCapture,
-  capturing = false,
-}: {
+export function PearlInteractiveRoom({ companionName, isCompanionView, isActive = true, onAction, onOpenDiary, onCapture, capturing = false }: {
   companionName: string;
   isCompanionView: boolean;
   isActive?: boolean;
   onAction?: (action: CompanionAction) => void;
   onOpenDiary?: () => void;
-  onCapture?: (scene: React.ComponentRef<typeof View>) => void;
+  onCapture?: (scene: ComponentRef<typeof View>) => void;
   capturing?: boolean;
 }) {
-  const [stage, setStage] = useState({ w: 344, h: 430 });
-  const [nightMode, setNightMode] = useState(false);
-  const [roomReady, setRoomReady] = useState(false);
-  const [captureReady, setCaptureReady] = useState(false);
-  const sceneRef = useRef<React.ComponentRef<typeof View>>(null);
-  const [userFacingLeft, setUserFacingLeft] = useState(false);
-  const [compFacingLeft, setCompFacingLeft] = useState(false);
-  const [userAction, setUserAction] = useState<CharacterAction>("idle");
-  const [compAction, setCompAction] = useState<CharacterAction>("idle");
-  const [userSortY, setUserSortY] = useState(0.46);
-  const [compSortY, setCompSortY] = useState(0.46);
-  const [hearts, setHearts] = useState<FloatingHeart[]>([]);
-  const [companionMenuOpen, setCompanionMenuOpen] = useState(false);
-  const [duo, setDuo] = useState<{ action: keyof typeof DUO_SPRITES; frame: number }>();
-  const duoEpoch = useRef(0);
-  const duoActive = useRef(false);
-  const duoTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-  const waveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const zzzAnim = useRef(new Animated.Value(0)).current;
-
-  // Persistent normalized positions (preserved across onLayout & tab switches!)
-  const userNormRef = useRef({ nx: 0.60, ny: 0.46 });
-  const compNormRef = useRef({ nx: 0.46, ny: 0.46 });
-  const userSeatRef = useRef<SeatKind>("none");
-  const compSeatRef = useRef<SeatKind>("none");
-  const stageRef = useRef({ w: 344, h: 430 });
-
-  const userX = useRef(new Animated.Value(206)).current;
-  const userY = useRef(new Animated.Value(198)).current;
-  const compX = useRef(new Animated.Value(158)).current;
-  const compY = useRef(new Animated.Value(198)).current;
-
-  const idleFloatA = useRef(new Animated.Value(0)).current;
-  const idleFloatB = useRef(new Animated.Value(0)).current;
-  const roomReveal = useRef(new Animated.Value(0)).current;
-  const userFade = useRef(new Animated.Value(1)).current;
-  const compFade = useRef(new Animated.Value(1)).current;
-  const companionReact = useRef(new Animated.Value(0)).current;
-  const petBounce = useRef(new Animated.Value(1)).current;
-  const diaryBounce = useRef(new Animated.Value(1)).current;
-  const modeSpin = useRef(new Animated.Value(0)).current;
-
-  const rippleScale = useRef(new Animated.Value(0)).current;
-  const rippleOpacity = useRef(new Animated.Value(0)).current;
-  const rippleOuterScale = useRef(new Animated.Value(0)).current;
-  const rippleOuterOpacity = useRef(new Animated.Value(0)).current;
-  const [ripplePos, setRipplePos] = useState({ x: 0, y: 0 });
-
-  const loadedIdsRef = useRef<Set<string>>(new Set());
-  const lastUserZRef = useRef(46);
-  const lastCompZRef = useRef(46);
+  const { skin, ui } = useSkin();
   const appActive = useAppIsActive();
-  const readyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const heartAnimations = useRef(new Map<number, Animated.CompositeAnimation>()).current;
-  const mountedAtRef = useRef(Date.now());
-  const heartIdRef = useRef(0);
-  const userTokenRef = useRef(0);
-  const compTokenRef = useRef(0);
-  const userAnimRef = useRef<Animated.CompositeAnimation | null>(null);
-  const compAnimRef = useRef<Animated.CompositeAnimation | null>(null);
-  const userWalkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const compWalkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Track real-time animated coordinates so interrupting mid-walk re-plans from actual live spot
-  useEffect(() => {
-    const uxId = userX.addListener(({ value }) => {
-      userNormRef.current.nx = value / Math.max(1, stageRef.current.w);
-    });
-    const uyId = userY.addListener(({ value }) => {
-      const ny = value / Math.max(1, stageRef.current.h);
-      userNormRef.current.ny = ny;
-      const z = Math.round(ny * 100);
-      if (z !== lastUserZRef.current) {
-        lastUserZRef.current = z;
-        setUserSortY(ny);
-      }
-    });
-    const cxId = compX.addListener(({ value }) => {
-      compNormRef.current.nx = value / Math.max(1, stageRef.current.w);
-    });
-    const cyId = compY.addListener(({ value }) => {
-      const ny = value / Math.max(1, stageRef.current.h);
-      compNormRef.current.ny = ny;
-      const z = Math.round(ny * 100);
-      if (z !== lastCompZRef.current) {
-        lastCompZRef.current = z;
-        setCompSortY(ny);
-      }
-    });
-    return () => {
-      userX.removeListener(uxId);
-      userY.removeListener(uyId);
-      compX.removeListener(cxId);
-      compY.removeListener(cyId);
-    };
-  }, [userX, userY, compX, compY]);
-
-  function markAssetLoaded(assetId: string) {
-    if (loadedIdsRef.current.has(assetId)) return;
-    loadedIdsRef.current.add(assetId);
-    if (loadedIdsRef.current.size >= TOTAL_ROOM_ASSETS) setCaptureReady(true);
-    if (loadedIdsRef.current.size >= TOTAL_ROOM_ASSETS && !roomReady) {
-      const elapsed = Date.now() - mountedAtRef.current;
-      const wait = Math.max(0, 200 - elapsed);
-      clearTimeout(readyTimer.current);
-      readyTimer.current = setTimeout(() => setRoomReady(true), wait);
-    }
-  }
+  const [engine] = useState(() => new RoomEngine());
+  const [frame, setFrame] = useState(() => engine.snapshot());
+  const [size, setSize] = useState<Size>({ width: 344, height: 430 });
+  const [night, setNight] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const [ready, setReady] = useState(false);
+  const scene = useRef<ComponentRef<typeof View>>(null);
+  const loaded = useRef(new Set<RoomImage>());
+  const [onLoad] = useState(() => (source: RoomImage) => {
+    loaded.current.add(source);
+    if (loaded.current.size === REQUIRED_IMAGES) setReady(true);
+  });
+  const actionRef = useRef(onAction);
+  actionRef.current = onAction;
+  const awake = isActive && appActive;
+  const sleeping = Object.values(frame.actors).some(actor => actor.phase === "SLEEP");
 
   useEffect(() => {
-    readyTimer.current = setTimeout(() => setRoomReady(true), 760);
-    return () => clearTimeout(readyTimer.current);
-  }, []);
-
-  useEffect(() => {
-    if (!roomReady) return;
-    const reveal = Animated.timing(roomReveal, {
-      toValue: 1,
-      duration: 260,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    });
-    reveal.start();
-    return () => reveal.stop();
-  }, [roomReady, roomReveal]);
-
-  const someoneSleeping = userAction === "sleep" || compAction === "sleep";
-
-  useEffect(() => {
-    if (!isActive || !appActive || !someoneSleeping) return;
-    const zzzLoop = Animated.loop(
-      Animated.timing(zzzAnim, {
-        toValue: 1,
-        duration: 2400,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    );
-    zzzLoop.start();
-    return () => zzzLoop.stop();
-  }, [isActive, appActive, someoneSleeping, zzzAnim]);
-
-  function stopRoomMotion() {
-    duoEpoch.current++;
-    duoActive.current = false;
-    clearInterval(duoTimer.current);
-    clearTimeout(waveTimer.current);
-    setDuo(undefined);
-    setCompanionMenuOpen(false);
-    userTokenRef.current++;
-    compTokenRef.current++;
-    userAnimRef.current?.stop();
-    compAnimRef.current?.stop();
-    stopWalkCycle(userWalkTimerRef);
-    stopWalkCycle(compWalkTimerRef);
-    userFade.setValue(1);
-    compFade.setValue(1);
-    setUserAction(actionForSeat(userSeatRef.current));
-    setCompAction(actionForSeat(compSeatRef.current));
-    companionReact.stopAnimation();
-    companionReact.setValue(0);
-  }
-
-  // Pause idle loops and movement when the room leaves the foreground.
-  useEffect(() => {
-    if (!isActive || !appActive) {
-      stopRoomMotion();
-      stopHearts();
-      setHearts([]);
-      return;
-    }
-    const loopA = Animated.loop(
-      Animated.sequence([
-        Animated.timing(idleFloatA, {
-          toValue: -1.6,
-          duration: 1450,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(idleFloatA, {
-          toValue: 0,
-          duration: 1450,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    const loopB = Animated.loop(
-      Animated.sequence([
-        Animated.timing(idleFloatB, {
-          toValue: -1.5,
-          duration: 1700,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(idleFloatB, {
-          toValue: 0,
-          duration: 1700,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loopA.start();
-    loopB.start();
-    return () => {
-      loopA.stop();
-      loopB.stop();
+    if (!awake || !ready) return;
+    let last: number | undefined;
+    let raf = 0;
+    const animate = (now: number) => {
+      engine.tick(last === undefined ? 0 : now - last);
+      last = now;
+      if (engine.consumeChange()) setFrame(engine.snapshot());
+      for (const action of engine.takeStartedActions()) actionRef.current?.(action);
+      raf = requestAnimationFrame(animate);
     };
-  }, [isActive, appActive, idleFloatA, idleFloatB, userFade, compFade, companionReact]);
+    raf = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(raf);
+  }, [awake, engine, ready]);
 
-  useEffect(() => {
-    return () => {
-      stopHearts();
-      userTokenRef.current++;
-      compTokenRef.current++;
-      duoEpoch.current++;
-      clearInterval(duoTimer.current);
-      clearTimeout(waveTimer.current);
-      userAnimRef.current?.stop();
-      compAnimRef.current?.stop();
-      if (userWalkTimerRef.current) clearInterval(userWalkTimerRef.current);
-      if (compWalkTimerRef.current) clearInterval(compWalkTimerRef.current);
-    };
-  }, []);
-
-  function onLayout(e: LayoutChangeEvent) {
-    const { width, height } = e.nativeEvent.layout;
-    if (width <= 0 || height <= 0 || (width === stageRef.current.w && height === stageRef.current.h)) return;
-    stopRoomMotion();
-    stageRef.current = { w: width, h: height };
-    setStage({ w: width, h: height });
-    // Restore preserved normalized coordinates instead of resetting positions!
-    compX.setValue(compNormRef.current.nx * width);
-    compY.setValue(compNormRef.current.ny * height);
-    userX.setValue(userNormRef.current.nx * width);
-    userY.setValue(userNormRef.current.ny * height);
+  function interact() {
+    if (!awake || !ready || isCompanionView || sleeping) return;
+    setMenu(open => !open);
   }
 
-  function stopHearts() {
-    const animations = [...heartAnimations.values()];
-    heartAnimations.clear();
-    animations.forEach(animation => animation.stop());
-  }
+  const renderActor = (id: ActorId) => {
+    const actor = frame.actors[id];
+    const action = spriteFor(actor);
+    const sprites = (id === "user") !== isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
+    const seated = actor.phase === "SIT";
+    const inBed = actor.furniture === "bed" && actor.point.nx < .314;
+    const zIndex = inBed ? 530 : actor.furniture === "sofa" ? 660 : depth(actor.point.ny) + 1;
+    const height = seated ? .132 : .175;
+    const width = height;
+    return <View key={id} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
+      actor.point.ny - height * .973, width, height), {
+      zIndex, opacity: frame.duo ? 0 : 1,
+      transform: [{ scaleX: (seated ? id === "user" : action !== "sleep" && actor.facingLeft) ? -1 : 1 }],
+    }]}>
+      <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />
+    </View>;
+  };
 
-  function spawnHeart(x: number, y: number) {
-    const id = ++heartIdRef.current;
-    const anim = new Animated.Value(0);
-    setHearts((prev) => [...prev.slice(-5), { id, x, y, anim }]);
-    const animation = Animated.timing(anim, {
-      toValue: 1,
-      duration: 950,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    });
-    heartAnimations.set(id, animation);
-    animation.start(() => {
-      if (heartAnimations.delete(id)) setHearts((prev) => prev.filter((h) => h.id !== id));
-    });
-  }
-
-  function triggerRipple(x: number, y: number) {
-    setRipplePos({ x, y });
-    rippleScale.setValue(0.28);
-    rippleOpacity.setValue(0.88);
-    rippleOuterScale.setValue(0.2);
-    rippleOuterOpacity.setValue(0.58);
-    Animated.parallel([
-      Animated.timing(rippleScale, {
-        toValue: 1.45,
-        duration: 440,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(rippleOpacity, {
-        toValue: 0,
-        duration: 440,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(rippleOuterScale, {
-        toValue: 2.1,
-        duration: 600,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(rippleOuterOpacity, {
-        toValue: 0,
-        duration: 600,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }
-
-  function bounceAnim(val: Animated.Value) {
-    val.setValue(0.88);
-    Animated.spring(val, {
-      toValue: 1,
-      speed: 20,
-      bounciness: 12,
-      useNativeDriver: true,
-    }).start();
-  }
-
-  function startWalkCycle(
-    timerRef: React.MutableRefObject<ReturnType<typeof setInterval> | null>,
-    setter: (a: CharacterAction) => void,
-  ) {
-    if (timerRef.current) clearInterval(timerRef.current);
-    let idx = 0;
-    setter(WALK_FRAMES[0]);
-    timerRef.current = setInterval(() => {
-      idx = (idx + 1) % WALK_FRAMES.length;
-      setter(WALK_FRAMES[idx]);
-    }, 160);
-  }
-
-  function stopWalkCycle(timerRef: React.MutableRefObject<ReturnType<typeof setInterval> | null>) {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }
-
-  type Actor = "user" | "companion";
-
-  function furnitureEntrance(who: Actor, seat: SeatKind): RoomPoint {
-    if (seat === "bed") return who === "user" ? { nx: 0.42, ny: 0.47 } : { nx: 0.39, ny: 0.47 };
-    // Reach the open front corners beside the coffee table before sitting.
-    return { nx: who === "user" ? 0.78 : 0.38, ny: 0.71 };
-  }
-
-  function planMove(who: Actor, target: RoomPoint, seat: SeatKind, exact = false) {
-    const isUser = who === "user";
-    const currentSeat = (isUser ? userSeatRef : compSeatRef).current;
-    const start = currentSeat === "none"
-      ? (isUser ? userNormRef : compNormRef).current
-      : furnitureEntrance(who, currentSeat);
-    const end = seat === "none" ? target : furnitureEntrance(who, seat);
-    const sameSeat = currentSeat === seat && seat !== "none";
-    const path = sameSeat ? [] : findSafePath(start, end, exact || seat !== "none");
-    return path ? { currentSeat, start, end, sameSeat, path } : undefined;
-  }
-
-  function moveCharacterAlong(
-    who: Actor, target: RoomPoint, seat: SeatKind = "none",
-    feedback?: "ripple", plan = planMove(who, target, seat), onArrival?: () => void,
-  ) {
-    if (!plan) return;
-    const { currentSeat, start, end, sameSeat, path } = plan;
-    const isUser = who === "user";
-    const tokenRef = isUser ? userTokenRef : compTokenRef;
-    const animRef = isUser ? userAnimRef : compAnimRef;
-    const walkTimerRef = isUser ? userWalkTimerRef : compWalkTimerRef;
-    const normRef = isUser ? userNormRef : compNormRef;
-    const seatRef = isUser ? userSeatRef : compSeatRef;
-    const x = isUser ? userX : compX;
-    const y = isUser ? userY : compY;
-    const fade = isUser ? userFade : compFade;
-    const setAction = isUser ? setUserAction : setCompAction;
-    const setFacing = isUser ? setUserFacingLeft : setCompFacingLeft;
-    const token = ++tokenRef.current;
-    animRef.current?.stop();
-    stopWalkCycle(walkTimerRef);
-    fade.setValue(1);
-    const current = () => tokenRef.current === token;
-    const play = (animation: Animated.CompositeAnimation, done: () => void) => {
-      animRef.current = animation;
-      animation.start(({ finished }) => {
-        if (finished && current()) done();
-      });
-    };
-    const place = (point: RoomPoint) => {
-      normRef.current = { ...point };
-      x.setValue(point.nx * stageRef.current.w);
-      y.setValue(point.ny * stageRef.current.h);
-      (isUser ? setUserSortY : setCompSortY)(point.ny);
-    };
-    const pose = (point: RoomPoint, destination: SeatKind, done: () => void) => {
-      stopWalkCycle(walkTimerRef);
-      play(Animated.timing(fade, { toValue: 0, duration: 100, useNativeDriver: true }), () => {
-        place(point);
-        seatRef.current = destination;
-        setAction(actionForSeat(destination));
-        setFacing(destination === "sofa" && isUser);
-        // The sleeping sprite and foreground mask are committed together while hidden.
-        requestAnimationFrame(() => {
-          if (current()) play(Animated.timing(fade, { toValue: 1, duration: 160, useNativeDriver: true }), done);
-        });
-      });
-    };
-    const finalPoint = path.at(-1) ?? end;
-    if (feedback === "ripple") triggerRipple(finalPoint.nx * stage.w, finalPoint.ny * stage.h);
-    const finish = () => onArrival?.();
-
-    if (sameSeat) {
-      pose(target, seat, finish);
-      return;
-    }
-
-    let walking = false;
-    const walk = (index: number) => {
-      const next = path[index];
-      if (!next) {
-        stopWalkCycle(walkTimerRef);
-        if (seat === "none") {
-          setAction("idle");
-          finish();
-        } else {
-          setAction("idle");
-          pose(target, seat, finish);
-        }
-        return;
-      }
-      const { w, h } = stageRef.current;
-      const dx = (next.nx - normRef.current.nx) * w;
-      const dy = (next.ny - normRef.current.ny) * h;
-      const distance = Math.hypot(dx, dy);
-      if (distance < 1) {
-        walk(index + 1);
-        return;
-      }
-      if (Math.abs(dx) > 1) setFacing(dx < 0);
-      if (!walking) {
-        walking = true;
-        startWalkCycle(walkTimerRef, setAction);
-      }
-      const duration = Math.max(85, Math.round(distance * 5.6));
-      play(Animated.parallel([
-        Animated.timing(x, { toValue: next.nx * w, duration, easing: Easing.linear, useNativeDriver: true }),
-        Animated.timing(y, { toValue: next.ny * h, duration, easing: Easing.linear, useNativeDriver: true }),
-      ]), () => {
-        place(next);
-        walk(index + 1);
-      });
-    };
-    if (currentSeat === "none") walk(0);
-    else pose(start, "none", () => walk(0));
-  }
-
-  function handleFloorPress(e: GestureResponderEvent) {
-    // A floor tap never gives the Companion a new destination.
-    if (duoActive.current) stopRoomMotion();
-    setCompanionMenuOpen(false);
-    const target = {
-      nx: e.nativeEvent.locationX / Math.max(1, stage.w),
-      ny: e.nativeEvent.locationY / Math.max(1, stage.h),
-    };
-    const plan = planMove("user", target, "none");
-    if (!plan) return;
-    clearTimeout(waveTimer.current);
-    moveCharacterAlong("user", target, "none", "ripple", plan);
-  }
-
-  function toggleCompanionMenu() {
-    if (isActive && appActive && !isCompanionView && !someoneSleeping && !duoActive.current) {
-      setCompanionMenuOpen(open => !open);
-    }
-  }
-
-  function reactInPlace() {
-    companionReact.stopAnimation();
-    companionReact.setValue(0);
-    Animated.sequence([
-      Animated.timing(companionReact, { toValue: 1, duration: 110, useNativeDriver: true }),
-      Animated.timing(companionReact, { toValue: 0, duration: 190, useNativeDriver: true }),
-    ]).start();
-  }
-
-  function moveTogether(companion: RoomPoint, user: RoomPoint, seat: SeatKind) {
-    stopRoomMotion();
-    const companionPlan = planMove("companion", companion, seat);
-    const userPlan = planMove("user", user, seat);
-    if (!companionPlan || !userPlan) return;
-    moveCharacterAlong("companion", companion, seat, undefined, companionPlan);
-    moveCharacterAlong("user", user, seat, undefined, userPlan);
-  }
-
-  function handleSitTogether() {
-    moveTogether({ nx: 0.525, ny: 0.678 }, { nx: 0.625, ny: 0.678 }, "sofa");
-  }
-
-  function playSocialAction(action: CompanionAction) {
-    if (!isActive || !appActive || isCompanionView) return;
-    stopRoomMotion();
-    if (action === "WAVE") {
-      if (userSeatRef.current === "none") {
-        setUserAction("wave");
-        waveTimer.current = setTimeout(() => setUserAction(actionForSeat(userSeatRef.current)), 850);
-      }
-      reactInPlace();
-      onAction?.(action);
-      return;
-    }
-
-    const companion = { nx: 0.48, ny: DUO_BASELINE };
-    const user = { nx: 0.57, ny: DUO_BASELINE };
-    const companionPlan = planMove("companion", companion, "none", true);
-    const userPlan = planMove("user", user, "none", true);
-    if (!companionPlan || !userPlan) return;
-
-    const epoch = duoEpoch.current;
-    duoActive.current = true;
-    let arrivals = 0;
-    const arrived = () => {
-      if (epoch !== duoEpoch.current || ++arrivals !== 2) return;
-      setDuo({ action, frame: 0 });
-      spawnHeart(DUO_CENTER * stage.w, DUO_BASELINE * stage.h - charH);
-      let frame = 0;
-      duoTimer.current = setInterval(() => {
-        if (++frame === 6) {
-          clearInterval(duoTimer.current);
-          duoActive.current = false;
-          setDuo(undefined);
-        } else {
-          setDuo({ action, frame: frame % 2 });
-        }
-      }, 280);
-    };
-    moveCharacterAlong("companion", companion, "none", undefined, companionPlan, arrived);
-    moveCharacterAlong("user", user, "none", undefined, userPlan, arrived);
-    onAction?.(action);
-  }
-
-  function handleRestTogether() {
-    moveTogether({ nx: 0.125, ny: 0.432 }, { nx: 0.222, ny: 0.432 }, "bed");
-  }
-
-  function handleWakeUp() {
-    stopRoomMotion();
-    if (userSeatRef.current === "bed") moveCharacterAlong("user", { nx: 0.56, ny: 0.46 });
-    if (compSeatRef.current === "bed") moveCharacterAlong("companion", { nx: 0.45, ny: 0.46 });
-  }
-
-  function handleSlotPress(interactive: "diary" | "pet") {
-    if (interactive === "pet") {
-      bounceAnim(petBounce);
-      spawnHeart(stage.w * 0.57, stage.h * 0.24);
-    } else {
-      bounceAnim(diaryBounce);
-      onOpenDiary?.();
-    }
-  }
-
-  function toggleNightMode() {
-    modeSpin.setValue(0);
-    Animated.spring(modeSpin, {
-      toValue: 1,
-      speed: 16,
-      bounciness: 10,
-      useNativeDriver: true,
-    }).start();
-    setNightMode((v) => !v);
-  }
-
-  const charH = Math.round(stage.h * 0.175);
-  const charW = Math.round(charH * 0.8);
-  const duoWidth = charH * 280 / 230;
-  const compSprites = isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
-  const userSprites = isCompanionView ? BOY_SPRITES : GIRL_SPRITES;
-
-  const zFromY = (yFrac: number) => Math.round(yFrac * 100);
-  const revealScale = roomReveal.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] });
-  const modeRotate = modeSpin.interpolate({ inputRange: [0, 1], outputRange: ["-24deg", "0deg"] });
-
-  return (
-    <View style={styles.frame} onLayout={onLayout}>
-      <Animated.View
-        style={[
-          StyleSheet.absoluteFill,
-          { opacity: roomReveal, transform: [{ scale: revealScale }] },
-        ]}
-      >
-        <View ref={sceneRef} collapsable={false} testID="home-room-scene" style={StyleSheet.absoluteFill}>
-          {/* Base empty 4:5 room */}
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            accessibilityRole="button"
-            accessibilityLabel="点击小家木地板走动"
-            onPress={handleFloorPress}
-          >
-            <Image
-              source={ROOM_BASE_IMAGE}
-              style={styles.roomImg}
-              resizeMode="cover"
-              fadeDuration={0}
-              onLoad={() => markAssetLoaded("base")}
-            />
-          </Pressable>
-
-          {/* 10 Swappable Furniture & Wall Slots */}
-          {ROOM_SLOTS.map((slot) => {
-            const zIndex =
-              slot.layer === "floor_base" ? 2 :
-              slot.layer === "wall_back" ? 6 :
-              zFromY(slot.sortY);
-
-            const boxStyle = {
-              position: "absolute" as const,
-              left: stage.w * slot.left,
-              top: stage.h * slot.top,
-              width: stage.w * slot.width,
-              height: stage.h * slot.height,
-              zIndex,
-            };
-
-            if (slot.id === "slot_sofa") {
-              const w = boxStyle.width;
-              const h = boxStyle.height;
-              const strips = [
-                { x: 0, y: 0, width: 1, height: 0.24, foreground: false },
-                { x: 0.13, y: 0.24, width: 0.74, height: 0.66, foreground: false },
-                { x: 0, y: 0.24, width: 0.13, height: 0.66, foreground: true },
-                { x: 0.87, y: 0.24, width: 0.13, height: 0.66, foreground: true },
-                { x: 0, y: 0.90, width: 1, height: 0.10, foreground: true },
-              ];
-              return [
-                <Pressable
-                  key={slot.id}
-                  style={[boxStyle, { zIndex: 65 }]}
-                  onPress={handleSitTogether}
-                  accessibilityRole="button"
-                  accessibilityLabel="在沙发一起坐"
-                />,
-                ...strips.map((strip, index) => (
-                  <View key={`sofa-${index}`} pointerEvents="none" style={{
-                    position: "absolute",
-                    overflow: "hidden",
-                    left: boxStyle.left + w * strip.x,
-                    top: boxStyle.top + h * strip.y,
-                    width: w * strip.width,
-                    height: h * strip.height,
-                    zIndex: strip.foreground ? zFromY(slot.top + slot.height) : zIndex,
-                  }}>
-                    <Image
-                      source={slot.source}
-                      style={{ position: "absolute", left: -w * strip.x, top: -h * strip.y, width: w, height: h }}
-                      resizeMode="contain"
-                      fadeDuration={0}
-                      onLoad={index === 0 ? () => markAssetLoaded(slot.id) : undefined}
-                    />
-                  </View>
-                )),
-              ];
-            }
-
-            if (slot.id === "slot_bed") {
-              return (
-                <Pressable
-                  key={slot.id}
-                  style={boxStyle}
-                  onPress={someoneSleeping ? handleWakeUp : handleRestTogether}
-                  accessibilityRole="button"
-                  accessibilityLabel={someoneSleeping ? "从床上起身" : "在床上休息"}
-                >
-                  <Image source={slot.source} style={styles.fillImg} resizeMode="contain" fadeDuration={0}
-                    onLoad={() => markAssetLoaded(slot.id)} />
-                </Pressable>
-              );
-            }
-
-            if (slot.interactive) {
-              const interactive = slot.interactive;
-              const scaleAnim = interactive === "pet" ? petBounce : diaryBounce;
-
-              return (
-                <Pressable
-                  key={slot.id}
-                  style={boxStyle}
-                  onPress={() => handleSlotPress(interactive)}
-                  accessibilityRole="button"
-                  accessibilityLabel={slot.name}
-                >
-                  <Animated.View style={[styles.fillImg, { transform: [{ scale: scaleAnim }] }]}>
-                    <Image
-                      source={slot.source}
-                      style={styles.fillImg}
-                      resizeMode="contain"
-                      fadeDuration={0}
-                      onLoad={() => markAssetLoaded(slot.id)}
-                    />
-                  </Animated.View>
-                </Pressable>
-              );
-            }
-            return (
-              <View key={slot.id} pointerEvents="none" style={boxStyle}>
-                <Image
-                  source={slot.source}
-                  style={styles.fillImg}
-                  resizeMode="contain"
-                  fadeDuration={0}
-                  onLoad={() => markAssetLoaded(slot.id)}
-                />
-              </View>
-            );
-          })}
-
-          {/* Double concentric pearl ripple on floor tap */}
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.rippleOuter,
-              {
-                left: ripplePos.x - 16,
-                top: ripplePos.y - 9,
-                opacity: rippleOuterOpacity,
-                transform: [{ scale: rippleOuterScale }],
-              },
-            ]}
-          />
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.ripple,
-              {
-                left: ripplePos.x - 14,
-                top: ripplePos.y - 8,
-                opacity: rippleOpacity,
-                transform: [{ scale: rippleScale }],
-              },
-            ]}
-          />
-
-          <View pointerEvents="none" style={{
-            position: "absolute",
-            width: duoWidth,
-            height: charH,
-            left: stage.w * DUO_CENTER - duoWidth / 2,
-            top: stage.h * DUO_BASELINE - charH,
-            zIndex: zFromY(DUO_BASELINE) + 3,
-          }}>
-            {DUO_ACTIONS.flatMap(action => DUO_SPRITES[action].map((source, frame) => (
-              <Image
-                key={`${action}:${frame}`}
-                source={source}
-                style={[StyleSheet.absoluteFill, styles.fillImg, { opacity: duo?.action === action && duo.frame === frame ? 1 : 0 }]}
-                resizeMode="contain"
-                fadeDuration={0}
-              />
-            )))}
-          </View>
-
-          {/* Companion Pixel Character */}
-          <Animated.View
-            style={[
-              styles.spriteWrap,
-              {
-                width: charW,
-                height: charH,
-                opacity: duo ? 0 : compFade,
-                zIndex: compAction === "sleep" ? 54 : compAction === "sit" ? 66 : zFromY(compSortY) + 1,
-                transform: [
-                  { translateX: Animated.subtract(compX, charW / 2) },
-                  { translateY: Animated.subtract(compY, charH) },
-                  { translateY: idleFloatB },
-                  { scaleY: companionReact.interpolate({ inputRange: [0, 1], outputRange: [1, 0.98] }) },
-                ],
-              },
-            ]}
-          >
-            <Pressable
-              disabled={isCompanionView || someoneSleeping || !!duo}
-              onPress={toggleCompanionMenu}
-              accessibilityState={{ expanded: companionMenuOpen }}
-              style={styles.charHit}
-              accessibilityRole="button"
-              accessibilityLabel={`与 ${companionName} 互动`}
-            >
-              {compAction !== "sit" && compAction !== "sleep" && <View style={[styles.spriteShadow, { width: charW * 0.56 }]} />}
-              <Image
-                source={compSprites[compAction]}
-                style={[styles.fillImg, compFacingLeft && { transform: [{ scaleX: -1 }] }]}
-                resizeMode="contain"
-                fadeDuration={0}
-                onLoad={compAction === "idle" ? () => markAssetLoaded("comp_idle") : undefined}
-              />
-            </Pressable>
-          </Animated.View>
-
-          {/* Walkable User Pixel Character */}
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.spriteWrap,
-              {
-                width: charW,
-                height: charH,
-                opacity: duo ? 0 : userFade,
-                zIndex: userAction === "sleep" ? 55 : userAction === "sit" ? 67 : zFromY(userSortY) + 2,
-                transform: [
-                  { translateX: Animated.subtract(userX, charW / 2) },
-                  { translateY: Animated.subtract(userY, charH) },
-                  { translateY: idleFloatA },
-                ],
-              },
-            ]}
-          >
-            {userAction !== "sit" && userAction !== "sleep" && <View style={[styles.spriteShadow, { width: charW * 0.56 }]} />}
-            <Image
-              source={userSprites[userAction]}
-              style={[styles.fillImg, userFacingLeft && { transform: [{ scaleX: -1 }] }]}
-              resizeMode="contain"
-              fadeDuration={0}
-              onLoad={userAction === "idle" ? () => markAssetLoaded("user_idle") : undefined}
-            />
-          </Animated.View>
-
-          {/* Bed Quilt Foreground Overlay (tucks sleeping characters cleanly under the blanket) */}
-          {someoneSleeping && (
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                left: stage.w * 0.025,
-                top: stage.h * 0.23,
-                width: stage.w * 0.42,
-                height: stage.h * 0.31,
-                zIndex: 56,
-              }}
-            >
-              <Image source={BED_QUILT_OVERLAY} style={styles.fillImg} resizeMode="contain" fadeDuration={0} />
-            </View>
-          )}
-
-          {/* Gentle Floating Zzz when resting in bed */}
-          {someoneSleeping && (
-            <Animated.View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                left: stage.w * 0.25,
-                top: stage.h * 0.23,
-                zIndex: 122,
-                opacity: zzzAnim.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0, 0.9, 0.7, 0] }),
-                transform: [
-                  { translateY: zzzAnim.interpolate({ inputRange: [0, 1], outputRange: [6, -22] }) },
-                  { translateX: zzzAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 8] }) },
-                ],
-              }}
-            >
-              <Text style={styles.zzzText}>Zzz</Text>
-            </Animated.View>
-          )}
-
-          {/* Night Ambient Veil */}
-          {nightMode && (
-            <View pointerEvents="none" style={[StyleSheet.absoluteFill, { zIndex: 110 }]}>
-              <View style={styles.nightVeil} />
-            </View>
-          )}
-
-          {/* Floating Hearts */}
-          {hearts.map((h) => (
-            <Animated.View
-              key={h.id}
-              pointerEvents="none"
-              style={[
-                styles.heartWrap,
-                {
-                  left: h.x - 8,
-                  top: h.y,
-                  opacity: h.anim.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1, 0] }),
-                  transform: [
-                    { translateY: h.anim.interpolate({ inputRange: [0, 1], outputRange: [0, -34] }) },
-                    { scale: h.anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.6, 1.18, 0.9] }) },
-                  ],
-                },
-              ]}
-            >
-              <Ionicons name="heart" size={14} color="#C87D87" />
-            </Animated.View>
-          ))}
-        </View>
-
-        {onCapture && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="拍一张小家照片"
-            disabled={!roomReady || !captureReady || capturing || !isActive || !appActive}
-            onPress={() => { if (sceneRef.current) onCapture(sceneRef.current); }}
-            style={styles.cameraOverlay}
-          >
-            <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
-              <View style={styles.cameraIcon}>
-                <Ionicons name="camera-outline" size={19} color={nightMode ? "#F8FAFC" : PEARL_UI.accentInk} />
-              </View>
-            </LiquidGlassSurface>
-          </Pressable>
-        )}
-
-        {/* Top-right Day/Night ambient toggle */}
-        <Pressable
-          onPress={toggleNightMode}
-          accessibilityRole="button"
-          accessibilityLabel="切换昼夜光线"
-          style={({ pressed }) => [styles.topRightOverlay, pressed && { transform: [{ scale: 0.88 }] }]}
-        >
-          <Animated.View
-            style={[
-              styles.modeBtn,
-              nightMode ? styles.modeBtnDark : styles.modeBtnLight,
-              { transform: [{ rotate: modeRotate }] },
-            ]}
-          >
-            <Ionicons
-              name={nightMode ? "moon" : "sunny-outline"}
-              size={15}
-              color={nightMode ? "#FDE68A" : PEARL_UI.accentInk}
-            />
-          </Animated.View>
-        </Pressable>
-
-        {(someoneSleeping || !isCompanionView) && (
-          <View style={styles.actionBarWrap}>
-            <LiquidGlassSurface glass tint={nightMode ? "dark" : "light"} borderRadius={RADIUS.pill}>
-              <View style={styles.actionBar}>
-                {companionMenuOpen && !someoneSleeping && COMPANION_MENU.map(([action, label]) => (
-                  <Pressable
-                    key={action}
-                    accessibilityRole="button"
-                    onPress={() => playSocialAction(action)}
-                    style={styles.actionItem}
-                  >
-                    <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>{label}</Text>
-                  </Pressable>
-                ))}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={someoneSleeping ? "起身" : "互动"}
-                  accessibilityState={someoneSleeping ? undefined : { expanded: companionMenuOpen }}
-                  onPress={someoneSleeping ? handleWakeUp : toggleCompanionMenu}
-                  style={[styles.actionItem, styles.actionToggle]}
-                >
-                  <Ionicons
-                    name={someoneSleeping ? "sunny-outline" : "heart-outline"}
-                    size={14}
-                    color={nightMode ? "#F8FAFC" : PEARL_UI.ink}
-                  />
-                  <Text style={[styles.actionText, nightMode && styles.actionTextDark]}>
-                    {someoneSleeping ? "起身" : "互动"}
-                  </Text>
-                </Pressable>
-              </View>
-            </LiquidGlassSurface>
-          </View>
-        )}
-      </Animated.View>
-
-      {/* Silky Liquid Pearl Loader until base room + slots + idle sprites are all loaded */}
-      <PearlTransitionLoader visible={!roomReady} borderRadius={28} />
+  const sofa = ROOM_SLOTS.find(slot => slot.id === "slot_sofa")!;
+  const bed = ROOM_SLOTS.find(slot => slot.id === "slot_bed")!;
+  const duoX = (DUO_POINTS.user.nx + DUO_POINTS.companion.nx) / 2;
+  const companion = frame.actors.companion.point;
+  const quiltVisible = Object.values(frame.actors).some(actor => actor.furniture === "bed" && actor.point.nx < .314);
+  const labelColor = night ? ui.onDark : skin.colors.ink;
+  return <View style={[styles.frame, { borderColor: skin.colors.border, backgroundColor: skin.colors.canvas }]}
+    onLayout={event => {
+      const { width, height } = event.nativeEvent.layout;
+      if (width > 0 && height > 0) setSize(previous => previous.width === width && previous.height === height ? previous : { width, height });
+    }}>
+    <View ref={scene} collapsable={false} testID="home-room-scene" style={StyleSheet.absoluteFill}>
+      <Furniture size={size} onLoad={onLoad} />
+      {renderActor("companion")}
+      {renderActor("user")}
+      <View pointerEvents="none" style={[box(size, sofa.left, sofa.top, sofa.width, sofa.height), { zIndex: 680 }]}>
+        <SceneImage source={SOFA_FRONT} onLoad={onLoad} />
+      </View>
+      <View pointerEvents="none" style={[box(size, bed.left, bed.top, bed.width, bed.height), { zIndex: 531, opacity: quiltVisible ? 1 : 0 }]}>
+        <SceneImage source={BED_QUILT_OVERLAY} onLoad={onLoad} />
+      </View>
+      <View pointerEvents="none" style={[box(size, duoX - .133, DUO_POINTS.user.ny - .173, .266, .175), { zIndex: 843 }]}>
+        <SpriteFrames sources={DUO_TEXTURES} current={frame.duo ? `${frame.duo.action}:${frame.duo.frame}` : ""} onLoad={onLoad} />
+      </View>
+      {night && <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.night]} />}
+      {sleeping && <Text style={[styles.zzz, { left: size.width * .17, top: size.height * .29,
+        opacity: .5 + Math.sin(frame.time / 400) * .3, color: labelColor }]}>Zzz</Text>}
+      {frame.effects.map(effect => <View key={effect.id} pointerEvents="none"
+        style={[styles.effect, { left: size.width * effect.point.nx - 14, top: size.height * effect.point.ny - 12,
+          opacity: 1 - effect.progress, transform: [{ scale: .6 + effect.progress }] }]}>
+        {effect.type === "heart" ? <Ionicons name="heart" size={20} color={ui.affection} />
+          : <View style={[styles.ripple, { borderColor: skin.colors.accent }]} />}
+      </View>)}
     </View>
-  );
+
+    {ready && awake && <>
+      <Pressable accessibilityLabel="点击木地板走动" style={styles.hitLayer}
+        onPress={event => {
+          setMenu(false);
+          engine.floor({ nx: event.nativeEvent.locationX / size.width, ny: event.nativeEvent.locationY / size.height });
+        }} />
+      <Pressable accessibilityRole="button" accessibilityLabel={sleeping ? "从床上起身" : "在床上休息"}
+        style={[box(size, bed.left, bed.top, bed.width, bed.height), styles.target]}
+        onPress={() => { setMenu(false); engine.furniture("bed"); }} />
+      <Pressable accessibilityRole="button" accessibilityLabel="在沙发一起坐"
+        style={[box(size, sofa.left, sofa.top, sofa.width, sofa.height), styles.target]}
+        onPress={() => { setMenu(false); engine.furniture("sofa"); }} />
+      {!isCompanionView && !sleeping && !frame.duo && <Pressable accessibilityRole="button" accessibilityState={{ expanded: menu }}
+        accessibilityLabel={`与 ${companionName} 互动`} onPress={interact}
+        style={[box(size, companion.nx - .05, companion.ny - .15, .1, .14), styles.actorTarget]} />}
+      <Pressable accessibilityRole="button" accessibilityLabel="窗台小猫"
+        style={[box(size, .49, .21, .16, .10), styles.objectTarget]}
+        onPress={() => engine.addEffect("heart", { nx: .57, ny: .21 })} />
+      <Pressable accessibilityRole="button" accessibilityLabel="粉色日记本"
+        style={[box(size, .576, .68, .138, .102), styles.objectTarget]} onPress={onOpenDiary} />
+    </>}
+
+    <View style={styles.tools}>
+      {onCapture && <Pressable accessibilityRole="button" accessibilityLabel="拍一张小家照片"
+        disabled={!awake || !ready || capturing} onPress={() => { if (scene.current) onCapture(scene.current); }}>
+        <LiquidGlassSurface glass><View style={styles.icon}><Ionicons name="camera-outline" size={19} color={labelColor} /></View></LiquidGlassSurface>
+      </Pressable>}
+      <Pressable accessibilityRole="button" accessibilityLabel="切换昼夜光线" onPress={() => setNight(value => !value)}>
+        <LiquidGlassSurface glass tint={night ? "dark" : "light"}>
+          <View style={styles.icon}><Ionicons name={night ? "moon" : "sunny-outline"} size={17} color={labelColor} /></View>
+        </LiquidGlassSurface>
+      </Pressable>
+    </View>
+
+    {ready && (sleeping || !isCompanionView) && <View style={styles.menu}>
+      <LiquidGlassSurface glass tint={night ? "dark" : "light"}>
+        <View style={styles.actionRow}>
+          {menu && !sleeping && ACTIONS.map(([action, label]) => <Pressable key={action}
+            accessibilityRole="button" style={styles.action} onPress={() => { setMenu(false); engine.action(action); }}>
+            <Text style={{ color: labelColor }}>{label}</Text>
+          </Pressable>)}
+          <Pressable accessibilityRole="button" accessibilityLabel={sleeping ? "起身" : "互动"} accessibilityState={{ expanded: menu }}
+            style={styles.action} onPress={sleeping ? () => engine.wake() : interact}>
+            <Ionicons name={sleeping ? "sunny-outline" : "heart-outline"} size={15} color={labelColor} />
+            <Text style={{ color: labelColor }}>{sleeping ? "起身" : "互动"}</Text>
+          </Pressable>
+        </View>
+      </LiquidGlassSurface>
+    </View>}
+    <PearlTransitionLoader visible={!ready} borderRadius={28} />
+  </View>;
 }
 
 const styles = StyleSheet.create({
-  frame: {
-    width: "100%",
-    aspectRatio: 0.8,
-    borderRadius: 28,
-    borderWidth: 1.5,
-    borderColor: PEARL_UI.highlight,
-    backgroundColor: "#EFEAE7",
-    overflow: "hidden",
-    shadowColor: "#6B5E54",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 4,
-  },
-  roomImg: { width: "100%", height: "100%" },
-  fillImg: { width: "100%", height: "100%" },
-  nightVeil: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: "rgba(26, 34, 58, 0.22)",
-  },
-  rippleOuter: {
-    position: "absolute",
-    width: 32,
-    height: 18,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(180, 192, 212, 0.72)",
-    zIndex: 7,
-  },
-  ripple: {
-    position: "absolute",
-    width: 28,
-    height: 16,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: "rgba(255, 255, 255, 0.92)",
-    backgroundColor: "rgba(255, 255, 255, 0.24)",
-    zIndex: 8,
-  },
-  spriteWrap: {
-    position: "absolute",
-    alignItems: "center",
-    justifyContent: "flex-end",
-  },
-  charHit: {
-    width: "100%",
-    height: "100%",
-    alignItems: "center",
-    justifyContent: "flex-end",
-  },
-  spriteShadow: {
-    position: "absolute",
-    bottom: 2,
-    height: 8,
-    borderRadius: 5,
-    backgroundColor: "rgba(56, 44, 38, 0.16)",
-  },
-  heartWrap: { position: "absolute", zIndex: 130 },
-  topRightOverlay: { position: "absolute", top: 12, right: 12, zIndex: 125 },
-  modeBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    shadowColor: "#6F685E",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-  },
-  modeBtnLight: {
-    backgroundColor: "rgba(255, 255, 255, 0.72)",
-    borderColor: "rgba(255, 255, 255, 0.92)",
-  },
-  modeBtnDark: {
-    backgroundColor: "rgba(30, 38, 56, 0.72)",
-    borderColor: "rgba(255, 255, 255, 0.28)",
-  },
-  cameraOverlay: { position: "absolute", top: 12, right: 58, zIndex: 125 },
-  cameraIcon: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  actionBarWrap: { position: "absolute", bottom: 12, right: 12, zIndex: 125 },
-  actionBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4 },
-  actionItem: { minHeight: 44, justifyContent: "center", paddingHorizontal: 8 },
-  actionToggle: { flexDirection: "row", alignItems: "center", gap: 4 },
-  actionText: { fontSize: 11.5, fontWeight: "600", color: PEARL_UI.ink },
-  actionTextDark: { color: "#F8FAFC" },
-  zzzText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: PEARL_UI.accent,
-    letterSpacing: 1,
-    textShadowColor: "rgba(255,255,255,0.9)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-  },
+  frame: { width: "100%", aspectRatio: .8, borderRadius: 28, borderWidth: 1, overflow: "hidden" },
+  night: { backgroundColor: "rgba(26,34,58,0.24)", zIndex: 950 },
+  zzz: { position: "absolute", zIndex: 960, fontSize: 14, fontWeight: "700" },
+  effect: { position: "absolute", zIndex: 970 },
+  ripple: { width: 28, height: 17, borderWidth: 1.5, borderRadius: 16 },
+  hitLayer: { ...StyleSheet.absoluteFill, zIndex: 1000 },
+  target: { zIndex: 1001 },
+  actorTarget: { zIndex: 1002 },
+  objectTarget: { zIndex: 1003, minHeight: 36, minWidth: 36 },
+  tools: { position: "absolute", top: 12, right: 12, zIndex: 1050, flexDirection: "row", gap: 8 },
+  icon: { width: 38, height: 38, justifyContent: "center", alignItems: "center" },
+  menu: { position: "absolute", right: 12, bottom: 12, zIndex: 1050 },
+  actionRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4 },
+  action: { flexDirection: "row", alignItems: "center", minHeight: 40, paddingHorizontal: 10, gap: 4 },
 });

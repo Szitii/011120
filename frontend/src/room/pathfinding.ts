@@ -1,20 +1,5 @@
-interface ObstacleBox {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-// Normalized furniture foot-collision boxes (0..1)
-const ROOM_OBSTACLES: ObstacleBox[] = [
-  { x1: 0.02, y1: 0.22, x2: 0.35, y2: 0.56 }, // Double bed
-  { x1: 0.33, y1: 0.28, x2: 0.45, y2: 0.43 }, // Nightstand
-  { x1: 0.65, y1: 0.22, x2: 0.98, y2: 0.43 }, // USM vinyl cabinet + floor lamp
-  { x1: 0.82, y1: 0.37, x2: 0.99, y2: 0.68 }, // Wavy mirror
-  { x1: 0.40, y1: 0.50, x2: 0.75, y2: 0.68 }, // Double sofa
-  { x1: 0.42, y1: 0.65, x2: 0.73, y2: 0.79 }, // Cloud coffee table
-  { x1: 0.03, y1: 0.56, x2: 0.23, y2: 0.83 }, // Olive plant
-];
+import { ROOM_OBSTACLES, type ObstacleBox, type RoomPoint } from "./geometry.ts";
+export type { RoomPoint } from "./geometry.ts";
 
 const GRID_COLS = 49;
 const GRID_ROWS = 51;
@@ -75,8 +60,6 @@ function isSegmentClear(ax: number, ay: number, bx: number, by: number): boolean
   }
   return true;
 }
-
-export type RoomPoint = { nx: number; ny: number };
 
 type GridPoint = RoomPoint & { index: number };
 

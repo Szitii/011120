@@ -18,7 +18,7 @@ export type { ChatModelInfo as ChatModelItem, ChatModelList } from "../../../con
 
 export interface ChatClient {
   listChats(): Promise<{ items: Chat[] }>;
-  openChat(companionIds: string[], title?: string): Promise<Chat>;
+  openChat(companionIds: string[], title?: string, key?: string): Promise<Chat>;
   getChat(chatId: string, cursor?: string): Promise<ChatPage>;
   deleteChat(chatId: string): Promise<{ deleted: true }>;
   sendMessage(
@@ -50,12 +50,12 @@ export function createChatClient(send: SendFn): ChatClient {
     listChats() {
       return send("GET", "/v0/chats");
     },
-    openChat(companionIds: string[], title?: string) {
+    openChat(companionIds: string[], title?: string, key?: string) {
       return send(
         "POST",
         "/v0/chats",
         { companionIds, ...(title ? { title } : {}) },
-        makeIdempotencyKey("chat-open"),
+        key ?? makeIdempotencyKey("chat-open"),
       );
     },
     getChat(chatId: string, cursor?: string) {

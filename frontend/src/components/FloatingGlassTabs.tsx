@@ -4,7 +4,6 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
-import { PEARL_UI } from "../theme/skinTokens";
 import { ROOT_TABS, type RootTab } from "../state/navigation";
 
 export function FloatingGlassTabs({
@@ -14,7 +13,7 @@ export function FloatingGlassTabs({
   current: RootTab;
   onSelect: (tab: RootTab) => void;
 }) {
-  const { skin } = useSkin();
+  const { skin, ui } = useSkin();
   const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -56,7 +55,7 @@ export function FloatingGlassTabs({
             const item = items[key];
             const active = current === key;
             const color = skin.id === "default"
-              ? (active ? PEARL_UI.accentInk : "#5E5A56")
+              ? (active ? ui.accentInk : "#5E5A56")
               : (active ? skin.colors.tabActive : skin.colors.tabInactive);
             return (
               <Pressable

@@ -1,10 +1,13 @@
+import { useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
   Pressable,
   SafeAreaView,
-  ScrollView,
+  FlatList,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
@@ -23,17 +26,16 @@ import type {
   CommunityActorFilter,
 } from "../../../contracts/community.ts";
 import { communityWriteMessage, safeClientMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
-import { CommunityFollowList, type FollowDirection } from "./CommunityFollowList.tsx";
+import { type FollowDirection } from "./CommunityFollowList.tsx";
 import { communityRequestKey, type CommunityClient } from "./client.ts";
 import type { CommunityTarget } from "../state/navigation";
 import { CommunityRequestScope } from "./request-scope.ts";
-import { ActorLine, CommunityButton as Button, ContentCard, communityStyles as s } from "./components.tsx";
+import { ActorLine, CommunityButton as Button, ContentCard, useCommunityStyles } from "./components.tsx";
 import { ReportForm } from "./ReportForm.tsx";
 import { HumanProfileEditor } from "./HumanProfileEditor.tsx";
 import { BottomSheet } from "../components/BottomSheet.tsx";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
-import { PEARL_UI } from "../theme/skinTokens";
 import { RADIUS } from "../theme/layoutTokens";
 
 type Page =
@@ -41,6 +43,10 @@ type Page =
   | { type: "profile"; id?: string }
   | { type: "detail"; id: string }
   | { type: "blocks" };
+
+function mergeRows<T extends { id: string }>(previous: T[], incoming: T[]): T[] {
+  return [...new Map([...previous, ...incoming].map(item => [item.id, item])).values()];
+}
 
 type Data =
   | { type: "feed"; value: CommunityPage<CommunityPost> }
@@ -52,47 +58,50 @@ export function CommunityScreen({
   client,
   viewer,
   initialScrollY = 0,
-  initialPostDraft,
-  onPostDraftChange,
+  onPublish,
+  onNavigate,
+  onFollowList,
+  onBack,
+  revision = 0,
+  onChanged,
   onScroll,
   initialTarget,
 }: {
   client: CommunityClient;
   viewer: ActorContext;
   initialScrollY?: number;
-  initialPostDraft?: { text: string; key: string };
-  onPostDraftChange?: (draft: { text: string; key: string }) => void;
+  onPublish?: () => void;
+  onNavigate: (target: CommunityTarget) => void;
+  onFollowList: (direction: FollowDirection) => void;
+  onBack: () => void;
+  revision?: number;
+  onChanged: () => void;
   onScroll: (y: number) => void;
   initialTarget?: CommunityTarget;
 }) {
-  const { skin } = useSkin();
-  const [followDirection, setFollowDirection] = useState<FollowDirection>();
+  const localStyles = useThemedStyles(createLocalStyles);
+  const s = useCommunityStyles();
+  const { skin, ui } = useSkin();
   const [reportTarget, setReportTarget] = useState<ReportTarget>();
   const [blockTarget, setBlockTarget] = useState<CommunityProfile>();
-  const [page, setPage] = useState<Page>(initialTarget ?? { type: "feed" });
+  const page = useMemo<Page>(() => initialTarget ?? { type: "feed" }, [initialTarget]);
   const [mode, setMode] = useState<CommunityFeedMode>("LATEST");
   const [filter, setFilter] = useState<CommunityActorFilter>("ALL");
   const [data, setData] = useState<Data>();
   const [own, setOwn] = useState<CommunityProfile>();
   const [ownUnavailable, setOwnUnavailable] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState("");
-  const [postDraft, setPostDraft] = useState(() => initialPostDraft ?? { text: "", key: communityRequestKey() });
   const [commentDraft, setCommentDraft] = useState("");
-  const [composeOpen, setComposeOpen] = useState(false);
   const commentKey = useRef(communityRequestKey());
 
-  function updatePostDraft(text: string) {
-    const next = { text, key: communityRequestKey() };
-    setPostDraft(next);
-    onPostDraftChange?.(next);
-  }
   const [editingProfile, setEditingProfile] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "posts" | "comments"; id: string }>();
   const scope = useMemo(() => new CommunityRequestScope(), []);
-  const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const scroll = useRef<FlatList<CommunityPost>>(null);
   const feedY = useRef(initialScrollY);
   const restoreFeed = useRef(true);
   const active = useRef(true);
@@ -158,19 +167,19 @@ export function CommunityScreen({
               ...next.value,
               comments: {
                 ...next.value.comments,
-                items: [...previous.value.comments.items, ...next.value.comments.items],
+                items: mergeRows(previous.value.comments.items, next.value.comments.items),
               },
             },
           };
         }
         if (next.type === "feed" && previous.type === "feed") {
-          return { ...next, value: { ...next.value, items: [...previous.value.items, ...next.value.items] } };
+          return { ...next, value: { ...next.value, items: mergeRows(previous.value.items, next.value.items) } };
         }
         if (next.type === "profile" && previous.type === "profile") {
-          return { ...next, value: { ...next.value, items: [...previous.value.items, ...next.value.items] } };
+          return { ...next, value: { ...next.value, items: mergeRows(previous.value.items, next.value.items) } };
         }
         if (next.type === "blocks" && previous.type === "blocks") {
-          return { ...next, value: { ...next.value, items: [...previous.value.items, ...next.value.items] } };
+          return { ...next, value: { ...next.value, items: mergeRows(previous.value.items, next.value.items) } };
         }
         return next;
       });
@@ -187,6 +196,13 @@ export function CommunityScreen({
     return () => scope.invalidate();
   }, [load, scope]);
 
+  const seenRevision = useRef(revision);
+  useEffect(() => {
+    if (seenRevision.current === revision) return;
+    seenRevision.current = revision;
+    void load();
+  }, [load, revision]);
+
   async function mutate(action: () => Promise<unknown>, success?: () => void, write?: CommunityWriteAction, nextPage?: Page) {
     if (busyRef.current) return false;
     busyRef.current = true;
@@ -196,7 +212,8 @@ export function CommunityScreen({
       await action();
       if (!active.current) return false;
       success?.();
-      if (nextPage) showPage(nextPage);
+      if (nextPage) onChanged();
+      if (nextPage) navigate(nextPage, true);
       else await load();
       return true;
     } catch (e) {
@@ -208,23 +225,17 @@ export function CommunityScreen({
     }
   }
 
-  function navigate(next: Page) {
-    if (busyRef.current) return;
-    showPage(next);
+  function navigate(next: Page, afterWrite = false) {
+    if (busyRef.current && !afterWrite) return;
+    if (next.type === "feed") onBack();
+    else if (next.type === "blocks") onNavigate(next);
+    else if (next.id) onNavigate({ type: next.type, id: next.id });
   }
 
-  function showPage(next: Page) {
-    scope.invalidate();
-    setCommentDraft("");
-    commentKey.current = communityRequestKey();
-    setBlockTarget(undefined);
-    setDeleteTarget(undefined);
-    setComposeOpen(false);
-    setData(undefined);
-    visibleProfile.current = undefined;
-    setPage(next);
-    restoreFeed.current = next.type === "feed";
-    if (next.type !== "feed") scroll.current?.scrollTo({ y: 0, animated: false });
+  async function refresh() {
+    if (busyRef.current || loading || refreshing) return;
+    setRefreshing(true);
+    try { await load(); } finally { if (active.current) setRefreshing(false); }
   }
 
   function remove(kind: "posts" | "comments", id: string) {
@@ -235,7 +246,7 @@ export function CommunityScreen({
   const posts = data?.type === "feed" || data?.type === "profile" ? data.value.items : [];
   const nextCursor = data?.type === "detail" ? data.value.comments.nextCursor : data?.value.nextCursor;
   const draftLimit = page.type === "detail" ? 2000 : 4000;
-  const draftLength = Array.from((page.type === "detail" ? commentDraft : postDraft.text).trim()).length;
+  const draftLength = Array.from(commentDraft.trim()).length;
   const canSubmit = draftLength > 0 && draftLength <= draftLimit;
   const canCompose = own?.canPublish === true;
   const openActor = (id: string) => navigate({ type: "profile", id });
@@ -275,9 +286,18 @@ export function CommunityScreen({
 
   return (
     <View style={skin.id === "default" ? s.communityPage : s.page}>
-      <ScrollView
+      <FlatList
         ref={scroll}
+        data={posts}
+        keyExtractor={post => post.id}
+        renderItem={({ item: post }) => <ContentCard item={post}
+          onActor={() => openActor(post.author.id)}
+          onDetail={() => navigate({ type: "detail", id: post.id })}
+          onDelete={() => remove("posts", post.id)}
+          onReport={own && post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined} />}
+        ListFooterComponent={nextCursor ? <Button disabled={loading || busy} label="加载更多" onPress={() => void load(nextCursor)} /> : undefined}
         keyboardShouldPersistTaps="handled"
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
         contentContainerStyle={[s.content, s.feedContent]}
         onScroll={(e) => {
           if (page.type === "feed") {
@@ -289,10 +309,10 @@ export function CommunityScreen({
         onContentSizeChange={() => {
           if (page.type === "feed" && restoreFeed.current && data && !loading) {
             restoreFeed.current = false;
-            scroll.current?.scrollTo({ y: feedY.current, animated: false });
+            scroll.current?.scrollToOffset({ offset: feedY.current, animated: false });
           }
         }}
-      >
+        ListHeaderComponent={<View style={{ gap: 12 }}>
         {page.type === "feed" ? (
           <>
             {/* Clean Modern Feed Header: Tabs on Left, Compact Glass Icons + Compose Pill on Right */}
@@ -324,38 +344,15 @@ export function CommunityScreen({
               </View>
 
               <View style={localStyles.headerActions}>
-                <Pressable
-                  disabled={busy}
-                  accessibilityRole="button"
-                  accessibilityLabel="我的社区主页"
-                  onPress={() => navigate({ type: "profile" })}
-                  style={({ pressed }) => [localStyles.glassIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
-                >
-                  <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-                  <Ionicons name="person-outline" size={16} color={PEARL_UI.ink} />
-                </Pressable>
-                <Pressable
-                  disabled={loading || busy}
-                  accessibilityRole="button"
-                  accessibilityLabel="刷新"
-                  onPress={() => void load()}
-                  style={({ pressed }) => [localStyles.glassIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
-                >
-                  <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-                  <Ionicons name="refresh-outline" size={16} color={PEARL_UI.ink} />
-                </Pressable>
-                {canCompose && (
+                {canCompose && onPublish && (
                   <Pressable
                     disabled={busy}
                     accessibilityRole="button"
                     accessibilityLabel="发布动态"
-                    onPress={() => {
-                      setError("");
-                      setComposeOpen(true);
-                    }}
+                    onPress={onPublish}
                     style={({ pressed }) => [localStyles.composePill, pressed && { transform: [{ scale: 0.94 }] }]}
                   >
-                    <Ionicons name="add" size={15} color="#FFFFFF" />
+                    <Ionicons name="add" size={15} color={ui.onAccent} />
                     <Text style={localStyles.composePillText}>发动态</Text>
                   </Pressable>
                 )}
@@ -387,18 +384,6 @@ export function CommunityScreen({
         ) : (
           /* Clean Modern Sub-page Header: Back + Title + Contextual Action */
           <View style={localStyles.subHeader}>
-            {!initialTarget && (
-              <Pressable
-                disabled={busy}
-                accessibilityRole="button"
-                onPress={() => navigate({ type: "feed" })}
-                style={({ pressed }) => [localStyles.backPill, pressed && { transform: [{ scale: 0.94 }] }]}
-              >
-                <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-                <Ionicons name="chevron-back" size={16} color={PEARL_UI.ink} />
-                <Text style={localStyles.backText}>返回</Text>
-              </Pressable>
-            )}
             <Text style={localStyles.subTitle}>{pageTitle}</Text>
             <View style={localStyles.subHeaderRight}>
               {page.type === "profile" && data?.type === "profile" && data.profile.isSelf && (
@@ -410,24 +395,14 @@ export function CommunityScreen({
                   style={({ pressed }) => [localStyles.glassIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
                 >
                   <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-                  <Ionicons name="ban-outline" size={16} color={PEARL_UI.ink} />
+                  <Ionicons name="ban-outline" size={16} color={ui.ink} />
                 </Pressable>
               )}
-              <Pressable
-                disabled={loading || busy}
-                accessibilityRole="button"
-                accessibilityLabel="刷新"
-                onPress={() => void load()}
-                style={({ pressed }) => [localStyles.glassIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
-              >
-                <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-                <Ionicons name="refresh-outline" size={16} color={PEARL_UI.ink} />
-              </Pressable>
             </View>
           </View>
         )}
 
-        {error !== "" && !blockTarget && !deleteTarget && !composeOpen && (
+        {error !== "" && !blockTarget && !deleteTarget && (
           <Text accessibilityRole="alert" style={s.error}>
             {error} 可刷新后重试；发布失败时草稿会保留。
           </Text>
@@ -437,12 +412,12 @@ export function CommunityScreen({
             当前身份资料暂时无法加载，部分操作不可用。可刷新后重试。
           </Text>
         )}
-        {loading && <ActivityIndicator accessibilityLabel="正在加载社区" color={PEARL_UI.accent} />}
+        {loading && <ActivityIndicator accessibilityLabel="正在加载社区" color={ui.accent} />}
 
         {/* Profile Card */}
         {data?.type === "profile" && (
           <View style={s.card}>
-            <ActorLine actor={data.profile} onPress={() => undefined} subtitle={`@${data.profile.handle}`} />
+            <ActorLine actor={data.profile} subtitle={`@${data.profile.handle}`} />
             {data.profile.bio !== "" && <Text style={s.body}>{data.profile.bio}</Text>}
             {data.profile.isSelf ? (
               <View style={s.row}>
@@ -450,12 +425,12 @@ export function CommunityScreen({
                 <Button
                   label={`关注 ${data.profile.followingCount}`}
                   disabled={busy}
-                  onPress={() => setFollowDirection("following")}
+                  onPress={() => onFollowList("following")}
                 />
                 <Button
                   label={`粉丝 ${data.profile.followersCount}`}
                   disabled={busy}
-                  onPress={() => setFollowDirection("followers")}
+                  onPress={() => onFollowList("followers")}
                 />
               </View>
             ) : (
@@ -503,8 +478,7 @@ export function CommunityScreen({
             <View key={block.id} style={s.card}>
               <View style={localStyles.rowBetween}>
                 <View style={{ flex: 1 }}>
-                  <Text style={s.author}>{block.actor.displayName}</Text>
-                  <Text style={s.meta}>@{block.actor.handle}</Text>
+                  <ActorLine actor={block.actor} subtitle={block.actor.handle ? `@${block.actor.handle}` : undefined} />
                 </View>
                 <Button
                   label="取消屏蔽"
@@ -520,18 +494,6 @@ export function CommunityScreen({
             <Text style={s.meta}>当前家机尚未开放公开发布，请前往「我的」页右上角的设置。</Text>
           </View>
         )}
-
-        {/* Feed / Profile Posts */}
-        {posts.map((post) => (
-          <ContentCard
-            key={post.id}
-            item={post}
-            onActor={() => openActor(post.author.id)}
-            onDetail={() => navigate({ type: "detail", id: post.id })}
-            onDelete={() => remove("posts", post.id)}
-            onReport={own && post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined}
-          />
-        ))}
 
         {/* Post Detail & Comments */}
         {data?.type === "detail" && (
@@ -556,7 +518,7 @@ export function CommunityScreen({
                   multiline
                   editable={!busy}
                   placeholder="写下你的回应…"
-                  placeholderTextColor="#9A968F"
+                  placeholderTextColor={ui.placeholder}
                   value={commentDraft}
                   style={[s.input, { minHeight: 74 }]}
                   onChangeText={(text) => {
@@ -584,7 +546,7 @@ export function CommunityScreen({
                 </View>
               </View>
             )}
-            <Text style={localStyles.sectionLabel}>评论（{data.value.comments.items.length}）</Text>
+            <Text style={localStyles.sectionLabel}>评论（{data.value.post.commentsCount}）</Text>
             {data.value.comments.items.map((comment) => (
               <ContentCard
                 key={comment.id}
@@ -614,7 +576,7 @@ export function CommunityScreen({
                 page.type === "blocks" ? "shield-checkmark-outline" : "chatbubbles-outline"
               }
               size={22}
-              color={PEARL_UI.accent}
+              color={ui.accent}
             />
             <Text style={localStyles.emptyText}>
               {page.type === "blocks"
@@ -626,53 +588,8 @@ export function CommunityScreen({
           </View>
         )}
 
-        {nextCursor && <Button disabled={loading || busy} label="加载更多" onPress={() => void load(nextCursor)} />}
-      </ScrollView>
-
-      {/* Sleek Compose BottomSheet (preserves draft on publish error) */}
-      <BottomSheet
-        visible={composeOpen && canCompose && page.type === "feed"}
-        title={viewer.kind === "OWNER" ? "发布公开动态" : "以家机身份发动态"}
-        badge={viewer.kind === "OWNER" ? undefined : "Owner 代发"}
-        onClose={() => {
-          if (!busyRef.current) setComposeOpen(false);
-        }}
-      >
-        <TextInput
-          accessibilityLabel="动态内容"
-          multiline
-          editable={!busy}
-          placeholder="写下今天的小事或心情…"
-          placeholderTextColor="#9A968F"
-          value={postDraft.text}
-          style={[s.input, { marginBottom: 12 }]}
-          onChangeText={updatePostDraft}
-        />
-        <Text style={draftLength > draftLimit ? s.error : s.meta}>{draftLength} / {draftLimit}</Text>
-        {error !== "" && (
-          <Text accessibilityRole="alert" style={[s.error, { marginBottom: 10 }]}>
-            {error}（输入内容已保留）
-          </Text>
-        )}
-        <View style={localStyles.sheetActions}>
-          <Button label="先收起" disabled={busy} onPress={() => setComposeOpen(false)} />
-          <Button
-            primary
-            disabled={busy || loading || !canSubmit}
-            label={busy ? "正在发布…" : "发布动态"}
-            onPress={() =>
-              void mutate(
-                () => client.publish(viewer, postDraft.text, postDraft.key),
-                () => {
-                  updatePostDraft("");
-                  setComposeOpen(false);
-                },
-                "发帖",
-              )
-            }
-          />
-        </View>
-      </BottomSheet>
+        </View>}
+      />
 
       {/* Block / Delete Confirmation Sheet */}
       <BottomSheet
@@ -733,18 +650,6 @@ export function CommunityScreen({
         )}
       </BottomSheet>
 
-      {followDirection && (
-        <CommunityFollowList
-          client={client}
-          viewer={viewer}
-          direction={followDirection}
-          canFollow={own?.canPublish === true}
-          onClose={(changed) => {
-            setFollowDirection(undefined);
-            if (changed) void load();
-          }}
-        />
-      )}
       {reportTarget && (
         <Modal animationType="slide" onRequestClose={closeReport}>
           <SafeAreaView style={s.page}>
@@ -756,7 +661,7 @@ export function CommunityScreen({
   );
 }
 
-const localStyles = StyleSheet.create({
+const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
   feedHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -776,19 +681,19 @@ const localStyles = StyleSheet.create({
   modeTabText: {
     fontSize: 17,
     fontWeight: "500",
-    color: PEARL_UI.muted,
+    color: ui.muted,
   },
   modeTabTextActive: {
     fontSize: 19,
     fontWeight: "700",
-    color: PEARL_UI.ink,
+    color: ui.ink,
   },
   modeTabIndicator: {
     marginTop: 4,
     width: 18,
     height: 3,
     borderRadius: 2,
-    backgroundColor: PEARL_UI.accent,
+    backgroundColor: ui.accent,
   },
   headerActions: {
     flexDirection: "row",
@@ -809,15 +714,15 @@ const localStyles = StyleSheet.create({
     height: 36,
     paddingHorizontal: 12,
     borderRadius: RADIUS.pill,
-    backgroundColor: PEARL_UI.accent,
-    shadowColor: "#586B85",
+    backgroundColor: ui.accent,
+    shadowColor: ui.shadow,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 2,
   },
   composePillText: {
-    color: "#FFFFFF",
+    color: ui.onAccent,
     fontSize: 12.5,
     fontWeight: "600",
   },
@@ -843,12 +748,12 @@ const localStyles = StyleSheet.create({
   backText: {
     fontSize: 13,
     fontWeight: "600",
-    color: PEARL_UI.ink,
+    color: ui.ink,
   },
   subTitle: {
     fontSize: 16,
     fontWeight: "700",
-    color: PEARL_UI.ink,
+    color: ui.ink,
   },
   subHeaderRight: {
     flexDirection: "row",
@@ -864,30 +769,30 @@ const localStyles = StyleSheet.create({
   sectionLabel: {
     fontSize: 13,
     fontWeight: "700",
-    color: PEARL_UI.muted,
+    color: ui.muted,
     marginTop: 4,
   },
   noticePill: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    backgroundColor: ui.white,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: PEARL_UI.line,
+    borderColor: ui.line,
   },
   emptyCard: {
     paddingVertical: 32,
     paddingHorizontal: 20,
     borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.68)",
+    backgroundColor: ui.white,
     borderWidth: 1,
-    borderColor: PEARL_UI.highlight,
+    borderColor: ui.highlight,
     alignItems: "center",
     gap: 8,
   },
   emptyText: {
     fontSize: 13,
-    color: PEARL_UI.muted,
+    color: ui.muted,
     textAlign: "center",
     lineHeight: 20,
   },

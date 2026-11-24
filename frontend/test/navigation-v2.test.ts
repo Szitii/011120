@@ -48,3 +48,15 @@ test("chat and notification targets both return to the messages root", () => {
   assert.deepEqual(popRoute(pushRoute(messages, { type: "chat", chatId: "chat", fromTab: "messages" })), messages);
   assert.deepEqual(popRoute(pushRoute(messages, { type: "community-target", target: { type: "detail", id: "post" } })), messages);
 });
+
+test("community subroutes pop back to the exact prior profile or notification target", () => {
+  const root = initialNavigationState();
+  const profile = pushRoute(root, { type: "community-target", target: { type: "profile", id: "self" } });
+  const blocked = pushRoute(profile, { type: "community-target", target: { type: "blocks" } });
+  assert.deepEqual(popRoute(blocked), profile);
+  const messages = selectTab(root, "messages");
+  const detail = pushRoute(messages, { type: "community-target", target: { type: "detail", id: "post" } });
+  const author = pushRoute(detail, { type: "community-target", target: { type: "profile", id: "author" } });
+  assert.deepEqual(popRoute(author), detail);
+  assert.deepEqual(popRoute(detail), messages);
+});

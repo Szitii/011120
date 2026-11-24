@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
-import { CommunityButton, SecondaryHeading, communityStyles as s } from "../community/components";
+import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 import type { HomeScope } from "../home/keys";
 import { addAlbumPhoto, deleteAlbumEntry, listAlbum, type AlbumEntry } from "./store";
 import { findMedia } from "./mediaFiles";
 
 export function AlbumScreen({ scope }: { scope: HomeScope }) {
+  const s = useCommunityStyles();
   const [items, setItems] = useState<AlbumEntry[]>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,6 +95,7 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
 }
 
 function AlbumPhoto({ path, snapshot }: { path: string; snapshot: boolean }) {
+  const s = useCommunityStyles();
   const [uri, setUri] = useState<string>();
   const [failed, setFailed] = useState(false);
   useEffect(() => {

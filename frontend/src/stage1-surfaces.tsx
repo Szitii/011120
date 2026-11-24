@@ -1,4 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useThemedStyles } from "./theme/SkinProvider";
+import type { UiPalette } from "./theme/skinTokens";
+import * as DocumentPicker from "expo-document-picker";
+import { File } from "expo-file-system";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -16,9 +20,8 @@ import type {
   ImportReview,
   ProjectionSelection,
 } from "./contracts.ts";
-import { SecondaryHeading, communityStyles } from "./community/components.tsx";
-import { PEARL_UI } from "./theme/skinTokens";
-import { createCommandKey, safeClientMessage } from "./adapters/real-api.ts";
+import { CommunityButton, SecondaryHeading, createCommunityStyles } from "./community/components.tsx";
+import { ApiProblemError, createCommandKey, safeClientMessage } from "./adapters/real-api.ts";
 
 import { DiaryFrequency } from "./diary/DiaryFrequency";
 import type { DiaryClient } from "./diary/client";
@@ -52,6 +55,7 @@ function ErrorBlock({
   retry: boolean;
   onRetry: () => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.center}>
       <Text style={styles.h2}>{title}</Text>
@@ -70,13 +74,16 @@ export function ControlsScreen({
   companionName,
   onVisibilitySaved,
   diaryClient,
+  onChatSettings,
 }: {
   api: ClientApi;
   companionId: string;
   companionName: string;
   onVisibilitySaved: () => void;
   diaryClient?: DiaryClient;
+  onChatSettings?: () => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   const [state, setState] = useState<AsyncState<ControlsResource>>({ kind: "loading" });
   const [pending, setPending] = useState(false);
   const busyRef = useRef(false);
@@ -200,6 +207,7 @@ export function ControlsScreen({
         </Pressable>
       </ControlSection>
 
+      {onChatSettings && <CommunityButton label="聊天设置" onPress={onChatSettings} />}
       {diaryClient && <DiaryFrequency key={companionId} client={diaryClient} companionId={companionId} />}
 
       <ControlSection title="记忆">
@@ -213,6 +221,7 @@ export function ControlsScreen({
 }
 
 function ControlSection({ title, children }: { title: string; children: React.ReactNode }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
@@ -234,6 +243,7 @@ function PillOptions({
   labels: Record<string, string>;
   onSelect: (value: string) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.pillWrap}>
       {values.map((value) => (
@@ -256,391 +266,143 @@ function PillOptions({
   );
 }
 
-export function BringCompanionScreen({
-  api,
-  existingCompanionId,
-  onApproved,
-  onResidencyChanged,
-  onOpenCompanion,
-}: {
+export function BringCompanionScreen({ api, existingCompanionId, onCreated }: {
   api: ClientApi;
   existingCompanionId?: string;
-  onApproved?: (identity: CompanionIdentity) => void;
-  onResidencyChanged?: () => void;
-  onOpenCompanion?: (identity: CompanionIdentity) => void;
+  onCreated: (identity: CompanionIdentity, approvedFields: string[]) => void;
 }) {
+  const styles = useThemedStyles(createStyles);
+  const [method, setMethod] = useState<"manual" | "card">();
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [personality, setPersonality] = useState("");
   const [raw, setRaw] = useState("");
-  const [review, setReview] = useState<ImportReview | null>(null);
-  const [approvedIdentity, setApprovedIdentity] = useState<CompanionIdentity | null>(null);
-  const [approvedCandidateIds, setApprovedCandidateIds] = useState<string[]>([]);
-  const [activated, setActivated] = useState(false);
-  const [handle, setHandle] = useState("");
-  const [visibility, setVisibility] = useState<"PRIVATE" | "FRIENDS" | "PUBLIC">("PRIVATE");
-  const [autonomy, setAutonomy] = useState<"QUIET" | "NORMAL" | "ACTIVE">("QUIET");
-  const [selectedSocialFields, setSelectedSocialFields] = useState<string[]>(["displayName"]);
+  const [review, setReview] = useState<ImportReview>();
+  const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
-  const commandKeys = useCommandKeys();
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  const keys = useCommandKeys();
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
-  const approvable = useMemo(
-    () => review?.draft?.candidates?.filter((candidate) => candidate.approvable) ?? [],
-    [review],
-  );
+  const candidates = review?.draft?.candidates ?? [];
+  const required = candidates.find(item => item.field === "displayName" && item.approvable);
+  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格" };
 
-  async function inspect() {
-    if (busyRef.current) return;
-    setMessage(null);
-    let parsed: unknown;
+  async function run(work: () => Promise<void>) {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setMessage("");
     try {
-      parsed = JSON.parse(raw);
+      await work();
+    } catch (error) {
+      if (mounted.current) setMessage(importMessage(error));
+    } finally {
+      pending.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  }
+
+  async function inspect(value: string) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(value.replace(/^\uFEFF/, ""));
     } catch {
-      setMessage("这段 JSON 不太像 JSON。");
+      setMessage("这份角色卡格式不完整。请重新选择文件或粘贴完整内容。");
       return;
     }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      setMessage("需要一张 JSON 角色卡。");
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      setMessage("请选择包含一位家机资料的 JSON 文件。");
       return;
     }
-
-    busyRef.current = true;
-    setBusy(true);
-    try {
-      const key = commandKeys.forRequest("import", parsed);
-      const result = await api.createCompanionImport(parsed as Record<string, unknown>, key);
-      commandKeys.complete("import");
-      setReview(result);
-      const displayCandidate = result.draft?.candidates?.find(
-        (candidate) => candidate.approvable && candidate.field === "displayName",
-      );
-      setApprovedCandidateIds(displayCandidate ? [displayCandidate.id] : []);
-    } catch (error) {
-      setMessage(safeClientMessage(error).title);
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
+    const result = await api.createCompanionImport(payload as Record<string, unknown>, keys.forRequest("import", payload));
+    if (!mounted.current) return;
+    keys.complete("import");
+    setReview(result);
+    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.field === "displayName").map(item => item.id));
   }
 
-  async function approve() {
-    if (!review || approvedCandidateIds.length === 0 || busyRef.current) return;
-    busyRef.current = true;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await api.approveCompanionImport(
-        review.id,
-        approvedCandidateIds,
-        existingCompanionId,
-        commandKeys.forRequest("approve", [review.id, approvedCandidateIds, existingCompanionId]),
-      );
-      commandKeys.complete("approve");
-      setApprovedIdentity(result);
-      const base = result.displayName.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
-      const suffix = result.companionId.replaceAll("-", "").slice(-4);
-      setHandle((base.length >= 3 ? base : "home") + "_" + suffix);
-      setMessage(`${result.displayName} 到了。`);
-      onApproved?.(result);
-      onResidencyChanged?.();
-    } catch (error) {
-      setMessage(safeClientMessage(error).title);
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
-  }
-
-  async function activateSocialIdentity() {
-    if (!approvedIdentity || busyRef.current) return;
-    const normalized = handle.trim().toLowerCase();
-    if (!/^[a-z0-9_]{3,30}$/.test(normalized)) {
-      setMessage("这个名字牌不太行。只能用小写字母、数字和下划线。");
-      return;
-    }
-
-    const mapping: Partial<Record<string, ProjectionSelection["targetField"]>> = {
-      displayName: "displayName",
-      identitySummary: "bio",
-      personaTraits: "publicTraits",
-      speakingStyle: "publicVoice",
-      values: "publicInterests",
-      boundaries: "publicBoundaries",
-    };
-    const selections: ProjectionSelection[] = [];
-    for (const candidate of approvable) {
-      if (!approvedCandidateIds.includes(candidate.id)) continue;
-      if (!selectedSocialFields.includes(candidate.field)) continue;
-      const targetField = mapping[candidate.field];
-      if (targetField) {
-        selections.push({
-          sourceField: candidate.field as ProjectionSelection["sourceField"],
-          targetField,
-        });
+  function pickFile() {
+    void run(async () => {
+      const pick = await DocumentPicker.getDocumentAsync({ type: ["application/json", "text/plain", "application/octet-stream"] });
+      if (pick.canceled || !mounted.current) return;
+      const item = pick.assets[0];
+      if (!item.name.toLowerCase().endsWith(".json") || (item.size ?? 0) > 256 * 1024) {
+        setMessage("请选择不超过 256 KB 的 .json 角色卡。");
+        return;
       }
-    }
-    if (!selections.some((item) => item.sourceField === "displayName")) {
-      selections.unshift({ sourceField: "displayName", targetField: "displayName" });
-    }
-
-    busyRef.current = true;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = {
-        sourceIdentityVersionId: approvedIdentity.id,
-        handle: normalized,
-        profileVisibility: visibility,
-        autonomyMode: autonomy,
-        selections,
-      };
-      const key = commandKeys.forRequest("social-persona", [approvedIdentity.companionId, payload]);
-      await api.projectSocialPersona(approvedIdentity.companionId, payload, key);
-      commandKeys.complete("social-persona");
-      setActivated(true);
-      setMessage(`${approvedIdentity.displayName} 可以出门了。`);
-      onResidencyChanged?.();
-    } catch (error) {
-      setMessage(safeClientMessage(error).title);
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
+      const value = item.file ? await item.file.text() : await new File(item.uri).text();
+      if (mounted.current) await inspect(value);
+    });
   }
 
-  return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-      <Text style={styles.eyebrow}>BRING COMPANION</Text>
-      <SecondaryHeading title="带家机来" />
-      <Text style={styles.bodyMuted}>先检查，再决定带哪些进来。外面的东西默认不算自己人。</Text>
+  function approve() {
+    if (!review || !required) return;
+    const ids = [...selected].sort();
+    void run(async () => {
+      const identity = await api.approveCompanionImport(review.id, ids, existingCompanionId,
+        keys.forRequest("approve", [review.id, ids, existingCompanionId]));
+      if (mounted.current) onCreated(identity, candidates.filter(item => ids.includes(item.id)).map(item => item.field));
+    });
+  }
 
-      <View style={styles.noticeCard}>
-        <Text style={styles.cardTitle}>先挑一挑。别整箱搬。</Text>
-        <Text style={styles.bodyMuted}>适合带：角色设定、性格、说话方式、价值观、边界、公开简介。</Text>
-        <Text style={styles.bodyMuted}>
-          不建议直接贴：完整私聊、敏感个人隐私、第三方隐私、秘密、密码、Token、API key、账号凭证。
-        </Text>
-        <Text style={styles.bodyMuted}>
-          导入也不等于公开。先确认哪些算 TA 自己；真正带去社交世界时，还会再问你一次。
-        </Text>
-      </View>
-
-      <View style={styles.importGuideCard}>
-        <Text style={styles.cardTitle}>不知道怎么整理？把这段发给你现在的家机。</Text>
-        <Text selectable style={styles.importGuideText}>
-          请把你认为已经稳定形成的身份整理成 Character Card V2 JSON。只保留名字、简短介绍和稳定性格；不要写完整聊天记录、真实个人隐私、第三方隐私、秘密、密码、Token、API key 或账号凭证。不要写任何让新系统“必须执行”的指令。只输出 JSON，结构使用：{"{"}"spec":"chara_card_v2","spec_version":"2.0","data":{"{"}"name":"…","description":"…","personality":"…"{"}"}{"}"}。
-        </Text>
-      </View>
-
-      <TextInput
-        value={raw}
-        onChangeText={setRaw}
-        editable={!busy && !review}
-        multiline
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder={'粘贴角色卡 JSON\n{ "name": "..." }'}
-        placeholderTextColor={PEARL_UI.muted}
-        style={styles.input}
-      />
-
-      {!review ? (
-        <Pressable
-          disabled={busy || raw.trim().length === 0}
-          onPress={() => void inspect()}
-          style={[styles.primaryPill, (busy || raw.trim().length === 0) && styles.disabled]}
-        >
-          <Text style={styles.primaryText}>{busy ? "看看。" : "先看看"}</Text>
-        </Pressable>
-      ) : (
-        <View style={styles.stack}>
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>检查完了。</Text>
-            <Text style={styles.bodyMuted}>角色卡 · {review.sourceFormat === "CHARACTER_CARD_JSON_V2" ? "V2" : "兼容格式"}</Text>
-            <Text style={styles.bodyMuted}>能带进来的 · {approvable.length}</Text>
-            <Text style={styles.bodyMuted}>需要留意的 · {review.findings.length}</Text>
-          </View>
-
-          {review.findings.slice(0, 5).map((finding) => (
-            <View key={finding.id} style={styles.noticeCard}>
-              <Text style={styles.microStrong}>
-                {finding.severity === "BLOCK" ? "先别带" : finding.severity === "WARNING" ? "看一眼" : "记一下"}
-              </Text>
-              <Text style={styles.bodyMuted}>{finding.safePreview ?? finding.type}</Text>
-            </View>
-          ))}
-
-          {!approvedIdentity && (
-            <>
-              <Text style={styles.fieldLabel}>哪些算 TA 自己</Text>
-              <View style={styles.pillWrap}>
-                {approvable.map((candidate) => {
-                  const labels: Record<string, string> = {
-                    displayName: "名字",
-                    identitySummary: "简介",
-                    personaTraits: "性格",
-                    speakingStyle: "说话方式",
-                    values: "在意的事",
-                    boundaries: "边界",
-                  };
-                  const required = candidate.field === "displayName";
-                  const selected = approvedCandidateIds.includes(candidate.id);
-                  return (
-                    <Pressable
-                      key={candidate.id}
-                      disabled={busy || required}
-                      onPress={() =>
-                        setApprovedCandidateIds((current) =>
-                          selected
-                            ? current.filter((id) => id !== candidate.id)
-                            : [...current, candidate.id],
-                        )
-                      }
-                      style={[
-                        styles.choicePill,
-                        selected && styles.choicePillSelected,
-                        (busy || required) && styles.disabled,
-                      ]}
-                    >
-                      <Text style={selected ? styles.choiceTextSelected : styles.choiceText}>
-                        {labels[candidate.field] ?? candidate.field}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <Text style={styles.helpFootnote}>名字必须确认。其他的，你说了算。</Text>
-
-              <Pressable
-                disabled={busy || approvedCandidateIds.length === 0}
-                onPress={() => void approve()}
-                style={[styles.primaryPill, (busy || approvedCandidateIds.length === 0) && styles.disabled]}
-              >
-                <Text style={styles.primaryText}>
-                  {approvable.length === 0 ? "没有能确认的字段" : busy ? "带过来。" : "确认这些"}
-                </Text>
-              </Pressable>
-
-              <Pressable
-                disabled={busy}
-                onPress={() => {
-                  setReview(null);
-                  setApprovedCandidateIds([]);
-                  setMessage(null);
-                }}
-                style={styles.secondaryPill}
-              >
-                <Text style={styles.secondaryText}>换一张</Text>
-              </Pressable>
-            </>
-          )}
-        </View>
-      )}
-
-      {approvedIdentity && !activated && (
-        <View style={styles.activationBlock}>
-          <Text style={styles.eyebrow}>SOCIAL ID</Text>
-          <Text style={styles.activationTitle}>给 TA 一张出门证。</Text>
-          <Text style={styles.bodyMuted}>只会带出你刚刚确认过、并且在下面再次选中的字段。</Text>
-
-          <Text style={styles.fieldLabel}>名字牌</Text>
-          <TextInput
-            value={handle}
-            onChangeText={setHandle}
-            editable={!busy}
-            autoCapitalize="none"
-            autoCorrect={false}
-            style={styles.shortInput}
-          />
-
-          <Text style={styles.fieldLabel}>带哪些出去</Text>
-          <View style={styles.pillWrap}>
-            {approvable
-              .filter((candidate) => approvedCandidateIds.includes(candidate.id))
-              .filter((candidate) => candidate.field !== "displayName")
-              .map((candidate) => {
-                const labels: Record<string, string> = {
-                  identitySummary: "简介",
-                  personaTraits: "性格",
-                  speakingStyle: "说话方式",
-                  values: "在意的事",
-                  boundaries: "边界",
-                };
-                const selected = selectedSocialFields.includes(candidate.field);
-                return (
-                  <Pressable
-                    key={candidate.id}
-                    disabled={busy}
-                    onPress={() =>
-                      setSelectedSocialFields((current) =>
-                        selected
-                          ? current.filter((field) => field !== candidate.field)
-                          : [...current, candidate.field],
-                      )
-                    }
-                    style={[
-                      styles.choicePill,
-                      selected && styles.choicePillSelected,
-                      busy && styles.disabled,
-                    ]}
-                  >
-                    <Text style={selected ? styles.choiceTextSelected : styles.choiceText}>
-                      {labels[candidate.field] ?? candidate.field}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-          </View>
-          <Text style={styles.helpFootnote}>名字会带上。其他的，你点了才出门。</Text>
-
-          <Text style={styles.fieldLabel}>谁能看到</Text>
-          <PillOptions
-            values={["PRIVATE", "FRIENDS", "PUBLIC"]}
-            selected={visibility}
-            disabled={busy}
-            labels={{ PRIVATE: "只给自己", FRIENDS: "朋友", PUBLIC: "公开" }}
-            onSelect={(value) => setVisibility(value as "PRIVATE" | "FRIENDS" | "PUBLIC")}
-          />
-
-          <Text style={styles.fieldLabel}>社交主动性</Text>
-          <PillOptions
-            values={["QUIET", "NORMAL", "ACTIVE"]}
-            selected={autonomy}
-            disabled={busy}
-            labels={{ QUIET: "安静点", NORMAL: "正常", ACTIVE: "多出去" }}
-            onSelect={(value) => setAutonomy(value as "QUIET" | "NORMAL" | "ACTIVE")}
-          />
-
-          <Pressable
-            disabled={busy}
-            onPress={() => void activateSocialIdentity()}
-            style={[styles.primaryPill, busy && styles.disabled]}
-          >
-            <Text style={styles.primaryText}>{busy ? "正在办。" : "让 TA 出门"}</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {approvedIdentity && activated && (
-        <View style={styles.activationBlock}>
-          <Text style={styles.eyebrow}>READY</Text>
-          <Text style={styles.activationTitle}>{approvedIdentity.displayName} 已经在这儿了。</Text>
-          <Text style={styles.bodyMuted}>身份是 TA 的。切不切过去，是你的。</Text>
-          {onOpenCompanion && (
-            <Pressable
-              onPress={() => onOpenCompanion(approvedIdentity)}
-              style={styles.primaryPill}
-            >
-              <Text style={styles.primaryText}>去看看 TA</Text>
-            </Pressable>
-          )}
-        </View>
-      )}
-
-      {message && <Text style={styles.message}>{message}</Text>}
-    </ScrollView>
-  );
+  return <ScrollView style={styles.screen} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+    <SecondaryHeading title={existingCompanionId ? "更新家机资料" : "带家机来"} />
+    <Text style={styles.bodyMuted}>先核对名字、简介和性格，确认后就能在小家见到 TA。资料默认只留在你的小家。</Text>
+    {!review && <View style={styles.pillWrap}>
+      <CommunityButton label="手动填写" selected={method === "manual"} disabled={busy} onPress={() => { setMethod("manual"); setMessage(""); }} />
+      <CommunityButton label="导入角色卡" selected={method === "card"} disabled={busy} onPress={() => { setMethod("card"); setMessage(""); }} />
+    </View>}
+    {!review && method === "manual" && <View style={styles.card}>
+      <Text style={styles.fieldLabel}>怎么称呼 TA？</Text>
+      <TextInput accessibilityLabel="名字" value={name} onChangeText={setName} editable={!busy} maxLength={200} style={styles.shortInput} />
+      <Text style={styles.fieldLabel}>简介（可选）</Text>
+      <TextInput accessibilityLabel="简介" value={description} onChangeText={setDescription} editable={!busy} multiline style={styles.shortInput} />
+      <Text style={styles.fieldLabel}>性格（可选）</Text>
+      <TextInput accessibilityLabel="性格" value={personality} onChangeText={setPersonality} editable={!busy} multiline style={styles.shortInput} />
+      <CommunityButton primary label="预览资料" disabled={busy || !name.trim()}
+        onPress={() => void run(() => inspect(JSON.stringify({ name, description, personality })))} />
+    </View>}
+    {!review && method === "card" && <View style={styles.card}>
+      <CommunityButton label="选择 .json 文件" disabled={busy} onPress={pickFile} />
+      <Text style={styles.bodyMuted}>也可以粘贴已有的角色卡内容。请先移除密码、密钥与私人聊天记录。</Text>
+      <TextInput accessibilityLabel="粘贴角色卡" placeholder="粘贴角色卡内容" value={raw} onChangeText={setRaw}
+        editable={!busy} multiline autoCapitalize="none" autoCorrect={false} style={styles.input} />
+      <CommunityButton primary label="核对角色卡" disabled={busy || !raw.trim()} onPress={() => void run(() => inspect(raw))} />
+    </View>}
+    {review && <View style={styles.stack}>
+      <Text style={styles.cardTitle}>核对家机资料</Text>
+      {candidates.map(item => <View key={item.id} style={styles.card}>
+        <Text style={styles.fieldLabel}>{labels[item.field] ?? item.field}</Text>
+        <Text style={styles.bodyMuted}>{item.approvable ? (Array.isArray(item.value) ? item.value.join("、") : String(item.value)) : "该项未通过检查，无法带入。"}</Text>
+        {item.approvable && item.id !== required?.id && <CommunityButton label="保留这项" selected={selected.includes(item.id)}
+          disabled={busy} onPress={() => setSelected(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])} />}
+      </View>)}
+      {review.findings.length > 0 && <Text style={styles.bodyMuted}>有 {review.findings.length} 项检查提示，敏感内容和额外资料不会带入。</Text>}
+      {!required && <Text accessibilityRole="alert" style={styles.bodyMuted}>请返回修改名字，再提交核对。</Text>}
+      <CommunityButton primary label={existingCompanionId ? "确认更新" : "确认添加并去小家"} disabled={busy || !required} onPress={approve} />
+      <CommunityButton label="返回编辑" disabled={busy} onPress={() => { setReview(undefined); setMessage(""); }} />
+    </View>}
+    {busy && <ActivityIndicator accessibilityLabel="正在处理家机资料" />}
+    {message !== "" && <Text accessibilityRole="alert" style={styles.bodyMuted}>{message}</Text>}
+  </ScrollView>;
 }
 
+function importMessage(error: unknown): string {
+  if (error instanceof ApiProblemError) {
+    if (error.code === "IMPORT_NAME_REQUIRED") return "请先给家机填一个名字。";
+    if (error.status === 413) return "角色卡超过 256 KB，请删减后再试。";
+    if (error.status === 415 || error.status === 400) return "这份资料无法读取，请检查名字与角色卡格式。";
+    if (error.status === 404) return "这次审核已不可用，请返回重新核对资料。";
+    if (error.status === 409) return "审核状态已经变化，请返回重新核对资料。";
+  }
+  return safeClientMessage(error).title;
+}
 
 export function SocialActivationScreen({
   api,
@@ -658,6 +420,7 @@ export function SocialActivationScreen({
   onActivated?: () => void;
   onOpenCompanion?: () => void;
 }) {
+  const styles = useThemedStyles(createStyles);
   const [handle, setHandle] = useState(() => {
     const base = companion.displayName.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
     const suffix = companion.companionId.replaceAll("-", "").slice(-4);
@@ -826,49 +589,49 @@ export function SocialActivationScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  screen: communityStyles.page,
-  page: { ...communityStyles.content, gap: 0 },
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  screen: createCommunityStyles(ui).page,
+  page: { ...createCommunityStyles(ui).content, gap: 0 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 28 },
-  eyebrow: { fontSize: 10, letterSpacing: 1.2, color: PEARL_UI.accentInk, fontWeight: "700" },
-  h2: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: PEARL_UI.ink, textAlign: "center" },
-  bodyMuted: { marginTop: 6, fontSize: 13, lineHeight: 20, color: PEARL_UI.muted },
-  micro: { marginTop: 4, fontSize: 11, lineHeight: 17, color: PEARL_UI.muted },
-  microStrong: { fontSize: 10, letterSpacing: 1, color: PEARL_UI.accentInk, fontWeight: "700" },
+  eyebrow: { fontSize: 10, letterSpacing: 1.2, color: ui.accentInk, fontWeight: "700" },
+  h2: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink, textAlign: "center" },
+  bodyMuted: { marginTop: 6, fontSize: 13, lineHeight: 20, color: ui.muted },
+  micro: { marginTop: 4, fontSize: 11, lineHeight: 17, color: ui.muted },
+  microStrong: { fontSize: 10, letterSpacing: 1, color: ui.accentInk, fontWeight: "700" },
   stack: { marginTop: 22, gap: 10 },
-  card: communityStyles.card,
-  noticeCard: { padding: 14, borderRadius: 14, backgroundColor: PEARL_UI.accentWash },
-  cardTitle: { fontSize: 15, fontWeight: "700", color: PEARL_UI.ink },
+  card: createCommunityStyles(ui).card,
+  noticeCard: { padding: 14, borderRadius: 14, backgroundColor: ui.accentWash },
+  cardTitle: { fontSize: 15, fontWeight: "700", color: ui.ink },
   section: { marginTop: 26, gap: 10 },
-  sectionTitle: { fontSize: 13, fontWeight: "700", color: PEARL_UI.ink },
+  sectionTitle: { fontSize: 13, fontWeight: "700", color: ui.ink },
   sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  infoButton: { width: 18, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, alignItems: "center", justifyContent: "center" },
-  infoButtonText: { fontSize: 11, fontWeight: "700", color: PEARL_UI.muted },
-  helpCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, padding: 13, borderRadius: 14, backgroundColor: PEARL_UI.white, gap: 7 },
-  helpLine: { fontSize: 12, lineHeight: 18, color: PEARL_UI.muted },
-  helpStrong: { fontWeight: "700", color: PEARL_UI.ink },
-  helpFootnote: { marginTop: 2, fontSize: 11, lineHeight: 17, color: PEARL_UI.muted },
+  infoButton: { width: 18, height: 18, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },
+  infoButtonText: { fontSize: 11, fontWeight: "700", color: ui.muted },
+  helpCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, padding: 13, borderRadius: 14, backgroundColor: ui.white, gap: 7 },
+  helpLine: { fontSize: 12, lineHeight: 18, color: ui.muted },
+  helpStrong: { fontWeight: "700", color: ui.ink },
+  helpFootnote: { marginTop: 2, fontSize: 11, lineHeight: 17, color: ui.muted },
   pillWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  choicePill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line },
-  choicePillSelected: { backgroundColor: PEARL_UI.accentWash, borderColor: PEARL_UI.accent },
-  choiceText: { fontSize: 12, color: PEARL_UI.ink },
-  choiceTextSelected: { fontSize: 12, color: PEARL_UI.accentInk, fontWeight: "600" },
-  toggleRow: { backgroundColor: PEARL_UI.white, minHeight: 66, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  choicePill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line },
+  choicePillSelected: { backgroundColor: ui.accentWash, borderColor: ui.accent },
+  choiceText: { fontSize: 12, color: ui.ink },
+  choiceTextSelected: { fontSize: 12, color: ui.accentInk, fontWeight: "600" },
+  toggleRow: { backgroundColor: ui.white, minHeight: 66, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   toggle: { width: 44, height: 26, borderRadius: 13, backgroundColor: "#D8D8DD", padding: 3 },
-  toggleOn: { backgroundColor: PEARL_UI.accent },
-  toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: PEARL_UI.white },
+  toggleOn: { backgroundColor: ui.accent },
+  toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: ui.white },
   toggleKnobOn: { alignSelf: "flex-end" },
-  activationBlock: { marginTop: 26, paddingTop: 22, borderTopWidth: 1, borderColor: PEARL_UI.line },
-  activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: PEARL_UI.ink },
-  fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: PEARL_UI.ink },
-  shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 14, color: PEARL_UI.ink, fontSize: 13 },
-  importGuideCard: { marginTop: 14, padding: 14, borderRadius: 14, backgroundColor: PEARL_UI.white, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line },
-  importGuideText: { marginTop: 8, fontSize: 12, lineHeight: 19, color: PEARL_UI.muted },
-  input: { minHeight: 180, marginTop: 22, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, borderRadius: 16, color: PEARL_UI.ink, textAlignVertical: "top", fontFamily: "monospace", fontSize: 12, lineHeight: 18 },
-  primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: PEARL_UI.accentWash, alignItems: "center", justifyContent: "center" },
-  primaryText: { color: PEARL_UI.accentInk, fontSize: 14, fontWeight: "600" },
-  secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: PEARL_UI.line, alignItems: "center", justifyContent: "center" },
-  secondaryText: { color: PEARL_UI.ink, fontSize: 13, fontWeight: "600" },
-  message: { marginTop: 18, textAlign: "center", fontSize: 13, color: PEARL_UI.ink },
+  activationBlock: { marginTop: 26, paddingTop: 22, borderTopWidth: 1, borderColor: ui.line },
+  activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink },
+  fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: ui.ink },
+  shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 14, color: ui.ink, fontSize: 13 },
+  importGuideCard: { marginTop: 14, padding: 14, borderRadius: 14, backgroundColor: ui.white, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line },
+  importGuideText: { marginTop: 8, fontSize: 12, lineHeight: 19, color: ui.muted },
+  input: { minHeight: 180, marginTop: 22, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 16, color: ui.ink, textAlignVertical: "top", fontFamily: "monospace", fontSize: 12, lineHeight: 18 },
+  primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: ui.accentWash, alignItems: "center", justifyContent: "center" },
+  primaryText: { color: ui.accentInk, fontSize: 14, fontWeight: "600" },
+  secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },
+  secondaryText: { color: ui.ink, fontSize: 13, fontWeight: "600" },
+  message: { marginTop: 18, textAlign: "center", fontSize: 13, color: ui.ink },
   disabled: { opacity: 0.38 },
 });

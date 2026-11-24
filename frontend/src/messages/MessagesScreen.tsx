@@ -4,14 +4,14 @@ import type { Chat } from "../../../contracts/chat";
 import type { ActorContext, CommunityNotification } from "../../../contracts/community";
 import { safeClientMessage } from "../adapters/real-api";
 import type { ChatClient } from "../chat/client";
-import { ActorLine, CommunityButton as Button, SecondaryHeading, communityStyles as s } from "../community/components";
+import { ActorLine, CommunityButton as Button, SecondaryHeading, useCommunityStyles } from "../community/components";
 import { communityRequestKey, type CommunityClient } from "../community/client";
 import type { ClientApi, LifeEventInboxCollection, LifeEventInboxItem, OwnerCompanionSummary } from "../contracts";
 import type { CommunityTarget } from "../state/navigation";
 import { useAppIsActive } from "../state/useAppIsActive";
 import { CHROME } from "../theme/layoutTokens";
 
-export function MessagesScreen({ api, viewer, chatClient, companions, visible, onChat, onStartChat, onCommunityTarget, onLife }: {
+export function MessagesScreen({ api, viewer, chatClient, companions, visible, onChat, onStartChat, onCreateGroup, onCommunityTarget, onLife }: {
   api: ClientApi;
   viewer: ActorContext;
   chatClient?: ChatClient;
@@ -21,7 +21,9 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   onStartChat: (companion: OwnerCompanionSummary) => void;
   onCommunityTarget: (target: CommunityTarget) => void;
   onLife: () => void;
+  onCreateGroup: () => void;
 }) {
+  const s = useCommunityStyles();
   const [section, setSection] = useState<"chats" | "notices">(chatClient ? "chats" : "notices");
   const [source, setSource] = useState<"community" | "owner">("community");
   const appActive = useAppIsActive();
@@ -40,7 +42,7 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
       </View>}
     </View>
     {section === "chats" && chatClient && <ConversationList
-      client={chatClient} companions={companions} active={active} onChat={onChat} onStartChat={onStartChat}
+      client={chatClient} companions={companions} active={active} onChat={onChat} onStartChat={onStartChat} onCreateGroup={onCreateGroup}
     />}
     {section === "notices" && source === "community" && (api.community
       ? <CommunityNotices client={api.community} viewer={viewer} visible={visible} onOpen={onCommunityTarget} />
@@ -50,13 +52,15 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   </View>;
 }
 
-function ConversationList({ client, companions, active, onChat, onStartChat }: {
+function ConversationList({ client, companions, active, onChat, onStartChat, onCreateGroup }: {
   client: ChatClient;
   companions: OwnerCompanionSummary[];
   active: boolean;
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
+  onCreateGroup: () => void;
 }) {
+  const s = useCommunityStyles();
   const [items, setItems] = useState<Chat[]>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -79,6 +83,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat }: {
 
   return <ScrollView contentContainerStyle={styles.content}>
     <Button label="刷新" disabled={loading} onPress={() => setReload(value => value + 1)} />
+    {companions.length >= 2 && <Button label="新建群聊" primary onPress={onCreateGroup} />}
     {error !== "" && <Text accessibilityRole="alert" style={s.meta}>{error}</Text>}
     {!items && !error && <ActivityIndicator accessibilityLabel="正在读取会话" />}
     {items?.map(chat => {
@@ -107,12 +112,13 @@ function CommunityNotices({ client, viewer, visible, onOpen }: {
 
   return <NoticeList load={load} acknowledge={acknowledge} visible={visible}
     onOpen={note => onOpen(note.postId ? { type: "detail", id: note.postId } : { type: "profile", id: note.actor.id })}
-    renderSummary={note => <ActorLine actor={note.actor} onPress={() => onOpen({ type: "profile", id: note.actor.id })}
+    renderSummary={note => <ActorLine actor={note.actor}
       subtitle={note.kind === "FOLLOW" ? "关注了你" : "评论了你的动态"} />}
   />;
 }
 
 function OwnerNotices({ api, visible, onOpen }: { api: ClientApi; visible: boolean; onOpen: () => void }) {
+  const s = useCommunityStyles();
   type Cursor = NonNullable<LifeEventInboxCollection["nextCursor"]>;
   const load = useCallback((cursor?: Cursor) => api.lifeEventInbox(cursor), [api]);
   return <NoticeList load={load} acknowledge={(item: LifeEventInboxItem) => api.acknowledgeLifeEvent(item.id)}
@@ -127,6 +133,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
   visible: boolean;
   onOpen: (item: T) => void;
 }) {
+  const s = useCommunityStyles();
   const [items, setItems] = useState<T[]>();
   const [cursor, setCursor] = useState<Cursor | null>(null);
   const [busy, setBusy] = useState(false);
@@ -175,10 +182,11 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
 
   function act(item: T, open = false) {
     return run(async () => {
+      if (open && openAllowed.current) onOpen(item);
       const next = item.readAt ? item : await acknowledge(item);
       if (!mounted.current) return;
       setItems(current => current?.map(value => value.id === item.id ? next : value));
-      if (open && openAllowed.current) onOpen(next);
+
     });
   }
 

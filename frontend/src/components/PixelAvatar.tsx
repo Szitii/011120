@@ -1,6 +1,7 @@
+import { useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { useEffect, useState } from "react";
 import { Image, StyleSheet, View, type ImageSourcePropType } from "react-native";
-import { PEARL_UI } from "../theme/skinTokens";
 
 type AvatarRole = "owner" | "companion";
 
@@ -20,6 +21,7 @@ export function PixelAvatar({
   uri?: string | null;
   size: number;
 }) {
+  const styles = useThemedStyles(createStyles);
   const [remoteReady, setRemoteReady] = useState(false);
   const [remoteFailed, setRemoteFailed] = useState(false);
 
@@ -58,11 +60,11 @@ export function PixelAvatar({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (ui: UiPalette) => StyleSheet.create({
   frame: {
     backgroundColor: "#FAF8F5",
     borderWidth: 1.5,
-    borderColor: PEARL_UI.highlight,
+    borderColor: ui.highlight,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -73,7 +75,7 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   companion: {
-    backgroundColor: PEARL_UI.accentWash,
+    backgroundColor: ui.accentWash,
   },
   image: {
     width: "100%",
