@@ -24,6 +24,8 @@ psql "$ADMIN_DB" -v ON_ERROR_STOP=1 -f backend/supabase/migrations/<新文件>.s
 
 **加模型密钥**：等全平台每日花费上限（`docs/ADMIN_PLAN.md` PR 3）合并后，`fly secrets set -a companion-social-api ANTHROPIC_API_KEY=...`（名字见 `CHAT_MODELS.md`）。没有密钥时聊天回复显示"即将开放"。
 
+**加语音密钥**：`fly secrets set -a companion-social-api MINIMAX_API_KEY=...`（MiniMax 国际版 platform.minimax.io 的 key）。没有它时 `GET /v0/voices` 返回 `available: false`，家机只打字。语音的每日条数和保存天数在 `companion_private.chat_quota`（`daily_voice`、`voice_keep_days`）。
+
 ## 连接和密码
 
 - `$ADMIN_DB`：Supabase 管理员（`postgres`）的 Session pooler 连接串，存在维护者电脑的 `~/.011120-password`（权限 600），不进仓库、不贴聊天。用 Session pooler 是因为直连地址只有 IPv6。

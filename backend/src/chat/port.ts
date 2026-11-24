@@ -1,6 +1,7 @@
 import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
+import type { Clip } from "./voices.ts";
 
 /** What the server needs to write one Companion reply (from chat_claim). */
 export interface ChatClaim {
@@ -89,8 +90,15 @@ export interface ChatPort {
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown>;
   /** Server only: the next reply to write, or null. */
   claim(chatId: string): Promise<ChatClaim | null>;
-  /** Server only: `bodies` are 1 to 3 messages for SENT, else null. False when the claim is stale. */
-  finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null): Promise<boolean>;
+  /**
+   * Server only: `bodies` are 1 to 3 messages for SENT, else null; `clips` (SENT only) has one entry
+   * per body, a Clip for a voice message or null for text. False when the claim is stale.
+   */
+  finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[]): Promise<boolean>;
+  /** Server only: how many voice messages the Owner may still get today. */
+  voiceLeft(): Promise<number>;
+  /** The audio of a shown voice message in the Owner's chat (NOT_FOUND otherwise). */
+  audio(chatId: string, messageId: string): Promise<{ mime: string; bytes: Uint8Array }>;
   /** Server only: book a model call and mark it started. */
   reserve(input: ChatReservation): Promise<ReservationDecision>;
   /** Server only: settle a started call with real usage (ok false: it failed). */

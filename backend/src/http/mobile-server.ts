@@ -3,6 +3,7 @@ import type { Connections } from "../connections/model.ts";
 import { MAX_IMPORT_BYTES } from "../companion-import/policy.ts";
 import type { ChatCatalog } from "../chat/models.ts";
 import { ChatReplies, devChatModel } from "../chat/replies.ts";
+import { devSpeaker, VoiceCatalog, Voices } from "../chat/voices.ts";
 import { MvpApiBoundary } from "./mvp-api.ts";
 import type { MvpHttpRequest, OwnerSessionResolver } from "./types.ts";
 
@@ -10,8 +11,9 @@ import type { MvpHttpRequest, OwnerSessionResolver } from "./types.ts";
 const MAX_BODY_BYTES = MAX_IMPORT_BYTES;
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "authorization, content-type, idempotency-key, if-match, x-trace-id",
+  "access-control-allow-headers": "authorization, content-type, idempotency-key, if-match, range, x-trace-id",
   "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+  "access-control-expose-headers": "accept-ranges, content-length, content-range, x-trace-id",
 };
 // status and title per transport failure; anything else is a 500 TRANSPORT_ERROR.
 const TRANSPORT_PROBLEMS: Readonly<Record<string, readonly [number, string]>> = {
@@ -54,7 +56,8 @@ const writeJson = (
   headers: Readonly<Record<string, string>> = {},
 ): void => {
   response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...CORS_HEADERS, ...headers });
-  response.end(JSON.stringify(body));
+  // Audio (a voice message) goes out as it is; everything else is JSON.
+  response.end(body instanceof Uint8Array ? body : JSON.stringify(body));
 };
 
 const writeTransportProblem = (response: ServerResponse, error: unknown): void => {
@@ -74,14 +77,14 @@ const writeTransportProblem = (response: ServerResponse, error: unknown): void =
 
 /**
  * One HTTP host for both the dev token resolver and the Supabase resolver. Chat replies: the dev
- * host answers with a fixed fake reply; the Supabase host has no model yet, so replies end as
- * UNAVAILABLE ("coming soon") until a model is connected.
+ * host answers with a fixed fake reply (and silent voice messages); the Supabase host has no model
+ * yet, so replies end as UNAVAILABLE ("coming soon") until a model is connected.
  */
 export const createMobileHttpServer = (
   sessions: OwnerSessionResolver,
   mode: "stage1-mobile-dev" | "supabase-auth",
   chat: { readonly replies: ChatReplies; readonly catalog?: ChatCatalog; readonly connections?: Connections } =
-    { replies: new ChatReplies(mode === "stage1-mobile-dev" ? devChatModel : undefined) },
+    { replies: mode === "stage1-mobile-dev" ? new ChatReplies(devChatModel, undefined, new Voices(VoiceCatalog.load(), devSpeaker)) : new ChatReplies() },
 ) => {
   const api = new MvpApiBoundary({
     sessions,

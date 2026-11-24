@@ -3,6 +3,7 @@ import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type { Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, ReservationDecision } from "./port.ts";
+import type { Clip } from "./voices.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
 export class PostgresChatAdapter implements ChatPort {
@@ -88,8 +89,8 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown> {
-    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5) as payload",
-      [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.revision]);
+    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6) as payload",
+      [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.voice ?? null, settings.revision]);
   }
 
   async claim(chatId: string): Promise<ChatClaim | null> {
@@ -97,9 +98,26 @@ export class PostgresChatAdapter implements ChatPort {
     return payload === null ? null : this.#check(payload) as ChatClaim;
   }
 
-  async finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null): Promise<boolean> {
-    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[]) as payload", [replyId, claimId, outcome, bodies]);
+  async finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null,
+    clips?: readonly (Clip | null)[]): Promise<boolean> {
+    const audio = clips === undefined || clips.every(clip => clip === null) ? null : JSON.stringify(clips.map(clip => clip === null ? null
+      : { mime: clip.mime, durationMs: clip.durationMs, characters: clip.characters, data: Buffer.from(clip.bytes).toString("base64") }));
+    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb) as payload",
+      [replyId, claimId, outcome, bodies, audio]);
     return (payload as { accepted?: unknown }).accepted === true;
+  }
+
+  async voiceLeft(): Promise<number> {
+    const left = (await this.#object("select public.chat_voice_left() as payload", []) as { left?: unknown }).left;
+    return typeof left === "number" ? left : 0;
+  }
+
+  async audio(chatId: string, messageId: string): Promise<{ mime: string; bytes: Uint8Array }> {
+    const payload = await this.#object("select public.chat_audio_get($1,$2) as payload", [chatId, messageId]) as { mime?: unknown; data?: unknown };
+    if (typeof payload.mime !== "string" || typeof payload.data !== "string") {
+      throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid chat response.");
+    }
+    return { mime: payload.mime, bytes: Buffer.from(payload.data, "base64") };
   }
 
   async reserve(input: ChatReservation): Promise<ReservationDecision> {

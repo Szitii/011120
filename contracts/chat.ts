@@ -31,6 +31,12 @@ export interface ChatMessage {
   /** true when POST .../retry may be used (failure ERROR). A BLOCKED reply is final. */
   retryable: boolean;
   sentAt: string;
+  /**
+   * A voice message (语音): play GET /v0/chats/{chatId}/messages/{id}/audio; `body` is its transcript.
+   * null for text, and once the clip has expired (kept 30 days): then show the body as text.
+   * Always sent; optional here so app code written before it still compiles.
+   */
+  audio?: { durationMs: number } | null;
 }
 
 export interface Chat {
@@ -50,6 +56,8 @@ export interface Chat {
   readUpTo?: string | null;
   /** Companions to show as "typing…" right now. */
   typing: string[];
+  /** Those in `typing` whose next message is a voice message: show "正在说话…" instead. Always sent; optional like unreadCount. */
+  recording?: string[];
   /** More replies are on the way: keep refreshing every 1-2 s while true, even if nobody shows as typing. */
   replying: boolean;
   activeAt: string;
@@ -104,7 +112,27 @@ export interface ChatSettings {
   companionInteraction: "NONE" | "RARE" | "NORMAL" | "LIVELY";
   /** A ChatModelInfo id from GET /v0/chat-models; null = the platform default. */
   model: string | null;
+  /**
+   * A VoiceInfo id from GET /v0/voices: the Companion sometimes answers with a voice message in this
+   * voice (it decides which messages, like a person). null: text only (default).
+   * Always sent; on PUT, leaving it out keeps the current voice.
+   */
+  voice?: string | null;
   revision: number;
+}
+
+/** One voice the Owner can pick for a Companion (GET /v0/voices). Hear it at GET /v0/voices/{id}/sample. */
+export interface VoiceInfo {
+  id: string;
+  name: string;
+  gender: "FEMALE" | "MALE";
+  description: string;
+}
+
+export interface VoiceList {
+  items: VoiceInfo[];
+  /** false: voice messages are not switched on on this server (no speech provider): hide the voice picker. */
+  available: boolean;
 }
 
 /** One model the Owner can pick (GET /v0/chat-models). */
