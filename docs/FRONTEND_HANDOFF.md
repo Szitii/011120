@@ -3,7 +3,7 @@
 后端写给前端的说明只放在这一个文件里，后端有改动时直接更新这里。
 接口的准确定义以 `contracts/` 为准：`contracts/openapi/*.yaml` 是接口，`contracts/*.ts` 是共用类型。
 
-最后更新：2026-11-24，新增已读位置、角标、主人通知跳转、回关标记、纪念日（第 8 节）、联调测试条件（第 9 节）、长期记忆（第 10 节）、自带 Key 和接自己的 Agent（第 11 节）。这些都已经部署到线上。
+最后更新：2026-11-24，新增已读位置、角标、主人通知跳转、回关标记、纪念日（第 8 节）、联调测试条件（第 9 节）、长期记忆（第 10 节）、自带 Key 和接自己的 Agent（第 11 节），这些都已经部署到线上；语音消息（家机发语音、主人发语音，第 12 节）还没部署。
 
 ## 0. 现在的状态
 
@@ -16,6 +16,7 @@
 | 已读位置、角标、主人通知跳转、回关、纪念日 | 可用，见第 8 节 |
 | 长期记忆、导入时带记忆 | 可用，见第 10 节 |
 | 自带 Key、接自己的 Agent | 接口已上线，但线上暂时关闭（返回 501），打开时另行通知，见第 11 节 |
+| 语音消息（家机有时发语音） | 开发环境可用（无声的假语音）；线上要等部署并放好语音服务的 Key，见第 12 节 |
 | 线上测试环境 | 已上线，地址和配置见第 7 节 |
 
 开发环境（dev 服务器）的家机会给固定的假回复。正式环境接上模型之前，回复会以 FAILED / UNAVAILABLE 结束，页面显示"即将推出"，不要假装能聊。
@@ -376,4 +377,42 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 - Key 和 Token 在服务器上加密后才存进数据库（AES-256-GCM），数据库、备份和运营后台都只能看到密文，App 也拿不回明文。
 - 服务器只会访问公网的 https 地址（443 端口），不会访问内网、本机、云服务器的元数据地址，也不跟随跳转。
 - 聊天内容会发给主人选的服务商或 Agent，隐私说明里要写清楚这一点：最近 30 条消息，群聊里也包括其他家机说的话；用 Agent 时还包括写日记用的聊天记录。发出去之前，主人消息里的密码、密钥会被打码。
+
+## 12. 语音消息（2026-11-24）
+
+家机像真人一样，有时发语音、有时打字，由家机自己决定哪条用语音。主人在家机设置里给它选一个声音；没选就只打字。主人也可以按住说话发语音。类型在 `contracts/chat.ts`（`ChatMessage.audio`、`Chat.recording`、`ChatSettings.voice`、`VoiceInfo`、`VoiceList`、`ChatVoiceInput`）。
+
+### 12.1 选声音（放在家机设置页）
+
+- `GET /v0/voices`：返回 `{items: [{id, name, gender, description}], available, input}`。`available` 为 false 时家机不能发语音，隐藏选声音的入口；`input` 为 false 时主人不能发语音，隐藏按住说话的按钮。
+- 试听：`GET /v0/voices/{id}/sample`，返回一段音频（家机说"你回来啦！我今天一直在等你呢。"），和别的请求一样要带 `Authorization` 头。
+- 保存：`PUT /v0/companions/{id}/chat-settings` 多一个 `voice` 字段，填声音的 `id`，或者 `null`（只打字，默认）。**不传 `voice` 就保持原来的声音**，所以旧版本 App 存设置时不会把声音清掉。`GET` 一直会返回 `voice`。
+- 400：`voice` 不在列表里。
+
+### 12.2 显示语音消息
+
+- 消息有 `audio: {durationMs}` 就是语音消息（家机的和主人自己的都一样）：显示语音气泡（时长按秒显示，点一下播放）。`body` 是这条语音的文字内容，可以做"转文字"。`audio` 为 null 就是普通文字消息。
+- 播放：`GET /v0/chats/{chatId}/messages/{messageId}/audio`，**要带 `Authorization` 头**。支持 `Range`（返回 206）。expo-audio 的音源可以带请求头；如果播放器带不上头，就先用 expo-file-system 带着头下载到缓存目录，再播本地文件。线上是 `audio/mpeg`，开发环境是 `audio/wav`。
+- 语音气泡上要标"AI 语音"之类的字样：《人工智能生成合成内容标识办法》要求 AI 生成的声音有明显标识。
+- `Chat.recording`：正在录语音的家机（它们也在 `typing` 里）。对这些家机显示"正在说话…"，代替"正在输入…"。
+- 语音保存 30 天，过期后 `audio` 变成 null，消息按文字显示。
+- 每个主人每天能收到的语音条数有上限（现在是 60 条），超过后家机只打字，前端不用处理。
+
+### 12.3 主人发语音（按住说话）
+
+- 录音：单声道 AAC（m4a），约 32 kbit/s、16 kHz 就够，最长 60 秒（录满自动发），文件最大 700 KB。用 expo-audio 录，`RecordingOptions` 里设 `numberOfChannels: 1`、`bitRate: 32000`、`sampleRate: 16000`。
+- 发送：`POST /v0/chats/{chatId}/voice`，带 `Idempotency-Key`，body 是 `{audio, mime, durationMs}`：`audio` 是录音的 base64（expo-file-system 读成 base64），`mime` 一般是 `audio/mp4`，`durationMs` 是录音时长。
+- 服务器把语音转成文字后，和发文字一样返回 `{message, typing, replying}`（201）：`message.audio` 有值，`message.body` 是转出来的文字，可以在气泡下面显示"转文字"。之后照常轮询等家机回复。群聊里语音不能 @ 人。
+- 出错：
+  - 422 `VOICE_NOT_UNDERSTOOD`：没听清，提示"没听清，再说一次"。
+  - 429 `VOICE_LIMIT`：今天的语音条数用完了（现在每人每天 100 条），提示改打字。
+  - 503 `VOICE_UNAVAILABLE`：语音转文字暂时不可用，提示稍后再试或打字。
+  - 400：格式不对（类型不在上面五种里、超过 60 秒或 700 KB、不是 base64）。
+- 网络失败重发时用同一个 `Idempotency-Key`，就不会发出两条。
+
+### 12.4 开发环境怎么测
+
+dev 服务器不连真的语音服务：
+- 给家机选了声音以后，家机假回复的第一条会是语音消息，音频是一段无声的 WAV，时长按字数算。用它就能把气泡、播放和"正在说话…"做出来。
+- 主人发的语音都会被"听成"同一句话：`（开发环境假转写）这是一条语音`，录音原样存下来，可以播放。
 

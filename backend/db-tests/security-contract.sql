@@ -1870,7 +1870,7 @@ reset role;
 -- Chat is private: no client role can touch its tables, and only the API server writes a Companion's words.
 select public.test_assert(
   not exists(select 1 from (values ('companion_private.chats'), ('companion_private.chat_members'),
-      ('companion_private.chat_messages'), ('companion_private.chat_settings')) t(name)
+      ('companion_private.chat_messages'), ('companion_private.chat_settings'), ('companion_private.chat_audio')) t(name)
     cross join (values ('anon'), ('authenticated')) r(role)
     where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
@@ -1878,13 +1878,19 @@ select public.test_assert(
 );
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_claim(uuid)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[])'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[])'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE'),
-  'Companion chat replies can only be written by the API server'
+  and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_send_voice(uuid,text,text,jsonb)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_send_voice(uuid,text,text,jsonb)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE'),
+  'Companion chat replies and their voice can only be written by the API server'
 );
 select public.test_assert(
   not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.admin_log'),

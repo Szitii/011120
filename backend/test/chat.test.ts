@@ -59,6 +59,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     diaryBegin: async () => ({ status: "OFF" }),
     diaryReserve: async () => ({ decision: "STALE" }),
     diaryFinish: async () => null,
+    voiceLeft: async () => ({ companion: 0, owner: 0 }),
+    sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
+    audio: async (...args) => { calls.push(["audio", ...args]); return { mime: "audio/mpeg", bytes: new Uint8Array([1, 2, 3, 4, 5]) }; },
   };
   return { port, calls, finished };
 }
@@ -96,7 +99,8 @@ it("routes every chat request to the database as the signed-in Owner", async () 
   assert.deepEqual(read.slice(1), [chatId, "2026-11-23T10:00:00Z", messageId]);
   assert.deepEqual(send.slice(1, 4), [chatId, "你好", [other]]);
   assert.notEqual(send[4], "stable-chat-test-key-1", "the retry key is hashed with the Owner");
-  assert.deepEqual(calls.at(-1), ["saveSettings", companion, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 2 }]);
+  assert.deepEqual(calls.at(-1), ["saveSettings", companion, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, revision: 2, voice: null }],
+    "without voice the current one is kept (none here)");
   assert.equal(await status(port, request(`companions/${companion}/actions`, "POST", { action: "PAT_HEAD" })), 201);
   const act = calls.at(-1)!;
   assert.deepEqual(act.slice(0, 3), ["act", companion, "PAT_HEAD"]);
@@ -316,7 +320,7 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   await adapter.remove(chatId);
   await adapter.settings(companion);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: "m", revision: 1 });
-  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", 1]);
+  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1]);
   rows = [{ payload: { decision: "QUOTA" } }];
   assert.deepEqual(await adapter.reserve({ replyId: messageId, claimId: "c", purpose: "REPLY", provider: "p", model: "m",
     pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3, traceId: "t" }), { decision: "QUOTA" });
