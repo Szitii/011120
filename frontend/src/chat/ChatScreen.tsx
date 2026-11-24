@@ -19,7 +19,7 @@ import { makeIdempotencyKey, type ChatClient } from "./client";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
-import { safeClientMessage } from "../adapters/real-api";
+import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import type { QuoteInput } from "../album/store";
 import { BottomSheet } from "../components/BottomSheet";
 import { CommunityButton } from "../community/components";
@@ -61,6 +61,8 @@ export function ChatScreen({
   onSaveQuote,
   onOpenSettings,
   onRead,
+  groupSendEnabled,
+  onAvailabilityChanged,
 }: {
   client: ChatClient;
   initialChatId?: string;
@@ -71,6 +73,8 @@ export function ChatScreen({
   backLabel?: string;
   onBackToHome: () => void;
   onSaveQuote?: (quote: QuoteInput) => Promise<void>;
+  groupSendEnabled: boolean;
+  onAvailabilityChanged: () => void;
   onRead?: () => void;
   onOpenSettings?: () => void;
 }) {
@@ -79,6 +83,8 @@ export function ChatScreen({
   const appActive = useAppIsActive();
   const wasActive = useRef(appActive);
   const [chat, setChat] = useState<Chat | null>(null);
+  const isGroup = chat?.direct === false;
+  const groupReadOnly = isGroup && !groupSendEnabled;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [bootstrapRevision, setBootstrapRevision] = useState(0);
@@ -236,10 +242,18 @@ export function ChatScreen({
     wasActive.current = appActive;
   }, [appActive, loadLatest]);
 
+  function writeError(error: unknown) {
+    if (isGroup && error instanceof ApiProblemError && error.status === 409 && error.code === "INVALID_STATE") {
+      onAvailabilityChanged();
+      return "群聊暂时无法发送消息，请稍后再试。";
+    }
+    return safeClientMessage(error).title;
+  }
+
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (!text || !targetId || sendingRef.current || deletingRef.current) return;
+    if (groupReadOnly || !text || !targetId || sendingRef.current || deletingRef.current) return;
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
@@ -270,7 +284,7 @@ export function ChatScreen({
     } catch (e) {
       if (session !== sessionRef.current) return;
       setDraft(current => current || text);
-      setError(safeClientMessage(e).title);
+      setError(writeError(e));
     } finally {
       sendingRef.current = false;
       if (session === sessionRef.current) setSending(false);
@@ -279,7 +293,7 @@ export function ChatScreen({
 
   async function handleRetry(messageId: string) {
     const targetId = chatIdRef.current;
-    if (!targetId || retryingRef.current.has(messageId)) return;
+    if (groupReadOnly || !targetId || retryingRef.current.has(messageId)) return;
     const session = sessionRef.current;
     retryingRef.current.add(messageId);
     try {
@@ -289,7 +303,7 @@ export function ChatScreen({
       setChat((prev) => (prev ? { ...prev, typing: res.typing, replying: res.replying } : prev));
       void loadLatest(targetId, true);
     } catch (e) {
-      if (session === sessionRef.current) setError(safeClientMessage(e).title);
+      if (session === sessionRef.current) setError(writeError(e));
     } finally {
       retryingRef.current.delete(messageId);
     }
@@ -427,7 +441,7 @@ export function ChatScreen({
           onEndReachedThreshold={0.2}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
-              <Text style={styles.mutedText}>和小家里的 {title} 说第一句话吧。</Text>
+              <Text style={styles.mutedText}>{groupReadOnly ? "还没有群聊消息。" : `和小家里的 ${title} 说第一句话吧。`}</Text>
             </View>
           }
           ListFooterComponent={
@@ -463,7 +477,7 @@ export function ChatScreen({
                         <Text style={styles.failedText}>
                           {replyFailureMessages[item.failure ?? "ERROR"]}
                         </Text>
-                        {item.failure === "ERROR" && item.retryable && (
+                        {item.failure === "ERROR" && item.retryable && !groupReadOnly && (
                           <Pressable onPress={() => void handleRetry(item.id)} style={styles.retryBtn}>
                             <Text style={styles.retryText}>重试</Text>
                           </Pressable>
@@ -510,14 +524,14 @@ export function ChatScreen({
         </>}
       </BottomSheet>
 
-      {chat?.direct === false && (mentionOpen || mentions.length > 0) && <View style={styles.mentionsBar}>
+      {isGroup && !groupReadOnly && (mentionOpen || mentions.length > 0) && <View style={styles.mentionsBar}>
         {chat.members.map(member => <CommunityButton key={member.companionId}
           label={`@${member.displayName}`} selected={mentions.includes(member.companionId)} disabled={sending || deleting}
           onPress={() => setMentions(current => current.includes(member.companionId)
             ? current.filter(id => id !== member.companionId) : [...current, member.companionId])} />)}
       </View>}
       {/* Bottom Liquid Glass Composer */}
-      <View style={styles.composerBar}>
+      {groupReadOnly ? <Text style={styles.quoteResult}>群聊暂未开放发言，可以查看记录或删除会话。</Text> : <View style={styles.composerBar}>
         <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={styles.composerGlass}>
           <View style={styles.composerRow}>
             {chat?.direct === false && <Pressable accessibilityRole="button" accessibilityLabel="提及家机"
@@ -556,7 +570,7 @@ export function ChatScreen({
             </Pressable>
           </View>
         </LiquidGlassSurface>
-      </View>
+      </View>}
     </KeyboardAvoidingView>
   );
 }

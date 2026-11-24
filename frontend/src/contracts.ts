@@ -163,7 +163,7 @@ interface ImportFinding {
 interface IdentityCandidate {
   id: string;
   field: string;
-  value: unknown;
+  value?: unknown;
   sourcePath: string;
   sourceTrust: "EXTERNAL_UNTRUSTED";
   approvable: boolean;

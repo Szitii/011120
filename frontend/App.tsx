@@ -1,3 +1,4 @@
+import type { PlatformFeatures } from "./src/chat/client";
 import type { Badges } from "../contracts/chat";
 import { useAppIsActive } from "./src/state/useAppIsActive";
 import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
@@ -197,6 +198,26 @@ function WorldApp({ client, account, isMockMode }: {
   const encounterId = route.type === "encounter" ? route.encounterId : undefined;
   const viewerKey = `${viewer?.kind}:${identityId}`;
   const appActive = useAppIsActive();
+  const authenticatedOwner = identityValue?.viewer.ownerId;
+  const [features, setFeatures] = useState<PlatformFeatures>();
+  const [featureRevision, setFeatureRevision] = useState(0);
+  const refreshFeatures = useCallback(() => setFeatureRevision(value => value + 1), []);
+  useEffect(() => {
+    if (!appActive || !authenticatedOwner || !client.api.chat?.features) {
+      setFeatures(undefined);
+      return;
+    }
+    let current = true;
+    void client.api.chat.features().then(value => {
+      if (current) setFeatures(value);
+    }).catch(() => {
+      if (current) setFeatures(undefined);
+    });
+    return () => { current = false; };
+  }, [appActive, authenticatedOwner, client.api, featureRevision]);
+  const groupCreateEnabled = features?.groupChatCreate === true;
+  const groupSendEnabled = features?.groupChatSend === true;
+  const connectionsEnabled = features?.connections === true;
   const [badgeRevision, setBadgeRevision] = useState(0);
   const [badgeState, setBadgeState] = useState<{ key: string; data: Badges }>();
   const refreshBadges = useCallback(() => setBadgeRevision(value => value + 1), []);
@@ -617,7 +638,7 @@ function WorldApp({ client, account, isMockMode }: {
             onStartChat={companion => openFromTab("messages", {
               type: "chat", companionId: companion.companionId, companionName: companion.displayName, fromTab: "messages",
             })}
-            onCreateGroup={() => openFromTab("messages", { type: "create-group" })}
+            onCreateGroup={groupCreateEnabled ? () => openFromTab("messages", { type: "create-group" }) : undefined}
             onCommunityTarget={target => openFromTab("messages", { type: "community-target", target })}
             onRead={refreshBadges}
             onLife={item => item.kind === "AGENT_DRAFT" || item.linkedObject?.type === "AGENT_DRAFT"
@@ -652,7 +673,8 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "create-group" && canUseChat && client.api.chat && (
-        <CreateGroupScreen client={client.api.chat} companions={availableCompanions} onCreated={chat => {
+        <CreateGroupScreen client={client.api.chat} companions={availableCompanions}
+          enabled={groupCreateEnabled} onAvailabilityChanged={refreshFeatures} onCreated={chat => {
           setNav(current => current.stack.at(-1) === route
             ? pushRoute(popRoute(current), { type: "chat", chatId: chat.id, companionName: chat.title ?? "群聊", fromTab: "messages" })
             : current);
@@ -660,7 +682,8 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
-        <ChatSettingsScreen key={route.companionId} client={client.api.chat} companionId={route.companionId} connectionKind={route.connectionKind} />
+        <ChatSettingsScreen key={route.companionId} client={client.api.chat} companionId={route.companionId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled}
+          onAvailabilityChanged={refreshFeatures} />
       )}
 
       {route.type === "chat" && canUseChat && client.api.chat && (
@@ -676,6 +699,8 @@ function WorldApp({ client, account, isMockMode }: {
           onSaveQuote={ownerId && route.companionId ? quote => addAlbumQuote({ ownerId, companionId: route.companionId! }, quote) : undefined}
           onOpenSettings={route.companionId ? () => setNav(current => pushRoute(current, { type: "chat-settings", companionId: route.companionId! })) : undefined}
           onRead={refreshBadges}
+          groupSendEnabled={groupSendEnabled}
+          onAvailabilityChanged={refreshFeatures}
           onBackToHome={goBack}
         />
       )}
@@ -788,7 +813,7 @@ function WorldApp({ client, account, isMockMode }: {
           api={client.api}
           existingCompanionId={route.companionId}
           ownerId={ownerId}
-          canConfigureConnection={Boolean(client.api.chat?.saveConnection)}
+          canConfigureConnection={connectionsEnabled && Boolean(client.api.chat?.saveConnection)}
           onCreated={(created, approvedFields, connectionKind) => {
             setCreatedHome({
               companionId: created.companionId, displayName: created.displayName, identityId: created.id,

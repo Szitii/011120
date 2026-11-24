@@ -80,7 +80,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
 
   function showReview(result: ImportReview) {
     setReview(result);
-    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.field === "displayName").map(item => item.id));
+    setSelected((result.draft?.candidates ?? []).filter(item => item.approvable && item.value != null && item.field === "displayName").map(item => item.id));
     setStep("review");
   }
 
@@ -127,8 +127,9 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
     return () => subscription.remove();
   }, [step, onBack]);
 
+  const selectedConnection = canConfigureConnection ? connectionKind : undefined;
   const candidates = review?.draft?.candidates ?? [];
-  const required = candidates.find(item => item.field === "displayName" && item.approvable);
+  const required = candidates.find(item => item.field === "displayName" && item.approvable && item.value != null);
   const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格", memory: "记忆" };
 
   async function run(work: () => Promise<void>) {
@@ -298,10 +299,10 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
       {step === "review" && <>
         {candidates.map(item => <GlassCard key={item.id}>
           <Text style={s.label}>{labels[item.field] ?? "资料"}</Text>
-          <Text style={s.body}>{item.approvable
+          <Text style={s.body}>{item.approvable && item.value != null
             ? (Array.isArray(item.value) ? item.value.join("、") : String(item.value))
             : "该项未通过检查，无法带入。"}</Text>
-          {item.approvable && item.id !== required?.id && <Check label="保留这项" checked={selected.includes(item.id)}
+          {item.approvable && item.value != null && item.id !== required?.id && <Check label="保留这项" checked={selected.includes(item.id)}
             onPress={() => setSelected(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])}
             disabled={busy} />}
         </GlassCard>)}
@@ -313,7 +314,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
 
       {step === "reply" && <>
         <View accessibilityRole="radiogroup" style={s.replyOptions}>
-          <Choice icon="cloud-outline" title="平台托管" badge="默认" selected={!connectionKind}
+          <Choice icon="cloud-outline" title="平台托管" badge="默认" selected={!selectedConnection}
             description="使用平台模型回复，无需自己配置"
             note="新手体验额度与余额功能待开放，当前以平台可用额度为准"
             onPress={() => { if (!pending.current) setConnectionKind(undefined); }} />
@@ -325,8 +326,8 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
             description="创建完成后，填写并验证你的接口地址" note="服务端连接失败时可以稍后重试"
             onPress={() => { if (!pending.current) setConnectionKind("external"); }} />}
         </View>
-        <BringButton label={connectionKind ? "创建并配置连接" : "完成入驻"} disabled={busy || !required}
-          onPress={() => approve(connectionKind)} />
+        <BringButton label={selectedConnection ? "创建并配置连接" : "完成入驻"} disabled={busy || !required}
+          onPress={() => approve(selectedConnection)} />
       </>}
 
       {busy && <ActivityIndicator color={ui.accent} accessibilityLabel="正在处理家机资料" />}

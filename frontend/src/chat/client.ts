@@ -17,7 +17,14 @@ interface ChatRetryResult {
 
 export type { ChatModelInfo as ChatModelItem, ChatModelList } from "../../../contracts/chat.ts";
 
+export interface PlatformFeatures {
+  groupChatCreate: boolean;
+  groupChatSend: boolean;
+  connections: boolean;
+}
+
 export interface ChatClient {
+  features?(): Promise<PlatformFeatures>;
   badges?(): Promise<Badges>;
   markRead?(chatId: string, messageId: string): Promise<Chat>;
   getAnniversary?(id: string): Promise<Anniversary>;
@@ -59,6 +66,14 @@ export function makeIdempotencyKey(prefix: string): string {
 export function createChatClient(send: SendFn): ChatClient {
   const companion = (id: string) => `/v0/companions/${encodeURIComponent(id)}`;
   return {
+    async features() {
+      const response = await send<Partial<PlatformFeatures> | null>("GET", "/v0/features");
+      return {
+        groupChatCreate: response?.groupChatCreate === true,
+        groupChatSend: response?.groupChatSend === true,
+        connections: response?.connections === true,
+      };
+    },
     badges: () => send("GET", "/v0/badges"),
     markRead: (id, messageId) => send("PUT", `/v0/chats/${encodeURIComponent(id)}/read`, { messageId }),
     getAnniversary: id => send("GET", `${companion(id)}/anniversary`),

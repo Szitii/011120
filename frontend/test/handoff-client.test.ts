@@ -38,3 +38,11 @@ test("model connection setup and removal use the same companion resource", async
     ["DELETE", "/v0/companions/companion/connection"],
   ]);
 });
+
+test("platform feature flags require an explicit true value and use the authenticated feature endpoint", async () => {
+  const client = createChatClient(async <T>(method: string, path: string) => {
+    assert.deepEqual([method, path], ["GET", "/v0/features"]);
+    return { groupChatCreate: true, groupChatSend: "true" } as T;
+  });
+  assert.deepEqual(await client.features!(), { groupChatCreate: true, groupChatSend: false, connections: false });
+});

@@ -22,7 +22,7 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   onCommunityTarget: (target: CommunityTarget) => void;
   onLife: (item: LifeEventInboxItem) => void;
   onRead: () => void;
-  onCreateGroup: () => void;
+  onCreateGroup?: () => void;
 }) {
   const s = useCommunityStyles();
   const [section, setSection] = useState<"chats" | "notices">(chatClient ? "chats" : "notices");
@@ -59,7 +59,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
   active: boolean;
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
-  onCreateGroup: () => void;
+  onCreateGroup?: () => void;
 }) {
   const s = useCommunityStyles();
   const [items, setItems] = useState<Chat[]>();
@@ -84,7 +84,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
 
   return <ScrollView contentContainerStyle={styles.content}>
     <Button label="刷新" disabled={loading} onPress={() => setReload(value => value + 1)} />
-    {companions.length >= 2 && <Button label="新建群聊" primary onPress={onCreateGroup} />}
+    {onCreateGroup && companions.length >= 2 && <Button label="新建群聊" primary onPress={onCreateGroup} />}
     {error !== "" && <Text accessibilityRole="alert" style={s.meta}>{error}</Text>}
     {!items && !error && <ActivityIndicator accessibilityLabel="正在读取会话" />}
     {items?.map(chat => {
