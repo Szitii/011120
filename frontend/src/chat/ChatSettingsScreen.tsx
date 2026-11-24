@@ -3,6 +3,7 @@ import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import type { ChatModelList, ChatSettings } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
+import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
 import type { ChatClient } from "./client";
 
@@ -10,7 +11,7 @@ const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"
 const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
 const TIER = { ECONOMY: "经济", STANDARD: "均衡", PREMIUM: "高级" };
 
-export function ChatSettingsScreen({ client, companionId }: { client: ChatClient; companionId: string }) {
+export function ChatSettingsScreen({ client, companionId, connectionKind }: { client: ChatClient; companionId: string; connectionKind?: "key" | "external" }) {
   const s = useCommunityStyles();
   const [form, setForm] = useState<ChatSettings>();
   const [models, setModels] = useState<ChatModelList>();
@@ -59,9 +60,10 @@ export function ChatSettingsScreen({ client, companionId }: { client: ChatClient
     }
   }
 
-  return <ScrollView style={s.page} contentContainerStyle={s.content}>
+  return <ScrollView style={s.page} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
     <SecondaryHeading title="聊天设置" />
     {!!notice && <Text accessibilityLiveRegion="polite" style={s.body}>{notice}</Text>}
+    {client.saveConnection && <ConnectionSettings client={client} companionId={companionId} initialKind={connectionKind} />}
     {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
     {!form ? busy ? <ActivityIndicator accessibilityLabel="正在读取聊天设置" />
       : <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />

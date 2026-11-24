@@ -31,6 +31,7 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
   useEffect(() => {
     if (!active) return;
     let current = true;
+    setReady(false);
     void (async () => {
       let saved: Anniversary | undefined;
       try {
@@ -48,7 +49,7 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
         }
         let value = await client.getAnniversary(scope.companionId);
         if (!current) return;
-        if (!value.startDate && saved) {
+        if (!value.startDate && value.revision === 1 && saved) {
           try {
             value = await client.saveAnniversary(scope.companionId, { ...saved, revision: value.revision });
           } catch (error) {
@@ -58,12 +59,13 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
         }
         if (!current) return;
         // A cloud value, including a later explicit clear, is authoritative after migration.
-        if (saved && value.startDate) void AsyncStorage.removeItem(key).catch(() => undefined);
+        if (saved && (value.startDate || value.revision > 1)) void AsyncStorage.removeItem(key).catch(() => undefined);
         setRemote(value);
         setAnniversary(value.startDate ? { startDate: value.startDate, timeZone: value.timeZone } : undefined);
         setError("");
       } catch {
         if (current) {
+          setRemote(undefined);
           if (saved) setAnniversary(saved);
           setError("暂时无法同步纪念日，请重新加载。");
         }
@@ -78,7 +80,7 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
   const label = days ? `在一起的第 ${days} 天 · 纪念日` : "设置纪念日";
 
   async function save(clear = false) {
-    if (pending.current || (usesCloud && !remote)) return;
+    if (!ready || pending.current || (usesCloud && !remote)) return;
     const next = {
       startDate: draft.trim(),
       timeZone: anniversary?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -152,8 +154,8 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
           style={s.input}
         />
         {error !== "" && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-        <CommunityButton label="保存纪念日" primary disabled={saving || (usesCloud && !remote)} onPress={() => void save()} />
-        {anniversary && <CommunityButton label="清除纪念日" disabled={saving || (usesCloud && !remote)} onPress={() => void save(true)} />}
+        <CommunityButton label="保存纪念日" primary disabled={!ready || saving || (usesCloud && !remote)} onPress={() => void save()} />
+        {anniversary && <CommunityButton label="清除纪念日" disabled={!ready || saving || (usesCloud && !remote)} onPress={() => void save(true)} />}
         {usesCloud && !remote && <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />}
       </View>
     </BottomSheet>

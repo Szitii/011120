@@ -8,7 +8,7 @@ export type Route =
   | { type: "community-target"; target: CommunityTarget }
   | { type: "compose-post" }
   | { type: "create-group" }
-  | { type: "chat-settings"; companionId: string }
+  | { type: "chat-settings"; companionId: string; connectionKind?: "key" | "external" }
   | { type: "community-follows"; direction: "following" | "followers" }
   | { type: "album"; companionId: string }
   | { type: "diary"; companionId: string; companionName: string }

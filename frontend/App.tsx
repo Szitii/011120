@@ -660,7 +660,7 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
-        <ChatSettingsScreen key={route.companionId} client={client.api.chat} companionId={route.companionId} />
+        <ChatSettingsScreen key={route.companionId} client={client.api.chat} companionId={route.companionId} connectionKind={route.connectionKind} />
       )}
 
       {route.type === "chat" && canUseChat && client.api.chat && (
@@ -788,14 +788,20 @@ function WorldApp({ client, account, isMockMode }: {
           api={client.api}
           existingCompanionId={route.companionId}
           ownerId={ownerId}
-          onCreated={(created, approvedFields) => {
+          canConfigureConnection={Boolean(client.api.chat?.saveConnection)}
+          onCreated={(created, approvedFields, connectionKind) => {
             setCreatedHome({
               companionId: created.companionId, displayName: created.displayName, identityId: created.id,
               identityVersion: created.version, approvedFields, status: "ACTIVE", socialReady: false,
             });
             invalidateCompanionViews();
             void loadOwnerCompanions();
-            setNav(current => selectTab(current, "home"));
+            setNav(current => {
+              const home = selectTab(current, "home");
+              return connectionKind && client.api.chat?.saveConnection
+                ? pushRoute(home, { type: "chat-settings", companionId: created.companionId, connectionKind })
+                : home;
+            });
           }}
         />
       )}

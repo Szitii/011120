@@ -21,3 +21,20 @@ test("handoff requests use the owned chat and companion paths with the correct w
     ["DELETE", "/v0/companions/companion/memories/memory"],
   ]);
 });
+
+test("model connection setup and removal use the same companion resource", async () => {
+  const calls: unknown[][] = [];
+  const client = createChatClient(async <T>(...args: unknown[]) => {
+    calls.push(args);
+    return {} as T;
+  });
+  const body = { kind: "EXTERNAL", name: "家机", endpoint: "https://example.com/chat", bearerToken: "", consent: true } as const;
+  await client.getConnection!("companion");
+  await client.saveConnection!("companion", body);
+  await client.removeConnection!("companion");
+  assert.deepEqual(calls, [
+    ["GET", "/v0/companions/companion/connection"],
+    ["PUT", "/v0/companions/companion/connection", body],
+    ["DELETE", "/v0/companions/companion/connection"],
+  ]);
+});
