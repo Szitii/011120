@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for suite in protection community account agent chat home admin; do
+for suite in protection community account agent chat home memory admin; do
   node --experimental-strip-types "backend/db-tests/${suite}-runtime.ts"
 done
 

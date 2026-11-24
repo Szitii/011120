@@ -179,16 +179,17 @@ function bookingPort(decisions: ReservationDecision[] = []) {
   const port = {
     reserve: async (input: ChatReservation) => { reserved.push(input); return decisions.shift() ?? { decision: "RESERVED", transactionId: `tx${reserved.length}` }; },
     settle: async (...args: unknown[]) => { settled.push(args); },
+    memories: async () => ({ items: [{ body: "主人喜欢下雨天" }, { body: "password: hunter2hunter2" }] }),
   } as unknown as ChatPort;
   return { port, reserved, settled };
 }
 
 it("speaks through a platform model: books, calls, settles, and asks the cheap model first when optional", async () => {
   const catalog = new ChatCatalog(file, keys);
-  const calls: string[] = [];
+  const calls: string[] = []; const systems: string[] = [];
   const answers: Record<string, string> = { "claude-small": "否", "claude-big": "好呀\n走吧" };
   const call: CallModel = async (model, request) => {
-    calls.push(model.model);
+    calls.push(model.model); systems.push(request.system);
     return { text: answers[model.model]!, inputTokens: request.user.length, outputTokens: 4, refused: false, cutOff: false };
   };
   const platform = new PlatformChatModel(catalog, call);
@@ -197,6 +198,7 @@ it("speaks through a platform model: books, calls, settles, and asks the cheap m
   const { port, reserved, settled } = bookingPort();
   assert.deepEqual(await platform.reply(turn(), { port, signal }), { messages: ["好呀", "走吧"] });
   assert.deepEqual(calls, ["claude-big"]);
+  assert.match(systems[0]!, /你记得的事[^]*- 主人喜欢下雨天\n- \[REDACTED_CREDENTIAL\]/, "memories, newest first, credentials masked");
   assert.deepEqual({ ...reserved[0], inputTokens: 0, costMinor: 0 }, { replyId: "reply", claimId: "claim", purpose: "REPLY", provider: "claude",
     model: "claude-big", pricingVersion: PRICING_VERSION, inputTokens: 0, outputTokens: 2000, costMinor: 0, traceId: "reply" });
   assert.equal(settled[0]![0], "tx1");

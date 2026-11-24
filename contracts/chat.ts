@@ -167,3 +167,20 @@ export interface DiaryWriteResult {
   nextAt: string | null;
   failure: "UNAVAILABLE" | "DISABLED" | "QUOTA" | "BLOCKED" | "ERROR" | null;
 }
+
+/**
+ * 长期记忆: one thing a Companion remembers, used when it chats and writes its diary. Only the Owner
+ * adds memories (by hand, or by approving them one by one when importing a card), and sees and
+ * deletes all of them. IMPORT: came from an approved card. OWNER: added by hand.
+ */
+export interface CompanionMemory {
+  id: string;
+  body: string;
+  source: "IMPORT" | "OWNER";
+  createdAt: string;
+}
+
+/** GET /v0/companions/{id}/memories: every memory, newest first (at most 200 per Companion). */
+export interface MemoryList {
+  items: CompanionMemory[];
+}

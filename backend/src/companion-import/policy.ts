@@ -2,13 +2,16 @@ import { contentHash } from "./canonical.ts";
 import type { FindingSeverity, FindingType, ImportFinding } from "./types.ts";
 
 export const IMPORT_POLICY_VERSION = "companion-import-policy/0.1.0";
-export const IMPORT_PARSER_VERSION = "character-card-json/0.1.0";
+export const IMPORT_PARSER_VERSION = "character-card-json/0.2.0";
 export const MAX_IMPORT_BYTES = 256 * 1024;
 export const MAX_DEPTH = 12;
 export const MAX_NODES = 10_000;
 export const MAX_STRING_LENGTH = 32_000;
 export const MAX_TOTAL_STRING_LENGTH = 128_000;
 export const MAX_DISPLAY_NAME_LENGTH = 200;
+/** Memories offered by a card (our `memories` field): at most this many, each at most this many characters. */
+export const MAX_MEMORIES = 50;
+export const MAX_MEMORY_LENGTH = 500;
 
 export const PROMPT_ONLY_FIELDS = new Set([
   "system_prompt",
@@ -29,6 +32,7 @@ export const KNOWN_CARD_FIELDS = new Set([
   "creator",
   "character_version",
   "tags",
+  "memories",
   ...PROMPT_ONLY_FIELDS,
 ]);
 

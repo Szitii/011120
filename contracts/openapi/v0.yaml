@@ -74,6 +74,10 @@ paths:
     $ref: ./chat.yaml#/paths/~1badges
   /companions/{companionId}/anniversary:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1anniversary
+  /companions/{companionId}/memories:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories
+  /companions/{companionId}/memories/{memoryId}:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories~1{memoryId}
   /companion-imports:
     post:
       x-capability-status: implemented
@@ -821,7 +825,12 @@ components:
       required: [id, field, value, sourcePath, sourceTrust, approvable, blockedByFindingIds]
       properties:
         id: { type: string }
-        field: { type: string }
+        field:
+          type: string
+          description: |
+            An identity field (displayName, identitySummary, personaTraits, ...) or `memory`: one entry of
+            the card's `memories` list (strings, at most 50, each at most 500 characters). Approved memory
+            candidates become the Companion's memories (GET /v0/companions/{id}/memories), not identity fields.
         value: {}
         sourcePath: { type: string }
         sourceTrust: { const: EXTERNAL_UNTRUSTED }

@@ -44,6 +44,7 @@ function diaryPort(start: DiaryStart = job(), decisions: ReservationDecision[] =
     },
     diaryFinish: async (_entry: string, _claim: string, body: string | null) => { finished.push(body); return body === null ? null : { ...entry, body }; },
     settle: async () => undefined,
+    memories: async () => ({ items: [] }),
   } as unknown as ChatPort;
   return { port, calls, finished, booked };
 }
