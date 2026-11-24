@@ -7,6 +7,7 @@ import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
+import { DiaryScheduler } from "../src/chat/diary-scheduler.ts";
 import type { ChatClaim, DiaryJob } from "../src/chat/port.ts";
 import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, DiaryPage, DiarySettings, DiaryWriteResult, VoiceList }
   from "../../contracts/chat.ts";
@@ -411,7 +412,7 @@ try {
   // ---- diary (家机日记) ----
   const diary = `companions/${A.companion}/diary`;
   const diarySettings = `companions/${A.companion}/diary-settings`;
-  assert.deepEqual((await call<DiarySettings>(0, diarySettings)).data, { frequency: "DAILY", revision: 1 });
+  assert.deepEqual((await call<DiarySettings>(0, diarySettings)).data, { frequency: "DAILY", autoWrite: false, revision: 1 });
   for (const [path, method] of [[diarySettings, "GET"], [diary, "GET"], [diary, "POST"]] as const) {
     assert.equal((await call(1, path, method)).status, 404, `${method} ${path} is the Owner's alone`);
   }
@@ -439,7 +440,7 @@ try {
   assert.equal(Date.parse(again.data.nextAt!) - Date.parse(firstEntry.entry!.writtenAt), 20 * 3600 * 1000, "DAILY: 20 hours later");
   passed("diary: written from the one-to-one chat and own posts, then not again until due");
 
-  assert.deepEqual((await call<DiarySettings>(0, diarySettings, "PUT", { frequency: "OFTEN", revision: 1 })).data, { frequency: "OFTEN", revision: 2 });
+  assert.deepEqual((await call<DiarySettings>(0, diarySettings, "PUT", { frequency: "OFTEN", revision: 1 })).data, { frequency: "OFTEN", autoWrite: false, revision: 2 });
   assert.equal((await call(0, diarySettings, "PUT", { frequency: "RARE", revision: 1 })).status, 409);
   const ago = (what: string) => pool.query(`update companion_private.diary_entries set created_at = created_at - interval '${what}' where companion_id = $1`, [A.companion]);
   await ago("7 hours");
@@ -487,6 +488,44 @@ try {
   assert.deepEqual(await portA.diaryReserve(paid.entry!.id, randomUUID(), { provider: "fakep", model: "fake-1", pricingVersion: "t", inputTokens: 1,
     outputTokens: 1, costMinor: 1 }), { decision: "STALE" }, "a finished entry cannot book again");
   passed("diary model calls are booked as DIARY_ENTRY and settled");
+
+  // ---- background diaries (autoWrite, migration 0052) ----
+  const background = (platform: boolean, written: string[]) => new DiaryScheduler({
+    server: new PgOwnerExecutor(pool, null), portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
+    replies: { writeDiary: (companionId, port) => { written.push(companionId); return capturing.writeDiary(companionId, port); } },
+    platform, log: message => { throw new Error(message); } });
+  const dueNow = async () => (await new PgOwnerExecutor(pool, null).query<{ payload: { companionId: string; subject: string }[] }>(
+    "select public.diary_due(10, true) as payload", [])).rows[0]!.payload;
+  const settingsNow = (await call<DiarySettings>(0, diarySettings)).data;
+  await pool.query("update companion_private.diary_entries set created_at = created_at - interval '3 days' where companion_id = $1", [A.companion]);
+  await call(0, `chats/${direct.data.id}/messages`, "POST", { body: "晚安" });
+  await settle(direct.data.id);
+  assert.deepEqual(await dueNow(), [], "not opted in: never in the background");
+  const auto = await call<DiarySettings>(0, diarySettings, "PUT", { frequency: "DAILY", autoWrite: true, revision: settingsNow.revision });
+  assert.deepEqual([auto.data.frequency, auto.data.autoWrite], ["DAILY", true]);
+  assert.equal((await call<DiarySettings>(0, diarySettings, "PUT", { frequency: "DAILY", revision: auto.data.revision })).data.autoWrite, true,
+    "an app that does not send autoWrite keeps it");
+  assert.deepEqual(await dueNow(), [{ companionId: A.companion, subject: A.subject }]);
+  const onlyOwnKeys: string[] = [];
+  assert.equal(await background(false, onlyOwnKeys).round(), 0, "no platform model: only Companions on their own key or agent");
+  const wrote: string[] = [];
+  assert.equal(await background(true, wrote).round(), 1);
+  assert.deepEqual(wrote, [A.companion]);
+  const newest = (await call<DiaryPage>(0, diary)).data.items[0]!;
+  assert.equal(newest.body, "今天主人抱了抱我。");
+  assert.deepEqual(await dueNow(), [], "written: not due again until the interval passes");
+  await pool.query("update companion_private.diary_entries set created_at = created_at - interval '3 days' where companion_id = $1", [A.companion]);
+  assert.deepEqual(await dueNow(), [], "due by time, but nothing new happened");
+  await call(0, `chats/${direct.data.id}/messages`, "POST", { body: "明天见" });
+  await settle(direct.data.id);
+  assert.equal((await dueNow()).length, 1);
+  await pool.query(`insert into companion_private.diary_entries(companion_id, status, covers_from, covers_until, created_at)
+    values ($1, 'FAILED', now(), now(), now() - interval '30 minutes')`, [A.companion]);
+  assert.deepEqual(await dueNow(), [], "a background retry waits an hour after a failure");
+  const privilege = await pool.query(`select has_function_privilege('authenticated', 'public.diary_due(integer,boolean)', 'EXECUTE') as app,
+    has_function_privilege('companion_api', 'public.diary_due(integer,boolean)', 'EXECUTE') as server`);
+  assert.deepEqual(privilege.rows[0], { app: false, server: true }, "only the API server asks what is due");
+  passed("background diaries: only when opted in and due, through the same lock, waiting longer after failures");
   await pool.query("delete from public.community_posts where id = any($1::uuid[])", [diaryPosts]);
 
   // Voice messages. Without a speech key the dev host speaks silence (a WAV), so the whole path runs here.

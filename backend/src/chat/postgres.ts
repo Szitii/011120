@@ -168,7 +168,8 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveDiarySettings(companionId: string, settings: DiarySettings): Promise<unknown> {
-    return this.#object("select public.diary_update_settings($1,$2,$3) as payload", [companionId, settings.frequency, settings.revision]);
+    return this.#object("select public.diary_update_settings($1,$2,$3,$4) as payload",
+      [companionId, settings.frequency, settings.autoWrite ?? null, settings.revision]);
   }
 
   async diaryBegin(companionId: string): Promise<DiaryStart> {

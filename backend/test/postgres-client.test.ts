@@ -44,6 +44,13 @@ describe("PostgreSQL pool executors", () => {
     assert.equal(released(), 1);
   });
 
+  it("runs the server's own jobs as companion_api without an Owner subject", async () => {
+    const { pool, statements } = fakePool();
+    await new PgOwnerExecutor(pool, null).query("select public.diary_due($1,$2)", [10, true]);
+    assert.deepEqual(statements.map(statement => statement.text),
+      ["begin", "set local role companion_api", "select public.diary_due($1,$2)", "commit"]);
+  });
+
   it("rolls back, releases the client and rethrows when a statement fails", async () => {
     const { pool, statements, released } = fakePool(["select 1"]);
     await assert.rejects(new PgOwnerExecutor(pool, SUBJECT).query("select 1", []), /select 1 failed/);

@@ -160,10 +160,10 @@ function connectionInput(request: MvpHttpRequest): ConnectionInput {
 }
 
 function diarySettings(request: MvpHttpRequest): DiarySettings {
-  const { frequency, revision } = body(request, ["frequency", "revision"]);
-  if (!["OFF", "RARE", "DAILY", "OFTEN"].includes(frequency as string)
+  const { frequency, autoWrite, revision } = body(request, ["frequency", "autoWrite", "revision"]);
+  if (!["OFF", "RARE", "DAILY", "OFTEN"].includes(frequency as string) || !(autoWrite === undefined || typeof autoWrite === "boolean")
     || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
-  return { frequency, revision } as DiarySettings;
+  return { frequency, revision, ...(autoWrite === undefined ? {} : { autoWrite }) } as DiarySettings;
 }
 
 /** The catalog with what can be used right now: enabled, key configured, not switched off. */
