@@ -2009,5 +2009,36 @@ select public.test_assert(
   and exists(select 1 from pg_trigger where tgrelid = 'public.companions'::regclass and tgname = 'companions_limit_guard'),
   'only a signed-in Owner deletes a Companion, and the limit per Owner is enforced on the table'
 );
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.owner_set_avatar(text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.companion_set_avatar(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.owner_set_avatar(text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.companion_set_avatar(uuid,text)'::regprocedure, 'EXECUTE')
+  and companion_private.avatar_ok(null) and companion_private.avatar_ok('preset:cat_01')
+  and not companion_private.avatar_ok('https://example.com/a.png') and not companion_private.avatar_ok('preset:')
+  and not companion_private.avatar_ok(E'preset:a\nb'),
+  'an avatar is one of the app''s built-in ones, set only by a signed-in Owner'
+);
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.community_post_visible(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_private.community_mentions_json(uuid[],uuid)'::regprocedure, 'EXECUTE')
+  and exists(select 1 from pg_trigger where tgrelid = 'public.community_comments'::regclass and tgname = 'community_comments_visible_guard'),
+  'post visibility is decided by one private rule, and every comment is checked against it'
+);
+select public.test_assert(
+  not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.agent_runs', 'SELECT') or has_table_privilege(r.role, 'companion_private.agent_runs', 'INSERT')
+      or has_table_privilege(r.role, 'companion_private.agent_runs', 'UPDATE') or has_table_privilege(r.role, 'companion_private.agent_runs', 'DELETE'))
+  and not has_function_privilege('authenticated', 'public.agent_auto_due(integer,boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.agent_auto_begin(uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.agent_auto_reserve(uuid,uuid,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.agent_auto_finish(uuid,uuid,text,boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.agent_key_create(uuid,text,text,integer,text[])'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.agent_auto_finish(uuid,uuid,text,boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.agent_key_create(uuid,text,text,integer,text[])'::regprocedure, 'EXECUTE'),
+  'a Companion''s own posts are started, booked and ended only by the API server'
+);
 
 drop function public.test_assert(boolean, text);

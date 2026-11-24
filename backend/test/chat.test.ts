@@ -37,6 +37,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     retry: async (...args) => { calls.push(["retry", ...args]); return { typing: [], replying }; },
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
     deleteCompanion: async (...args) => { calls.push(["deleteCompanion", ...args]); return { deleted: true }; },
+    saveAvatar: async (...args) => { calls.push(["saveAvatar", ...args]); return { avatar: args[1] }; },
     markRead: async (...args) => { calls.push(["markRead", ...args]); return {}; },
     features: async () => { calls.push(["features"]); return { groupChatCreate: false, groupChatSend: true }; },
     wallet: async () => { calls.push(["wallet"]); return { enabled: false }; },
@@ -67,6 +68,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     diaryBegin: async () => ({ status: "OFF" }),
     diaryReserve: async () => ({ decision: "STALE" }),
     diaryFinish: async () => null,
+    postBegin: async () => ({ status: "OFF" }),
+    postReserve: async () => ({ decision: "STALE" }),
+    postFinish: async () => null,
     voiceLeft: async () => ({ companion: 0, owner: 0 }),
     sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
     audio: async (...args) => { calls.push(["audio", ...args]); return { mime: "audio/mpeg", bytes: new Uint8Array([1, 2, 3, 4, 5]) }; },
@@ -95,6 +99,20 @@ it("deletes a Companion through its own route", async () => {
   assert.equal(await refusal(port, request("companions/not-a-uuid", "DELETE")), "INVALID_INPUT");
   assert.equal(await handleChatRequest(request(`companions/${companion}`), session(port), "trace", replies), undefined,
     "other methods on a Companion are not chat routes");
+});
+
+it("sets a built-in avatar for the Owner or a Companion", async () => {
+  const { port, calls } = fakePort();
+  assert.equal(await status(port, request("owner/avatar", "PUT", { avatar: "preset:cat_01" })), 200);
+  assert.equal(await status(port, request(`companions/${companion}/avatar`, "PUT", { avatar: null })), 200);
+  assert.deepEqual(calls, [["saveAvatar", null, "preset:cat_01"], ["saveAvatar", companion, null]]);
+  for (const bad of [{ avatar: "https://example.com/a.png" }, { avatar: "preset:" }, { avatar: "preset:Cat" }, { avatar: 3 }, {},
+    { avatar: "preset:a", extra: 1 }, { avatar: `preset:${"a".repeat(41)}` }]) {
+    assert.equal(await refusal(port, request("owner/avatar", "PUT", bad)), "INVALID_INPUT", JSON.stringify(bad));
+  }
+  assert.equal(await refusal(port, request("companions/not-a-uuid/avatar", "PUT", { avatar: null })), "INVALID_INPUT");
+  assert.equal(await refusal(port, request("owner/avatar")), "NOT_FOUND");
+  assert.equal(calls.length, 2);
 });
 
 it("routes every chat request to the database as the signed-in Owner", async () => {
@@ -175,9 +193,15 @@ it("routes agent keys: the token is shown once and only its hash reaches the dat
   assert.equal(created?.status, 201);
   const token = (created?.body as { token: string }).token;
   assert.match(token, /^cak_/);
-  assert.deepEqual(calls.at(-1), ["createAgentKey", companion, "我的 Agent", sha256(token), 30]);
+  assert.deepEqual(calls.at(-1), ["createAgentKey", companion, "我的 Agent", sha256(token), 30, ["COMMUNITY_READ"]], "read only unless asked");
   assert.equal(await status(port, request(`companions/${companion}/agent-keys`, "POST", { name: "短期", days: 7 })), 201);
   assert.equal((calls.at(-1) as unknown[])[4], 7);
+  assert.equal(await status(port, request(`companions/${companion}/agent-keys`, "POST",
+    { name: "能交稿", scopes: ["COMMUNITY_DRAFT", "COMMUNITY_READ", "COMMUNITY_DRAFT"] })), 201);
+  assert.deepEqual((calls.at(-1) as unknown[])[5], ["COMMUNITY_DRAFT", "COMMUNITY_READ"]);
+  for (const scopes of [[], ["CHAT"], "COMMUNITY_READ", [7]]) {
+    assert.equal(await refusal(port, request(`companions/${companion}/agent-keys`, "POST", { name: "x", scopes })), "INVALID_INPUT", JSON.stringify(scopes));
+  }
   assert.equal(await status(port, request(`companions/${companion}/agent-keys`)), 200);
   assert.equal(await status(port, request(`companions/${companion}/agent-keys/${messageId}`, "DELETE")), 200);
   assert.deepEqual(calls.slice(-2), [["agentKeys", companion], ["revokeAgentKey", companion, messageId]]);
@@ -372,6 +396,10 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   await adapter.retry(chatId, messageId);
   await adapter.remove(chatId);
   await adapter.deleteCompanion(companion);
+  await adapter.saveAvatar(null, "preset:a");
+  assert.deepEqual(seen.at(-1), ["select public.owner_set_avatar($1) as payload", ["preset:a"]]);
+  await adapter.saveAvatar(companion, null);
+  assert.deepEqual(seen.at(-1)![1], [companion, null]);
   await adapter.settings(companion);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: "m", revision: 1 });
   assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1]);

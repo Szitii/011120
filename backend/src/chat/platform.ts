@@ -4,20 +4,22 @@
  * Every model call is booked in the compute ledger first (chat_reserve: kill switches, today's
  * budget) and settled with the real usage after (chat_settle). A turn that may stay quiet first
  * asks the cheap decision model "should it speak?"; only a yes pays for the reply model.
- * Diary entries are booked and settled the same way (diary_reserve, reason DIARY_ENTRY).
+ * Diary entries are booked and settled the same way (diary_reserve, reason DIARY_ENTRY), and so are
+ * the community posts a Companion writes on its own (agent_auto_reserve, reason COMMUNITY_POST).
  */
 import type { CatalogModel, ChatCatalog } from "./models.ts";
 import { PRICING_VERSION } from "./models.ts";
-import type { Booking, ChatClaim, ChatPort, DiaryJob, ReservationDecision } from "./port.ts";
-import { decisionPrompt, diaryPrompt, parseDecision, parseReply, replyPrompt } from "./prompt.ts";
+import type { Booking, ChatClaim, ChatPort, DiaryJob, PostJob, ReservationDecision } from "./port.ts";
+import { decisionPrompt, diaryPrompt, parseDecision, parsePost, parseReply, postPrompt, replyPrompt } from "./prompt.ts";
 import type { CallModel, ModelResult } from "./providers.ts";
-import type { Answer, ChatModel, DiaryAnswer } from "./replies.ts";
+import type { Answer, ChatModel, DiaryAnswer, PostAnswer } from "./replies.ts";
 
 /** Within the ledger's limits for these reasons (16000 input; 2000 reply, 100 decision, 2000 diary output tokens). */
 const MAX_INPUT_TOKENS = 16_000;
 const REPLY_TOKENS = 2_000;
 const DECIDE_TOKENS = 100;
 const DIARY_TOKENS = 2_000;
+const POST_TOKENS = 1_000;
 
 type Failed = { failed: "DISABLED" | "QUOTA" };
 /** Books one call in the ledger, for a chat turn or a diary entry. */
@@ -65,6 +67,18 @@ export class PlatformChatModel implements ChatModel {
     const result = await this.#withFallback(model, m => this.#run(port, book, m, prompt, DIARY_TOKENS, signal));
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : { text: result.text };
+  }
+
+  async post(job: PostJob, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer> {
+    const model = this.#catalog.pick(job.companion.settings.model);
+    if (model === undefined) return { failed: "UNAVAILABLE" };
+    const book: Book = booking => port.postReserve(job.runId, job.claimId, booking);
+    const prompt = postPrompt(job, await memoriesOf(port, job.companion.companionId));
+    const result = await this.#withFallback(model, m => this.#run(port, book, m, prompt, POST_TOKENS, signal));
+    if ("failed" in result) return result;
+    if (result.refused) return { refused: true };
+    const text = parsePost(result.text);
+    return text === null ? { pass: true } : { text };
   }
 
   /** The chosen model was switched off by the platform: use the default instead. */

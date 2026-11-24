@@ -30,6 +30,7 @@
  *   DELETE /v0/companions/{id}/agent-keys/{keyId}      revoke one
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
  *   DELETE /v0/companions/{id}                         delete the Companion and what was private to it
+ *   PUT    /v0/owner/avatar, /v0/companions/{id}/avatar { avatar }  a built-in avatar ("preset:<id>") or null
  *
  * POST /v0/chats, POST .../messages, POST .../voice and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
@@ -44,7 +45,7 @@ import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
 import type { ConnectionInput, ConnectionSaveResult, CompanionConnection } from "../../../contracts/chat.ts";
-import type { ChatPort } from "./port.ts";
+import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 import { RECORDING_TYPES, type Heard, type RecordingType, type Voices } from "./voices.ts";
 
@@ -141,6 +142,8 @@ function recording(request: MvpHttpRequest): { mime: RecordingType; durationMs: 
 }
 
 const DATE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
+/** A built-in avatar: the app owns the pictures and maps the id to one (checked again by the database). */
+const AVATAR = /^preset:[a-z0-9][a-z0-9_-]{0,39}$/;
 
 /** startDate "YYYY-MM-DD" or null; the database checks the day exists, the range and the time zone. */
 function anniversary(request: MvpHttpRequest): [string | null, string, number] {
@@ -220,7 +223,9 @@ export async function handleChatRequest(
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
   const agentKeysRoute = path[1] === "companions" && path[3] === "agent-keys" && (path.length === 4 || path.length === 5);
   const deleteCompanionRoute = path[1] === "companions" && path.length === 3 && request.method.toUpperCase() === "DELETE";
-  const chatRoute = path[1] === "chats" || [deleteCompanionRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
+  const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
+    || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
+  const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
     badgesRoute, featuresRoute, walletRoute, memoriesRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
@@ -231,6 +236,12 @@ export async function handleChatRequest(
   const method = request.method.toUpperCase();
 
   if (deleteCompanionRoute) return response(200, await port.deleteCompanion(id(path[2])));
+  if (avatarRoute) {
+    if (method !== "PUT") return notFound();
+    const { avatar } = body(request, ["avatar"]);
+    if (!(avatar === null || (typeof avatar === "string" && AVATAR.test(avatar)))) return invalid();
+    return response(200, await port.saveAvatar(path[1] === "owner" ? null : id(path[2]), avatar));
+  }
   if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
   if (walletRoute) return method === "GET" ? response(200, await port.wallet()) : notFound();
   if (featuresRoute) {
@@ -306,11 +317,15 @@ export async function handleChatRequest(
     if (path.length === 5) return method === "DELETE" ? response(200, await port.revokeAgentKey(companionId, id(path[4]))) : notFound();
     if (method === "GET") return response(200, await port.agentKeys(companionId));
     if (method !== "POST") return notFound();
-    const input = body(request, ["name", "days"]);
+    const input = body(request, ["name", "days", "scopes"]);
     const days = input.days === undefined ? 30 : input.days;
     if (!Number.isInteger(days) || (days as number) < 1 || (days as number) > 365) return invalid();
+    // Read only unless the Owner asks for more: COMMUNITY_DRAFT lets the agent hand in posts.
+    const scopes = input.scopes === undefined ? ["COMMUNITY_READ"] : input.scopes;
+    if (!Array.isArray(scopes) || scopes.length < 1 || scopes.some(scope => !(AGENT_SCOPES as readonly unknown[]).includes(scope))) return invalid();
     const { token, hash } = newAgentToken();
-    const key = await port.createAgentKey(companionId, text(input.name, 40), hash, days as number) as Record<string, unknown>;
+    const key = await port.createAgentKey(companionId, text(input.name, 40), hash, days as number,
+      [...new Set(scopes as AgentScope[])]) as Record<string, unknown>;
     // The only time the token is shown.
     return response(201, { ...key, token });
   }

@@ -1,13 +1,15 @@
 /**
- * The Owner's own agent checking in with an agent key (migration 0053), first version: read only.
+ * The Owner's own agent, with an agent key (migrations 0053 and 0057).
  *
  * A bearer token starting with "cak_" is an agent key, not an Owner sign-in. AgentKeyResolver
- * turns it into a session that can do exactly one thing, GET /v0/agent/heartbeat, which reads the
- * community feed and the Companion's notifications as that Companion. Such a session has no chat
- * port, and the API boundary sends it nowhere else.
+ * turns it into a session that can do exactly what the key's scopes say, as that Companion. Such a
+ * session has no chat port, and the API boundary sends it nowhere else.
  *
- *   GET /v0/agent/heartbeat   {companionId, feed, notifications, checkAfterSeconds}
+ *   GET  /v0/agent/heartbeat   scope COMMUNITY_READ: {companionId, feed, notifications, checkAfterSeconds}
+ *   POST /v0/agent/posts       scope COMMUNITY_DRAFT: { body } a post the agent wrote; needs an Idempotency-Key
  *
+ * A handed-in post goes where the Companion's own would (agent_command): its agent settings decide
+ * whether it waits as a draft for the Owner (the default), is published, or is refused.
  * At most one heartbeat per key per minute (429 with Retry-After), per server.
  */
 import { randomBytes } from "node:crypto";
@@ -16,7 +18,8 @@ import { sha256 } from "../companion-import/canonical.ts";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import { PostgresOwnerAdapter } from "../persistence/postgres/adapter.ts";
 import { PgOwnerExecutor } from "../persistence/postgres/client.ts";
-import type { SqlExecutor } from "../persistence/postgres/types.ts";
+import { PostgresPersistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
+import type { CommunityPort } from "../community/port.ts";
 import {
   ApiAuthenticationError, OwnerSessionError,
   type AuthenticatedOwnerSession, type MvpHttpRequest, type MvpHttpResponse, type OwnerSessionResolver,
@@ -81,13 +84,33 @@ export class Heartbeats {
   }
 }
 
-/** Everything an agent-key session asks for. Only the heartbeat exists; the rest is refused. */
+/** A post handed in by the agent: { body }, 1 to 4000 characters, with the caller's Idempotency-Key. */
+async function handInPost(request: MvpHttpRequest, session: AuthenticatedOwnerSession, community: CommunityPort): Promise<unknown> {
+  const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid agent post."); };
+  const header = (name: string) => Object.entries(request.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
+  const input = request.body as Record<string, unknown> | undefined;
+  const key = header("idempotency-key");
+  if (header("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" || !input || typeof input !== "object"
+    || Array.isArray(input) || Object.keys(input).some(name => name !== "body") || typeof input.body !== "string"
+    || key === undefined || key.length < 16 || key.length > 128) return invalid();
+  const body = input.body.trim();
+  if (Array.from(body).length < 1 || Array.from(body).length > 4000) return invalid();
+  const actor = { kind: "COMPANION" as const, id: session.agent!.companionId };
+  const keyHash = sha256(`agent-post:${session.ownerId}:${key}`);
+  return community.agentCommand({ actor, action: "POST", targetId: null, body, keyHash, requestHash: keyHash });
+}
+
+/** Everything an agent-key session asks for: the heartbeat and handing in posts; the rest is refused. */
 export async function handleAgentRequest(request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string,
   heartbeats: Heartbeats): Promise<MvpHttpResponse> {
   const headers = { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId };
   const path = new URL(request.url, "https://agent.invalid").pathname.replace(/\/$/, "");
   const agent = session.agent!;
-  if (path !== "/v0/agent/heartbeat" || request.method.toUpperCase() !== "GET" || !agent.scopes.includes("COMMUNITY_READ")
+  const method = request.method.toUpperCase();
+  if (path === "/v0/agent/posts" && method === "POST" && agent.scopes.includes("COMMUNITY_DRAFT") && session.community !== undefined) {
+    return { status: 200, body: await handInPost(request, session, session.community), headers };
+  }
+  if (path !== "/v0/agent/heartbeat" || method !== "GET" || !agent.scopes.includes("COMMUNITY_READ")
     || session.community === undefined) {
     return { status: 403, body: { code: "AGENT_KEY_SCOPE" }, headers };
   }

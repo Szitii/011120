@@ -2,7 +2,7 @@ import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "..
 import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
-import type { Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, ReservationDecision } from "./port.ts";
+import type { AgentScope, Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, PostOutcome, PostStart, ReservationDecision } from "./port.ts";
 import type { Clip } from "./voices.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
@@ -36,6 +36,11 @@ export class PostgresChatAdapter implements ChatPort {
 
   remove(chatId: string): Promise<unknown> {
     return this.#object("select public.chat_delete($1) as payload", [chatId]);
+  }
+
+  saveAvatar(companionId: string | null, avatar: string | null): Promise<unknown> {
+    return companionId === null ? this.#object("select public.owner_set_avatar($1) as payload", [avatar])
+      : this.#object("select public.companion_set_avatar($1,$2) as payload", [companionId, avatar]);
   }
 
   deleteCompanion(companionId: string): Promise<unknown> {
@@ -87,8 +92,8 @@ export class PostgresChatAdapter implements ChatPort {
       [companionId, c.kind, c.provider, c.baseUrl, c.model, c.name, c.secret, hint]);
   }
 
-  createAgentKey(companionId: string, name: string, tokenHash: string, days: number): Promise<unknown> {
-    return this.#object("select public.agent_key_create($1,$2,$3,$4) as payload", [companionId, name, tokenHash, days]);
+  createAgentKey(companionId: string, name: string, tokenHash: string, days: number, scopes: readonly AgentScope[]): Promise<unknown> {
+    return this.#object("select public.agent_key_create($1,$2,$3,$4,$5::text[]) as payload", [companionId, name, tokenHash, days, scopes]);
   }
 
   agentKeys(companionId: string): Promise<unknown> {
@@ -201,6 +206,21 @@ export class PostgresChatAdapter implements ChatPort {
   async diaryFinish(entryId: string, claimId: string, body: string | null): Promise<DiaryEntry | null> {
     const payload = await this.#object("select public.diary_finish($1,$2,$3) as payload", [entryId, claimId, body]);
     return (payload as { entry?: DiaryEntry | null }).entry ?? null;
+  }
+
+  async postBegin(companionId: string): Promise<PostStart> {
+    return await this.#object("select public.agent_auto_begin($1) as payload", [companionId]) as PostStart;
+  }
+
+  async postReserve(runId: string, claimId: string, b: Booking): Promise<ReservationDecision> {
+    return await this.#object("select public.agent_auto_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9) as payload", [
+      runId, claimId, b.provider, b.model, b.pricingVersion, b.inputTokens, b.outputTokens, b.costMinor, runId,
+    ]) as ReservationDecision;
+  }
+
+  async postFinish(runId: string, claimId: string, body: string | null, nothing: boolean): Promise<PostOutcome | null> {
+    const payload = await this.#object("select public.agent_auto_finish($1,$2,$3,$4) as payload", [runId, claimId, body, nothing]);
+    return (payload as { status?: PostOutcome }).status ?? null;
   }
 
   async #object(sql: string, values: readonly unknown[]): Promise<unknown> {

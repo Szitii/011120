@@ -7,7 +7,7 @@ import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
-import { DiaryScheduler } from "../src/chat/diary-scheduler.ts";
+import { BackgroundScheduler } from "../src/chat/background-scheduler.ts";
 import type { ChatClaim, DiaryJob } from "../src/chat/port.ts";
 import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, DiaryPage, DiarySettings, DiaryWriteResult, VoiceList }
   from "../../contracts/chat.ts";
@@ -70,7 +70,7 @@ try {
   const direct = await call<Chat>(0, "chats", "POST", { companionIds: [A.companion] });
   assert.equal(direct.status, 200, JSON.stringify(direct.data));
   assert.deepEqual([direct.data.direct, direct.data.title, direct.data.members, direct.data.replying],
-    [true, null, [{ companionId: A.companion, displayName: "SampleCompanion" }], false]);
+    [true, null, [{ companionId: A.companion, displayName: "SampleCompanion", avatar: null }], false]);
   assert.equal((await call<Chat>(0, "chats", "POST", { companionIds: [A.companion] })).data.id, direct.data.id);
   assert.equal((await call(1, "chats", "POST", { companionIds: [A.companion] })).status, 404);
   assert.equal((await call(1, `chats/${direct.data.id}`)).status, 404);
@@ -490,9 +490,10 @@ try {
   passed("diary model calls are booked as DIARY_ENTRY and settled");
 
   // ---- background diaries (autoWrite, migration 0052) ----
-  const background = (platform: boolean, written: string[]) => new DiaryScheduler({
+  const background = (platform: boolean, written: string[]) => new BackgroundScheduler({
     server: new PgOwnerExecutor(pool, null), portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
-    replies: { writeDiary: (companionId, port) => { written.push(companionId); return capturing.writeDiary(companionId, port); } },
+    due: "diary_due", what: "diary",
+    write: (companionId, port) => { written.push(companionId); return capturing.writeDiary(companionId, port); },
     platform, log: message => { throw new Error(message); } });
   const dueNow = async () => (await new PgOwnerExecutor(pool, null).query<{ payload: { companionId: string; subject: string }[] }>(
     "select public.diary_due(10, true) as payload", [])).rows[0]!.payload;

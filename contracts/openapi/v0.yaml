@@ -78,6 +78,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys
   /companions/{companionId}/agent-keys/{keyId}:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys~1{keyId}
+  /agent/posts:
+    $ref: ./chat.yaml#/paths/~1agent~1posts
   /agent/heartbeat:
     $ref: ./chat.yaml#/paths/~1agent~1heartbeat
   /companions/{companionId}/actions:
@@ -102,6 +104,10 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1connection
   /companions/{companionId}:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}
+  /companions/{companionId}/avatar:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1avatar
+  /owner/avatar:
+    $ref: ./chat.yaml#/paths/~1owner~1avatar
   /companion-imports:
     post:
       x-capability-status: implemented
@@ -533,6 +539,7 @@ components:
         socialReady: { type: boolean }
         socialTwinId: { type: string, format: uuid }
         handle: { type: string }
+        avatar: { type: string, description: 'A built-in avatar "preset:<id>"; left out when none is chosen.' }
     ControlsPatch:
       type: object
       additionalProperties: false

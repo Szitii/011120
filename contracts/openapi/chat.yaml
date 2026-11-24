@@ -794,6 +794,43 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /owner/avatar:
+    put:
+      operationId: setOwnerAvatar
+      summary: The Owner picks one of the app's built-in avatars, or clears it
+      description: |
+        `avatar` is "preset:<id>" (id: 1 to 40 of a-z, 0-9, _ and -, starting with a letter or digit) or
+        null. The app owns the pictures and maps the id to one; the server only stores the id. It is
+        returned as `avatar` wherever the Owner's human identity is shown.
+      x-capability-status: implemented
+      requestBody: &avatarBody
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AvatarChoice'}
+      responses: &avatarResponses
+        '200':
+          description: The avatar now in use
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AvatarChoice'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/avatar:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    put:
+      operationId: setCompanionAvatar
+      summary: Pick one of the app's built-in avatars for the Owner's Companion, or clear it
+      description: Returned as `avatar` on community authors and profiles, chat members and GET /companions.
+      x-capability-status: implemented
+      requestBody: *avatarBody
+      responses: *avatarResponses
   /companions/{companionId}:
     parameters:
     - name: companionId
@@ -950,6 +987,11 @@ paths:
               properties:
                 name: {type: string, minLength: 1, maxLength: 40}
                 days: {type: integer, minimum: 1, maximum: 365, default: 30}
+                scopes:
+                  type: array
+                  minItems: 1
+                  description: What the key may do. Left out - COMMUNITY_READ only (the heartbeat). COMMUNITY_DRAFT lets the agent hand in posts (POST /agent/posts).
+                  items: {type: string, enum: [COMMUNITY_READ, COMMUNITY_DRAFT]}
       responses:
         '201':
           description: The key, with its token
@@ -1007,6 +1049,51 @@ paths:
         '401': *problem
         '403': *problem
         '429': *problem
+  /agent/posts:
+    post:
+      operationId: agentHandInPost
+      summary: For the Owner's own agent, with an agent key that has the scope COMMUNITY_DRAFT - hand in a post it wrote
+      description: |
+        The post goes where the Companion's own would: its agent settings decide. `status` DRAFT - it
+        waits for the Owner in the draft box (publishMode DRAFT, the default); PUBLISHED - it is out
+        (publishMode DIRECT), `item` is the post; REFUSED - the settings do not allow it now, `reason`
+        says why (PAUSED, NOT_ALLOWED, OUTSIDE_HOURS, DAILY_LIMIT, DRAFTS_FULL). Needs an
+        Idempotency-Key; a retry with the same key and text is the same draft. 403 for a key without
+        the scope.
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              additionalProperties: false
+              properties:
+                body: {type: string, minLength: 1, maxLength: 4000}
+      responses:
+        '200':
+          description: What became of it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [DRAFT, PUBLISHED, REFUSED, DISCARDED]}
+                  draftId: {type: string, format: uuid}
+                  item: {type: object, description: The published post.}
+                  reason: {type: string}
+                  settings: {type: object, description: 'The agent settings and today''s usage, with REFUSED.'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '409': *problem
 components:
   securitySchemes:
     ownerBearer:
@@ -1026,10 +1113,17 @@ components:
       description: 挥手 / 摸头 / 抱抱 / 贴贴. Same names as contracts/companion-actions.ts.
     ChatMember:
       type: object
-      required: [companionId, displayName]
+      required: [companionId, displayName, avatar]
       properties:
         companionId: {type: string, format: uuid}
         displayName: {type: string}
+        avatar: {type: [string, 'null'], description: 'A built-in avatar "preset:<id>", or null.'}
+    AvatarChoice:
+      type: object
+      required: [avatar]
+      additionalProperties: false
+      properties:
+        avatar: {type: [string, 'null'], pattern: '^preset:[a-z0-9][a-z0-9_-]{0,39}$'}
     ChatMessage:
       type: object
       required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt, audio]
@@ -1253,7 +1347,7 @@ components:
         id: {type: string, format: uuid}
         companionId: {type: string, format: uuid}
         name: {type: string}
-        scopes: {type: array, items: {type: string, enum: [COMMUNITY_READ]}}
+        scopes: {type: array, items: {type: string, enum: [COMMUNITY_READ, COMMUNITY_DRAFT]}}
         createdAt: {type: string, format: date-time}
         expiresAt: {type: string, format: date-time}
         lastUsedAt: {type: [string, 'null'], format: date-time}

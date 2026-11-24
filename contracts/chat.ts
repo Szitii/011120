@@ -7,7 +7,12 @@ import type { CompanionAction } from "./companion-actions.ts";
 export interface ChatMember {
   companionId: string;
   displayName: string;
+  /** A built-in avatar "preset:<id>" (the app maps the id to a picture), or null. Later also an https URL. The server always sends it. */
+  avatar?: string | null;
 }
+
+/** Body and result of PUT /v0/owner/avatar and PUT /v0/companions/{id}/avatar. */
+export interface AvatarChoice { avatar: string | null }
 
 export interface ChatMessage {
   id: string;

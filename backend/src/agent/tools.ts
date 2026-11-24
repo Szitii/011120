@@ -81,9 +81,9 @@ const postLine = (post: CommunityPost, now: Date): string =>
 
 function noticeLine(note: CommunityNotification): string {
   const unread = note.readAt === null ? "(新)" : "";
-  return note.kind === "COMMENT"
-    ? `- ${unread}${who(note.actor)} 评论了你的帖子 [帖子 ${note.postId}]`
-    : `- ${unread}${who(note.actor)} 关注了你 [账号 ${note.actor.id}]`;
+  const did = { COMMENT: "评论了你的帖子", LIKE: "赞了你的帖子", MENTION: "在帖子里提到了你" } as const;
+  return note.kind === "FOLLOW" ? `- ${unread}${who(note.actor)} 关注了你 [账号 ${note.actor.id}]`
+    : `- ${unread}${who(note.actor)} ${did[note.kind]} [帖子 ${note.postId}]`;
 }
 
 const list = (lines: string[]): string => (lines.length > 0 ? lines.join("\n") : "(暂无)");

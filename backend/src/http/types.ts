@@ -194,6 +194,8 @@ export interface OwnerCompanionSummaryView {
   readonly socialReady: boolean;
   readonly socialTwinId?: string;
   readonly handle?: string;
+  /** "preset:<id>"; left out when none is chosen. */
+  readonly avatar?: string;
 }
 
 export interface ControlsResourceView {

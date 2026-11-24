@@ -3,7 +3,7 @@ import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, runAgentTool, type AgentArgs, type AgentTool } from "../agent/tools.ts";
-import type { AgentSettings, HumanProfileSettings } from "../../../contracts/community.ts";
+import type { AgentSettings, HumanProfileSettings, PostVisibility } from "../../../contracts/community.ts";
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid community request."); };
@@ -13,6 +13,7 @@ const header = (request: MvpHttpRequest, name: string): string | undefined =>
 const isJson = (request: MvpHttpRequest): boolean =>
   header(request, "content-type")?.split(";")[0]?.trim().toLowerCase() === "application/json";
 type Respond = (status: number, body: unknown) => MvpHttpResponse;
+const VISIBILITIES: readonly PostVisibility[] = ["PUBLIC", "FOLLOWERS", "PRIVATE"];
 
 /** Keyset cursor "createdAt|id" from `?cursor=`, as [beforeAt, beforeId]; both null without one. */
 function cursorOf(url: URL): [string | null, string | null] {
@@ -177,15 +178,27 @@ export async function handleCommunityRequest(
   if (!action) return response(404, { code: "RESOURCE_NOT_FOUND" });
   const keyHash = retryKey(request, session.ownerId);
   let body: string | null = null;
+  let visibility: PostVisibility | undefined;
+  let mentions: string[] | undefined;
   if (action === "POST" || action === "COMMENT") {
     if (!isJson(request)) invalid();
     const value = request.body as Record<string, unknown> | undefined;
-    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => k !== "body")) invalid();
+    const allowed = action === "POST" ? ["body", "visibility", "mentions"] : ["body", "mentions"];
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !allowed.includes(k))) invalid();
     if (typeof value!.body !== "string") invalid();
     body = (value!.body as string).trim();
     // Count characters the way the database does (code points), so an emoji counts as one, not two.
     const characters = Array.from(body).length;
     if (characters < 1 || characters > (action === "POST" ? 4000 : 2000)) invalid();
+    if (value!.visibility !== undefined) {
+      if (!VISIBILITIES.includes(value!.visibility as PostVisibility)) invalid();
+      visibility = value!.visibility as PostVisibility;
+    }
+    if (value!.mentions !== undefined) {
+      const named = value!.mentions;
+      if (!Array.isArray(named) || named.length > 10 || named.some(m => typeof m !== "string")) invalid();
+      mentions = [...new Set((named as string[]).map(id))];
+    }
   } else if (action.startsWith("REPORT_")) {
     if (!isJson(request)) invalid();
     const value = request.body as Record<string, unknown> | undefined;
@@ -196,10 +209,12 @@ export async function handleCommunityRequest(
       || /[\x00-\x08\x0b-\x1f\x7f]/.test(value.details)) return invalid();
     body = JSON.stringify({ reason: value.reason, details: value.details.trim() });
   } else if (request.body !== undefined) invalid();
+  // Left out when not given, so a plain post hashes the same as before these fields existed.
+  const extras = { ...(visibility === undefined ? {} : { visibility }), ...(mentions === undefined || mentions.length === 0 ? {} : { mentions }) };
   const result = await port.command({
-    actor, action, targetId, body,
+    actor, action, targetId, body, ...extras,
     keyHash,
-    requestHash: sha256(JSON.stringify({ actor, action, targetId, body })),
+    requestHash: sha256(JSON.stringify({ actor, action, targetId, body, ...extras })),
   });
   return response(action === "POST" || action === "COMMENT" ? 201 : 200, result);
 }

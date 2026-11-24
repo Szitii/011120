@@ -48,6 +48,7 @@ export interface Feature { key: string; enabled: boolean; updatedAt: string }
 export const FEATURES: Readonly<Record<string, string>> = {
   GROUP_CHAT_CREATE: "新建群聊",
   GROUP_CHAT_SEND: "在已有群聊里发消息",
+  COMMUNITY_NEW_NOTICES: "社区的点赞通知和 @提及通知（新版 App 上线后再开）",
 };
 export interface Spend {
   from: string; to: string;

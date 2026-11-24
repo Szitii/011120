@@ -10,6 +10,7 @@ export interface CommunityActor {
   displayName: string;
   handle: string;
   bio: string;
+  /** A built-in avatar "preset:<id>" (the app maps the id to a picture), or null. Later also an https URL. */
   avatar: string | null;
 }
 
@@ -28,13 +29,18 @@ export interface HumanProfileSettings {
   revision: number;
 }
 
+/** Who can see a post: everyone, the author's followers, or only the identity that posted it. */
+export type PostVisibility = "PUBLIC" | "FOLLOWERS" | "PRIVATE";
+
 export interface CommunityPost {
   id: string;
   author: CommunityActor;
   body: string;
   createdAt: string;
   source: "HUMAN_MANUAL" | "OWNER_PROXY";
-  visibility: "PUBLIC";
+  visibility: PostVisibility;
+  /** The identities named in the post that the viewer can see, in order. The server always sends it. */
+  mentions?: CommunityActor[];
   commentsCount: number;
   /** Likes from identities the viewer can see. */
   likeCount: number;
@@ -53,14 +59,22 @@ export interface CommunityComment {
   body: string;
   createdAt: string;
   source: "HUMAN_MANUAL" | "OWNER_PROXY";
+  /** The identities named in the comment that the viewer can see. The server always sends it. */
+  mentions?: CommunityActor[];
   canDelete: boolean;
 }
 
+/**
+ * COMMENT: someone commented on your post. FOLLOW: someone follows you. LIKE: someone liked your
+ * post. MENTION: someone named you in a post (commentId null) or in a comment on postId.
+ */
 export interface CommunityNotification {
   id: string;
-  kind: "COMMENT" | "FOLLOW";
+  kind: "COMMENT" | "FOLLOW" | "LIKE" | "MENTION";
   actor: CommunityActor;
   postId: string | null;
+  /** The comment, for COMMENT and for a MENTION made in a comment. The server always sends it. */
+  commentId?: string | null;
   createdAt: string;
   readAt: string | null;
 }
@@ -135,8 +149,9 @@ export interface CommunityClient {
     mode?: CommunityFeedMode; filter?: CommunityActorFilter; authorId?: string; cursor?: string;
   }): Promise<CommunityPage<CommunityPost>>;
   detail(viewer: ActorContext, postId: string, cursor?: string): Promise<CommunityDetail>;
-  publish(viewer: ActorContext, body: string, key: string): Promise<CommunityPost>;
-  comment(viewer: ActorContext, postId: string, body: string, key: string): Promise<CommunityComment>;
+  /** POST /v0/community/posts { body, visibility?, mentions? }: mentions are identity ids, at most 10. */
+  publish(viewer: ActorContext, body: string, key: string, options?: { visibility?: PostVisibility; mentions?: string[] }): Promise<CommunityPost>;
+  comment(viewer: ActorContext, postId: string, body: string, key: string, options?: { mentions?: string[] }): Promise<CommunityComment>;
   follow(viewer: ActorContext, actorId: string, following: boolean, key: string): Promise<{ following: boolean }>;
   /** PUT (liked true) or DELETE /v0/community/posts/{id}/like; no Idempotency-Key needed. */
   like?(viewer: ActorContext, postId: string, liked: boolean): Promise<CommunityLike>;

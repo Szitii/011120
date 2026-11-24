@@ -11,7 +11,7 @@
 import { ACTION_TEXT, answersAction, splitVoice } from "./prompt.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { DiaryWriteResult } from "../../../contracts/chat.ts";
-import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob } from "./port.ts";
+import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob, PostJob, PostOutcome, PostStart } from "./port.ts";
 import type { Clip, Emotion, Voices } from "./voices.ts";
 
 /**
@@ -28,11 +28,16 @@ export type Answer =
 /** A diary entry the model wrote, or why there is none. */
 export type DiaryAnswer = { text: string } | { refused: true } | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
 
+/** A community post the model wrote on its own; `pass` when it had nothing to say. */
+export type PostAnswer = DiaryAnswer | { pass: true };
+
 /** Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on. */
 export interface ChatModel {
   reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal }): Promise<Answer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
+  /** Writes a community post of its own; without it, such posts fail. */
+  post?(job: PostJob, context: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer>;
 }
 
 const MAX_MESSAGES = 3;
@@ -43,6 +48,8 @@ const SPEECH_TIMEOUT_MS = 25_000;
 /** Longer messages are sent as text: nobody records a minute-long voice message to say it. */
 const MAX_VOICE_CHARS = 120;
 const MAX_CHARS = 2000;
+/** A post of its own is short; the prompt asks for 20 to 200 characters. */
+const MAX_POST_CHARS = 1000;
 const PREVIEW = 40;
 const preview = (text: string): string => {
   const chars = Array.from(text.replace(/\s+/g, " ").trim());
@@ -82,6 +89,8 @@ export const devChatModel: ChatModel = {
       "。",
       last ? `主人说：「${preview(last)}」` : "",
     ].join("") };
+  },  async post(job) {
+    return { text: `（开发环境假动态）我是${job.companion.displayName}，现在是 ${job.localTime}，这是我发的第 ${job.own.length + 1} 条。` };
   },
 };
 
@@ -165,6 +174,36 @@ export class ChatReplies {
       return safe.length > MAX_CHARS ? [null, "ERROR"] : [safe, null];
     } catch {
       return [null, "ERROR"];
+    }
+  }
+
+  /**
+   * Writes a community post of the Companion's own if one is due (the database decides), through
+   * the same output safety scan as its other words. What comes of it follows the agent settings:
+   * a draft for the Owner (the default) or published. Returns how the run ended, or why none started.
+   */
+  async writePost(companionId: string, port: ChatPort): Promise<PostOutcome | Exclude<PostStart["status"], "WRITE">> {
+    const job = await port.postBegin(companionId);
+    if (job.status !== "WRITE") return job.status;
+    const written = await this.#postText(job, port);
+    return await port.postFinish(job.runId, job.claimId, written.text, written.nothing) ?? "FAILED";
+  }
+
+  /** The post; or no text, with `nothing` true when the Companion passed and false when the attempt failed. */
+  async #postText(job: PostJob, port: ChatPort): Promise<{ text: string | null; nothing: boolean }> {
+    const failed = { text: null, nothing: false };
+    const model = this.#model;
+    if (model?.post === undefined) return failed;
+    try {
+      const result = await this.#timed(signal => model.post!(job, { port, signal }));
+      if ("pass" in result) return { text: null, nothing: true };
+      if (!("text" in result)) return failed;
+      const scan = this.#safety.scanOutput(result.text.trim());
+      const safe = scan.sanitized.trim();
+      return scan.decision === "BLOCK" || safe.length === 0 || Array.from(safe).length > MAX_POST_CHARS ? failed
+        : { text: safe, nothing: false };
+    } catch {
+      return failed;
     }
   }
 

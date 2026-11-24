@@ -15,7 +15,7 @@ export interface ChatClaim {
   /** A one-to-one chat (otherwise a group). */
   direct: boolean;
   companion: { companionId: string; displayName: string; identity: unknown; settings: ChatSettings };
-  members: { companionId: string; displayName: string }[];
+  members: { companionId: string; displayName: string; avatar?: string | null }[];
   /** The last 30 shown messages, oldest first; companionId null is the Owner. An action has no body. */
   history: {
     companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string;
@@ -56,11 +56,36 @@ export interface DiaryJob {
   posts: { kind: "POST" | "COMMENT"; body: string; at: string }[];
 }
 
+/** A community post to write on its own (agent_auto_begin said WRITE). */
+export interface PostJob {
+  status: "WRITE";
+  runId: string;
+  claimId: string;
+  companion: ChatClaim["companion"];
+  /** The Owner's local time, "M/D HH:MM". */
+  localTime: string;
+  /** Its own latest posts, oldest first, so it does not repeat itself. */
+  own: { body: string; at: string }[];
+  /** A few recent public posts by others, oldest first. */
+  others: { author: string; body: string; at: string }[];
+}
+
+/** agent_auto_begin: a job, or why nothing is written now. */
+export type PostStart = PostJob | { status: "OFF" | "WRITING" } | { status: "NOT_DUE"; nextAt: string }
+  | { status: "REFUSED"; reason: string };
+
+/** How a run ended: a draft for the Owner, published, nothing to say, refused by the settings, or failed. */
+export type PostOutcome = "DRAFT" | "PUBLISHED" | "NOTHING" | "REFUSED" | "FAILED";
+
 /** diary_begin: a job, or why nothing is written now. */
 export type DiaryStart = DiaryJob | { status: "OFF" | "WRITING" | "NOTHING_NEW" } | { status: "NOT_DUE"; nextAt: string };
 
 /** What a model call costs, before it starts; the caller adds which turn or entry it is for. */
 export type Booking = Pick<ChatReservation, "provider" | "model" | "pricingVersion" | "inputTokens" | "outputTokens" | "costMinor">;
+
+/** What an agent key may do: read the feed and notifications (the heartbeat), hand in posts. */
+export type AgentScope = "COMMUNITY_READ" | "COMMUNITY_DRAFT";
+export const AGENT_SCOPES: readonly AgentScope[] = ["COMMUNITY_READ", "COMMUNITY_DRAFT"];
 
 /** Every call runs as the signed-in Owner; the database checks ownership. */
 export interface ChatPort {
@@ -72,6 +97,8 @@ export interface ChatPort {
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;
   remove(chatId: string): Promise<unknown>;
+  /** A built-in avatar ("preset:<id>") or null, for the Owner (companionId null) or one of their Companions. */
+  saveAvatar(companionId: string | null, avatar: string | null): Promise<unknown>;
   /** Deletes the Owner's Companion and what was private to it (chats, diary, memories, keys). */
   deleteCompanion(companionId: string): Promise<unknown>;
   /** The Owner has read up to this message (only moves forward); returns the chat. */
@@ -94,7 +121,7 @@ export interface ChatPort {
   /** Server only: save a tested connection; `secret` is already sealed. */
   saveConnection(companionId: string, connection: Connection, hint: string): Promise<unknown>;
   /** Server only: a new agent key (only its hash is stored); the key without its token. */
-  createAgentKey(companionId: string, name: string, tokenHash: string, days: number): Promise<unknown>;
+  createAgentKey(companionId: string, name: string, tokenHash: string, days: number, scopes: readonly AgentScope[]): Promise<unknown>;
   /** The Companion's agent keys, newest first ({ items }). */
   agentKeys(companionId: string): Promise<unknown>;
   revokeAgentKey(companionId: string, keyId: string): Promise<unknown>;
@@ -133,4 +160,10 @@ export interface ChatPort {
   diaryReserve(entryId: string, claimId: string, booking: Booking): Promise<ReservationDecision>;
   /** Server only: keep the entry (body) or mark the attempt failed (null). The entry, or null if not kept. */
   diaryFinish(entryId: string, claimId: string, body: string | null): Promise<DiaryEntry | null>;
+  /** Server only: start a community post of its own if one is due. */
+  postBegin(companionId: string): Promise<PostStart>;
+  /** Server only: book the model call for a post (like reserve). */
+  postReserve(runId: string, claimId: string, booking: Booking): Promise<ReservationDecision>;
+  /** Server only: hand in the text (body), or end the run with nothing to say or as failed. Null when the run was given up. */
+  postFinish(runId: string, claimId: string, body: string | null, nothing: boolean): Promise<PostOutcome | null>;
 }

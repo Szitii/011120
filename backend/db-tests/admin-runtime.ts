@@ -259,7 +259,7 @@ try {
   const chats = await admin(two, "chats", A.owner);
   const listed = chats.items.find((c: Json) => c.id === chatId);
   assert.deepEqual([listed.title, listed.direct, listed.members, listed.messages],
-    ["Admin fixture chat", false, [{ companionId: A.companion, displayName: "SampleCompanion" }], 55]);
+    ["Admin fixture chat", false, [{ companionId: A.companion, displayName: "SampleCompanion", avatar: null }], 55]);
   assert.ok(!JSON.stringify(chats).includes("private line"), "the list carries no message text");
   const chatReads = async () => (await pool.query(`select operator, owner_id, reason from companion_private.admin_log
     where action = 'READ_CHAT' and target_id = $1 order by id`, [chatId])).rows;
