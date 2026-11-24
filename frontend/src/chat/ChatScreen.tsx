@@ -24,6 +24,7 @@ import type { QuoteInput } from "../album/store";
 import { BottomSheet } from "../components/BottomSheet";
 import { CommunityButton } from "../community/components";
 import { VoiceComposer } from "./VoiceComposer";
+import { quotaMessage, type Wallet } from "../wallet/wallet";
 import { useVoicePlayback } from "./useVoicePlayback";
 import { useAppIsActive } from "../state/useAppIsActive";
 
@@ -37,7 +38,6 @@ const actionLabels = {
 const replyFailureMessages = {
   UNAVAILABLE: "即将推出",
   DISABLED: "平台模型暂时关闭",
-  QUOTA: "今天的免费回复用完了，明天再来",
   ERROR: "这条回复没发出来，可以重试",
 };
 
@@ -126,6 +126,23 @@ export function ChatScreen({
   const reqVersionRef = useRef(0);
   const cursorExhaustedRef = useRef(false);
   const pendingSendRef = useRef<{ text: string; key: string } | null>(null);
+
+  // Look up the current wallet once for the latest failed reply, not for older quota failures.
+  const latestReply = messages.find(item => item.companionId !== null);
+  const quotaId = latestReply?.status === "FAILED" && latestReply.failure === "QUOTA" ? latestReply.id : undefined;
+  const [quotaWallet, setQuotaWallet] = useState<{ messageId: string; wallet: Wallet }>();
+  useEffect(() => {
+    if (!appActive || !quotaId || !client.wallet) return;
+    let current = true;
+    void client.wallet().then(wallet => {
+      if (current) setQuotaWallet({ messageId: quotaId, wallet });
+    }).catch(error => {
+      if (current && error instanceof ApiProblemError && error.status === 404) {
+        setQuotaWallet({ messageId: quotaId, wallet: { enabled: false } });
+      }
+    });
+    return () => { current = false; };
+  }, [appActive, client, quotaId]);
 
   const sendingRead = useRef<string | undefined>(undefined);
   const lastRead = useRef<string | undefined>(undefined);
@@ -517,7 +534,9 @@ export function ChatScreen({
                     ) : item.status === "FAILED" ? (
                       <View style={styles.failedWrap}>
                         <Text style={styles.failedText}>
-                          {replyFailureMessages[item.failure ?? "ERROR"]}
+                          {item.failure === "QUOTA"
+                            ? quotaMessage(quotaId === item.id && quotaWallet?.messageId === item.id ? quotaWallet.wallet : undefined)
+                            : replyFailureMessages[item.failure ?? "ERROR"]}
                         </Text>
                         {item.failure === "ERROR" && item.retryable && !groupReadOnly && (
                           <Pressable onPress={() => void handleRetry(item.id)} style={styles.retryBtn}>

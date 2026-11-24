@@ -8,6 +8,7 @@ import type {
   CompanionActionResult,
 } from "../../../contracts/chat.ts";
 
+import type { Wallet } from "../wallet/wallet.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 
 export type VoiceChat = Chat & { recording?: string[] };
@@ -58,6 +59,7 @@ export interface ChatClient {
   voiceSample?(voiceId: string): Promise<AudioClip>;
   messageAudio?(chatId: string, messageId: string): Promise<AudioClip>;
   sendVoice?(chatId: string, input: ChatVoiceInput, key: string): Promise<VoiceSendResult>;
+  wallet?(): Promise<Wallet>;
   features?(): Promise<PlatformFeatures>;
   badges?(): Promise<Badges>;
   markRead?(chatId: string, messageId: string): Promise<Chat>;
@@ -113,6 +115,7 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
         connections: response?.connections === true,
       };
     },
+    wallet: () => send("GET", "/v0/wallet"),
     badges: () => send("GET", "/v0/badges"),
     markRead: (id, messageId) => send("PUT", `/v0/chats/${encodeURIComponent(id)}/read`, { messageId }),
     getAnniversary: id => send("GET", `${companion(id)}/anniversary`),

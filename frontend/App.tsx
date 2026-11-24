@@ -1,4 +1,5 @@
-import type { PlatformFeatures } from "./src/chat/client";
+import { WalletBalance } from "./src/wallet/WalletBalance";
+import type { ChatClient, PlatformFeatures } from "./src/chat/client";
 import type { Badges } from "../contracts/chat";
 import { useAppIsActive } from "./src/state/useAppIsActive";
 import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
@@ -883,6 +884,7 @@ function WorldApp({ client, account, isMockMode }: {
         visible={mySettingsOpen}
         isSampleCompanion={isSampleCompanion}
         account={account}
+        walletClient={ownerId ? client.api.chat : undefined}
         onClose={() => setMySettingsOpen(false)}
         onBlocks={viewer && client.api.community ? () => openCommunity({ type: "blocks" }) : undefined}
         onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
@@ -1584,12 +1586,14 @@ function AppSettingsSheet({
   visible,
   isSampleCompanion,
   account,
+  walletClient,
   onClose,
   onBringCompanion,
   onBlocks,
   onAgentSettings,
 }: {
   visible: boolean;
+  walletClient?: ChatClient;
   isSampleCompanion: boolean;
   account?: { email?: string; signOut: () => void };
   onClose: () => void;
@@ -1607,6 +1611,7 @@ function AppSettingsSheet({
   return (
     <>
       <BottomSheet visible={visible} title="设置" onClose={onClose}>
+        {visible && walletClient?.wallet && <WalletBalance client={walletClient} />}
         <View style={[styles.cleanCardGroup, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
           {onAgentSettings && (
             <Pressable
