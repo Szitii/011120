@@ -1,5 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import React, { useState } from "react";
+import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";

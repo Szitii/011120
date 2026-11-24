@@ -54,7 +54,7 @@ const LIGHT_BASE_COLORS = {
 };
 
 /** 定稿前端色卡（暖珍珠浅底 × 清透液态毛玻璃 × 冰雾/雾霾灰蓝点缀） */
-export const PEARL_UI = {
+const PEARL_UI = {
   background: ["#F6F5F0", "#F0E9E1"] as const,
   white: "#FFFFFF",
   ink: "#242322",

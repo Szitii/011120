@@ -4,7 +4,7 @@ import { findSafePath } from "./pathfinding.ts";
 
 const PLACEMENT_MS = 240;
 const ACTORS = ["companion", "user"] as const;
-export type DuoAction = Exclude<CompanionAction, "WAVE">;
+type DuoAction = Exclude<CompanionAction, "WAVE">;
 type Phase = "IDLE" | "WALK" | "SIT" | "SLEEP" | "DUO";
 export type ActorFrame = {
   point: RoomPoint;
@@ -18,7 +18,7 @@ export type ActorFrame = {
 type Step = { point: RoomPoint; furniture?: FurnitureId; pose?: Phase; placement?: boolean };
 type Track = { frame: ActorFrame; steps: Step[]; travelled: number; placementElapsed?: number };
 type Effect = { id: number; type: "heart" | "ripple"; point: RoomPoint; start: number };
-export type RoomFrame = {
+type RoomFrame = {
   actors: Record<ActorId, ActorFrame>;
   duo?: { action: DuoAction; frame: number };
   effects: (Effect & { progress: number })[];

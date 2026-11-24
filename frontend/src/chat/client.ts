@@ -9,7 +9,7 @@ import type {
 
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 
-export interface ChatRetryResult {
+interface ChatRetryResult {
   typing: string[];
   replying: boolean;
 }

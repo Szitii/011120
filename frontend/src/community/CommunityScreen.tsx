@@ -737,19 +737,6 @@ const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 4,
   },
-  backPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    height: 36,
-    paddingHorizontal: 11,
-    borderRadius: RADIUS.pill,
-  },
-  backText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: ui.ink,
-  },
   subTitle: {
     fontSize: 16,
     fontWeight: "700",

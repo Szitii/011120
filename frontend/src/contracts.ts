@@ -148,7 +148,7 @@ export interface LifeEventInboxCollection {
   nextCursor: { beforeCreatedAt: string; beforeId: string } | null;
 }
 
-export interface ImportFinding {
+interface ImportFinding {
   id: string;
   type: string;
   severity: "INFO" | "WARNING" | "BLOCK";
@@ -158,7 +158,7 @@ export interface ImportFinding {
   safePreview?: string;
 }
 
-export interface IdentityCandidate {
+interface IdentityCandidate {
   id: string;
   field: string;
   value: unknown;

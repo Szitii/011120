@@ -1,4 +1,4 @@
-export type Stage1MediaPresentation =
+type Stage1MediaPresentation =
   | { kind: "IMAGE"; url: string; alt?: string }
   | { kind: "UNAVAILABLE"; label: string };
 
