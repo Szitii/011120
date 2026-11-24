@@ -54,7 +54,21 @@ export interface PlatformFeatures {
   connections: boolean;
 }
 
+export interface AgentKey {
+  id: string;
+  companionId: string;
+  name: string;
+  scopes: "COMMUNITY_READ"[];
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+  active: boolean;
+}
+
 export interface ChatClient {
+  listAgentKeys?(id: string): Promise<{ items: AgentKey[] }>;
+  createAgentKey?(id: string, name: string): Promise<AgentKey & { token: string }>;
+  revokeAgentKey?(id: string, keyId: string): Promise<AgentKey>;
   listVoices?(): Promise<VoiceList>;
   voiceSample?(voiceId: string): Promise<AudioClip>;
   messageAudio?(chatId: string, messageId: string): Promise<AudioClip>;
@@ -102,6 +116,9 @@ export function makeIdempotencyKey(prefix: string): string {
 export function createChatClient(send: SendFn, getAudio?: (path: string) => Promise<AudioClip>): ChatClient {
   const companion = (id: string) => `/v0/companions/${encodeURIComponent(id)}`;
   return {
+    listAgentKeys: id => send("GET", `${companion(id)}/agent-keys`),
+    createAgentKey: (id, name) => send("POST", `${companion(id)}/agent-keys`, { name }),
+    revokeAgentKey: (id, keyId) => send("DELETE", `${companion(id)}/agent-keys/${encodeURIComponent(keyId)}`),
     listVoices: () => send("GET", "/v0/voices"),
     voiceSample: getAudio ? id => getAudio(`/v0/voices/${encodeURIComponent(id)}/sample`) : undefined,
     messageAudio: getAudio ? (id, messageId) =>

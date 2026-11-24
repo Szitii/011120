@@ -57,3 +57,19 @@ test("owner voice sends the recording to the chat with the caller's retry key", 
   await client.sendVoice!("chat/id", clip, "chat-voice-fixture");
   assert.deepEqual(calls, [["POST", "/v0/chats/chat%2Fid/voice", clip, "chat-voice-fixture"]]);
 });
+
+test("agent heartbeat keys use companion-scoped management routes with server-default expiry", async () => {
+  const calls: unknown[][] = [];
+  const client = createChatClient(async <T>(...args: unknown[]) => {
+    calls.push(args);
+    return {} as T;
+  });
+  await client.listAgentKeys!("companion/a");
+  await client.createAgentKey!("companion/a", "我的 Agent");
+  await client.revokeAgentKey!("companion/a", "key/b");
+  assert.deepEqual(calls, [
+    ["GET", "/v0/companions/companion%2Fa/agent-keys"],
+    ["POST", "/v0/companions/companion%2Fa/agent-keys", { name: "我的 Agent" }],
+    ["DELETE", "/v0/companions/companion%2Fa/agent-keys/key%2Fb"],
+  ]);
+});
