@@ -143,17 +143,20 @@ try {
   const writer = (await call<{ token: string; scopes: string[] }>(0, keys, "POST", { name: "能交稿", scopes: ["COMMUNITY_DRAFT", "COMMUNITY_READ"] })).data;
   assert.deepEqual([readOnly.scopes, writer.scopes], [["COMMUNITY_READ"], ["COMMUNITY_DRAFT", "COMMUNITY_READ"]]);
   assert.equal((await call(0, keys, "POST", { name: "乱来", scopes: ["CHAT"] })).status, 400);
-  assert.equal((await call(0, "agent/posts", "POST", { body: "只读钥匙想发帖" }, readOnly.token)).status, 403);
+  assert.equal((await call(0, "agent/posts", "POST", { text: "只读钥匙想发帖" }, readOnly.token)).status, 403);
   const handKey = randomUUID();
-  const handed = await call<{ status: string; draftId: string }>(0, "agent/posts", "POST", { body: " 外部 Agent 写的动态 " }, writer.token, handKey);
-  assert.deepEqual([handed.status, handed.data.status], [200, "DRAFT"], JSON.stringify(handed.data));
-  assert.equal((await call<{ draftId: string }>(0, "agent/posts", "POST", { body: "外部 Agent 写的动态" }, writer.token, handKey)).data.draftId,
-    handed.data.draftId, "a retry is the same draft");
-  assert.deepEqual((await drafts()).map(d => [d.id, d.body]), [[handed.data.draftId, "外部 Agent 写的动态"]]);
+  const handed = await call<{ text: string }>(0, "agent/posts", "POST", { text: " 外部 Agent 写的动态 " }, writer.token, handKey);
+  assert.equal(handed.status, 202, JSON.stringify(handed.data));
+  const waiting2 = await drafts();
+  assert.deepEqual(waiting2.map(d => d.body), ["外部 Agent 写的动态"]);
+  assert.equal(handed.data.text, `已存为草稿，等主人确认后发布：[草稿 ${waiting2[0]!.id}]`);
+  assert.equal((await call<{ text: string }>(0, "agent/posts", "POST", { text: "外部 Agent 写的动态" }, writer.token, handKey)).data.text,
+    handed.data.text, "a retry is the same draft");
+  assert.equal((await drafts()).length, 1);
+  assert.equal((await call(0, "agent/posts", "POST", { text: "" }, writer.token)).status, 400);
   await set("can_post = false");
-  const refused = await call<{ status: string; reason: string }>(0, "agent/posts", "POST", { body: "不让发的时候" }, writer.token);
-  assert.deepEqual([refused.data.status, refused.data.reason], ["REFUSED", "NOT_ALLOWED"], "the agent settings decide, as for the Companion itself");
-  assert.equal((await call(0, "agent/posts", "POST", { body: "" }, writer.token)).status, 400);
+  const refused = await call<{ text: string }>(0, "agent/posts", "POST", { text: "不让发的时候" }, writer.token);
+  assert.deepEqual([refused.status, refused.data.text], [403, '主人没有开启"自己发新帖"，现在不能发帖。'], "the agent settings decide, as for the Companion itself");
   assert.equal((await call(0, "agent/heartbeat", "GET", undefined, writer.token)).status, 200, "the same key still checks in");
   assert.equal((await call(0, "chats", "GET", undefined, writer.token)).status, 403, "and reaches nothing else");
   passed("an agent key with the draft scope hands in posts under the same settings; a read-only key cannot");

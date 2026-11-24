@@ -15,6 +15,10 @@ begin;
 --
 -- With an agent key: a key made with the scope COMMUNITY_DRAFT may POST /v0/agent/posts.
 
+-- autoEnabled has been a stored setting that did nothing ("coming soon") since 0034. It starts
+-- doing something now, so nobody is opted in by an old tap: everyone starts with it off.
+update companion_private.agent_settings set auto_enabled = false, revision = revision + 1 where auto_enabled;
+
 -- ---------- runs ----------
 
 create table companion_private.agent_runs (
@@ -28,7 +32,7 @@ create table companion_private.agent_runs (
   created_at timestamptz not null default now(),
   check ((status = 'WRITING') = (claim_id is not null))
 );
-create index agent_runs_companion on companion_private.agent_runs(companion_id, created_at desc);
+create index agent_runs_actor on companion_private.agent_runs(actor_id, created_at desc);
 alter table companion_private.agent_runs enable row level security;
 alter table companion_private.agent_runs force row level security;
 revoke all on companion_private.agent_runs from public, anon, authenticated;
@@ -70,6 +74,8 @@ end $$;
 -- with the Owner's auth subject to write as. [{companionId, subject}]
 -- p_platform false: the server has no platform model, so only Companions on their Owner's own
 -- key or agent. agent_auto_begin checks everything again under the Companion's lock.
+-- A Companion with an abandoned run is listed whatever its settings say now, so that begin closes
+-- the run and gives back what it booked.
 create function public.agent_auto_due(p_limit integer, p_platform boolean)
 returns jsonb language sql stable security definer set search_path='' as $$
   select coalesce(jsonb_agg(jsonb_build_object('companionId', d.companion_id, 'subject', d.subject) order by d.last_run nulls first), '[]')
@@ -82,12 +88,12 @@ returns jsonb language sql stable security definer set search_path='' as $$
     join public.companions c on c.id = t.companion_id and c.status = 'ACTIVE'
     join public.owners o on o.id = c.owner_id and o.status = 'ACTIVE'
     cross join lateral (select max(x.created_at) as last_run from companion_private.agent_runs x where x.actor_id = s.actor_id) r
-    where s.auto_enabled and not s.paused and s.can_post
-      and (p_platform or exists(select 1 from companion_private.companion_connections k where k.companion_id = t.companion_id))
-      and coalesce(r.last_run + make_interval(mins => s.interval_minutes), '-infinity') <= now()
-      and companion_private.agent_refusal(s, companion_private.agent_settings_json(s), 'POST', null) is null
-      and (s.publish_mode <> 'DRAFT' or (select count(*) from companion_private.agent_drafts x
-        where x.actor_id = s.actor_id and x.status = 'PENDING') < 20)
+    where exists(select 1 from companion_private.agent_runs x where x.actor_id = s.actor_id and x.status = 'WRITING'
+        and x.created_at <= now() - interval '3 minutes')
+      or (s.auto_enabled and not s.paused and s.can_post
+        and (p_platform or exists(select 1 from companion_private.companion_connections k where k.companion_id = t.companion_id))
+        and coalesce(r.last_run + make_interval(mins => s.interval_minutes), '-infinity') <= now()
+        and companion_private.agent_refusal(s, companion_private.agent_settings_json(s), 'POST', null) is null)
     order by r.last_run nulls first
     limit least(greatest(p_limit, 1), 50)
   ) d
@@ -114,7 +120,6 @@ returns jsonb language plpgsql security definer set search_path='' as $$
 declare o uuid := companion_private.chat_owner(); s companion_private.agent_settings%rowtype;
   r companion_private.agent_runs%rowtype; v_view jsonb; reason text; last_run timestamptz; next_at timestamptz;
 begin
-  perform companion_private.owned_companion(p_companion);
   s := companion_private.agent_lock(companion_private.agent_settings_for('COMPANION', p_companion), null);
   -- A run older than 3 minutes was abandoned (the server stopped or the model hung); its call is closed.
   for r in select * from companion_private.agent_runs where actor_id = s.actor_id and status = 'WRITING' for update loop
@@ -145,8 +150,8 @@ begin
     'others', coalesce((select jsonb_agg(jsonb_build_object('author', q.author, 'body', q.body, 'at', q.created_at) order by q.created_at)
       from (select companion_private.community_actor_json(p.actor_id)->>'displayName' as author, p.body, p.created_at
         from public.community_posts p
-        where p.actor_id <> s.actor_id and p.visibility = 'PUBLIC' and p.created_at > now() - interval '3 days'
-          and companion_private.community_post_visible(p.id, s.actor_id)
+        where p.actor_id <> s.actor_id and p.visibility = 'PUBLIC' and p.deleted_at is null
+          and p.created_at > now() - interval '3 days' and companion_private.community_visible(p.actor_id, s.actor_id)
         order by p.created_at desc limit 8) q), '[]'));
 end $$;
 
@@ -180,6 +185,8 @@ begin
   if p_body is not null and (v_body !~ '\S' or char_length(v_body) > 4000) then
     raise exception using errcode='22023', message='invalid post';
   end if;
+  -- The actor before the run, the order agent_auto_begin and agent_command take them in.
+  perform 1 from public.community_actors a join companion_private.agent_runs x on x.actor_id = a.id where x.id = p_run for update of a;
   r := companion_private.agent_run_for(p_run);
   if r.id is null or r.status <> 'WRITING' or r.claim_id is distinct from p_claim then
     return jsonb_build_object('accepted', false);
@@ -201,24 +208,91 @@ begin
   return jsonb_strip_nulls(jsonb_build_object('accepted', true, 'status', v_status, 'draftId', outcome->'draftId'));
 end $$;
 
+-- ---------- deleting a Companion ----------
+
+-- Same as in 0054, with three changes:
+--   1. Its runs go too, and one still in progress gives back what it booked.
+--   2. The chats are locked before anything of theirs is touched, the order the chat functions
+--      use, so a reply finishing at the same moment waits instead of deadlocking.
+--   3. Its posts and comments lose their text like ones the Owner deletes by hand.
+create or replace function public.companion_delete(p_companion uuid)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare o uuid := companion_private.chat_owner(); c uuid; v_actor uuid;
+begin
+  perform 1 from public.owners where id = o for no key update;
+  select id into c from public.companions
+    where id = p_companion and owner_id = o and status not in ('DELETED', 'QUARANTINED') for update;
+  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
+  update public.companions set status = 'DELETED', updated_at = now() where id = c;
+
+  perform 1 from companion_private.chats x where x.direct_companion_id = c
+    or exists(select 1 from companion_private.chat_members m where m.chat_id = x.id and m.companion_id = c) for update;
+  -- Model calls still on the way are given up, so no budget or credits stay held.
+  perform companion_private.chat_abandon_compute(o, m.compute_tx)
+    from companion_private.chat_messages m where m.companion_id = c and m.compute_tx is not null;
+  perform companion_private.chat_abandon_compute(o, e.compute_tx)
+    from companion_private.diary_entries e where e.companion_id = c and e.compute_tx is not null;
+  perform companion_private.chat_abandon_compute(o, r.compute_tx)
+    from companion_private.agent_runs r where r.companion_id = c and r.compute_tx is not null;
+
+  delete from companion_private.chats where direct_companion_id = c;
+  delete from companion_private.chat_messages where companion_id = c;
+  delete from companion_private.chat_members where companion_id = c;
+  delete from companion_private.chats x where x.owner_id = o and x.direct_companion_id is null
+    and not exists(select 1 from companion_private.chat_members m where m.chat_id = x.id);
+  delete from companion_private.diary_entries where companion_id = c;
+  delete from companion_private.diary_settings where companion_id = c;
+  delete from companion_private.companion_memories where companion_id = c;
+  delete from companion_private.companion_connections where companion_id = c;
+  delete from companion_private.agent_keys where companion_id = c;
+  delete from companion_private.agent_runs where companion_id = c;
+  delete from companion_private.anniversaries where companion_id = c;
+  delete from companion_private.chat_settings where companion_id = c;
+  delete from public.life_event_inbox where owner_id = o and companion_id = c;
+
+  select a.id into v_actor from public.community_actors a
+    join public.social_twins t on t.id = a.social_twin_id where t.companion_id = c;
+  if v_actor is not null then
+    update public.community_posts set deleted_at = now(), body = '[已删除]' where actor_id = v_actor and deleted_at is null;
+    update public.community_comments set deleted_at = now(), body = '[已删除]' where actor_id = v_actor and deleted_at is null;
+    delete from public.community_follows where actor_id = v_actor or target_id = v_actor;
+    delete from public.community_likes where actor_id = v_actor;
+    delete from public.community_notifications where actor_id = v_actor or recipient_id = v_actor;
+    delete from companion_private.agent_drafts where actor_id = v_actor;
+  end if;
+
+  insert into public.audit_events(owner_id, companion_id, actor_type, actor_id, action, target_type, target_id)
+    values (o, c, 'OWNER', o, 'COMPANION_DELETE', 'COMPANION', c);
+  return jsonb_build_object('deleted', true);
+end $$;
+
 -- ---------- agent keys that may hand in posts ----------
 
 alter table companion_private.agent_keys drop constraint agent_keys_scopes_check;
 alter table companion_private.agent_keys add constraint agent_keys_scopes_check
   check (cardinality(scopes) >= 1 and scopes <@ array['COMMUNITY_READ', 'COMMUNITY_DRAFT']);
 
--- As agent_key_create (0053), with the scopes the Owner chose: COMMUNITY_READ (the heartbeat),
--- COMMUNITY_DRAFT (handing in posts). API server only.
+-- As in 0053, with the scopes the Owner chose: COMMUNITY_READ (the heartbeat), COMMUNITY_DRAFT
+-- (handing in posts). It replaces the version without scopes, which nothing calls any more.
+drop function public.agent_key_create(uuid, text, text, integer);
 create function public.agent_key_create(p_companion uuid, p_name text, p_token_hash text, p_days integer, p_scopes text[])
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare made jsonb; k companion_private.agent_keys%rowtype;
+declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
+  k companion_private.agent_keys%rowtype;
   v_scopes text[] := array(select distinct x from unnest(p_scopes) x where x is not null order by x);
 begin
-  if cardinality(v_scopes) < 1 or not v_scopes <@ array['COMMUNITY_READ', 'COMMUNITY_DRAFT'] then
+  if p_name is null or char_length(btrim(p_name)) not between 1 and 40 or p_days is null or p_days not between 1 and 365
+    or cardinality(v_scopes) < 1 or not v_scopes <@ array['COMMUNITY_READ', 'COMMUNITY_DRAFT'] then
     raise exception using errcode='22023', message='invalid agent key';
   end if;
-  made := public.agent_key_create(p_companion, p_name, p_token_hash, p_days);
-  update companion_private.agent_keys set scopes = v_scopes where id = (made->>'id')::uuid returning * into k;
+  perform 1 from public.companions where id = c for update;
+  if (select count(*) from companion_private.agent_keys where companion_id = c and revoked_at is null and expires_at > now()) >= 5 then
+    raise exception using errcode='55000', message='too many agent keys';
+  end if;
+  insert into companion_private.agent_keys(owner_id, companion_id, name, token_hash, scopes, expires_at)
+    values (o, c, btrim(p_name), p_token_hash, v_scopes, now() + make_interval(days => p_days)) returning * into k;
+  insert into public.audit_events(owner_id, companion_id, actor_type, actor_id, action, target_type, target_id)
+    values (o, c, 'OWNER', o, 'AGENT_KEY_CREATE', 'AGENT_KEY', k.id);
   return companion_private.agent_key_json(k);
 end $$;
 

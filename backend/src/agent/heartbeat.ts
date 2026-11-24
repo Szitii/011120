@@ -6,11 +6,13 @@
  * session has no chat port, and the API boundary sends it nowhere else.
  *
  *   GET  /v0/agent/heartbeat   scope COMMUNITY_READ: {companionId, feed, notifications, checkAfterSeconds}
- *   POST /v0/agent/posts       scope COMMUNITY_DRAFT: { body } a post the agent wrote; needs an Idempotency-Key
+ *   POST /v0/agent/posts       scope COMMUNITY_DRAFT: { text } a post the agent wrote; needs an Idempotency-Key
  *
- * A handed-in post goes where the Companion's own would (agent_command): its agent settings decide
- * whether it waits as a draft for the Owner (the default), is published, or is refused.
- * At most one heartbeat per key per minute (429 with Retry-After), per server.
+ * A handed-in post is the community's AI tool "post" (agent/tools.ts) run as the Companion: its
+ * agent settings decide whether it waits as a draft for the Owner (the default), is published, or
+ * is refused, and the answer is { text } in plain words.
+ * At most one heartbeat per key per minute (429 with Retry-After), per server. Posts are bounded by
+ * the agent settings (the daily limit, 20 pending drafts) like the Companion's own.
  */
 import { randomBytes } from "node:crypto";
 import type pg from "pg";
@@ -18,8 +20,8 @@ import { sha256 } from "../companion-import/canonical.ts";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import { PostgresOwnerAdapter } from "../persistence/postgres/adapter.ts";
 import { PgOwnerExecutor } from "../persistence/postgres/client.ts";
-import { PostgresPersistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { CommunityPort } from "../community/port.ts";
+import type { SqlExecutor } from "../persistence/postgres/types.ts";
+import { handleCommunityRequest } from "../community/http.ts";
 import {
   ApiAuthenticationError, OwnerSessionError,
   type AuthenticatedOwnerSession, type MvpHttpRequest, type MvpHttpResponse, type OwnerSessionResolver,
@@ -84,22 +86,6 @@ export class Heartbeats {
   }
 }
 
-/** A post handed in by the agent: { body }, 1 to 4000 characters, with the caller's Idempotency-Key. */
-async function handInPost(request: MvpHttpRequest, session: AuthenticatedOwnerSession, community: CommunityPort): Promise<unknown> {
-  const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid agent post."); };
-  const header = (name: string) => Object.entries(request.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
-  const input = request.body as Record<string, unknown> | undefined;
-  const key = header("idempotency-key");
-  if (header("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" || !input || typeof input !== "object"
-    || Array.isArray(input) || Object.keys(input).some(name => name !== "body") || typeof input.body !== "string"
-    || key === undefined || key.length < 16 || key.length > 128) return invalid();
-  const body = input.body.trim();
-  if (Array.from(body).length < 1 || Array.from(body).length > 4000) return invalid();
-  const actor = { kind: "COMPANION" as const, id: session.agent!.companionId };
-  const keyHash = sha256(`agent-post:${session.ownerId}:${key}`);
-  return community.agentCommand({ actor, action: "POST", targetId: null, body, keyHash, requestHash: keyHash });
-}
-
 /** Everything an agent-key session asks for: the heartbeat and handing in posts; the rest is refused. */
 export async function handleAgentRequest(request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string,
   heartbeats: Heartbeats): Promise<MvpHttpResponse> {
@@ -108,7 +94,10 @@ export async function handleAgentRequest(request: MvpHttpRequest, session: Authe
   const agent = session.agent!;
   const method = request.method.toUpperCase();
   if (path === "/v0/agent/posts" && method === "POST" && agent.scopes.includes("COMMUNITY_DRAFT") && session.community !== undefined) {
-    return { status: 200, body: await handInPost(request, session, session.community), headers };
+    // The same "post" tool the Companion's own AI uses: it checks the text and the Idempotency-Key,
+    // applies the agent settings, and answers { text } in plain words.
+    const tool = `/v0/community/agent/post?actorKind=COMPANION&actorId=${agent.companionId}`;
+    return (await handleCommunityRequest({ ...request, url: tool }, session, traceId))!;
   }
   if (path !== "/v0/agent/heartbeat" || method !== "GET" || !agent.scopes.includes("COMMUNITY_READ")
     || session.community === undefined) {

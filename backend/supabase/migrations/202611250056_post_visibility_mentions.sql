@@ -26,15 +26,22 @@ create unique index community_post_mention_notice on public.community_notificati
 create unique index community_comment_mention_notice on public.community_notifications(recipient_id, comment_id)
   where kind = 'MENTION' and comment_id is not null;
 
+-- Whether a post's visibility lets the viewer in. For a query that already has the post's row;
+-- it does not check the author or whether the post was withdrawn.
+create function companion_private.community_post_open(p_author uuid, p_visibility text, p_viewer uuid)
+returns boolean language sql stable security definer set search_path='' as $$
+  select p_visibility = 'PUBLIC' or p_author = p_viewer
+    or (p_visibility = 'FOLLOWERS' and exists(select 1 from public.community_follows f
+      where f.actor_id = p_viewer and f.target_id = p_author))
+$$;
+
 -- The one rule for "this viewer can see this post": it is not withdrawn, the viewer can see its
 -- author (blocks, suspended and deleted identities), and its visibility lets the viewer in.
 create function companion_private.community_post_visible(p_post uuid, p_viewer uuid)
 returns boolean language sql stable security definer set search_path='' as $$
   select exists(select 1 from public.community_posts p
     where p.id = p_post and p.deleted_at is null and companion_private.community_visible(p.actor_id, p_viewer)
-      and (p.visibility = 'PUBLIC' or p.actor_id = p_viewer
-        or (p.visibility = 'FOLLOWERS' and exists(select 1 from public.community_follows f
-          where f.actor_id = p_viewer and f.target_id = p.actor_id))))
+      and companion_private.community_post_open(p.actor_id, p.visibility, p_viewer))
 $$;
 
 -- The mentioned identities the viewer can see, in the order they were named.
@@ -44,7 +51,8 @@ returns jsonb language sql stable security definer set search_path='' as $$
   from unnest(p_mentions) with ordinality t(m, n) where companion_private.community_visible(m, p_viewer)
 $$;
 
--- Same as in 0054, with the real visibility and the mentions.
+-- Same as in 0054, with the real visibility and the mentions. likeCount is now every like: a
+-- number names nobody, and checking each liker against the viewer cost a function call per like.
 create or replace function companion_private.community_post_json(p_post uuid,p_viewer uuid)
 returns jsonb language sql stable security definer set search_path='' as $$
   select jsonb_build_object('id',p.id,'author',companion_private.community_actor_json(p.actor_id),
@@ -52,7 +60,7 @@ returns jsonb language sql stable security definer set search_path='' as $$
     'mentions',companion_private.community_mentions_json(p.mentions,p_viewer),
     'commentsCount',(select count(*) from public.community_comments c where c.post_id=p.id and c.deleted_at is null
       and companion_private.community_visible(c.actor_id,p_viewer)),
-    'likeCount',companion_private.community_like_count(p.id,p_viewer),
+    'likeCount',(select count(*) from public.community_likes l where l.post_id=p.id),
     'likedByMe',exists(select 1 from public.community_likes l where l.post_id=p.id and l.actor_id=p_viewer),
     'canDelete',p.actor_id=p_viewer)
   from public.community_posts p where p.id=p_post
@@ -68,8 +76,8 @@ returns jsonb language sql stable security definer set search_path='' as $$
 $$;
 
 -- The app released before this migration shows every notification that is not a FOLLOW as
--- "commented on your post". So LIKE and MENTION notices are written from now on but stay hidden
--- (list and badges) until the operators turn this switch on, once the app knows the new kinds.
+-- "commented on your post". So LIKE and MENTION notices are only written once the operators turn
+-- this switch on, when the app knows the new kinds; until then likes and mentions tell nobody.
 alter table companion_private.feature_switches drop constraint feature_switches_key_check;
 alter table companion_private.feature_switches add constraint feature_switches_key_check
   check (key in ('GROUP_CHAT_CREATE', 'GROUP_CHAT_SEND', 'COMMUNITY_NEW_NOTICES'));
@@ -84,25 +92,26 @@ returns boolean language sql stable security definer set search_path='' as $$
     and (nt.kind = 'FOLLOW' and exists(select 1 from public.community_follows f where f.actor_id = nt.actor_id and f.target_id = nt.recipient_id)
       or nt.kind = 'COMMENT' and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
         and exists(select 1 from public.community_comments c where c.id = nt.comment_id and c.deleted_at is null)
-      or nt.kind = 'LIKE' and companion_private.feature_on('COMMUNITY_NEW_NOTICES')
-        and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
+      or nt.kind = 'LIKE' and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
         and exists(select 1 from public.community_likes l where l.post_id = nt.post_id and l.actor_id = nt.actor_id)
-      or nt.kind = 'MENTION' and companion_private.feature_on('COMMUNITY_NEW_NOTICES')
-        and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
+      or nt.kind = 'MENTION' and companion_private.community_post_visible(nt.post_id, nt.recipient_id)
         and (nt.comment_id is null or exists(select 1 from public.community_comments c where c.id = nt.comment_id and c.deleted_at is null)))
 $$;
 
--- A comment needs a post its author can see. community_write checks the post's author; this
--- adds the post's visibility for every path that writes a comment (direct, or a published draft).
+-- A comment needs a post its author can see. community_write and agent_command check the post's
+-- author; this adds the post's visibility for every path that writes a comment or keeps one as
+-- a draft, so an AI cannot queue a comment on a post it cannot see.
 create function companion_private.community_comment_guard()
 returns trigger language plpgsql security definer set search_path='' as $$
 begin
-  if not companion_private.community_post_visible(new.post_id, new.actor_id) then
+  if new.post_id is not null and not companion_private.community_post_visible(new.post_id, new.actor_id) then
     raise exception using errcode='P0001', message='post not found';
   end if;
   return new;
 end $$;
 create trigger community_comments_visible_guard before insert on public.community_comments
+  for each row execute function companion_private.community_comment_guard();
+create trigger agent_drafts_visible_guard before insert on companion_private.agent_drafts
   for each row execute function companion_private.community_comment_guard();
 
 -- Same as in 0032, with: posts filtered by visibility (feed, profile count, detail), notifications
@@ -130,13 +139,15 @@ begin
       'following',exists(select 1 from public.community_follows where actor_id=a.id and target_id=target),
       'followersCount',(select count(*) from public.community_follows f where f.target_id=target and companion_private.community_visible(f.actor_id,a.id)),
       'followingCount',(select count(*) from public.community_follows f where f.actor_id=target and companion_private.community_visible(f.target_id,a.id)),
-      'postsCount',(select count(*) from public.community_posts p where p.actor_id=target and companion_private.community_post_visible(p.id,a.id)));
+      'postsCount',(select count(*) from public.community_posts p where p.actor_id=target and p.deleted_at is null
+        and companion_private.community_post_open(p.actor_id,p.visibility,a.id)));
   elsif p_resource='feed' then
     if p_target is not null and not companion_private.community_visible(p_target,a.id) then raise exception using errcode='P0001',message='profile not found'; end if;
     select coalesce(jsonb_agg(q.item order by q.created_at desc,q.id desc),'[]') into items from (
       select p.created_at,p.id,companion_private.community_post_json(p.id,a.id) item from public.community_posts p
         join public.community_actors ca on ca.id=p.actor_id
-      where p.deleted_at is null and companion_private.community_post_visible(p.id,a.id)
+      where p.deleted_at is null and companion_private.community_visible(p.actor_id,a.id)
+        and companion_private.community_post_open(p.actor_id,p.visibility,a.id)
         and (p_target is null or p.actor_id=p_target) and (p_filter='ALL' or ca.kind=p_filter)
         and (p_mode='LATEST' or exists(select 1 from public.community_follows f where f.actor_id=a.id and f.target_id=p.actor_id))
         and (p_before_at is null or (p.created_at,p.id)<(p_before_at,p_before_id))
@@ -175,9 +186,9 @@ begin
   return page;
 end $$;
 
--- Same as in 0054, with the post's visibility, and a notice to the author for a new like
--- (kept when the like is taken back, so liking again does not tell them twice; it is only shown
--- while the like stands).
+-- Same as in 0054, with the post's visibility, a plain count, and a notice to the author for a
+-- new like (kept when the like is taken back, so liking again does not tell them twice; it is
+-- only shown while the like stands).
 create or replace function public.community_like(p_kind text, p_id uuid, p_post uuid, p_liked boolean)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare a public.community_actors%rowtype; s companion_private.agent_settings%rowtype; reason text; author uuid;
@@ -206,9 +217,9 @@ begin
       if (select count(*) from public.community_likes where actor_id = a.id and created_at > now() - interval '1 hour') >= 300 then
         raise exception using errcode='55000', message='community like limit reached';
       end if;
-      insert into public.community_likes(post_id, actor_id) values (p_post, a.id) on conflict do nothing;
+      insert into public.community_likes(post_id, actor_id) values (p_post, a.id);
       select actor_id into author from public.community_posts where id = p_post;
-      if author <> a.id then
+      if author <> a.id and companion_private.feature_on('COMMUNITY_NEW_NOTICES') then
         insert into public.community_notifications(recipient_id, actor_id, kind, post_id) values (author, a.id, 'LIKE', p_post)
           on conflict do nothing;
       end if;
@@ -216,28 +227,31 @@ begin
   else
     delete from public.community_likes where post_id = p_post and actor_id = a.id;
   end if;
-  return jsonb_build_object('liked', p_liked, 'likeCount', companion_private.community_like_count(p_post, a.id));
+  return jsonb_build_object('liked', p_liked, 'likeCount', (select count(*) from public.community_likes where post_id = p_post));
 end $$;
+drop function companion_private.community_like_count(uuid, uuid);
 
 -- A new post (p_post null) or a comment on p_post, with who can see it (posts only; null means
 -- PUBLIC) and who is mentioned. Mentions the author cannot see, the author itself and repeats are
 -- dropped; more than 10 is refused. A mentioned identity is told if it can see the post; in a
 -- comment the post's author is not told twice (the comment already tells them).
--- A retry with the same key returns what was written; a retry that asks for another visibility
--- is a conflict.
+-- A retry with the same key returns what was written, as it was written; a retry that asks for
+-- another visibility is a conflict. The writer's locks are taken first, in its order, so a retry
+-- racing the first request waits for it and is seen as the retry it is.
 create function public.community_publish(p_kind text, p_id uuid, p_post uuid, p_body text, p_visibility text,
   p_mentions uuid[], p_key text, p_hash text)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare a public.community_actors%rowtype; v_visibility text := coalesce(p_visibility, 'PUBLIC'); v_mentions uuid[];
-  replay boolean; result jsonb; v_id uuid;
+  replay boolean; result jsonb; v_id uuid; author uuid; notify boolean := companion_private.feature_on('COMMUNITY_NEW_NOTICES');
 begin
   a := companion_private.community_actor(p_kind, p_id);
   if v_visibility not in ('PUBLIC', 'FOLLOWERS', 'PRIVATE') or (p_post is not null and p_visibility is not null)
     or (select count(distinct m) from unnest(coalesce(p_mentions, '{}')) m) > 10 then
     raise exception using errcode='22023', message='invalid publication';
   end if;
-  v_mentions := array(select m from unnest(coalesce(p_mentions, '{}')) with ordinality t(m, n)
-    where m is not null and m <> a.id and companion_private.community_visible(m, a.id) group by m order by min(n));
+  select actor_id into author from public.community_posts where id = p_post;
+  if author is not null then perform companion_private.community_lock_pair(a.id, author); end if;
+  perform 1 from public.community_actors where id = a.id for update;
   replay := exists(select 1 from companion_private.community_requests where actor_id = a.id and key_hash = p_key);
   result := public.community_command(p_kind, p_id, case when p_post is null then 'POST' else 'COMMENT' end, p_post, p_body, p_key, p_hash);
   v_id := (result->>'id')::uuid;
@@ -247,23 +261,29 @@ begin
     end if;
     return result;
   end if;
+  v_mentions := array(select m from unnest(coalesce(p_mentions, '{}')) with ordinality t(m, n)
+    where m is not null and m <> a.id and companion_private.community_visible(m, a.id) group by m order by min(n));
   if p_post is null then
     update public.community_posts set visibility = v_visibility, mentions = v_mentions where id = v_id;
-    insert into public.community_notifications(recipient_id, actor_id, kind, post_id)
-      select m, a.id, 'MENTION', v_id from unnest(v_mentions) m where companion_private.community_post_visible(v_id, m)
-      on conflict do nothing;
+    if notify then
+      insert into public.community_notifications(recipient_id, actor_id, kind, post_id)
+        select m, a.id, 'MENTION', v_id from unnest(v_mentions) m where companion_private.community_post_visible(v_id, m)
+        on conflict do nothing;
+    end if;
     return companion_private.community_post_json(v_id, a.id);
   end if;
   update public.community_comments set mentions = v_mentions where id = v_id;
-  insert into public.community_notifications(recipient_id, actor_id, kind, post_id, comment_id)
-    select m, a.id, 'MENTION', p_post, v_id from unnest(v_mentions) m
-    where companion_private.community_post_visible(p_post, m)
-      and m <> (select actor_id from public.community_posts where id = p_post)
-    on conflict do nothing;
+  if notify then
+    insert into public.community_notifications(recipient_id, actor_id, kind, post_id, comment_id)
+      select m, a.id, 'MENTION', p_post, v_id from unnest(v_mentions) m
+      where m <> author and companion_private.community_post_visible(p_post, m)
+      on conflict do nothing;
+  end if;
   return companion_private.community_comment_json(v_id, a.id);
 end $$;
 
-revoke all on function companion_private.community_post_visible(uuid, uuid), companion_private.community_mentions_json(uuid[], uuid),
+revoke all on function companion_private.community_post_open(uuid, text, uuid),
+  companion_private.community_post_visible(uuid, uuid), companion_private.community_mentions_json(uuid[], uuid),
   companion_private.community_comment_guard(), public.community_publish(text, uuid, uuid, text, text, uuid[], text, text)
   from public, anon, authenticated;
 grant execute on function public.community_publish(text, uuid, uuid, text, text, uuid[], text, text) to authenticated;

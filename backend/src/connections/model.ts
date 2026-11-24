@@ -146,31 +146,31 @@ export class ConnectedChatModel implements ChatModel {
   }
 
   async diary(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer> {
-    const companionId = job.companion.companionId;
-    const stored = await connectionOf(context.port, companionId);
-    if (stored === null) return this.#platform?.diary ? this.#platform.diary(job, context) : { failed: "UNAVAILABLE" };
-    if (stored === "DISABLED") return { failed: "DISABLED" };
-    const secret = this.#box.open(stored.secret, companionId);
-    const prompt = diaryPrompt(job, stored.kind === "BYOK" ? await memoriesOf(context.port, companionId) : []);
-    const result = await complete(this.#post, stored, secret, toMessages(prompt), DIARY_TOKENS, context.signal);
-    if (result.refused) return { refused: true };
-    if (result.cutOff) throw new Error("the entry was cut off");
-    return { text: result.text };
+    const id = job.companion.companionId;
+    // An agent keeps its own memories; a key gets the Owner's, as in chat.
+    const result = await this.#write(id, context, DIARY_TOKENS, async byok => diaryPrompt(job, byok ? await memoriesOf(context.port, id) : []));
+    if (result === null) return this.#platform?.diary ? this.#platform.diary(job, context) : { failed: "UNAVAILABLE" };
+    if ("failed" in result) return result;
+    return result.refused ? { refused: true } : { text: result.text };
   }
 
-  /** A community post of its own: the same prompt for a key and an agent (an agent keeps its own memories). */
   async post(job: PostJob, context: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer> {
-    const companionId = job.companion.companionId;
+    const result = await this.#write(job.companion.companionId, context, POST_TOKENS, async () => postPrompt(job));
+    if (result === null) return this.#platform?.post ? this.#platform.post(job, context) : { failed: "UNAVAILABLE" };
+    if ("failed" in result) return result;
+    return result.refused ? { refused: true } : parsePost(result.text);
+  }
+
+  /** One call for a diary entry or a post through the Owner's key or agent; null without a connection. */
+  async #write(companionId: string, context: { port: ChatPort; signal: AbortSignal }, maxTokens: number,
+    prompt: (byok: boolean) => Promise<{ system: string; user: string }>): Promise<ModelResult | { failed: "DISABLED" } | null> {
     const stored = await connectionOf(context.port, companionId);
-    if (stored === null) return this.#platform?.post ? this.#platform.post(job, context) : { failed: "UNAVAILABLE" };
+    if (stored === null) return null;
     if (stored === "DISABLED") return { failed: "DISABLED" };
-    const secret = this.#box.open(stored.secret, companionId);
-    const prompt = postPrompt(job, stored.kind === "BYOK" ? await memoriesOf(context.port, companionId) : []);
-    const result = await complete(this.#post, stored, secret, toMessages(prompt), POST_TOKENS, context.signal);
-    if (result.refused) return { refused: true };
-    if (result.cutOff) throw new Error("the post was cut off");
-    const text = parsePost(result.text);
-    return text === null ? { pass: true } : { text };
+    const messages = toMessages(await prompt(stored.kind === "BYOK"));
+    const result = await complete(this.#post, stored, this.#box.open(stored.secret, companionId), messages, maxTokens, context.signal);
+    if (result.cutOff) throw new Error("the text was cut off");
+    return result;
   }
 }
 

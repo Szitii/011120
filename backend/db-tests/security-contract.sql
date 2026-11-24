@@ -1986,7 +1986,7 @@ select public.test_assert(
     where has_table_privilege(r.role, 'companion_private.agent_keys', 'SELECT') or has_table_privilege(r.role, 'companion_private.agent_keys', 'INSERT')
       or has_table_privilege(r.role, 'companion_private.agent_keys', 'UPDATE') or has_table_privilege(r.role, 'companion_private.agent_keys', 'DELETE'))
   and not has_function_privilege('authenticated', 'public.agent_key_resolve(text)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.agent_key_create(uuid,text,text,integer)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.agent_key_create(uuid,text,text,integer,text[])'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.agent_key_resolve(text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.agent_key_list(uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.agent_key_list(uuid)'::regprocedure, 'EXECUTE'),
@@ -1998,8 +1998,7 @@ select public.test_assert(
       or has_table_privilege(r.role, 'public.community_likes', 'UPDATE') or has_table_privilege(r.role, 'public.community_likes', 'DELETE'))
   and (select relrowsecurity and relforcerowsecurity from pg_class where oid = 'public.community_likes'::regclass)
   and has_function_privilege('authenticated', 'public.community_like(text,uuid,uuid,boolean)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('anon', 'public.community_like(text,uuid,uuid,boolean)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'companion_private.community_like_count(uuid,uuid)'::regprocedure, 'EXECUTE'),
+  and not has_function_privilege('anon', 'public.community_like(text,uuid,uuid,boolean)'::regprocedure, 'EXECUTE'),
   'likes are reachable only through community_like'
 );
 select public.test_assert(
@@ -2024,8 +2023,9 @@ select public.test_assert(
   and not has_function_privilege('anon', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'companion_private.community_post_visible(uuid,uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'companion_private.community_mentions_json(uuid[],uuid)'::regprocedure, 'EXECUTE')
-  and exists(select 1 from pg_trigger where tgrelid = 'public.community_comments'::regclass and tgname = 'community_comments_visible_guard'),
-  'post visibility is decided by one private rule, and every comment is checked against it'
+  and exists(select 1 from pg_trigger where tgrelid = 'public.community_comments'::regclass and tgname = 'community_comments_visible_guard')
+  and exists(select 1 from pg_trigger where tgrelid = 'companion_private.agent_drafts'::regclass and tgname = 'agent_drafts_visible_guard'),
+  'post visibility is decided by one private rule, and every comment and comment draft is checked against it'
 );
 select public.test_assert(
   not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
@@ -2035,7 +2035,6 @@ select public.test_assert(
   and not has_function_privilege('authenticated', 'public.agent_auto_begin(uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.agent_auto_reserve(uuid,uuid,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.agent_auto_finish(uuid,uuid,text,boolean)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.agent_key_create(uuid,text,text,integer,text[])'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.agent_auto_finish(uuid,uuid,text,boolean)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.agent_key_create(uuid,text,text,integer,text[])'::regprocedure, 'EXECUTE'),
   'a Companion''s own posts are started, booked and ended only by the API server'

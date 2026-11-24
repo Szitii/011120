@@ -60,25 +60,26 @@ export class PlatformChatModel implements ChatModel {
   }
 
   async diary(job: DiaryJob, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer> {
-    const model = this.#catalog.pick(job.companion.settings.model);
-    if (model === undefined) return { failed: "UNAVAILABLE" };
-    const book: Book = booking => port.diaryReserve(job.entryId, job.claimId, booking);
     const prompt = diaryPrompt(job, await memoriesOf(port, job.companion.companionId));
-    const result = await this.#withFallback(model, m => this.#run(port, book, m, prompt, DIARY_TOKENS, signal));
+    const result = await this.#write(job.companion.settings.model, port, booking => port.diaryReserve(job.entryId, job.claimId, booking),
+      prompt, DIARY_TOKENS, signal);
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : { text: result.text };
   }
 
   async post(job: PostJob, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer> {
-    const model = this.#catalog.pick(job.companion.settings.model);
-    if (model === undefined) return { failed: "UNAVAILABLE" };
-    const book: Book = booking => port.postReserve(job.runId, job.claimId, booking);
-    const prompt = postPrompt(job, await memoriesOf(port, job.companion.companionId));
-    const result = await this.#withFallback(model, m => this.#run(port, book, m, prompt, POST_TOKENS, signal));
+    const result = await this.#write(job.companion.settings.model, port, booking => port.postReserve(job.runId, job.claimId, booking),
+      postPrompt(job), POST_TOKENS, signal);
     if ("failed" in result) return result;
-    if (result.refused) return { refused: true };
-    const text = parsePost(result.text);
-    return text === null ? { pass: true } : { text };
+    return result.refused ? { refused: true } : parsePost(result.text);
+  }
+
+  /** One booked call for a diary entry or a post, with the Companion's model or the default. */
+  async #write(chosen: string | null, port: ChatPort, book: Book, prompt: { system: string; user: string }, maxTokens: number,
+    signal: AbortSignal): Promise<ModelResult | Failed | { failed: "UNAVAILABLE" }> {
+    const model = this.#catalog.pick(chosen);
+    if (model === undefined) return { failed: "UNAVAILABLE" };
+    return this.#withFallback(model, m => this.#run(port, book, m, prompt, maxTokens, signal));
   }
 
   /** The chosen model was switched off by the platform: use the default instead. */

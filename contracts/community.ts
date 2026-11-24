@@ -42,7 +42,7 @@ export interface CommunityPost {
   /** The identities named in the post that the viewer can see, in order. The server always sends it. */
   mentions?: CommunityActor[];
   commentsCount: number;
-  /** Likes from identities the viewer can see. */
+  /** Every like on the post. */
   likeCount: number;
   /** Whether the viewing identity liked it. */
   likedByMe: boolean;
