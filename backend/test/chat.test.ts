@@ -7,6 +7,7 @@ import type { ChatClaim, ChatOutcome, ChatPort } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
 import { PostgresPersistenceError, type SqlExecutor } from "../src/persistence/postgres/types.ts";
+import type { Connections } from "../src/connections/model.ts";
 
 const ownerId = "00000000-0000-0000-0000-0000000001a1";
 const chatId = "00000000-0000-0000-0000-00000000c001";
@@ -35,6 +36,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     retry: async (...args) => { calls.push(["retry", ...args]); return { typing: [], replying }; },
     remove: async (...args) => { calls.push(["remove", ...args]); return { deleted: true }; },
     markRead: async (...args) => { calls.push(["markRead", ...args]); return {}; },
+    features: async () => { calls.push(["features"]); return { groupChatCreate: false, groupChatSend: true }; },
     badges: async () => { calls.push(["badges"]); return {}; },
     anniversary: async (...args) => { calls.push(["anniversary", ...args]); return {}; },
     saveAnniversary: async (...args) => { calls.push(["saveAnniversary", ...args]); return {}; },
@@ -129,6 +131,16 @@ it("routes read state, badges and the anniversary", async () => {
     assert.equal(await refusal(port, req), "NOT_FOUND");
   }
   assert.equal(calls.length, 0);
+});
+
+it("tells the app which features it may offer", async () => {
+  const { port, calls } = fakePort();
+  const off = await handleChatRequest(request("features"), session(port), "trace", replies);
+  assert.deepEqual(off?.body, { groupChatCreate: false, groupChatSend: true, connections: false });
+  const on = await handleChatRequest(request("features"), session(port), "trace", replies, undefined, {} as Connections);
+  assert.deepEqual(on?.body, { groupChatCreate: false, groupChatSend: true, connections: true });
+  assert.equal(await refusal(port, request("features", "POST")), "NOT_FOUND");
+  assert.deepEqual(calls, [["features"], ["features"]]);
 });
 
 it("routes memories and refuses ones with credentials", async () => {

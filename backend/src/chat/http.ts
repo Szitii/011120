@@ -20,6 +20,7 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET    /v0/features                                what the app may offer (group chats, connections)
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
  *
  * POST /v0/chats, POST .../messages and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
@@ -29,7 +30,7 @@ import { sha256 } from "../companion-import/canonical.ts";
 import { hasCredential } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
-import type { ChatModelList, ChatSettings, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatModelList, ChatSettings, DiarySettings, PlatformFeatures } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
@@ -151,10 +152,11 @@ export async function handleChatRequest(
   const diarySettingsRoute = path[1] === "companions" && path[3] === "diary-settings" && path.length === 4;
   const anniversaryRoute = path[1] === "companions" && path[3] === "anniversary" && path.length === 4;
   const badgesRoute = path[1] === "badges" && path.length === 2;
+  const featuresRoute = path[1] === "features" && path.length === 2;
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   if (path[0] !== "v0" || (path[1] !== "chats" && !settingsRoute && !modelsRoute && !actionsRoute && !diaryRoute
-    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute && !memoriesRoute && !connectionRoute)) return undefined;
+    && !diarySettingsRoute && !anniversaryRoute && !badgesRoute && !featuresRoute && !memoriesRoute && !connectionRoute)) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
     status, body: payload, headers: { "content-type": "application/json", "cache-control": "no-store", "x-trace-id": traceId },
@@ -163,6 +165,11 @@ export async function handleChatRequest(
   const method = request.method.toUpperCase();
 
   if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
+  if (featuresRoute) {
+    if (method !== "GET") return notFound();
+    const switches = await port.features() as Omit<PlatformFeatures, "connections">;
+    return response(200, { ...switches, connections: connections !== undefined } satisfies PlatformFeatures);
+  }
   if (badgesRoute) return method === "GET" ? response(200, await port.badges()) : notFound();
   if (anniversaryRoute) {
     const companionId = id(path[2]);

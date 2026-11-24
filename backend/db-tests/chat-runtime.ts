@@ -110,7 +110,25 @@ try {
   await pool.query("update companion_private.chat_messages set shown_at = now() where chat_id = $1 and part = 2", [direct.data.id]);
   passed("pacing: a reading delay, typing time by length, one message after another, nothing shown early");
 
-  const group = await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001");
+  // ---- group chats are paused at launch (feature switches, migration 0050) ----
+  const setFeature = (key: string, on: boolean) => pool.query("update companion_private.feature_switches set enabled = $2 where key = $1", [key, on]);
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: false, groupChatSend: false, connections: false });
+  assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-paused-001")).status, 409);
+  assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion] })).status, 200, "one-to-one chats are not paused");
+  await setFeature("GROUP_CHAT_CREATE", true);
+  const paused = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-paused-002")).data;
+  assert.equal((await call(0, `chats/${paused.id}/messages`, "POST", { body: "有人吗" })).status, 409);
+  assert.equal((await call(0, `chats/${paused.id}`)).status, 200, "a paused group can still be read");
+  assert.equal((await call(0, `chats/${direct.data.id}/messages`, "POST", { body: "单聊照常" })).status, 201);
+  await settle(direct.data.id);
+  await setFeature("GROUP_CHAT_SEND", true);
+  assert.equal((await call(0, `chats/${paused.id}/messages`, "POST", { body: "有人吗" })).status, 201);
+  await settle(paused.id);
+  assert.equal((await call(0, `chats/${paused.id}`, "DELETE")).status, 200);
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, connections: false });
+  passed("group chats paused by switch: no new group, no sending in an old one; one-to-one chats unaffected");
+
+  const group =await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001");
   assert.equal(group.status, 200, JSON.stringify(group.data));
   assert.equal((await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001")).data.id, group.data.id);
   assert.equal((await call(0, "chats", "POST", { companionIds: [second, A.companion], title: "一家人" }, "group-key-0000000001")).status, 409);

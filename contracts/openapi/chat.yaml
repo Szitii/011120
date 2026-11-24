@@ -181,6 +181,29 @@ paths:
               schema: {$ref: '#/components/schemas/Badges'}
         '401': *problem
         '403': *problem
+  /features:
+    get:
+      operationId: getFeatures
+      summary: What the app may offer right now; hide what is false
+      description: |
+        groupChatCreate false: POST /chats with 2 or more Companions answers 409. groupChatSend false:
+        existing group chats can be read and deleted, but sending and retrying in them answer 409.
+        connections false: PUT .../connection answers 501.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Features
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groupChatCreate, groupChatSend, connections]
+                properties:
+                  groupChatCreate: {type: boolean}
+                  groupChatSend: {type: boolean}
+                  connections: {type: boolean}
+        '401': *problem
+        '403': *problem
   /companions/{companionId}/anniversary:
     parameters:
     - name: companionId
