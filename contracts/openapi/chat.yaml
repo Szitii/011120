@@ -31,6 +31,7 @@ info:
     .../messages/{messageId}/audio. While a Companion records one it is in both `typing` and
     `recording` (show "正在说话…"). Clips are kept 30 days, then `audio` becomes null and the
     message shows as text. Each Owner gets a limited number per day; past it, replies are text.
+    The Owner sends a voice message with POST /chats/{chatId}/voice (when GET /voices says `input`).
 servers:
 - url: /v0
 security:
@@ -346,6 +347,59 @@ paths:
         '404': *problem
         '416':
           description: The range is outside the clip
+  /chats/{chatId}/voice:
+    parameters:
+    - *chatId
+    post:
+      operationId: sendChatVoice
+      summary: The Owner sends a voice message
+      description: |
+        The server turns the recording into text and sends it like POST .../messages (no @mentions):
+        the message has `audio` and `body` is what was recognised. Record mono AAC (m4a, about
+        32 kbit/s), at most 60 s and 700 KB. A retry with the same Idempotency-Key returns the first
+        message. 422 VOICE_NOT_UNDERSTOOD - nothing could be heard. 429 VOICE_LIMIT - today's voice
+        messages are used up. 503 VOICE_UNAVAILABLE - speech recognition is off or failed (try again or type).
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [audio, mime, durationMs]
+              properties:
+                audio: {type: string, contentEncoding: base64, description: The recording.}
+                mime: {type: string, enum: [audio/mp4, audio/aac, audio/mpeg, audio/wav, audio/ogg]}
+                durationMs: {type: integer, minimum: 1, maximum: 60000}
+      responses:
+        '201':
+          description: Sent; replies are on the way when `replying` is true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, typing, replying]
+                properties:
+                  message: {$ref: '#/components/schemas/ChatMessage'}
+                  typing: {$ref: '#/components/schemas/Typing'}
+                  replying: {$ref: '#/components/schemas/Replying'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: VOICE_NOT_UNDERSTOOD
+        '429':
+          description: VOICE_LIMIT
+        '503':
+          description: VOICE_UNAVAILABLE
   /voices:
     get:
       operationId: listVoices
@@ -935,10 +989,11 @@ components:
         description: {type: string}
     VoiceList:
       type: object
-      required: [items, available]
+      required: [items, available, input]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/VoiceInfo'}}
-        available: {type: boolean, description: false - voice messages are not switched on on this server.}
+        available: {type: boolean, description: false - Companions cannot answer with voice messages on this server.}
+        input: {type: boolean, description: 'true - the Owner can send voice messages (POST /chats/{chatId}/voice).'}
     ChatModelInfo:
       type: object
       required: [id, name, provider, tier, inputPerMTok, outputPerMTok, available]

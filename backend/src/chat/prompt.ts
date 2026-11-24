@@ -31,6 +31,7 @@ const voiceRules = (turn: ChatClaim): string[] => !turn.companion.settings.voice
   "- 你也可以发语音，像真人一样有时发语音、有时打字：在那条消息开头写 [语音]，想带语气就写 [语音:开心]" +
     `（可选：${Object.keys(VOICE_TONES).join("、")}）。`,
   "- 短的、带情绪的话（打招呼、安慰、开心、委屈、撒娇）适合语音；长内容、要主人记住的信息、链接和数字用文字。大多数时候还是打字。",
+  "- 聊天记录里标着（语音）的是语音消息。主人刚发了语音时，你也更愿意回语音。",
 ];
 /** Recent conversation sent to the model, newest kept first. Keeps one call well under the ledger's 16k input tokens. */
 const TRANSCRIPT_CHARS = 8000;
@@ -94,7 +95,7 @@ function remembered(memories: readonly string[]): string[] {
 const nameOf = (turn: ChatClaim, companionId: string | null): string => companionId === null ? "主人"
   : turn.members.find(member => member.companionId === companionId)?.displayName ?? "某位家机";
 
-type Said = { companionId: string | null; body: string | null; action: CompanionAction | null };
+type Said = { companionId: string | null; body: string | null; action: CompanionAction | null; voice?: boolean };
 
 /** The newest messages that fit, oldest first. The Owner's messages have keys and passwords masked. */
 function transcript(history: readonly Said[], name: (companionId: string | null) => string): string {
@@ -103,7 +104,7 @@ function transcript(history: readonly Said[], name: (companionId: string | null)
   for (const message of [...history].reverse()) {
     const body = message.action !== null ? `（${ACTION_TEXT[message.action]}）`
       : message.companionId === null ? maskCredentials(message.body ?? "") : message.body ?? "";
-    const line = `【${name(message.companionId)}】${body.replace(/\r\n|[\r\n\u0085\u2028\u2029]/g, "\n  ")}`;
+    const line = `【${name(message.companionId)}】${message.voice ? "（语音）" : ""}${body.replace(/\r\n|[\r\n\u0085\u2028\u2029]/g, "\n  ")}`;
     if (used + line.length > TRANSCRIPT_CHARS && lines.length > 0) break;
     lines.unshift(line);
     used += line.length;
@@ -170,7 +171,7 @@ export function agentMessages(turn: ChatClaim): { role: "system" | "user" | "ass
   const said = turn.history.slice(-30).map(message => {
     if (message.companionId === self) return { role: "assistant" as const, content: message.body ?? "" };
     const body = message.action !== null ? `（${ACTION_TEXT[message.action]}）`
-      : message.companionId === null ? maskCredentials(message.body ?? "") : message.body ?? "";
+      : `${message.voice ? "（语音）" : ""}${message.companionId === null ? maskCredentials(message.body ?? "") : message.body ?? ""}`;
     return { role: "user" as const, content: turn.direct && message.companionId === null ? body : `【${nameOf(turn, message.companionId)}】${body}` };
   }).filter(message => message.content.length > 0);
   if (said.length === 0 || said.at(-1)!.role === "assistant") said.push({ role: "user", content: `（现在轮到你，${name}。）` });

@@ -191,7 +191,7 @@ export class ChatReplies {
     const voice = voices?.pick(turn.companion.settings.voice);
     const wanted = tones.map((tone, i) => tone !== false && Array.from(texts[i]!).length <= MAX_VOICE_CHARS);
     if (voices === undefined || voice === undefined || !wanted.includes(true)) return undefined;
-    let left = await port.voiceLeft().catch(() => 0);
+    let left = await port.voiceLeft().then(left => left.companion, () => 0);
     const signal = AbortSignal.timeout(this.#speechTimeoutMs);
     const clips = await Promise.all(texts.map(async (text, i): Promise<Clip | null> => {
       if (!wanted[i] || left <= 0) return null;

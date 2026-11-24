@@ -1886,6 +1886,8 @@ select public.test_assert(
   and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_send_voice(uuid,text,text,jsonb)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_send_voice(uuid,text,text,jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE'),
   'Companion chat replies and their voice can only be written by the API server'

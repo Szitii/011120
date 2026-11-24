@@ -5,7 +5,7 @@ import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { agentMessages, replyPrompt, splitVoice } from "../src/chat/prompt.ts";
 import { ChatReplies, devChatModel, type ChatModel } from "../src/chat/replies.ts";
 import {
-  devSpeaker, MiniMaxSpeaker, VoiceCatalog, Voices, type Clip, type Emotion, type Speaker, type VoiceFile,
+  devSpeaker, MiniMaxSpeaker, MiniMaxTranscriber, VoiceCatalog, Voices, type Clip, type Emotion, type Speaker, type VoiceFile,
 } from "../src/chat/voices.ts";
 import type { ChatClaim, ChatOutcome, ChatPort } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
@@ -55,7 +55,7 @@ function replyPort(claim: ChatClaim, left = 60) {
     finish: async (_reply: string, _claim: string, outcome: ChatOutcome, bodies: string[] | null, clips?: (Clip | null)[]) => {
       finished.push([outcome, bodies, clips]); return true;
     },
-    voiceLeft: async () => { if (left < 0) throw new Error("db down"); return left; },
+    voiceLeft: async () => { if (left < 0) throw new Error("db down"); return { companion: left, owner: 0 }; },
     memories: async () => ({ items: [] }),
   } as unknown as ChatPort;
   let claimed = false;
@@ -227,10 +227,10 @@ it("lists voices, plays samples and serves voice messages with ranges", async ()
   const replies = new ChatReplies(undefined, undefined, voices);
   const call = (req: MvpHttpRequest, using = replies) => handleChatRequest(req, session(port), "trace", using);
 
-  assert.deepEqual((await call(get("voices")))!.body, { available: true, items: [
+  assert.deepEqual((await call(get("voices")))!.body, { available: true, input: false, items: [
     { id: "warm", name: "暖暖", gender: "FEMALE", description: "温暖" }, { id: "calm-boy", name: "阿静", gender: "MALE", description: "安静" },
   ] });
-  assert.deepEqual((await call(get("voices"), new ChatReplies()))!.body, { available: false, items: [] });
+  assert.deepEqual((await call(get("voices"), new ChatReplies()))!.body, { available: false, input: false, items: [] });
   const sample = (await call(get("voices/warm/sample")))!;
   assert.equal(sample.status, 200);
   assert.equal(sample.headers["content-type"], "audio/mpeg");
@@ -285,13 +285,101 @@ it("stores clips with the reply and reads audio back through the database", asyn
   assert.equal(seen.at(-1)![1][4], null, "all text: no audio sent");
   await adapter.finish(messageId, "c", "ERROR", null);
   assert.equal(seen.at(-1)![1][4], null);
-  rows = [{ payload: { left: 7 } }];
-  assert.equal(await adapter.voiceLeft(), 7);
+  rows = [{ payload: { left: 7, ownerLeft: 3 } }];
+  assert.deepEqual(await adapter.voiceLeft(), { companion: 7, owner: 3 });
   rows = [{ payload: {} }];
-  assert.equal(await adapter.voiceLeft(), 0);
+  assert.deepEqual(await adapter.voiceLeft(), { companion: 0, owner: 0 });
+  rows = [{ payload: { message: { id: "m" } } }];
+  await adapter.sendVoice(chatId, "你好", { mime: "audio/mp4", durationMs: 1500, bytes: new Uint8Array([7, 8]) }, "k");
+  assert.equal(seen.at(-1)![0], "select public.chat_send_voice($1,$2,$3,$4::jsonb) as payload");
+  assert.deepEqual(seen.at(-1)![1].slice(0, 3), [chatId, "你好", "k"]);
+  assert.deepEqual(JSON.parse(seen.at(-1)![1][3] as string), { mime: "audio/mp4", durationMs: 1500, data: Buffer.from([7, 8]).toString("base64") });
   rows = [{ payload: { mime: "audio/wav", durationMs: 5, data: Buffer.from([1, 2]).toString("base64") } }];
   assert.deepEqual(await adapter.audio(chatId, messageId), { mime: "audio/wav", bytes: Buffer.from([1, 2]) });
   assert.deepEqual(seen.at(-1)![1], [chatId, messageId]);
   rows = [{ payload: { mime: "audio/wav" } }];
   await assert.rejects(adapter.audio(chatId, messageId), { code: "DATABASE_ERROR" });
+});
+
+it("hears the Owner's recordings through MiniMax", async () => {
+  const sent: [string, RequestInit][] = [];
+  const answer = (status: number, payload: unknown) => (async (url: string, init: RequestInit) => {
+    sent.push([url, init]);
+    return new Response(JSON.stringify(payload), { status });
+  }) as typeof fetch;
+  const signal = new AbortController().signal;
+  const heard = await new MiniMaxTranscriber(file.provider, "secret", answer(200, { text: "我回来了", duration: 1.25 }))
+    .transcribe(new Uint8Array([1, 2, 3]), "audio/mp4", signal);
+  assert.deepEqual(heard, { text: "我回来了", durationMs: 1250 });
+  const [url, init] = sent[0]!;
+  assert.equal(url, "https://speech.example/v1/speech_to_text");
+  assert.equal((init.headers as Record<string, string>).authorization, "Bearer secret");
+  const form = init.body as FormData;
+  assert.deepEqual([form.get("model"), form.get("response_format")], ["asr-1.0", "json"]);
+  const upload = form.get("file") as File;
+  assert.deepEqual([upload.name, upload.type, upload.size], ["voice.m4a", "audio/mp4", 3]);
+  assert.equal(init.signal, signal);
+  assert.deepEqual(await new MiniMaxTranscriber(file.provider, "k", answer(200, { text: "" })).transcribe(new Uint8Array([1]), "audio/aac", signal),
+    { text: "", durationMs: 0 });
+  await assert.rejects(new MiniMaxTranscriber(file.provider, "k", answer(402, { type: "error" })).transcribe(new Uint8Array([1]), "audio/wav", signal), /HTTP 402/);
+  await assert.rejects(new MiniMaxTranscriber(file.provider, "k", answer(200, { words: [] })).transcribe(new Uint8Array([1]), "audio/ogg", signal), /unexpected shape/);
+
+  assert.equal(Voices.fromEnvironment("supabase-auth", {}).listening, false);
+  assert.equal(Voices.fromEnvironment("supabase-auth", { MINIMAX_API_KEY: "k" }).listening, true);
+  const dev = Voices.fromEnvironment("stage1-mobile-dev", {});
+  assert.match((await dev.transcribe(new Uint8Array([1]), "audio/mp4", signal)).text, /开发环境假转写/);
+  await assert.rejects(new Voices(catalog).transcribe(new Uint8Array([1]), "audio/mp4", signal), /no speech recognition/);
+});
+
+it("marks voice messages in what the model reads", () => {
+  const spoken = { ...turn("warm"), history: [
+    { companionId: null, body: "我回来了", action: null, mentions: [], sentAt: "t1", voice: true },
+    { companionId: companion, body: "欢迎回来", action: null, mentions: [], sentAt: "t2", voice: false },
+  ] };
+  assert.match(replyPrompt(spoken).user, /【主人】（语音）我回来了\n【小光】欢迎回来/);
+  assert.deepEqual(agentMessages(spoken).slice(1, 3).map(m => m.content), ["（语音）我回来了", "欢迎回来"]);
+});
+
+it("takes the Owner's voice message: recognise, store, then reply", async () => {
+  const calls: unknown[][] = [];
+  let ownerLeft = 5;
+  const port = {
+    voiceLeft: async () => ({ companion: 0, owner: ownerLeft }),
+    sendVoice: async (...args: unknown[]) => { calls.push(args); return { message: { id: "m" }, typing: [], replying: true }; },
+  } as unknown as ChatPort;
+  let heard: string | Error = "  我 回来\n了 ";
+  const transcriber = { transcribe: async () => { if (heard instanceof Error) throw heard; return { text: heard, durationMs: 9 }; } };
+  const kicked: string[] = [];
+  const replies = new ChatReplies(undefined, undefined, new Voices(catalog, undefined, transcriber));
+  (replies as unknown as { kick: (id: string) => void }).kick = id => { kicked.push(id); };
+  const recording = Buffer.from("m4a-bytes").toString("base64");
+  const post = (input: unknown, using = replies, headers: Record<string, string> = { "idempotency-key": "voice-key-0000000001" }) =>
+    handleChatRequest(get(`chats/${chatId}/voice`, headers, "POST", input), session(port), "trace", using);
+  const ok = { audio: recording, mime: "audio/mp4", durationMs: 2300 };
+
+  const sent = (await post(ok))!;
+  assert.equal(sent.status, 201);
+  assert.deepEqual(kicked, [chatId], "replies start");
+  const [chat, words, said, key] = calls[0] as [string, string, { mime: string; durationMs: number; bytes: Uint8Array }, string];
+  assert.deepEqual([chat, words, said.mime, said.durationMs, Buffer.from(said.bytes).toString()], [chatId, "我 回来 了", "audio/mp4", 2300, "m4a-bytes"]);
+  assert.match(key, /^[a-f0-9]{64}$/);
+  assert.equal((await post(ok, replies, {}).catch((error: { code: string }) => error.code)), "INVALID_INPUT", "needs an Idempotency-Key");
+
+  for (const bad of [{ ...ok, audio: "" }, { ...ok, audio: "a=b" }, { ...ok, mime: "audio/webm" }, { ...ok, mime: "toString" },
+    { ...ok, durationMs: 0 }, { ...ok, durationMs: 60_001 }, { ...ok, durationMs: 1.5 }, { ...ok, extra: 1 },
+    { ...ok, audio: Buffer.alloc(700 * 1024 + 1).toString("base64") }]) {
+    await assert.rejects(post(bad), { code: "INVALID_INPUT" }, JSON.stringify(bad).slice(0, 80));
+  }
+  assert.deepEqual((await post(ok, new ChatReplies()))!.body, { code: "VOICE_UNAVAILABLE" });
+  assert.deepEqual((await post(ok, new ChatReplies(undefined, undefined, new Voices(catalog))))!.body, { code: "VOICE_UNAVAILABLE" });
+  heard = new Error("402");
+  assert.deepEqual([(await post(ok))!.status, (await post(ok))!.body], [503, { code: "VOICE_UNAVAILABLE" }]);
+  heard = " \n ";
+  assert.deepEqual([(await post(ok))!.status, (await post(ok))!.body], [422, { code: "VOICE_NOT_UNDERSTOOD" }]);
+  heard = "长".repeat(2100);
+  await post(ok);
+  assert.equal(Array.from((calls.at(-1) as string[])[1]!).length, 2000, "cut to what a message holds");
+  ownerLeft = 0;
+  assert.deepEqual([(await post(ok))!.status, (await post(ok))!.body], [429, { code: "VOICE_LIMIT" }]);
+  assert.equal(calls.length, 2, "nothing stored without a recognised message");
 });

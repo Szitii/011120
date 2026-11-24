@@ -59,7 +59,8 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     diaryBegin: async () => ({ status: "OFF" }),
     diaryReserve: async () => ({ decision: "STALE" }),
     diaryFinish: async () => null,
-    voiceLeft: async () => 0,
+    voiceLeft: async () => ({ companion: 0, owner: 0 }),
+    sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
     audio: async (...args) => { calls.push(["audio", ...args]); return { mime: "audio/mpeg", bytes: new Uint8Array([1, 2, 3, 4, 5]) }; },
   };
   return { port, calls, finished };

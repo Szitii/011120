@@ -1,14 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Connections } from "../connections/model.ts";
 import { MAX_IMPORT_BYTES } from "../companion-import/policy.ts";
+import { MAX_VOICE_REQUEST_BYTES } from "../chat/http.ts";
 import type { ChatCatalog } from "../chat/models.ts";
 import { ChatReplies, devChatModel } from "../chat/replies.ts";
-import { devSpeaker, VoiceCatalog, Voices } from "../chat/voices.ts";
+import { devSpeaker, devTranscriber, VoiceCatalog, Voices } from "../chat/voices.ts";
 import { MvpApiBoundary } from "./mvp-api.ts";
 import type { MvpHttpRequest, OwnerSessionResolver } from "./types.ts";
 
-// The largest body any route takes is a Companion import; every other route caps its own fields.
-const MAX_BODY_BYTES = MAX_IMPORT_BYTES;
+// The largest body any route takes is a voice message (a minute of audio, base64 in JSON); every route caps its own fields.
+const MAX_BODY_BYTES = Math.max(MAX_IMPORT_BYTES, MAX_VOICE_REQUEST_BYTES);
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-headers": "authorization, content-type, idempotency-key, if-match, range, x-trace-id",
@@ -84,7 +85,7 @@ export const createMobileHttpServer = (
   sessions: OwnerSessionResolver,
   mode: "stage1-mobile-dev" | "supabase-auth",
   chat: { readonly replies: ChatReplies; readonly catalog?: ChatCatalog; readonly connections?: Connections } =
-    { replies: mode === "stage1-mobile-dev" ? new ChatReplies(devChatModel, undefined, new Voices(VoiceCatalog.load(), devSpeaker)) : new ChatReplies() },
+    { replies: mode === "stage1-mobile-dev" ? new ChatReplies(devChatModel, undefined, new Voices(VoiceCatalog.load(), devSpeaker, devTranscriber)) : new ChatReplies() },
 ) => {
   const api = new MvpApiBoundary({
     sessions,

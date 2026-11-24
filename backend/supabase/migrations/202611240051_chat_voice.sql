@@ -1,7 +1,7 @@
 begin;
 
 -- Voice messages (语音): a Companion sometimes answers with a voice message instead of text,
--- like a person does.
+-- like a person does, and the Owner can send voice messages too.
 --
 -- A voice message is an ordinary chat message (its body is the transcript, so the safety scan,
 -- the diary and the model's own history keep working on text) plus one audio clip in chat_audio.
@@ -13,19 +13,26 @@ begin;
 -- too, and no storage key is needed. They are small (about 4 KB per second) and kept for
 -- chat_quota.voice_keep_days (default 30), then deleted; the message stays as text.
 -- chat_quota.daily_voice caps how many clips one Owner gets per UTC day; past it, replies are text.
+--
+-- The Owner's own voice message: the app uploads the recording to the API server, which turns it
+-- into text (speech recognition) and stores both with chat_send_voice. chat_quota.daily_owner_voice
+-- caps how many the Owner sends per UTC day. Companions see "(语音)" before voice messages in the
+-- conversation, so they answer a voice message with one more often.
 
 alter table companion_private.chat_settings
   add column voice text check (voice is null or voice ~ '^[a-z0-9][a-z0-9-]{0,39}$');
 
 alter table companion_private.chat_quota
   add column daily_voice integer not null default 60 check (daily_voice between 0 and 100000),
-  add column voice_keep_days integer not null default 30 check (voice_keep_days between 1 and 3650);
+  add column voice_keep_days integer not null default 30 check (voice_keep_days between 1 and 3650),
+  add column daily_owner_voice integer not null default 100 check (daily_owner_voice between 0 and 100000);
 
 create table companion_private.chat_audio (
   message_id uuid primary key references companion_private.chat_messages(id) on delete cascade,
-  mime text not null check (mime in ('audio/mpeg', 'audio/wav')),
+  -- The Owner's recordings come from phones (m4a/aac), the Companions' from the speech provider (mp3).
+  mime text not null check (mime in ('audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac', 'audio/ogg')),
   duration_ms integer not null check (duration_ms between 1 and 120000),
-  -- What the speech provider billed, for adding up usage later.
+  -- What the speech provider billed for a Companion's clip (0 for the Owner's), for adding up usage later.
   characters integer not null check (characters between 0 and 100000),
   bytes bytea not null check (octet_length(bytes) between 1 and 1048576),
   created_at timestamptz not null default now()
@@ -101,17 +108,106 @@ end $$;
 
 -- ---------- for the API server only (companion_api) ----------
 
--- How many voice messages the signed-in Owner may still get today (UTC): {"left": n}.
-create function public.chat_voice_left()
-returns jsonb language sql stable security definer set search_path='' as $$
-  select jsonb_build_object('left', greatest(0, q.daily_voice - (select count(*) from companion_private.chat_audio a
+-- Voice messages the signed-in Owner sent today (UTC): p_owner true; or got from Companions: false.
+create function companion_private.chat_voice_used(p_owner boolean)
+returns bigint language sql stable security definer set search_path='' as $$
+  select count(*) from companion_private.chat_audio a
     join companion_private.chat_messages m on m.id = a.message_id
     join companion_private.chats c on c.id = m.chat_id
-    where c.owner_id = companion_private.chat_owner()
-      and a.created_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC')))
+  where c.owner_id = companion_private.chat_owner() and (m.companion_id is null) = p_owner
+    and a.created_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC'
+$$;
+
+-- How many voice messages the signed-in Owner may still get from Companions today (UTC), and
+-- send: {"left": n, "ownerLeft": n}.
+create function public.chat_voice_left()
+returns jsonb language sql stable security definer set search_path='' as $$
+  select jsonb_build_object('left', greatest(0, q.daily_voice - companion_private.chat_voice_used(false)),
+    'ownerLeft', greatest(0, q.daily_owner_voice - companion_private.chat_voice_used(true)))
   from companion_private.chat_quota q
   where companion_private.chat_owner() is not null
 $$;
+
+-- The Owner's voice message: p_body is what the API server recognised, p_audio the recording
+-- {mime, durationMs, data (base64)}. Otherwise like chat_send (no @mentions). A retry with the same
+-- key returns the first message even if recognition came out differently this time.
+create function public.chat_send_voice(p_chat uuid, p_body text, p_key text, p_audio jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare c companion_private.chats%rowtype; m companion_private.chat_messages%rowtype; sent jsonb;
+begin
+  c := companion_private.chat_for(p_chat);
+  select * into m from companion_private.chat_messages where chat_id = c.id and key_hash = p_key;
+  if found then
+    return jsonb_build_object('message', companion_private.chat_message_json(m)) || companion_private.chat_progress(c);
+  end if;
+  if p_audio is null or jsonb_typeof(p_audio) <> 'object' then
+    raise exception using errcode='22023', message='invalid voice message';
+  end if;
+  if companion_private.chat_voice_used(true) >= (select daily_owner_voice from companion_private.chat_quota) then
+    raise exception using errcode='55000', message='voice message limit reached';
+  end if;
+  sent := public.chat_send(p_chat, p_body, '{}', p_key);
+  insert into companion_private.chat_audio(message_id, mime, duration_ms, characters, bytes)
+    values ((sent -> 'message' ->> 'id')::uuid, p_audio ->> 'mime', (p_audio ->> 'durationMs')::integer, 0,
+      decode(p_audio ->> 'data', 'base64'));
+  select * into m from companion_private.chat_messages where id = (sent -> 'message' ->> 'id')::uuid;
+  return sent || jsonb_build_object('message', companion_private.chat_message_json(m));
+end $$;
+
+-- Same as before, plus `voice` in the history (a voice message), so a Companion knows when the
+-- Owner spoke rather than typed.
+create or replace function public.chat_claim(p_chat uuid)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare c companion_private.chats%rowtype; m companion_private.chat_messages%rowtype; claim uuid := gen_random_uuid();
+  skipped boolean := false;
+begin
+  c := companion_private.chat_for(p_chat);
+  if exists(select 1 from companion_private.chat_messages where chat_id = c.id and status = 'PENDING'
+      and claimed_at > now() - interval '2 minutes') then
+    return null;
+  end if;
+  loop
+    select x.* into m from companion_private.chat_messages x
+      join companion_private.chat_members mm on mm.chat_id = x.chat_id and mm.companion_id = x.companion_id
+      where x.chat_id = c.id and x.status = 'PENDING' order by x.created_at, mm.position, x.id limit 1;
+    if not found then
+      if not skipped then return null; end if;
+      -- A skipped turn ends like a finished one: another Companion may answer what was said.
+      -- That queues at most one turn for a Companion that can take part, so this ends.
+      skipped := false;
+      perform companion_private.chat_queue_followup(c);
+      continue;
+    end if;
+    perform companion_private.chat_abandon_compute(c.owner_id, m.compute_tx);
+    exit when m.attempts < 3 and companion_private.chat_companion_ok(c.owner_id, m.companion_id);
+    if m.optional then
+      update companion_private.chat_messages set status = 'PASSED', shown_at = now(), typing_at = null, claim_id = null,
+        compute_tx = null where id = m.id;
+    else
+      update companion_private.chat_messages set status = 'FAILED', shown_at = now(), typing_at = null, claim_id = null,
+        compute_tx = null, failure = case when m.attempts >= 3 then 'ERROR' else 'UNAVAILABLE' end where id = m.id;
+    end if;
+    skipped := true;
+  end loop;
+  update companion_private.chat_messages set claim_id = claim, claimed_at = now(), attempts = attempts + 1, compute_tx = null
+    where id = m.id;
+  return jsonb_build_object('chatId', c.id, 'replyId', m.id, 'claimId', claim, 'replyTo', m.reply_to,
+    'optional', m.optional, 'direct', c.direct_companion_id is not null,
+    'companion', companion_private.chat_companion_json(m.companion_id)
+      || jsonb_build_object('identity', (select i.identity_document from public.companions x
+        join public.companion_identities i on i.id = x.current_identity_version_id where x.id = m.companion_id))
+      || jsonb_build_object('settings', companion_private.chat_settings_json(companion_private.chat_settings_for(m.companion_id))),
+    'members', companion_private.chat_members_json(c.id),
+    'history', coalesce((select jsonb_agg(jsonb_build_object('companionId', q.companion_id, 'body', q.body, 'action', q.action,
+        'mentions', to_jsonb(q.mentions), 'sentAt', q.shown_at,
+        'voice', exists(select 1 from companion_private.chat_audio a where a.message_id = q.id)) order by q.shown_at, q.id)
+      from (select * from companion_private.chat_messages h where h.chat_id = c.id and h.status = 'SENT'
+        -- Actions in a row read as the last of them, so taps cannot push the conversation out of the 30.
+        and (h.action is null or (select n.action from companion_private.chat_messages n
+          where n.chat_id = h.chat_id and n.status = 'SENT' and (n.shown_at, n.id) > (h.shown_at, h.id)
+          order by n.shown_at, n.id limit 1) is null)
+        order by h.shown_at desc, h.id desc limit 30) q), '[]'));
+end $$;
 
 drop function public.chat_finish(uuid, uuid, text, text[]);
 -- Same as before, plus p_audio: for SENT, null (all text) or one entry per message, each null
@@ -191,10 +287,12 @@ begin
 end $$;
 
 revoke all on function public.chat_update_settings(uuid, text, text, text, text, integer), public.chat_audio_get(uuid, uuid),
-  public.chat_voice_left(), public.chat_finish(uuid, uuid, text, text[], jsonb) from public, anon, authenticated;
+  public.chat_voice_left(), public.chat_send_voice(uuid, text, text, jsonb), public.chat_finish(uuid, uuid, text, text[], jsonb),
+  companion_private.chat_voice_used(boolean) from public, anon, authenticated;
 grant execute on function public.chat_update_settings(uuid, text, text, text, text, integer), public.chat_audio_get(uuid, uuid)
   to authenticated;
--- Only the API server writes a Companion's words, and its voice.
-grant execute on function public.chat_voice_left(), public.chat_finish(uuid, uuid, text, text[], jsonb) to companion_api;
+-- Only the API server writes a Companion's words and its voice, and turns the Owner's recordings into text.
+grant execute on function public.chat_voice_left(), public.chat_send_voice(uuid, text, text, jsonb),
+  public.chat_finish(uuid, uuid, text, text[], jsonb) to companion_api;
 
 commit;

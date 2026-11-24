@@ -17,7 +17,11 @@ export interface ChatClaim {
   companion: { companionId: string; displayName: string; identity: unknown; settings: ChatSettings };
   members: { companionId: string; displayName: string }[];
   /** The last 30 shown messages, oldest first; companionId null is the Owner. An action has no body. */
-  history: { companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string }[];
+  history: {
+    companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string;
+    /** A voice message (the body is what was said). */
+    voice?: boolean;
+  }[];
 }
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
@@ -95,8 +99,10 @@ export interface ChatPort {
    * per body, a Clip for a voice message or null for text. False when the claim is stale.
    */
   finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[]): Promise<boolean>;
-  /** Server only: how many voice messages the Owner may still get today. */
-  voiceLeft(): Promise<number>;
+  /** Server only: how many voice messages the Owner may still get from Companions today, and send. */
+  voiceLeft(): Promise<{ companion: number; owner: number }>;
+  /** Server only: the Owner's voice message, `body` being what the server recognised in `recording`. */
+  sendVoice(chatId: string, body: string, recording: { mime: string; durationMs: number; bytes: Uint8Array }, keyHash: string): Promise<unknown>;
   /** The audio of a shown voice message in the Owner's chat (NOT_FOUND otherwise). */
   audio(chatId: string, messageId: string): Promise<{ mime: string; bytes: Uint8Array }>;
   /** Server only: book a model call and mark it started. */

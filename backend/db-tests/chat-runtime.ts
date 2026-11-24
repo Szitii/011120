@@ -508,11 +508,11 @@ try {
   assert.equal((await fetch(`${bases[0]}/v0/chats/${talk}/messages/${written!.id}/audio`, { headers: auth })).status, 404);
   const listed = (await call<{ items: Chat[] }>(0, "chats")).data.items.find(c => c.id === talk)!;
   assert.deepEqual(listed.recording, []);
-  assert.equal(await portA.voiceLeft(), 59);
+  assert.deepEqual(await portA.voiceLeft(), { companion: 59, owner: 100 });
   passed("voice messages: pick a voice, a reply with a voice message, its audio with ranges, only for its Owner");
 
   await pool.query("update companion_private.chat_quota set daily_voice = 1");
-  assert.equal(await portA.voiceLeft(), 0);
+  assert.equal((await portA.voiceLeft()).companion, 0);
   const [capped] = await voiceReply("再说一句");
   assert.deepEqual([capped!.body, capped!.audio], ["（开发环境假回复）我是SampleCompanion", null], "today's voice messages are used up: text");
   await pool.query("update companion_private.chat_quota set daily_voice = 60");
@@ -524,6 +524,35 @@ try {
   await assert.rejects(pool.query("select public.chat_finish(gen_random_uuid(), gen_random_uuid(), 'SENT', array['a'], '[null, null]')"),
     { code: "22023" });
   await assert.rejects(pool.query("select public.chat_finish(gen_random_uuid(), gen_random_uuid(), 'ERROR', null, '[null]')"), { code: "22023" });
+  // The Owner's voice message: the dev host "hears" a fixed sentence.
+  assert.equal(voiceList.input, true);
+  const recording = { audio: Buffer.from("fake m4a").toString("base64"), mime: "audio/mp4", durationMs: 1500 };
+  const voiceKey = randomUUID();
+  const mine = await call<ChatSendResult>(0, `chats/${talk}/voice`, "POST", recording, voiceKey);
+  assert.equal(mine.status, 201, JSON.stringify(mine.data));
+  assert.deepEqual([mine.data.message.companionId, mine.data.message.body, mine.data.message.audio, mine.data.replying],
+    [null, "（开发环境假转写）这是一条语音", { durationMs: 1500 }, true]);
+  assert.equal((await call<ChatSendResult>(0, `chats/${talk}/voice`, "POST", recording, voiceKey)).data.message.id, mine.data.message.id,
+    "a retry gets the same message");
+  const heardBack = await fetch(`${bases[0]}/v0/chats/${talk}/messages/${mine.data.message.id}/audio`, { headers: auth });
+  assert.deepEqual([heardBack.headers.get("content-type"), Buffer.from(await heardBack.arrayBuffer()).toString()], ["audio/mp4", "fake m4a"]);
+  assert.equal((await call(1, `chats/${talk}/voice`, "POST", recording)).status, 404, "not into another Owner's chat");
+  assert.equal((await call(0, `chats/${talk}/voice`, "POST", { ...recording, mime: "audio/webm" })).status, 400);
+  await settle(talk);
+  assert.deepEqual(await portA.voiceLeft(), { companion: 58, owner: 99 }, "the Owner's own do not count against the Companions'");
+  await portA.send(talk, "听到了吗", [], keyHash());
+  const heardTurn = (await portA.claim(talk))!;
+  assert.deepEqual([heardTurn.history.find(h => h.companionId === null && h.body === "（开发环境假转写）这是一条语音")?.voice,
+    heardTurn.history.at(-1)?.body, heardTurn.history.at(-1)?.voice], [true, "听到了吗", false], "Companions see which messages were spoken");
+  assert.ok(heardTurn.history.some(h => h.companionId === A.companion && h.voice), "its own voice messages are marked too");
+  assert.equal(await portA.finish(heardTurn.replyId, heardTurn.claimId, "SENT", ["听到了"]), true);
+  await pool.query("update companion_private.chat_quota set daily_owner_voice = 1");
+  assert.deepEqual((await call(0, `chats/${talk}/voice`, "POST", recording)).data, { code: "VOICE_LIMIT" });
+  await assert.rejects(portA.sendVoice(talk, "绕过", { mime: "audio/mp4", durationMs: 1, bytes: Buffer.from("x") }, keyHash()),
+    { code: "INVALID_STATE" }, "the database checks the limit too");
+  await pool.query("update companion_private.chat_quota set daily_owner_voice = 100");
+  passed("voice messages: the Owner sends one, it is recognised, kept with its audio, and Companions see it was spoken");
+
   await putSettings(A.companion, { voice: null });
   const [plain] = await voiceReply("好的");
   assert.equal(plain!.audio, null, "no voice: text only");

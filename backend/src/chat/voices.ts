@@ -1,11 +1,12 @@
 /**
- * Voice messages: the voices an Owner can pick for a Companion, and the speech provider that says
- * a Companion's message aloud.
+ * Voice messages: the voices an Owner can pick for a Companion, the speech provider that says a
+ * Companion's message aloud, and the speech recognition that turns the Owner's recordings into text.
  *
  * The voices are a config file (backend/config/voices.json, or the path in VOICES_FILE), like the
  * model catalog: adding or removing a voice needs no code change. The API key never goes in the
  * file; the provider names the environment variable that holds it. Without the key there are no
- * voice messages (the dev host speaks silence instead, so the app can be built without a key).
+ * voice messages (the dev host speaks silence and "hears" a fixed sentence instead, so the app can
+ * be built without a key).
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,18 @@ export interface Clip {
 /** Something that can say a text in a voice. `signal` aborts when it takes too long: pass it on. */
 export interface Speaker {
   speak(text: string, voice: VoiceEntry, emotion: Emotion | null, signal: AbortSignal): Promise<Clip>;
+}
+
+/** Recordings the Owner may send, by type; the speech recognition takes all of them. */
+export const RECORDING_TYPES = { "audio/mp4": "m4a", "audio/aac": "aac", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/ogg": "ogg" } as const;
+export type RecordingType = keyof typeof RECORDING_TYPES;
+
+/** What was said in a recording, and how long it is (ms; 0 when the provider did not say). */
+export interface Heard { readonly text: string; readonly durationMs: number }
+
+/** Something that can turn a recording into text. `signal` aborts when it takes too long: pass it on. */
+export interface Transcriber {
+  transcribe(bytes: Uint8Array, type: RecordingType, signal: AbortSignal): Promise<Heard>;
 }
 
 const DEFAULT_FILE = fileURLToPath(new URL("../../config/voices.json", import.meta.url));
@@ -146,6 +159,37 @@ export class MiniMaxSpeaker implements Speaker {
   }
 }
 
+/** MiniMax speech recognition (POST /v1/speech_to_text, asr-1.0); the language is detected. Billed by audio length. */
+export class MiniMaxTranscriber implements Transcriber {
+  readonly #url: string;
+  readonly #key: string;
+  readonly #fetch: Fetch;
+
+  constructor(provider: VoiceFile["provider"], apiKey: string, fetchImpl: Fetch = globalThis.fetch) {
+    this.#url = `${provider.baseUrl.replace(/\/$/, "")}/v1/speech_to_text`;
+    this.#key = apiKey;
+    this.#fetch = fetchImpl;
+  }
+
+  async transcribe(bytes: Uint8Array, type: RecordingType, signal: AbortSignal): Promise<Heard> {
+    const form = new FormData();
+    form.set("model", "asr-1.0");
+    form.set("response_format", "json");
+    form.set("file", new Blob([bytes], { type }), `voice.${RECORDING_TYPES[type]}`);
+    const response = await this.#fetch(this.#url, { method: "POST", signal, headers: { authorization: `Bearer ${this.#key}` }, body: form });
+    if (!response.ok) throw new Error(`speech recognition answered HTTP ${response.status}`);
+    const payload = await response.json() as { text?: unknown; duration?: unknown };
+    if (typeof payload.text !== "string") throw new Error("speech recognition answered in an unexpected shape");
+    const seconds = payload.duration;
+    return { text: payload.text, durationMs: typeof seconds === "number" && seconds > 0 ? Math.round(seconds * 1000) : 0 };
+  }
+}
+
+/** Development only: every recording "says" the same sentence. */
+export const devTranscriber: Transcriber = {
+  async transcribe() { return { text: "（开发环境假转写）这是一条语音", durationMs: 0 }; },
+};
+
 /** Development only: silence (an 8 kHz WAV) about as long as it takes to say the text. */
 export const devSpeaker: Speaker = {
   async speak(text) {
@@ -160,26 +204,39 @@ export const devSpeaker: Speaker = {
   },
 };
 
-/** The voice catalog and, when one is configured, the speaker. Samples are made once per server. */
+/** The voice catalog and, when configured, the speaker and the transcriber. Samples are made once per server. */
 export class Voices {
   readonly catalog: VoiceCatalog;
   readonly #speaker: Speaker | undefined;
+  readonly #transcriber: Transcriber | undefined;
   readonly #samples = new Map<string, Promise<Clip>>();
 
-  constructor(catalog: VoiceCatalog, speaker?: Speaker) {
+  constructor(catalog: VoiceCatalog, speaker?: Speaker, transcriber?: Transcriber) {
     this.catalog = catalog;
     this.#speaker = speaker;
+    this.#transcriber = transcriber;
   }
 
-  /** With the provider's key, MiniMax; without it, the dev host speaks silence and the Supabase host has no voices. */
+  /** With the provider's key, MiniMax; without it, the dev host fakes both and the Supabase host has no voice messages. */
   static fromEnvironment(mode: "stage1-mobile-dev" | "supabase-auth", env = process.env): Voices {
     const catalog = VoiceCatalog.load(env);
     const key = catalog.apiKey();
-    if (key !== undefined) return new Voices(catalog, new MiniMaxSpeaker(catalog.provider, key));
-    return new Voices(catalog, mode === "stage1-mobile-dev" ? devSpeaker : undefined);
+    if (key !== undefined) {
+      return new Voices(catalog, new MiniMaxSpeaker(catalog.provider, key), new MiniMaxTranscriber(catalog.provider, key));
+    }
+    return mode === "stage1-mobile-dev" ? new Voices(catalog, devSpeaker, devTranscriber) : new Voices(catalog);
   }
 
+  /** Companions can answer with voice messages. */
   get available(): boolean { return this.#speaker !== undefined; }
+
+  /** The Owner can send voice messages. */
+  get listening(): boolean { return this.#transcriber !== undefined; }
+
+  transcribe(bytes: Uint8Array, type: RecordingType, signal: AbortSignal): Promise<Heard> {
+    if (this.#transcriber === undefined) return Promise.reject(new Error("no speech recognition"));
+    return this.#transcriber.transcribe(bytes, type, signal);
+  }
 
   /** The voice a Companion speaks with: its chosen one, if voice messages can be made now. */
   pick(id: string | null | undefined): VoiceEntry | undefined {

@@ -107,9 +107,16 @@ export class PostgresChatAdapter implements ChatPort {
     return (payload as { accepted?: unknown }).accepted === true;
   }
 
-  async voiceLeft(): Promise<number> {
-    const left = (await this.#object("select public.chat_voice_left() as payload", []) as { left?: unknown }).left;
-    return typeof left === "number" ? left : 0;
+  async voiceLeft(): Promise<{ companion: number; owner: number }> {
+    const payload = await this.#object("select public.chat_voice_left() as payload", []) as { left?: unknown; ownerLeft?: unknown };
+    const count = (value: unknown): number => (typeof value === "number" ? value : 0);
+    return { companion: count(payload.left), owner: count(payload.ownerLeft) };
+  }
+
+  sendVoice(chatId: string, body: string, recording: { mime: string; durationMs: number; bytes: Uint8Array }, keyHash: string): Promise<unknown> {
+    return this.#object("select public.chat_send_voice($1,$2,$3,$4::jsonb) as payload", [chatId, body, keyHash, JSON.stringify({
+      mime: recording.mime, durationMs: recording.durationMs, data: Buffer.from(recording.bytes).toString("base64"),
+    })]);
   }
 
   async audio(chatId: string, messageId: string): Promise<{ mime: string; bytes: Uint8Array }> {

@@ -133,6 +133,23 @@ export interface VoiceList {
   items: VoiceInfo[];
   /** false: voice messages are not switched on on this server (no speech provider): hide the voice picker. */
   available: boolean;
+  /** true: the Owner can send voice messages (POST /v0/chats/{id}/voice); false: hide the hold-to-talk button. */
+  input?: boolean;
+}
+
+/**
+ * POST /v0/chats/{id}/voice (with an Idempotency-Key): the Owner's voice message. Record mono AAC
+ * (m4a, about 32 kbit/s), at most 60 seconds. The server turns it into text and answers like
+ * POST .../messages (ChatSendResult); the message has `audio`, and `body` is what was recognised.
+ * 422 VOICE_NOT_UNDERSTOOD: nothing could be heard. 429 VOICE_LIMIT: today's voice messages are used up.
+ * 503 VOICE_UNAVAILABLE: speech recognition is off or failed; try again or type.
+ */
+export interface ChatVoiceInput {
+  /** The recording, base64. At most 700 KB before encoding. */
+  audio: string;
+  mime: "audio/mp4" | "audio/aac" | "audio/mpeg" | "audio/wav" | "audio/ogg";
+  /** How long the recording is, as the recorder measured it (1 to 60000). */
+  durationMs: number;
 }
 
 /** One model the Owner can pick (GET /v0/chat-models). */
