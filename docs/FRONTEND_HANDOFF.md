@@ -209,9 +209,9 @@
 
 开发环境的家机会写"（开发环境假日记）主人和我说了 N 句话……"。
 
-## 6. 这轮不做
+## 6. 还没做的
 
-换装保存、访客串门；家机社区的"让 TA 逛一下"按钮、自动定时上线、帖子来源标签。社区这几项要等接上模型才做。
+见 `docs/FRONTEND_BACKEND_HANDOFF.md`。
 
 ## 7. 线上测试环境（2026-11-23 上线）
 
@@ -232,7 +232,7 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 
 ## 8. 消息 Tab、角标、纪念日（2026-11-24）
 
-对应前端的 `docs/FRONTEND_BACKEND_HANDOFF.md` 第 1、2 节。接口在 `contracts/openapi/chat.yaml`，类型在 `contracts/chat.ts`。
+接口在 `contracts/openapi/chat.yaml`，类型在 `contracts/chat.ts`。
 
 ### 8.1 聊天已读位置（换设备也能接着用）
 
@@ -291,7 +291,7 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 | 社区角标 | 用另一个测试账号关注你，或者评论你的帖子 |
 ## 10. 长期记忆，以及导入时带记忆（2026-11-24）
 
-对应前端 `docs/claude_2026_11_24.txt` 里的 P0。接口在 `contracts/openapi/chat.yaml`，类型 `CompanionMemory` 在 `contracts/chat.ts`。
+接口在 `contracts/openapi/chat.yaml`，类型 `CompanionMemory` 在 `contracts/chat.ts`。
 
 ### 10.1 记忆是什么
 
@@ -328,15 +328,9 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BwpM5vrwUel9OuEo-SkU-Q_mK2ie
 - 批准后，勾选的记忆写进这个家机的记忆库，不会出现在人设字段里。
 - 如果导入到已有的家机（带 `companionId`），记忆会加在原有记忆后面；加完超过 200 条的话，整个批准会返回 409。
 
-### 10.4 回答前端的问题
-
-- 现在没有其他未合并的导入分支。只支持 JSON 角色卡（V2 和旧格式），PNG 角色卡、邀请码都还不支持。
-- 说话方式、价值观、边界这几个人设字段，导入时还没有从卡片里读，下一步补。
-- Markdown 和纯文本的设定加记忆，要先用模型整理成结构化内容，所以要等接上模型才能做。在那之前，前端继续显示"暂未接入"。
-
 ## 11. 家机接入方式：自带 Key、接自己的 Agent（2026-11-24）
 
-对应前端 `docs/claude_2026_11_24.txt` 的 P2（形态 A 和形态 B），以及接入家机五屏流程里的"自带 Key / 外部本体"。接口：`GET / PUT / DELETE /v0/companions/{id}/connection`，类型在 `contracts/chat.ts`（`CompanionConnection`、`ConnectionInput`、`ConnectionSaveResult`）。
+接口：`GET / PUT / DELETE /v0/companions/{id}/connection`，类型在 `contracts/chat.ts`（`CompanionConnection`、`ConnectionInput`、`ConnectionSaveResult`）。
 
 ### 11.1 三种方式
 
