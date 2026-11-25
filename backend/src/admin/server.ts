@@ -18,7 +18,7 @@ import { vendorStatus, type VendorKey } from "./vendors.ts";
 import { promptBlock, promptTextRefusal, tidyPromptText } from "../chat/prompt-texts.ts";
 import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
-import { chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
+import { withPending, chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
   type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue, type SavedPrompts,
   type Feature } from "./pages.ts";
 
@@ -280,7 +280,12 @@ export function createAdminServer(options: AdminServerOptions): Server {
     const { db, host } = entered;
     let back = "/reports";
     try {
-      if (method === "GET") return url.pathname === "/" ? { location: "/reports" } : { status: 200, body: await get(db, url) };
+      if (method === "GET") {
+        if (url.pathname === "/") return { location: "/reports" };
+        // Every page shows, next to 举报, how many reports wait (reports() reads SUBMITTED by default).
+        const [body, waiting] = await Promise.all([get(db, url), db.call<ReportQueue>("reports")]);
+        return { status: 200, body: typeof body === "string" ? withPending(body, waiting.pending) : body };
+      }
       if (method !== "POST") return { status: 405, body: errorPage("不支持", "不支持这种请求。", back) };
       // A form must come from the console's own pages: any other origin (another site, another port
       // here, a sandboxed frame's "null") is refused. Browsers send Origin with every POST.
@@ -290,7 +295,8 @@ export function createAdminServer(options: AdminServerOptions): Server {
       const form = await readForm(request);
       back = backPath(form);
       const shown = await post(db, url.pathname, form);
-      return shown === null ? { location: `${back}${back.includes("?") ? "&" : "?"}ok=1` } : { status: 200, body: shown };
+      return shown === null ? { location: `${back}${back.includes("?") ? "&" : "?"}ok=1` }
+        : { status: 200, body: withPending(shown, (await db.call<ReportQueue>("reports")).pending) };
     } catch (error) {
       if (error instanceof NotFound) return { status: 404, body: errorPage("没有这个页面", "没有找到这个页面或对象。", "/reports") };
       if (error instanceof AdminRefusal) return { status: 409, body: errorPage("没有执行", error.message, back) };

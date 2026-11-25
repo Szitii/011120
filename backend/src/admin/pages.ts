@@ -166,6 +166,8 @@ nav a:hover{background:var(--fill2);text-decoration:none}
 nav a.on{background:var(--blue);color:#fff;font-weight:500}
 nav a svg{width:22px;height:22px;flex:none;padding:4px;border-radius:6px;color:#fff;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 nav a.on svg{background:rgba(255,255,255,.22)!important}
+nav .badge{margin-left:auto;min-width:20px;padding:0 6px;border-radius:980px;background:#ff3b30;color:#fff;font-size:12px;font-weight:600;line-height:20px;text-align:center}
+nav a.on .badge{background:#fff;color:var(--blue)}form.read{margin:0;flex-wrap:nowrap}form.read input{min-width:120px;flex:1}
 main{flex:1;min-width:0;max-width:1120px;margin:0 auto;padding:36px 40px 80px}
 @media (max-width:860px){.shell{display:block}
 aside{position:sticky;z-index:5;width:auto;height:auto;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
@@ -209,7 +211,8 @@ textarea{line-height:1.6;width:100%;padding:12px 14px;resize:vertical}
 pre.fixed{color:var(--sub)}
 .own{background:var(--orange-soft);border-radius:14px;padding:14px 16px;margin:12px 0}.own.off{background:var(--red-soft)}
 .own>b{margin-right:8px}
-details.edit{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+details.edit{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}details.fixed{margin:8px 0}details.fixed>summary{color:var(--sub);font-weight:400;font-size:13px}
+dl.detail{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dl.detail dt{color:var(--sub);font-size:13px}dl.detail dd{margin:0}
 details>summary{cursor:pointer;color:var(--blue);width:max-content;list-style:none;font-weight:500}details>summary::-webkit-details-marker{display:none}
 details>summary::before{content:"";display:inline-block;width:6px;height:6px;margin:0 9px 2px 2px;border:solid currentColor;border-width:0 2px 2px 0;
 transform:rotate(-45deg);transition:transform .2s}details[open]>summary::before{transform:rotate(45deg)}
@@ -266,12 +269,19 @@ const NAV: readonly (readonly [string, readonly (readonly [string, string, strin
   ["记录", [["/log", "操作日志", "#636366", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2"]]],
 ];
 
+/** Where the sidebar shows how many reports wait; the server fills it in (withPending). */
+const PENDING = "<!--pending-->";
+/** A page with the number of reports waiting next to 举报 (nothing when none wait). */
+export const withPending = (page: string, pending: number) =>
+  page.replace(PENDING, pending > 0 ? `<span class="badge" aria-label="${pending} 条待处理">${Math.min(pending, 99)}</span>` : "");
+
 /** `tools` goes to the right of the title. */
 function page(title: string, at: string, body: Safe, done = false, tools: Safe | "" = ""): string {
   return html`<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · 管理后台</title><style>${new Safe(STYLE)}</style></head><body><div class="shell">
 <aside><a class="brand" href="/reports">管理后台</a><nav>${NAV.map(([group, items]) => html`<p>${group}</p>${items.map(([path, label, color, icon]) =>
-    html`<a href="${path}" class="${at === path ? "on" : ""}"${at === path ? html` aria-current="page"` : ""}><svg viewBox="0 0 24 24" style="background:${color}" aria-hidden="true"><path d="${icon}"/></svg>${label}</a>`)}`)}</nav></aside>
+    html`<a href="${path}" class="${at === path ? "on" : ""}"${at === path ? html` aria-current="page"` : ""}><svg viewBox="0 0 24 24" style="background:${color}" aria-hidden="true"><path d="${icon}"/></svg>${label}${
+    path === "/reports" ? new Safe(PENDING) : ""}</a>`)}`)}</nav></aside>
 <main>${done ? html`<p class="ok toast" role="status">操作已完成,已记入日志。</p>` : ""}<div class="head"><h1>${title}</h1>${tools}</div>${body}</main></div></body></html>`.text;
 }
 
@@ -311,13 +321,24 @@ const ownerLink = (id: string, label: string | null) => html`<a href="/owners/${
 const status = (table: Readonly<Record<string, string>>, value: string | null) =>
   html`<span class="tag ${value === "ACTIVE" ? "" : "bad"}">${word(table, value)}</span>`;
 
+/** What a log row's detail keys mean; other keys are shown as they are. */
+const DETAIL_WORDS: Readonly<Record<string, string>> = { before: "改前", body: "内容", enabled: "开关", reason: "原因" };
+/** A value as a person reads it: text keeps its lines; a group of values goes one per line. */
+const detailValue = (value: unknown): string => typeof value === "string" ? value
+  : value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.entries(value).map(([k, v]) => `${DETAIL_WORDS[k] ?? k}: ${typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}`).join("\n")
+    : JSON.stringify(value);
+/** A log row's detail, one labelled line (or block of text) per key. */
+const detailView = (detail: Record<string, unknown>) =>
+  html`<dl class="detail">${Object.entries(detail).map(([k, v]) => html`<dt>${DETAIL_WORDS[k] ?? k}</dt><dd><pre>${detailValue(v)}</pre></dd>`)}</dl>`;
+
 function logTable(zone: string, log: LogPage): Safe {
   if (log.items.length === 0) return html`<p class="muted">没有记录。</p>`;
   return html`<table><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>原因</th><th>详情</th></tr>${log.items.map(l => html`
 <tr><td>${time(zone, l.createdAt)}</td><td>${l.operator}</td><td>${word(ACTIONS, l.action)}</td>
 <td>${l.ownerId === null ? html`${word(TARGETS, l.targetType)} ${l.targetId}`
     : html`<a href="/owners/${l.ownerId}">${word(TARGETS, l.targetType)}</a> <span class="muted">${l.targetId}</span>`}</td>
-<td>${l.reason}</td><td>${Object.keys(l.detail).length === 0 ? "" : html`<details><summary>查看</summary><pre>${JSON.stringify(l.detail, null, 1)}</pre></details>`}</td></tr>`)}</table>`;
+<td>${l.reason}</td><td>${Object.keys(l.detail).length === 0 ? "" : html`<details><summary>查看</summary>${detailView(l.detail)}</details>`}</td></tr>`)}</table>`;
 }
 
 // ---------- pages ----------
@@ -354,9 +375,9 @@ export function ownersPage(zone: string, list: OwnerList, search: string): strin
   return page("用户与聊天", "/owners", html`<form method="get" action="/owners" class="act">
 <input name="q" type="search" value="${search}" placeholder="搜索邮箱、名字,或完整的主人编号"><button>搜索</button></form>
 ${list.more ? html`<p class="muted">结果超过 100 个,只显示最新的 100 个。请用搜索缩小范围。</p>` : ""}
-<div class="scroll"><table><tr><th>邮箱</th><th>名字</th><th>状态</th><th>家机</th><th>帖子</th><th>注册时间</th><th></th></tr>${list.items.map(o => html`
+<div class="scroll"><table><tr><th>邮箱</th><th>名字</th><th>状态</th><th class="num">家机</th><th class="num">帖子</th><th>注册时间</th></tr>${list.items.map(o => html`
 <tr><td><a href="/owners/${o.id}">${o.email ?? "(没有邮箱)"}</a></td><td>${name(o.displayName)}</td><td>${status(OWNER_STATUS, o.status)}</td>
-<td>${o.companions}</td><td>${o.posts}</td><td>${time(zone, o.createdAt)}</td><td><a href="/owners/${o.id}#chats">聊天记录</a></td></tr>`)}</table></div>
+<td class="num">${o.companions}</td><td class="num">${o.posts}</td><td>${time(zone, o.createdAt)}</td></tr>`)}</table></div>
 ${list.items.length === 0 ? html`<p class="muted">没有找到。</p>` : ""}`);
 }
 
@@ -377,12 +398,14 @@ export function ownerPage(zone: string, detail: OwnerDetail, chats: ChatList, lo
 <div>注册<b>${time(zone, o.createdAt)}</b></div><div>状态<b>${status(OWNER_STATUS, o.status)}</b></div></div>
 <div class="muted">主人编号:${o.id}</div>
 ${o.status === "DELETED" ? "" : act(`/owners/${o.id}/${suspended ? "restore" : "suspend"}`, suspended ? "解封" : "封禁", back, "", !suspended)}
-<div class="muted">封禁后:这个人的所有请求立刻被拒绝,他和他的家机在社区里对别人不可见。</div></div>
+<div class="muted">封禁后:这个人的所有请求立刻被拒绝,他和他的家机在社区里对别人不可见。</div>
+${o.status === "DELETED" ? "" : edit("加减积分", html`${act("/models/credit", "调整积分", back, html`${hidden("owner", o.id)}
+<label>积分(可以是负数)<input name="credits" type="number" required></label>`)}<p class="muted">调整的是赠送积分;负数最多扣到 0。积分钱包关着时不起作用。</p>`)}</div>
 <h2 id="chats">聊天记录(私聊会话)</h2>${chats.items.length === 0 ? html`<p class="muted">没有会话。</p>` : html`
-<div class="scroll"><table><tr><th>会话</th><th>成员</th><th>消息数</th><th>最近活动</th></tr>${chats.items.map(c => html`
-<tr><td><a href="/chats/${c.id}">${c.title ?? (c.direct ? "一对一" : "群聊")}</a></td><td>${c.members.map(m => name(m.displayName)).join("、")}</td>
-<td>${c.messages}</td><td>${time(zone, c.activeAt)}</td></tr>`)}</table></div>`}
-<p class="muted">点会话名打开,要填写原因,每次查看都会记入日志。</p>
+<div class="scroll"><table><tr><th>会话</th><th>成员</th><th class="num">消息</th><th>最近活动</th><th>查看(填原因,记入日志)</th></tr>${chats.items.map(c => html`
+<tr><td>${c.title ?? (c.direct ? "一对一" : "群聊")}</td><td>${c.members.map(m => name(m.displayName)).join("、")}</td>
+<td class="num">${c.messages}</td><td>${time(zone, c.activeAt)}</td><td><form class="act read" method="post" action="/chats/${c.id}">${hidden("back", `/chats/${c.id}`)}
+<input name="reason" required maxlength="500" placeholder="原因" aria-label="查看这个会话的原因"><button>查看</button></form></td></tr>`)}</table></div>`}
 <h2>家机</h2>${detail.companions.length === 0 ? html`<p class="muted">没有家机。</p>` : detail.companions.map(c => html`<div class="card">
 <b>${name(c.displayName)}</b> <span class="muted">${word(COMPANION_STATUS, c.status)}</span> · 社区身份:${c.twinId === null ? "还没有" : status(TWIN_STATUS, c.twinStatus)}
 ${c.twinId === null ? "" : act(`/twins/${c.twinId}/${c.twinStatus === "SUSPENDED" ? "restore" : "suspend"}`,
@@ -476,9 +499,7 @@ ${panel("主人积分钱包", html`
 ${edit("修改钱包规则", act("/models/wallet", "修改钱包规则", back, html`${hidden("enabled", w.enabled ? "on" : "off")}${hidden("welcome", w.welcomeCredits)}
 <label>每分积分 <input name="rate" type="number" min="1" required value="${w.creditsPerCent}"></label>
 <label>给聊天保留 <input name="floor" type="number" min="0" required value="${w.backgroundFloor}"></label>`))}
-${edit("给某个主人调整积分", act("/models/credit", "调整积分", back, html`<input name="owner" placeholder="主人编号" required size="38">
-<label>积分(可以是负数)<input name="credits" type="number" required></label>`))}
-<p class="muted">调整的是赠送积分;负数最多扣到 0。</p>`)}
+<p class="muted">给某个主人加减积分:在<a href="/owners">用户与聊天</a>里打开他。</p>`)}
 <p class="muted">每一笔花了多少钱、全平台每天的花费上限,在<a href="/costs">“花费”页</a>。</p>`, done);
 }
 
@@ -928,11 +949,12 @@ export function promptsPage(zone: string, now: Date, saved: SavedPrompts, done: 
   const changed = PROMPT_BLOCKS.filter(block => saved[block.key] !== undefined).length;
   return page("家机说明", "/prompts", html`
 <p>这里是服务器每次请模型开口时写给它的说明,和线上用的是同一份代码生成的。<b>黄色框</b>里的段落可以改,保存后从下一条回复起生效;
-<span class="muted">灰色的部分是固定的</span>:回答的格式(服务器要照着读)、防止别人的话被当成指令、隐私和“不让主人离不开”的底线,这些要改得改代码。</p>
+<span class="muted">折起来的是固定的部分</span>,点开能看:回答的格式(服务器要照着读)、防止别人的话被当成指令、隐私和“不让主人离不开”的底线,这些要改得改代码。</p>
 <p class="muted">示例里的家机、人设、记忆和聊天是编的,只为了让你看到完整的样子;真实调用时,标着(示例)的位置填的是主人自己写的人设、称呼、记忆和真实的聊天记录。
 每次修改都记在<a href="/log">操作日志</a>里,带修改前和修改后的文字,想找回以前的版本去那里看。现在有 ${changed} / ${PROMPT_BLOCKS.length} 段改过。</p>
 ${promptViews(zone, now, texts).map(view => panel(view.title, html`<p class="muted">${view.when}</p>
-${cutPrompt(view.system, view.blocks, texts).map(part => typeof part === "string" ? html`<pre class="fixed">${part}</pre>`
+${cutPrompt(view.system, view.blocks, texts).map(part => typeof part === "string"
+    ? html`<details class="fixed"><summary>固定的部分(${part.length} 字)</summary><pre class="fixed">${part}</pre></details>`
     : promptBox(zone, part, saved[part.key], view.editable))}
 ${view.user === null ? "" : html`<details class="edit"><summary>和这段说明一起发给模型的材料(示例)</summary><pre class="fixed">${view.user}</pre></details>`}`))}`,
   done);

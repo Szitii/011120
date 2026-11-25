@@ -434,7 +434,7 @@ try {
   await pool.query("insert into companion_private.chat_members(chat_id, companion_id, position) values ($1, $2, 1)", [consoleChat, A.companion]);
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
     values ($1, 'console private line', 'SENT', repeat('e', 64), now())`, [consoleChat]);
-  assert.ok((await web(`/owners/${A.owner}`)).body.includes(`<a href="/chats/${consoleChat}">Console fixture chat</a>`));
+  assert.ok((await web(`/owners/${A.owner}`)).body.includes(`<tr><td>Console fixture chat</td>`));
   const gate = await web(`/chats/${consoleChat}`);
   assert.ok(gate.status === 200 && !gate.body.includes("console private line"));
   assert.equal((await web(`/chats/${consoleChat}`, { reason: " " })).status, 409);

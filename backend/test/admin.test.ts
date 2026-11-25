@@ -63,15 +63,17 @@ type Returned = Partial<Record<AdminFunction, unknown>>;
 
 /** A console database that returns the fixtures (or what the test put in `returns`) and remembers every call. */
 function fakeDb(returns: Returned = {}, failure?: unknown) {
-  const calls: [AdminFunction, ...unknown[]][] = [];
+  const calls: [AdminFunction, ...unknown[]][] = [], badges: string[] = [];
   const db: AdminDb = {
     async call<T>(fn: AdminFunction, ...args: unknown[]): Promise<T> {
+      // The sidebar's count of waiting reports, read with every page: kept out of `calls` (asserted on its own).
+      if (fn === "reports" && args.length === 0) { badges.push(fn); return (returns.reports ?? fixtures.reports) as T; }
       calls.push([fn, ...args]);
       if (failure !== undefined) throw failure;
       return (fn in returns ? returns[fn] : (fixtures as Returned)[fn]) as T;
     },
   };
-  return { db, calls };
+  return { db, calls, badges };
 }
 
 const catalog = [{ name: "Big", provider: "claude", model: "claude-big" }, { name: "Small", provider: "claude", model: "claude-small" },
@@ -244,17 +246,20 @@ it("lists and searches Owners, and opens one with what can be done about them", 
   assert.deepEqual(calls, [["owner_detail", OWNER], ["chats", OWNER], ["log", null, OWNER]]);
   assert.ok(!detail.body.includes("<script>alert"));
   const actions = [...detail.body.matchAll(/<form class="act" method="post" action="([^"]+)">/g)].map(m => m[1]);
-  assert.deepEqual(actions, [`/owners/${OWNER}/suspend`, `/twins/${TWIN}/suspend`, `/twins/${id(21)}/restore`,
+  assert.deepEqual(actions, [`/owners/${OWNER}/suspend`, "/models/credit", `/twins/${TWIN}/suspend`, `/twins/${id(21)}/restore`,
     `/content/post/${POST}/remove`, `/content/post/${id(41)}/restore`, `/content/comment/${COMMENT}/remove`]);
+  assert.match(detail.body, /<input type="hidden" name="owner" value="00000000-0000-0000-0000-000000000001">/, "credits for this Owner, no id to type");
+  assert.match(detail.body, /<form class="act read" method="post" action="\/chats\/[0-9a-f-]+">[\s\S]*?name="reason" required[\s\S]*?<button>查看<\/button>/, "a chat is read from its row");
+  assert.match(detail.body, /举报<span class="badge" aria-label="3 条待处理">3<\/span>/, "the sidebar shows the waiting reports");
   assert.match(detail.body, /作者已删除/);
   assert.match(detail.body, /本人发的[\s\S]*主人代发/);
   assert.match(detail.body, /<b>Mochi<\/b> <span class="muted">正常<\/span>[\s\S]*<span class="muted">草稿<\/span>/);
   assert.match(detail.body, /社区身份:还没有/);
-  assert.match(detail.body, new RegExp(`<a href="/chats/${CHAT}">一对一</a>`));
-  assert.match(detail.body, /<a href="\/chats\/[0-9a-f-]+">群聊<\/a>/);
+  assert.match(detail.body, new RegExp(`<tr><td>一对一</td>[\\s\\S]*?action="/chats/${CHAT}"`));
+  assert.match(detail.body, /<tr><td>群聊<\/td>/);
   assert.match(detail.body, new RegExp(`<a href="/log\\?owner=${OWNER}&before=8">更早的记录</a>`));
   assert.match(detail.body, /操作已完成/);
-  assert.ok((detail.body.match(new RegExp(`name="back" value="/owners/${OWNER}"`, "g")) ?? []).length === 6);
+  assert.ok((detail.body.match(new RegExp(`name="back" value="/owners/${OWNER}"`, "g")) ?? []).length === 7, "six changes and the credits");
 
   const gone = await start({ owner_detail: null });
   assert.equal((await gone.send(`/owners/${OWNER}`)).status, 404);
@@ -446,6 +451,7 @@ it("pages through the log, for everyone or one Owner", async () => {
   assert.match(all.body, /<td>admin_bob<\/td><td>模型开关<\/td>\s*<td>全部模型 \*<\/td>/);
   assert.match(all.body, new RegExp(`<a href="/owners/${OWNER}">帖子</a>`));
   assert.match(all.body, /<a href="\/log\?before=8">更早的记录<\/a>/);
+  assert.match(all.body, /<dl class="detail"><dt>内容<\/dt><dd><pre>&lt;script&gt;/, "the detail is labelled, its text kept as text");
   assert.ok(!all.body.includes("<script>alert"));
   calls.length = 0;
   const one = await send(`/log?before=8&owner=${OWNER}`);
@@ -702,7 +708,7 @@ it("shows what the models are told, and rewords a block only when the wording ca
   assert.match(page.body, /现在有 0 \/ 7 段改过/);
   // Each prompt whole: the fixed lines, and every block in its place with a form.
   for (const title of ["聊天回复", "写日记", "发社区动态", "自动记忆", "主人自己接的 agent(自建家机)", "群聊里要不要开口"]) assert.ok(page.body.includes(`<h2>${title}</h2>`), title);
-  assert.match(page.body, /<pre class="fixed">你是「小满」，主人的 AI 伴侣。[\s\S]*说话方式：<\/pre>\s*<div class="own "><b>可以改:说话方式<\/b><span class="tag">内置文字<\/span>\s*<pre>- 像用微信聊天/);
+  assert.match(page.body, /<details class="fixed"><summary>固定的部分\(\d+ 字\)<\/summary><pre class="fixed">你是「小满」，主人的 AI 伴侣。[\s\S]*说话方式：<\/pre><\/details>\s*<div class="own "><b>可以改:说话方式<\/b><span class="tag">内置文字<\/span>\s*<pre>- 像用微信聊天/);
   assert.match(page.body, /<pre class="fixed">- 一次可以发 1 到 3 条消息，每条单独一行；通常 1 条就够。\n- 只写你自己要说的话/);
   assert.match(page.body, /必须保留「\[语音\]」。/);
   assert.match(page.body, /<pre class="fixed">- 写到主人时用「\(示例\)称呼」这个称呼。\n- 语气真诚温和/);
