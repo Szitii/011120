@@ -29,6 +29,9 @@ async function connect(connectionString: string) {
   return { db: new PgAdminDb(pool), who };
 }
 const catalog = ChatCatalog.load().models;
+// The 系统 page: a read-only Fly token (fly tokens create readonly) and the apps to show.
+const fly = process.env.FLY_READ_TOKEN ? { token: process.env.FLY_READ_TOKEN,
+  apps: (process.env.ADMIN_FLY_APPS ?? "companion-social-api,companion-social-admin").split(",").map(a => a.trim()).filter(Boolean) } : undefined;
 
 let server;
 if (process.env.ADMIN_OPERATORS) {
@@ -41,14 +44,14 @@ if (process.env.ADMIN_OPERATORS) {
     console.log(`管理员:${login} → 数据库账号 ${who}`);
   }
   const hostname = process.env.ADMIN_HOSTNAME ?? "companion-admin";
-  server = createAdminServer({ tailnet: { hostname, operators }, catalog });
+  server = createAdminServer({ tailnet: { hostname, operators }, catalog, fly });
   server.listen(port, "127.0.0.1", () => console.log(`管理后台已启动,在 Tailscale 网络里打开 http://${hostname}/`));
 } else {
   const connectionString = process.env.ADMIN_DATABASE_URL;
   if (!connectionString) throw new Error("Set ADMIN_DATABASE_URL to the database, as your own operator login (a member of companion_admin).");
   const { db, who } = await connect(connectionString);
   const token = randomBytes(32).toString("hex");
-  server = createAdminServer({ db, token, catalog });
+  server = createAdminServer({ db, token, catalog, fly });
   server.listen(port, "127.0.0.1", () => {
     console.log(`管理后台已启动。数据库账号:${who}(日志里的“操作人”就是它)`);
     console.log(`在这台电脑的浏览器里打开:http://127.0.0.1:${port}/?token=${token}`);

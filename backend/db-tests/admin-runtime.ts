@@ -444,6 +444,18 @@ try {
   assert.equal((await web("/models")).status, 200);
   const costs = await web("/costs");
   assert.ok(costs.status === 200 && costs.body.includes("admin-test-provider/m-spend") && costs.body.includes("总花费"), "what was spent is on the costs page");
+  const today = new Date().toISOString().slice(0, 10);
+  const activity = (await consolePool.query("select companion_admin.activity($1::date) as a", [today])).rows[0].a;
+  const todayRow = activity.days.find((d: { day: string }) => d.day === today);
+  assert.ok(activity.owners > 0 && activity.chatters > 0 && todayRow.ownerMessages > 0 && todayRow.chatters > 0, "today's chat line is counted");
+  assert.equal(activity.days.at(-1).day, today, "the running month stops at today");
+  const system = (await consolePool.query("select companion_admin.system() as s")).rows[0].s;
+  assert.ok(system.databaseBytes > 0 && system.maxConnections > 0 && system.connections > 0 && system.tables.length > 0, "the database's size and connections");
+  const stats = await web("/stats");
+  assert.ok(stats.status === 200 && stats.body.includes("今天聊天的人"), "the 运营数据 page");
+  assert.ok((await web("/system")).body.includes("数据库空间"), "the 系统 page");
+  assert.equal((await web("/costs?year=2026")).status, 200);
+  assert.equal((await web("/costs/export.xlsx")).status, 200);
   assert.equal((await web("/models/switch", why("Console switch off", { target: "MODEL:admin-test-provider/m-spend", enabled: "off" }))).status, 303);
   assert.ok((await web("/models")).body.includes("关(模型关闭)"));
   assert.equal((await web("/models/switch", why("Console switch on", { target: "MODEL:admin-test-provider/m-spend", enabled: "on" }))).status, 303);
