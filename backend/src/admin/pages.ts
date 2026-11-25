@@ -459,7 +459,7 @@ ${panel("功能开关", html`<div class="scroll"><table><tr><th>功能</th><th>�
 <tr><td>${toggle("/models/feature", f.enabled, word(FEATURES, f.key), back, hidden("key", f.key), word(FEATURES, f.key))}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>
 <p class="muted">点一下就生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>`)}
 ${panel("每个家机每天的免费额度", html`
-<p>现在:每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
+<p>${w.enabled ? html`<span class="tag">积分钱包开着,现在不限</span> 主人用积分付钱,家机每天用多少都可以(全平台每天花费上限照样管着)。钱包关掉后恢复:` : "现在:"}每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
 ${edit("修改额度", act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
 <label>金额(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(q.dailyCostMinor / 100).toString()}"></label>`))}`)}
 ${panel("新人送积分", html`
@@ -471,7 +471,7 @@ ${w.welcomeCredits > 0 ? edit("改送多少", act("/models/welcome", "保存", b
 <p class="muted">关掉期间注册的主人,之后再打开时,会在他下一次用钱包时补送一次。${w.welcomeCredits > 0 ? "" : `打开时送 ${count(gift)} 积分,打开后可以改。`}</p>`)}
 ${panel("主人积分钱包", html`
 <div>${toggle("/models/wallet", w.enabled, "主人积分钱包", back, html`${hidden("welcome", w.welcomeCredits)}${hidden("rate", w.creditsPerCent)}${hidden("floor", w.backgroundFloor)}`,
-    w.enabled ? "开" : "关(只按每个家机每天的免费额度限制)")}</div>
+    w.enabled ? "开(主人用积分付钱,不再受每个家机每天的免费额度限制)" : "关(只按每个家机每天的免费额度限制)")}</div>
 <p>模型花费每 1 分 = ${w.creditsPerCent} 积分;写日记要给聊天留 ${w.backgroundFloor} 积分。调用失败不扣积分。</p>
 ${edit("修改钱包规则", act("/models/wallet", "修改钱包规则", back, html`${hidden("enabled", w.enabled ? "on" : "off")}${hidden("welcome", w.welcomeCredits)}
 <label>每分积分 <input name="rate" type="number" min="1" required value="${w.creditsPerCent}"></label>
