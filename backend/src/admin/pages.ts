@@ -347,7 +347,9 @@ export function modelsPage(zone: string, now: Date, models: Models, catalog: rea
 <div class="card ${offModels > 0 ? "warn" : ""}"><div class="muted">平台模型</div><div class="big">${catalog.length - offModels} / ${catalog.length}</div>
 <div class="muted">${offModels > 0 ? `有 ${offModels} 个关着` : "全部开着"}</div></div>
 <div class="card"><div class="muted">每个家机每天免费</div><div class="big">${q.dailyCalls} 次</div><div class="muted">最多 ${money(q.dailyCostMinor, q.currency)}</div></div>
-<div class="card"><div class="muted">主人积分钱包</div><div class="big">${w.enabled ? "开" : "关"}</div><div class="muted">新主人送 ${w.welcomeCredits} 积分</div></div>
+<div class="card"><div class="muted">主人积分钱包</div><div class="big">${w.enabled ? "开" : "关"}</div><div class="muted">每 1 分 = ${w.creditsPerCent} 积分</div></div>
+<div class="card ${w.welcomeCredits > 0 ? "" : "warn"}"><div class="muted">新人送积分</div><div class="big">${w.welcomeCredits > 0 ? "开" : "关"}</div>
+<div class="muted">${w.welcomeCredits > 0 ? `每个新主人 ${count(w.welcomeCredits)} 积分${w.enabled ? "" : "(钱包关着,暂时不送)"}` : "新主人不送积分"}</div></div>
 </div>
 ${panel("模型开关", html`<div class="scroll"><table><tr><th>模型</th><th>厂商 / 模型名</th><th>现在</th></tr>${catalog.map(m => {
     const state = switchState(models, m);
@@ -368,6 +370,12 @@ ${panel("每个家机每天的免费额度", html`
 <p>现在:每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
 ${edit("修改额度", act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
 <label>金额(分)<input name="cents" type="number" min="0" required value="${q.dailyCostMinor}"></label>`))}`)}
+${panel("新人送积分", html`
+<p>${w.welcomeCredits > 0 ? html`现在:开,每个新主人第一次用钱包时送 ${count(w.welcomeCredits)} 积分(只送一次)。` : "现在:关,新主人不送积分。"}${
+    w.enabled ? "" : html` <span class="muted">积分钱包关着时,不管这里开不开都不送。</span>`}</p>
+${edit(w.welcomeCredits > 0 ? "关掉或改数量" : "打开", act("/models/welcome", "保存", back, html`<select name="enabled" required><option value="on">开</option><option value="off">关</option></select>
+<label>送多少积分 <input name="welcome" type="number" min="1" max="100000000" value="${w.welcomeCredits > 0 ? w.welcomeCredits : 1000}"></label>`))}
+<p class="muted">关掉期间注册的主人,之后再打开时,会在他下一次用钱包时补送一次。</p>`)}
 ${panel("主人积分钱包", html`
 <p>${w.enabled ? "现在:开。" : "现在:关(只按每个家机每天的免费额度限制)。"}新主人送 ${w.welcomeCredits} 积分;
 模型花费每 1 分 = ${w.creditsPerCent} 积分;写日记要给聊天留 ${w.backgroundFloor} 积分。调用失败不扣积分。</p>
