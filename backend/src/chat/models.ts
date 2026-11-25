@@ -32,7 +32,7 @@ export interface CatalogModel {
   readonly options?: {
     /** anthropic: output_config.effort. */
     readonly effort?: "low" | "medium" | "high";
-    /** anthropic: turn thinking off (only models that allow it). */
+    /** Turn thinking off (only models that allow it): anthropic, and DeepSeek's OpenAI-format `thinking` field. */
     readonly thinking?: "disabled";
     /** anthropic: server-side fallback when a request is declined. */
     readonly fallbacks?: boolean;

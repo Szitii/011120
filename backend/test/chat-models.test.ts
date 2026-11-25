@@ -81,6 +81,9 @@ it("loads the shipped catalog and a file named by CHAT_MODELS_FILE", () => {
   const shipped = ChatCatalog.load({});
   assert.ok(shipped.has(shipped.models[0]!.id));
   assert.equal(shipped.pick(null), undefined, "no key, nothing usable");
+  const deepseek = ChatCatalog.load({ DEEPSEEK_API_KEY: "k" });
+  assert.deepEqual([deepseek.pick(null)?.id, deepseek.decisionModel()?.id], ["deepseek-flash", "deepseek-flash"], "the platform runs on DeepSeek");
+  assert.ok(deepseek.models.every(m => m.options?.thinking === "disabled"), "chat replies do not think");
   const dir = mkdtempSync(path.join(tmpdir(), "chat-models-"));
   writeFileSync(path.join(dir, "models.json"), JSON.stringify(file));
   assert.equal(ChatCatalog.load({ CHAT_MODELS_FILE: path.join(dir, "models.json"), ...keys }).pick(null)?.id, "big");
@@ -170,6 +173,10 @@ it("calls Claude through the SDK and OpenAI-style providers over HTTP", async ()
   assert.equal((await call(catalog.models[2]!, request)).cutOff, true);
   reply = new Response("busy", { status: 503 });
   await assert.rejects(call(catalog.models[2]!, request), /HTTP 503/);
+  // DeepSeek's OpenAI format turns thinking off with the same option.
+  reply = Response.json({ choices: [{ message: { content: "好" }, finish_reason: "stop" }] });
+  await call({ ...catalog.models[2]!, options: { thinking: "disabled" } }, request);
+  assert.deepEqual(JSON.parse(fetched.at(-1)![1].body as string).thinking, { type: "disabled" });
   await assert.rejects(createModelCaller(new ChatCatalog(file, {}))(catalog.models[0]!, request), /no API key/);
 });
 

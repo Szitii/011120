@@ -11,10 +11,19 @@
    有密钥的厂商,它的模型才可用;一个都没有时:开发服务器用假回复,正式服务器的回复显示"即将推出"。
 3. 重启 API 服务器。`GET /v0/chat-models` 会列出每个模型现在能不能用。
 
+## 现在用的(2026-11-25 起)
+
+平台模型用 DeepSeek:`deepseek-flash`(默认,也用来判断群里要不要开口)和 `deepseek-v4-pro`(贵一档)。
+都关掉了"思考模式"(DeepSeek 默认开着;聊天用不上,开着更慢,思考的内容也按输出收费)。
+清单里的价格按 DeepSeek 官网的高峰价、不按缓存命中算(api-docs.deepseek.com/quick_start/pricing):
+flash 输入 $0.30 / 输出 $1.20,v4-pro 输入 $1.32 / 输出 $3.96(每百万 token)。
+非高峰时段(UTC 工作日 01–04、06–10 点以外,和周末)DeepSeek 实际只收一半,所以花费页上的数会比账单高,最多高一倍。
+密钥放在 API 服务器的 `DEEPSEEK_API_KEY`。
+
 ## 先单独试一个模型(会花钱)
 
 ```
-ANTHROPIC_API_KEY=... npm run chat:try -- claude-haiku-5-5 "今天好累啊"
+DEEPSEEK_API_KEY=... npm run chat:try -- deepseek-flash "今天好累啊"
 ```
 
 打印回复、用了多少 token、花了多少美分。不写数据库。
@@ -28,7 +37,7 @@ ANTHROPIC_API_KEY=... npm run chat:try -- claude-haiku-5-5 "今天好累啊"
 ```
 select companion_admin.model_switch_set('ALL', '*', false, '原因');                                 -- 全部平台模型
 select companion_admin.model_switch_set('PROVIDER', 'openai', false, '原因');                        -- 某一家
-select companion_admin.model_switch_set('MODEL', 'anthropic/claude-opus-5-5', false, '原因');        -- 某一个
+select companion_admin.model_switch_set('MODEL', 'deepseek/deepseek-v4-pro', false, '原因');         -- 某一个
 select companion_admin.models();                                                                     -- 查看现状
 ```
 
