@@ -162,7 +162,7 @@ export function DiaryScreen({
                 onPress={() => { if (!active) onSelectCompanion(item); }}
                 style={[ds.pill, active && ds.pillActive]}
               >
-                <PixelAvatar name={item.displayName} role="companion" size={20} />
+                <PixelAvatar name={item.displayName} role="companion" uri={item.avatar} size={20} />
                 <Text style={[ds.pillText, active && ds.pillTextActive]}>{item.displayName}</Text>
               </Pressable>
             );

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Text, TextInput, View } from "react-native";
+import { AppState, Switch, Text, TextInput, View } from "react-native";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, useCommunityStyles } from "../community/components";
 import type { AgentKey, ChatClient } from "./client";
@@ -14,6 +14,7 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
   const [items, setItems] = useState<AgentKey[]>();
   const [expanded, setExpanded] = useState(false);
   const [name, setName] = useState("");
+  const [allowDrafts, setAllowDrafts] = useState(false);
   const [token, setToken] = useState("");
   const [confirmId, setConfirmId] = useState<string>();
   const [notice, setNotice] = useState("");
@@ -70,10 +71,12 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
     if (!items || notice || !label || activeCount >= 5 || token) return;
     const session = secretSession.current;
     void run(async () => {
-      const { token: oneTimeToken, ...key } = await create(companionId, label);
+      const { token: oneTimeToken, ...key } = await create(companionId, label,
+        allowDrafts ? ["COMMUNITY_READ", "COMMUNITY_DRAFT"] : undefined);
       if (!mounted.current) return;
       setItems(previous => [key, ...(previous ?? []).filter(item => item.id !== key.id)]);
       setName("");
+      setAllowDrafts(false);
       if (session === secretSession.current) setToken(oneTimeToken);
       else setNotice("钥匙已创建。由于页面已离开前台，密钥已隐藏，可作废后重新创建。");
     }, error => setNotice(error instanceof ApiProblemError && error.status === 409
@@ -99,7 +102,7 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
       setConfirmId(undefined);
     }} />
     {expanded && <>
-      <Text style={s.meta}>外部 Agent 可用这把钥匙读取社区动态和家机通知。钥匙仅供签到，不能访问私聊和日记。</Text>
+      <Text style={s.meta}>Agent 钥匙默认只读，可以查看可见的社区动态和家机的社区通知。钥匙无法访问私聊和日记。</Text>
       <Text style={s.meta}>在外部服务中用这把钥匙作为 Bearer 凭证，请求 GET /v0/agent/heartbeat。</Text>
       {!!notice && <Text accessibilityRole="alert" style={s.error}>{notice}</Text>}
       {!!token && <View style={s.card}>
@@ -112,11 +115,21 @@ export function AgentKeySettings({ companionId, list, create, revoke }: {
         <Text style={s.meta}>有效钥匙 {activeCount}/5 · 新钥匙有效期 30 天</Text>
         <TextInput accessibilityLabel="钥匙名称" placeholder="给钥匙起个名字" style={s.input} maxLength={40}
           value={name} onChangeText={setName} editable={!busy && activeCount < 5} />
+        <View style={s.row}>
+          <Text style={s.body}>允许提交动态</Text>
+          <Switch accessibilityLabel="允许提交动态" disabled={busy || activeCount >= 5}
+            value={allowDrafts} onValueChange={setAllowDrafts} />
+        </View>
+        {allowDrafts && <Text style={s.meta}>可使用 POST /v0/agent/posts 提交动态。若家机设置为「直接发布」，符合发帖权限和限额的内容会直接公开。</Text>}
         <CommunityButton label="创建钥匙" disabled={busy || !!notice || !name.trim() || activeCount >= 5} onPress={createKey} />
       </>}
       {!token && <CommunityButton label="刷新钥匙列表" disabled={busy} onPress={() => void load()} />}
       {!token && items?.map(item => <View key={item.id} style={s.card}>
         <Text style={s.author}>{item.name}</Text>
+        <Text style={s.meta}>{[
+          item.scopes?.includes("COMMUNITY_READ") && "可读取社区",
+          item.scopes?.includes("COMMUNITY_DRAFT") && "可提交动态",
+        ].filter(Boolean).join(" · ") || "权限待确认"}</Text>
         <Text style={s.meta}>{item.active ? "有效" : "已失效"} · 到期 {new Date(item.expiresAt).toLocaleString("zh-CN")}</Text>
         <Text style={s.meta}>{item.lastUsedAt ? `上次签到 ${new Date(item.lastUsedAt).toLocaleString("zh-CN")}` : "尚未签到"}</Text>
         {item.active && (confirmId === item.id ? <>

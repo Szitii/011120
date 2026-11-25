@@ -20,6 +20,7 @@ export function PrivateHomeScreen({
   chatClient,
   scope,
   companionName,
+  companionAvatar,
   companions = [],
   onSelectCompanion,
   isCompanion,
@@ -30,6 +31,7 @@ export function PrivateHomeScreen({
   chatClient?: ChatClient;
   scope?: HomeScope;
   companionName: string;
+  companionAvatar?: string | null;
   companions?: OwnerCompanionSummary[];
   onSelectCompanion?: (companionId: string) => void;
   isCompanion: boolean;
@@ -78,7 +80,7 @@ export function PrivateHomeScreen({
             onPress={() => setSwitcherOpen(true)}
             style={({ pressed }) => [styles.switchPill, pressed && { opacity: 0.8 }]}
           >
-            <PixelAvatar name={companionName} role="companion" size={20} />
+            <PixelAvatar name={companionName} role="companion" uri={companionAvatar} size={20} />
             <Text style={styles.switchText}>小家里：{companionName}</Text>
             <Ionicons name="chevron-down" size={14} color={ui.accentInk} />
           </Pressable>
@@ -123,7 +125,7 @@ export function PrivateHomeScreen({
                 }}
                 style={[styles.sheetItem, active && styles.sheetItemActive]}
               >
-                <PixelAvatar name={item.displayName} role="companion" size={34} />
+                <PixelAvatar name={item.displayName} role="companion" uri={item.avatar} size={34} />
                 <Text style={[styles.sheetName, active && styles.sheetNameActive]}>{item.displayName}</Text>
                 {active && <Ionicons name="checkmark-circle" size={20} color={ui.accent} />}
               </Pressable>

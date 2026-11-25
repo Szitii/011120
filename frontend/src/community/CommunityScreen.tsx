@@ -293,6 +293,7 @@ export function CommunityScreen({
       <HumanProfileEditor
         client={client}
         viewer={viewer}
+        avatar={own?.avatar}
         onClose={(saved) => {
           setEditingProfile(false);
           if (saved) void load();

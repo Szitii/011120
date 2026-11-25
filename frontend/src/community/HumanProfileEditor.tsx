@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useLayoutEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityClient, HumanProfileSettings } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
 import { PixelAvatar } from "../components/PixelAvatar";
@@ -9,9 +9,11 @@ import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 
-export function HumanProfileEditor({ client, viewer, onClose }: {
+export function HumanProfileEditor({ client, viewer, avatar, onChangeAvatar, onClose }: {
   client: CommunityClient;
   viewer: ActorContext;
+  avatar?: string | null;
+  onChangeAvatar?: () => void;
   onClose: (saved: boolean) => void;
 }) {
   const s = useThemedStyles(createStyles);
@@ -23,7 +25,6 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState("");
-  const [avatarNotice, setAvatarNotice] = useState("");
   const ownerId = viewer.id;
   const viewerKind = viewer.kind;
   const scope = useMemo(() => ({ active: false, pending: false, version: 0 }), [client, ownerId, viewerKind]);
@@ -104,21 +105,21 @@ export function HumanProfileEditor({ client, viewer, onClose }: {
       <Text accessibilityRole="header" style={s.screenTitle}>编辑资料</Text>
 
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="更换头像"
-        onPress={() => setAvatarNotice("自定义头像上传接口正在接入中，上线后点击这里即可从相册更换。")}
+        accessibilityRole={onChangeAvatar ? "button" : undefined}
+        accessibilityLabel={onChangeAvatar ? "更换头像" : undefined}
+        disabled={!onChangeAvatar || saving}
+        onPress={() => { Keyboard.dismiss(); onChangeAvatar?.(); }}
         style={({ pressed }) => [s.avatarBlock, pressed && { opacity: 0.85 }]}
       >
         <View style={s.avatarRing}>
-          <PixelAvatar name={displayName || "我"} role="owner" size={88} />
-          <View style={s.cameraBadge}>
-            <Ionicons name="camera-outline" size={16} color={ui.onAccent} />
-          </View>
+          <PixelAvatar name={displayName || "我"} role="owner" uri={avatar} size={88} />
+          {onChangeAvatar && <View style={s.cameraBadge}>
+            <Ionicons name="image-outline" size={16} color={ui.onAccent} />
+          </View>}
         </View>
-        <Text style={s.avatarHint}>轻点更换头像</Text>
+        {onChangeAvatar && <Text style={s.avatarHint}>更换预设头像</Text>}
       </Pressable>
 
-      {!!avatarNotice && <Text style={s.infoText}>{avatarNotice}</Text>}
       {loading && <ActivityIndicator accessibilityLabel="正在加载资料" color={ui.accent} style={{ marginVertical: 16 }} />}
 
       {settings && (
@@ -221,7 +222,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     justifyContent: "center",
   },
   avatarHint: { fontSize: 12.5, color: ui.muted },
-  infoText: { fontSize: 12.5, color: ui.accentInk, textAlign: "center" },
   card: {
     borderRadius: 24,
     borderWidth: 1,

@@ -35,3 +35,13 @@ test("settings validate integer limits and accept all-day and cross-midnight tim
   assert.equal(settingsPayload({ ...form, dailyPosts: "" }), undefined);
   assert.equal(settingsPayload({ ...form, commentsPerPost: "0" }), undefined);
 });
+
+test("auto posting respects its interval range and preserves the selected publish mode", () => {
+  const form = { ...settingsForm(view), autoEnabled: true, canPost: true, publishMode: "DIRECT" as const };
+  assert.equal(settingsPayload({ ...form, intervalMinutes: "14" }), undefined);
+  assert.equal(settingsPayload({ ...form, intervalMinutes: "15.5" }), undefined);
+  assert.equal(settingsPayload({ ...form, intervalMinutes: "1441" }), undefined);
+  assert.equal(settingsPayload({ ...form, intervalMinutes: "15" })?.autoEnabled, true);
+  assert.equal(settingsPayload({ ...form, intervalMinutes: "1440" })?.intervalMinutes, 1440);
+  assert.equal(settingsPayload(form)?.publishMode, "DIRECT");
+});

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  extendedImportAvailability, validateExternal, validateApiKey,
+  connectionMessage, extendedImportAvailability, validateExternal, validateApiKey,
   type ApiKeySetup, type ExternalSetup,
 } from "../src/onboarding/connection-client.ts";
 
@@ -12,6 +12,14 @@ test("provider connection distinguishes invalid configuration from a valid backe
   assert.equal(validateApiKey({ ...form, provider: "custom", baseUrl: "http://example.com/v1" }).status, "INVALID");
   assert.equal(validateApiKey(form).status, "READY");
   assert.equal(extendedImportAvailability().status, "UNAVAILABLE");
+});
+
+test("connection feedback uses only a valid upstream HTTP status and explains complete endpoints", () => {
+  assert.match(connectionMessage({ result: "ERROR", httpStatus: 405 }, "external"), /HTTP 405.*完整的 HTTPS 接口地址/);
+  assert.match(connectionMessage({ result: "AUTH_FAILED", httpStatus: 401 }, "key"), /密钥.*HTTP 401/);
+  assert.doesNotMatch(connectionMessage({ result: "UNREACHABLE" }, "external"), /HTTP/);
+  assert.doesNotMatch(connectionMessage({ result: "ERROR", httpStatus: 999 }, "key"), /HTTP/);
+  assert.equal(connectionMessage({ result: "CONNECTED" }, "key"), "已连接并保存。");
 });
 
 test("external connection accepts an optional token and rejects embedded credentials", () => {

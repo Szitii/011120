@@ -66,11 +66,27 @@ test("agent heartbeat keys use companion-scoped management routes with server-de
   });
   await client.listAgentKeys!("companion/a");
   await client.createAgentKey!("companion/a", "我的 Agent");
+  await client.createAgentKey!("companion/a", "投稿 Agent", ["COMMUNITY_READ", "COMMUNITY_DRAFT"]);
   await client.revokeAgentKey!("companion/a", "key/b");
   assert.deepEqual(calls, [
     ["GET", "/v0/companions/companion%2Fa/agent-keys"],
     ["POST", "/v0/companions/companion%2Fa/agent-keys", { name: "我的 Agent" }],
+    ["POST", "/v0/companions/companion%2Fa/agent-keys", { name: "投稿 Agent", scopes: ["COMMUNITY_READ", "COMMUNITY_DRAFT"] }],
     ["DELETE", "/v0/companions/companion%2Fa/agent-keys/key%2Fb"],
+  ]);
+});
+
+test("avatar updates use the owner or owned companion endpoint and accept explicit reset", async () => {
+  const calls: unknown[][] = [];
+  const client = createChatClient(async <T>(...args: unknown[]) => {
+    calls.push(args);
+    return args[2] as T;
+  });
+  assert.deepEqual(await client.saveAvatar!(null, "preset:pixel_long_hair"), { avatar: "preset:pixel_long_hair" });
+  assert.deepEqual(await client.saveAvatar!("companion/a", null), { avatar: null });
+  assert.deepEqual(calls, [
+    ["PUT", "/v0/owner/avatar", { avatar: "preset:pixel_long_hair" }],
+    ["PUT", "/v0/companions/companion%2Fa/avatar", { avatar: null }],
   ]);
 });
 

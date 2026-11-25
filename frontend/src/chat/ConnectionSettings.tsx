@@ -114,7 +114,7 @@ export function ConnectionSettings({
               try {
                 const result = await save(companionId, input);
                 if (mounted.current) setConnection(result.connection);
-                return result.result;
+                return result;
               } catch (error) {
                 if (error instanceof ApiProblemError && error.status === 501) onAvailabilityChanged();
                 throw error;
