@@ -11,7 +11,7 @@ import { BottomSheet } from "../components/BottomSheet";
 import { PearlInteractiveRoom } from "../components/PearlInteractiveRoom";
 import { PixelAvatar } from "../components/PixelAvatar";
 import type { OwnerCompanionSummary } from "../contracts";
-import { DIARY_SLOT_IMAGE } from "../room/roomSlots";
+import { ALBUM_SLOT_IMAGE, DIARY_SLOT_IMAGE } from "../room/roomSlots";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { AnniversaryPill } from "./AnniversaryPill";
 import type { HomeScope } from "./keys";
@@ -104,7 +104,7 @@ export function PrivateHomeScreen({
             <Text style={styles.label}>日记</Text>
           </Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="相册" style={styles.card} disabled={capturing || !onOpenAlbum} onPress={onOpenAlbum}>
-            <Ionicons name="images-outline" size={28} color={ui.accentInk} />
+            <Image source={ALBUM_SLOT_IMAGE} style={styles.icon} resizeMode="contain" />
             <Text style={styles.label}>相册</Text>
           </Pressable>
         </View>

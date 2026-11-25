@@ -12,6 +12,7 @@ import type { UiPalette } from "../theme/skinTokens";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
 import { VoicePicker } from "./VoicePicker";
+import { BUBBLE_SKINS, CHAT_BACKGROUNDS, loadChatTheme, saveChatTheme, type ChatThemePreference } from "../theme/chatThemes";
 import type { ChatClient } from "./client";
 
 const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"]] as const;
@@ -26,16 +27,22 @@ export function ChatSettingsScreen({
   groupSendEnabled,
   onAvailabilityChanged,
   onBack,
+  chatId,
+  ownerId,
   onDeleteCompanion,
+  onConversationDeleted,
 }: {
   client: ChatClient;
-  companionId: string;
+  companionId?: string;
+  chatId?: string;
+  ownerId?: string;
   connectionKind?: "key" | "external";
   connectionsEnabled: boolean;
   groupSendEnabled: boolean;
   onAvailabilityChanged: () => void;
   onBack?: () => void;
   onDeleteCompanion?: () => Promise<void>;
+  onConversationDeleted?: () => void;
 }) {
   const { ui } = useSkin();
   const s = useThemedStyles(createStyles);
@@ -49,11 +56,24 @@ export function ChatSettingsScreen({
   const [saveNotice, setSaveNotice] = useState("");
   const [leaveSheetOpen, setLeaveSheetOpen] = useState(false);
   const [modelError, setModelError] = useState(false);
-  const [deleteSheetOpen, setDeleteSheetOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<"companion" | "conversation">();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const deletingRef = useRef(false);
   const [reload, setReload] = useState(0);
+  const [themePref, setThemePref] = useState<ChatThemePreference>();
+  useEffect(() => {
+    if (!chatId || !ownerId) return;
+    let current = true;
+    void loadChatTheme(ownerId, chatId).then(p => { if (current) setThemePref(p); });
+    return () => { current = false; };
+  }, [chatId, ownerId]);
+  function updateTheme(patch: Partial<ChatThemePreference>) {
+    if (!themePref || !chatId || !ownerId) return;
+    const next = { ...themePref, ...patch };
+    setThemePref(next);
+    void saveChatTheme(ownerId, chatId, next);
+  }
   const pending = useRef(false);
   const settingsRead = useRef(0);
   const voiceChanged = voiceDraft !== undefined;
@@ -82,6 +102,7 @@ export function ChatSettingsScreen({
   }, [connectionMode, handleBack, onBack]);
 
   useEffect(() => {
+    if (!companionId) return;
     const read = ++settingsRead.current;
     setBusy(true);
     setNotice("");
@@ -101,7 +122,7 @@ export function ChatSettingsScreen({
   }, [client, companionId, reload]);
 
   async function save() {
-    if (!form || saveDisabled || pending.current) return;
+    if (!companionId || !form || saveDisabled || pending.current) return;
     const read = settingsRead.current;
     pending.current = true;
     setBusy(true);
@@ -146,14 +167,20 @@ export function ChatSettingsScreen({
   }
 
   async function confirmDelete() {
-    if (!onDeleteCompanion || deletingRef.current || pending.current) return;
+    if (!deleteTarget || deletingRef.current || pending.current) return;
     deletingRef.current = true;
     const read = settingsRead.current;
     setDeleteError("");
     setDeleting(true);
     try {
-      await onDeleteCompanion();
-      if (read === settingsRead.current) setDeleteSheetOpen(false);
+      if (deleteTarget === "conversation") {
+        if (!chatId || !onConversationDeleted) return;
+        await client.deleteChat(chatId);
+        if (read === settingsRead.current) onConversationDeleted();
+      } else {
+        await onDeleteCompanion?.();
+      }
+      if (read === settingsRead.current) setDeleteTarget(undefined);
     } catch (error) {
       if (read === settingsRead.current) setDeleteError(`暂时无法删除。${safeClientMessage(error).title}`);
     } finally {
@@ -191,7 +218,7 @@ export function ChatSettingsScreen({
           </View>
         )}
 
-        {client.saveConnection && (
+        {companionId && client.saveConnection && (
           <ConnectionSettings
             client={client}
             companionId={companionId}
@@ -202,7 +229,35 @@ export function ChatSettingsScreen({
           />
         )}
 
-        {!connectionMode && (
+        {!connectionMode && themePref && (
+          <View style={s.card}>
+            <Text style={s.sectionTitle}>气泡皮肤与聊天背景</Text>
+            <Text style={s.mutedText}>气泡皮肤</Text>
+            <View style={s.pillRow}>
+              {BUBBLE_SKINS.map(skin => (
+                <CommunityButton
+                  key={skin.id}
+                  label={skin.label}
+                  selected={themePref.bubbleSkin === skin.id}
+                  onPress={() => updateTheme({ bubbleSkin: skin.id })}
+                />
+              ))}
+            </View>
+            <Text style={[s.mutedText, { marginTop: 4 }]}>聊天背景</Text>
+            <View style={s.pillRow}>
+              {CHAT_BACKGROUNDS.map(bg => (
+                <CommunityButton
+                  key={bg.id}
+                  label={bg.label}
+                  selected={themePref.background === bg.id}
+                  onPress={() => updateTheme({ background: bg.id })}
+                />
+              ))}
+            </View>
+          </View>
+        )}
+
+        {!connectionMode && companionId && (
           <>
             {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
 
@@ -287,7 +342,7 @@ export function ChatSettingsScreen({
                 {onDeleteCompanion && <Pressable
                   accessibilityRole="button"
                   disabled={busy || deleting}
-                  onPress={() => { setDeleteError(""); setDeleteSheetOpen(true); }}
+                  onPress={() => { setDeleteError(""); setDeleteTarget("companion"); }}
                   style={({ pressed }) => [s.deleteBtn, pressed && { opacity: 0.78 }]}
                 >
                   <Text style={s.deleteBtnText}>删除这位家机</Text>
@@ -296,6 +351,14 @@ export function ChatSettingsScreen({
             )}
           </>
         )}
+        {!connectionMode && chatId && onConversationDeleted && <Pressable
+          accessibilityRole="button"
+          disabled={busy || deleting}
+          onPress={() => { setDeleteError(""); setDeleteTarget("conversation"); }}
+          style={({ pressed }) => [s.deleteBtn, pressed && { opacity: 0.78 }]}
+        >
+          <Text style={s.deleteBtnText}>删除会话</Text>
+        </Pressable>}
       </ScrollView>
 
       {!connectionMode && form && (
@@ -320,10 +383,13 @@ export function ChatSettingsScreen({
         <CommunityButton label="放弃更改并返回" onPress={() => { setLeaveSheetOpen(false); onBack?.(); }} />
       </BottomSheet>
 
-      <BottomSheet visible={deleteSheetOpen} title="删除这位家机？" onClose={() => { if (!deletingRef.current) setDeleteSheetOpen(false); }}>
+      <BottomSheet visible={!!deleteTarget} title={deleteTarget === "conversation" ? "删除会话？" : "删除这位家机？"}
+        onClose={() => { if (!deletingRef.current) setDeleteTarget(undefined); }}>
         <View style={{ gap: 12 }}>
           <Text style={s.mutedText}>
-            删除后，该家机的聊天、日记和记忆无法恢复，社区动态也会撤下。
+            {deleteTarget === "conversation"
+              ? "删除后，这段会话将从消息列表移除。"
+              : "删除后，该家机的聊天、日记和记忆无法恢复，社区动态也会撤下。"}
           </Text>
           {deleteError !== "" && <Text accessibilityRole="alert" style={s.deleteError}>{deleteError}</Text>}
           <CommunityButton

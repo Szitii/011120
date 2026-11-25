@@ -3,7 +3,7 @@ export type RootTab = typeof ROOT_TABS[number];
 
 export type CommunityTarget =
   | { type: "detail"; id: string; commentId?: string }
-  | { type: "profile"; id: string }
+  | { type: "profile"; id?: string }
   | { type: "blocks" };
 export type Route =
   | { type: "root"; tab: RootTab }
@@ -11,7 +11,7 @@ export type Route =
   | { type: "community-target"; target: CommunityTarget }
   | { type: "compose-post" }
   | { type: "create-group" }
-  | { type: "chat-settings"; companionId: string; connectionKind?: "key" | "external" }
+  | { type: "chat-settings"; companionId?: string; chatId?: string; connectionKind?: "key" | "external" }
   | { type: "community-follows"; direction: "following" | "followers" }
   | { type: "album"; companionId: string }
   | { type: "diary"; companionId: string; companionName: string }

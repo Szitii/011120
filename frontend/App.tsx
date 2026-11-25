@@ -74,6 +74,7 @@ import { SkinProvider, useSkin, TEXT_SIZES } from "./src/theme/SkinProvider";
 import { CHROME } from "./src/theme/layoutTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
+import { UnifiedProfileView } from "./src/components/UnifiedProfileView";
 import { PresetAvatarPicker } from "./src/components/PresetAvatarPicker";
 import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
 import { PrivateHomeScreen } from "./src/home/PrivateHomeScreen";
@@ -97,10 +98,6 @@ const LOCAL_PREVIEW_IMAGES: Record<string, number> = {
   "night-desk": require("./assets/post-night-desk.jpg"),
   "cute-room": require("./assets/room-cute-flat.jpg"),
 };
-
-function actionAllowed(capabilities: Record<string, boolean>, ...keys: string[]): boolean {
-  return keys.some((key) => capabilities[key] === true);
-}
 
 function formatDate(value: string): string {
   const diffMin = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
@@ -556,7 +553,7 @@ function WorldApp({ client, account, isMockMode }: {
     const previousName = companionDisplayName;
 
     setSwitcherOpen(false);
-    if (target.kind !== "OWNER" && (route.type === "chat" || route.type === "diary" || route.type === "album")) {
+    if (target.kind !== "OWNER" && (route.type === "chat" || route.type === "chat-settings" || route.type === "diary" || route.type === "album")) {
       setNav((current) => selectTab(current, current.rootTab));
     }
     setIdentitySwitchPending(true);
@@ -809,9 +806,18 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
-        <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId])} client={client.api.chat} companionId={route.companionId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
+        <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId, route.chatId])} client={client.api.chat} companionId={route.companionId} chatId={route.chatId} ownerId={ownerId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
           onAvailabilityChanged={refreshFeatures} onBack={goBack}
-          onDeleteCompanion={client.api.chat.deleteCompanion ? () => deleteOwnedCompanion(route.companionId) : undefined} />
+          onConversationDeleted={route.chatId ? () => {
+            refreshBadges();
+            setNav(current => {
+              if (current.stack.at(-1) !== route) return current;
+              const parent = popRoute(current);
+              return parent.stack.at(-1)?.type === "chat" ? popRoute(parent) : parent;
+            });
+          } : undefined}
+          onDeleteCompanion={route.companionId && client.api.chat.deleteCompanion
+            ? () => deleteOwnedCompanion(route.companionId!) : undefined} />
       )}
 
       {route.type === "chat" && canUseChat && client.api.chat && (
@@ -827,7 +833,11 @@ function WorldApp({ client, account, isMockMode }: {
           autoFocus={route.autoFocus === true}
           backLabel={route.fromTab === "messages" ? "返回消息" : route.fromTab === "my" ? "返回" : "返回小家"}
           onSaveQuote={ownerId && route.companionId ? quote => addAlbumQuote({ ownerId, companionId: route.companionId! }, quote) : undefined}
-          onOpenSettings={route.companionId ? () => setNav(current => pushRoute(current, { type: "chat-settings", companionId: route.companionId! })) : undefined}
+          onOpenSettings={(chatId, companionId) => setNav(current => pushRoute(current, { type: "chat-settings", chatId, companionId }))}
+          onOpenProfile={companionId => {
+            if (companionId) openProfile(companionId);
+            else if (client.api.community) openCommunity({ type: "profile" });
+          }}
           onRead={refreshBadges}
           groupSendEnabled={groupSendEnabled}
           onAvailabilityChanged={refreshFeatures}
@@ -874,8 +884,14 @@ function WorldApp({ client, account, isMockMode }: {
           isSampleCompanion={isSampleCompanion}
           companionName={companionDisplayName}
           companions={ownerCompanions}
+          homeCompanionId={homeCompanion?.companionId}
           avatar={activeAvatar}
           selfProfile={profile}
+          onAddCompanion={() => setNav(current => pushRoute(current, { type: "bring-companion" }))}
+          onSelectHomeCompanion={companionId => {
+            selectHomeCompanion(companionId);
+            setNav(current => selectTab(current, "home"));
+          }}
           onOpenCompanionProfile={(item) => openProfile(item.companionId)}
           onUpdateCompanion={(item) => setNav(current => pushRoute(current, { type: "bring-companion", companionId: item.companionId }))}
           onChangeAvatar={ownerId && client.api.chat?.saveAvatar ? item =>
@@ -1451,68 +1467,20 @@ function ProfileScreen({
   if (state.kind !== "success") return <Centered title="TA 的主页没打开。" />;
 
   const p = state.value;
-  const canFollow = actionAllowed(p.viewer.capabilities, "follow", "canFollow");
-  const canFriend = actionAllowed(p.viewer.capabilities, "friend", "canFriend");
 
   return (
     <ScrollView style={styles.secondaryPage} contentContainerStyle={styles.profilePage}>
-      <View style={styles.profileTop}>
-        <PixelAvatar name={p.displayName} role="companion" uri={avatar} size={74} />
-
-        <View style={styles.profileActions}>
-          {canFollow && (
-            <View style={styles.accentSmallPill}>
-              <Text style={styles.accentSmallPillText}>关注</Text>
-            </View>
-          )}
-          {canFriend && (
-            <View style={styles.outlineSmallPill}>
-              <Text style={styles.outlineSmallPillText}>加个关系</Text>
-            </View>
-          )}
-        </View>
-      </View>
-
-      <SecondaryHeading title={p.displayName} />
-      <Text style={styles.profileHandle}>@{p.handle}</Text>
-      <Text style={styles.tinyMuted}>
-        {p.viewer.relationship === "SELF"
-          ? "这是 TA 自己看到的主页"
-          : p.viewer.relationship === "OWNER_OF"
-            ? "你的家机"
-            : "公开主页"}
-      </Text>
-
-      <View style={styles.profileMetaRow}>
-        <Text style={styles.profileMeta}>谁能看到 · {p.profileVisibility}</Text>
-      </View>
-
+      <UnifiedProfileView name={p.displayName} role="companion" avatar={avatar} subtitle={`@${p.handle}`}>
+        <Text style={styles.profileMeta}>可见范围 · {p.profileVisibility}</Text>
+        {p.viewer.capabilities.openControls === true && (
+          <CommunityButton label="权限设置" onPress={onControls} />
+        )}
+      </UnifiedProfileView>
       {p.completeness === "PARTIAL" && (
         <View style={styles.inlineNotice}>
-          <Text style={styles.inlineNoticeText}>有一部分没回来。</Text>
+          <Text style={styles.inlineNoticeText}>部分资料暂时无法显示。</Text>
         </View>
       )}
-
-      <View style={styles.profileDivider} />
-
-      <View style={styles.profileSection}>
-        {p.viewer.capabilities.openControls === true && (
-          <Pressable style={styles.secondaryPill} onPress={onControls}>
-            <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-            <Text style={styles.secondaryPillText}>设置</Text>
-          </Pressable>
-        )}
-        {!canFollow && !canFriend && p.viewer.capabilities.openControls !== true && (
-          <Text style={styles.tinyMuted}>这里暂时没什么能做的。</Text>
-        )}
-      </View>
-
-      <View style={styles.profileDivider} />
-
-      <View style={styles.profileSection}>
-        <Text style={styles.sectionLabel}>关于 TA</Text>
-        <Text style={styles.bodyText}>暂时没有更多公开资料。</Text>
-      </View>
     </ScrollView>
   );
 }
@@ -1587,6 +1555,9 @@ function MyScreen({
   companionName,
   companions,
   selfProfile,
+  homeCompanionId,
+  onAddCompanion,
+  onSelectHomeCompanion,
   onOpenCompanionProfile,
   onUpdateCompanion,
   onChangeAvatar,
@@ -1607,6 +1578,9 @@ function MyScreen({
   companionName: string;
   companions: LoadState<OwnerCompanionCollection>;
   selfProfile: LoadState<CompanionProfile>;
+  homeCompanionId?: string;
+  onAddCompanion: () => void;
+  onSelectHomeCompanion: (companionId: string) => void;
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
   onUpdateCompanion: (item: OwnerCompanionSummary) => void;
   onChangeAvatar?: (item: OwnerCompanionSummary) => void;
@@ -1657,35 +1631,11 @@ function MyScreen({
       style={styles.rootContent}
       contentContainerStyle={[styles.mySocialPage, { paddingBottom: CHROME.scrollBottomClearance }]}
     >
-      {/* Compact Refined Social Profile Header (no empty cover gap, no green badge) */}
-      <View style={[styles.profileHero, { marginTop: 10 }]}>
-        <PixelAvatar
-          name={displayName}
-          role={isSampleCompanion ? "companion" : "owner"}
-          uri={avatar === undefined ? ownProfile?.avatar : avatar}
-          size={80}
-        />
-
-        <Text style={[styles.heroName, { color: ink }]}>{displayName}</Text>
-        {bio ? <Text style={[styles.heroBio, { color: muted }]}>{bio}</Text> : null}
-        {isSampleCompanion && selfProfile.kind === "success" && <Text style={[styles.heroBio, { color: muted }]}>@{selfProfile.value.handle} · {selfProfile.value.profileVisibility}</Text>}
-
-        {/* 3-Column Stats Row */}
-        <View style={styles.statsRow}>
-          <View style={styles.statCol}>
-            <Text style={[styles.statNum, { color: ink }]}>{ownProfile?.postsCount ?? "—"}</Text>
-            <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>动态</Text>
-          </View>
-          {([["followers", "粉丝", ownProfile?.followersCount], ["following", "关注", ownProfile?.followingCount]] as const)
-            .map(([direction, label, count]) => (
-              <Pressable key={direction} style={styles.statCol} accessibilityRole="button"
-                accessibilityLabel={`${label} ${count ?? "未加载"}`} disabled={!ownProfile}
-                onPress={() => onFollowList(direction)}>
-                <Text style={[styles.statNum, { color: ink }]}>{count ?? "—"}</Text>
-                <Text style={[styles.statLabel, { color: skin.colors.inkMute }]}>{label}</Text>
-              </Pressable>
-            ))}
-        </View>
+      <UnifiedProfileView name={displayName} role={isSampleCompanion ? "companion" : "owner"}
+        avatar={avatar === undefined ? ownProfile?.avatar : avatar} bio={bio}
+        subtitle={ownProfile ? `@${ownProfile.handle}`
+          : isSampleCompanion && selfProfile.kind === "success" ? `@${selfProfile.value.handle}` : undefined}
+        stats={ownProfile} onFollowList={onFollowList}>
         {onEditHumanProfile && (
           <Pressable
             accessibilityRole="button"
@@ -1698,54 +1648,73 @@ function MyScreen({
             <Text style={styles.editProfilePillText}>编辑资料</Text>
           </Pressable>
         )}
-      </View>
+      </UnifiedProfileView>
 
-      {/* Bidirectional Companion Relation Pill */}
-      {!isSampleCompanion && companions.kind === "success" && companions.value.items.map((item: OwnerCompanionSummary) => (
-        <View
-          key={item.companionId}
-          style={[styles.relationPillCard, { backgroundColor: defaultSkin ? ui.white : skin.colors.surface, borderColor: skin.colors.border }]}
-        >
-          <Pressable
-            style={styles.relationMain}
-            onPress={item.socialReady ? () => onOpenCompanionProfile(item) : () => onResumeCompanion(item)}
-          >
-            <PixelAvatar name={item.displayName} role="companion" uri={item.avatar} size={38} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.relTitle, { color: ink }]}>{item.displayName}</Text>
-              <Text style={[styles.relSub, { color: muted }]}>
-                {item.socialReady ? "专属陪伴 · 查看主页" : "待完成激活"}
-              </Text>
-            </View>
-          </Pressable>
-          <View style={{ flexDirection: "row", gap: 6 }}>
-            {onOpenCompanionChat && (
-              <Pressable
-                onPress={() => onOpenCompanionChat(item)}
-                style={[styles.relControlBtn, { backgroundColor: ui.iceBlue, borderColor: ui.highlight }]}
-              >
-                <Text style={[styles.relControlText, { color: ui.accentInk }]}>聊天</Text>
-              </Pressable>
-            )}
-            {item.socialReady && (
-              <Pressable
-                onPress={() => onControls(item)}
-                style={[styles.relControlBtn, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border }]}
-              >
-                <Text style={[styles.relControlText, { color: ink }]}>权限</Text>
-              </Pressable>
-            )}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`${item.displayName} 的更多操作`}
-              onPress={() => setCompanionMenu(item)}
-              style={[styles.relControlBtn, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border, paddingHorizontal: 8 }]}
-            >
-              <Ionicons name="ellipsis-horizontal" size={16} color={muted} />
-            </Pressable>
+      {!isSampleCompanion && (companions.kind === "success" || companions.kind === "empty") && (
+        <View style={{ gap: 8 }}>
+          <View style={styles.postSectionHeader}>
+            <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>我的家机 ({companions.kind === "success" ? companions.value.items.length : 0})</Text>
           </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 2 }}>
+            {companions.kind === "success" && companions.value.items.map(item => (
+              <View
+                key={item.companionId}
+                style={{
+                  width: 148,
+                  borderRadius: 20,
+                  borderWidth: 1,
+                  borderColor: skin.colors.border,
+                  backgroundColor: defaultSkin ? ui.white : skin.colors.surface,
+                  padding: 12,
+                  gap: 8,
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <PixelAvatar name={item.displayName} role="companion" uri={item.avatar} size={38} />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.displayName} 的更多操作`}
+                    onPress={() => setCompanionMenu(item)}
+                    style={{ padding: 4 }}
+                  >
+                    <Ionicons name="ellipsis-horizontal" size={16} color={muted} />
+                  </Pressable>
+                </View>
+                <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${item.displayName} 的资料`}
+                  onPress={item.socialReady ? () => onOpenCompanionProfile(item) : () => onResumeCompanion(item)}>
+                  <Text style={[styles.relTitle, { color: ink }]} numberOfLines={1}>{item.displayName}</Text>
+                  <Text style={[styles.relSub, { color: muted }]} numberOfLines={1}>
+                    {item.companionId === homeCompanionId ? "● 正在小家" : "主页"}
+                  </Text>
+                </Pressable>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  {onOpenCompanionChat && (
+                    <Pressable
+                      onPress={() => onOpenCompanionChat(item)}
+                      style={[styles.relControlBtn, { flex: 1, alignItems: "center", backgroundColor: ui.iceBlue, borderColor: ui.highlight }]}
+                    >
+                      <Text style={[styles.relControlText, { color: ui.accentInk }]}>聊天</Text>
+                    </Pressable>
+                  )}
+                  {item.socialReady && (
+                    <Pressable
+                      onPress={() => onControls(item)}
+                      style={[styles.relControlBtn, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border }]}
+                    >
+                      <Text style={[styles.relControlText, { color: ink }]}>权限</Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            ))}
+            <Pressable accessibilityRole="button" accessibilityLabel="添加家机" onPress={onAddCompanion}
+              style={styles.addCompanionCard}>
+              <Ionicons name="add" size={22} color={ui.accentInk} />
+              <Text style={[styles.heroBio, { color: ui.accentInk }]}>添加</Text>
+            </Pressable>
+          </ScrollView>
         </View>
-      ))}
+      )}
 
 
       <View style={styles.postSectionHeader}>
@@ -1781,6 +1750,10 @@ function MyScreen({
           if (item) onUpdateCompanion(item);
         }}><Text style={[styles.cleanRowTitle, { color: ink }]}>编辑 / 更新资料</Text></Pressable>
         {companionMenu && <>
+          <CommunityButton label="去 TA 的小家" onPress={() => {
+            setCompanionMenu(undefined);
+            onSelectHomeCompanion(companionMenu.companionId);
+          }} />
           {onChangeAvatar && <CommunityButton label="更换家机头像" onPress={() => {
             setCompanionMenu(undefined);
             onChangeAvatar(companionMenu);
@@ -2191,17 +2164,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
 
   secondaryPage: { flex: 1, backgroundColor: ui.background[0] },
   profilePage: { padding: CHROME.screenInset, paddingBottom: 44 },
-  profileTop: { marginBottom: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  profileActions: { flexDirection: "row", gap: 8 },
-  accentSmallPill: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 999, backgroundColor: ui.accentWash },
-  accentSmallPillText: { color: ui.accentInk, fontSize: 13, fontWeight: "600" },
-  outlineSmallPill: { paddingHorizontal: 15, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: ui.line },
-  outlineSmallPillText: { color: ui.ink, fontSize: 13, fontWeight: "600" },
-  profileHandle: { marginTop: 3, fontSize: 13, color: ui.muted },
-  profileMetaRow: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
   profileMeta: { fontSize: 12, color: ui.muted },
-  profileDivider: { marginVertical: 20, height: StyleSheet.hairlineWidth, backgroundColor: ui.line },
-  profileSection: { gap: 7 },
 
   lifePage: { padding: CHROME.screenInset, paddingBottom: 44 },
   lifeSub: { marginTop: 10, fontSize: 14, lineHeight: 22, color: ui.muted },
@@ -2323,53 +2286,20 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     paddingHorizontal: CHROME.screenInset,
     paddingTop: 18,
   },
-  profileHero: {
-    alignItems: "center",
-    paddingVertical: 20,
-    marginBottom: 18,
-  },
-  heroName: {
-    fontSize: 20,
-    fontWeight: "700",
-    marginTop: 12,
-  },
   heroBio: {
     fontSize: 13,
     marginTop: 4,
     textAlign: "center",
   },
-  statsRow: {
-    flexDirection: "row",
+  addCompanionCard: {
+    width: 88,
+    minHeight: 108,
     alignItems: "center",
     justifyContent: "center",
-    gap: 36,
-    marginTop: 18,
-  },
-  statCol: {
-    alignItems: "center",
-  },
-  statNum: {
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  statLabel: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  relationPillCard: {
-    flexDirection: "row",
-    alignItems: "center",
     borderRadius: 20,
     borderWidth: 1,
-    padding: 12,
-    marginBottom: 18,
-    gap: 10,
-  },
-  relationMain: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
+    borderColor: ui.line,
+    backgroundColor: ui.white,
   },
   relTitle: {
     fontSize: 14,

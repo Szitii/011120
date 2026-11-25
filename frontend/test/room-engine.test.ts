@@ -159,3 +159,47 @@ test("straight floor retargets keep their travel direction and avoid an initial 
   assert.equal(engine.snapshot().actors.user.phase, "IDLE");
   assert.equal(findSafePath({ nx: .60, ny: .46 }, { nx: .60, ny: .61 }, true), null);
 });
+
+test("actors fade into their furniture anchors together without sliding in a seated or sleeping pose", () => {
+  for (const kind of ["bed", "sofa"] as const) {
+    const engine = new RoomEngine();
+    const placed = kind === "bed" ? "SLEEP" : "SIT";
+    let sawPlacement = false;
+    engine.furniture(kind);
+    for (let frame = 0; frame < 360; frame++) {
+      const before = engine.snapshot().actors;
+      engine.tick(16);
+      const after = engine.snapshot().actors;
+      assert.equal(after.user.phase === placed, after.companion.phase === placed);
+      if (after.user.phase !== placed || before.user.phase === placed) continue;
+      sawPlacement = true;
+      for (const id of ["companion", "user"] as const) {
+        assert.ok((after[id].opacity ?? 1) <= .2);
+        assert.deepEqual(after[id].point, FURNITURE[kind][id].anchor);
+      }
+    }
+    assert.equal(sawPlacement, true);
+  }
+});
+
+test("vertical walking changes facing direction before the next frame", () => {
+  const engine = new RoomEngine();
+  engine.floor({ nx: .60, ny: .43 });
+  assert.equal(engine.snapshot().actors.user.facingDir, "back");
+  for (let frame = 0; frame < 8; frame++) engine.tick(16);
+  engine.floor({ nx: .60, ny: .47 });
+  assert.equal(engine.snapshot().actors.user.facingDir, "front");
+});
+
+test("a companion's autonomous action animates locally without recording an owner action", () => {
+  const engine = new RoomEngine();
+  for (let frame = 0; frame < 1300; frame++) engine.tick(33);
+  assert.equal(engine.snapshot().duo, undefined);
+  let sawCompanionAction = false;
+  for (let frame = 0; frame < 1300; frame++) {
+    engine.tick(33, true);
+    assert.deepEqual(engine.takeStartedActions(), []);
+    if (engine.snapshot().duo?.initiator === "COMPANION") sawCompanionAction = true;
+  }
+  assert.equal(sawCompanionAction, true);
+});

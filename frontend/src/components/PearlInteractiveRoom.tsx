@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import { BED_QUILT_OVERLAY, BOY_SPRITES, DUO_SPRITES, GIRL_SPRITES, ROOM_BASE_IMAGE, ROOM_SLOTS, SOFA_FRONT, type CharacterAction, type RoomImage } from "../room/roomSlots";
+import { BED_QUILT_OVERLAY, BOY_SPRITES, DUO_COMPANION_PAT_SPRITES, DUO_SPRITES, GIRL_SPRITES, ROOM_BASE_IMAGE, ROOM_SLOTS, SOFA_FRONT, type CharacterAction, type RoomImage } from "../room/roomSlots";
 import { BED_FLOOR_EDGE, DUO_SLOT, SOFA_SLOT, type ActorId } from "../room/geometry";
 import { RoomEngine, type ActorFrame } from "../room/roomEngine";
 import { useAppIsActive } from "../state/useAppIsActive";
@@ -13,8 +13,14 @@ import { PearlTransitionLoader } from "./PearlTransitionLoader";
 
 const ACTIONS = [["WAVE", "挥手"], ["PAT_HEAD", "摸头"], ["HUG", "抱抱"], ["CUDDLE", "贴贴"]] as const;
 const WALK = ["walk_1", "walk_2", "walk_3", "walk_4"] as const;
+const WALK_FRONT = ["walk_front_1", "walk_front_2", "walk_front_3", "walk_front_4"] as const;
+const WALK_BACK = ["walk_back_1", "walk_back_2", "walk_back_3", "walk_back_4"] as const;
+const SOFA = ROOM_SLOTS.find(slot => slot.id === "slot_sofa")!;
+const BED = ROOM_SLOTS.find(slot => slot.id === "slot_bed")!;
+const PET = ROOM_SLOTS.find(slot => slot.interactive === "pet")!;
+const DIARY = ROOM_SLOTS.find(slot => slot.interactive === "diary")!;
 const STATIC_IMAGES = [ROOM_BASE_IMAGE, ...ROOM_SLOTS.map(slot => slot.source), SOFA_FRONT, BED_QUILT_OVERLAY];
-const REQUIRED_IMAGES = new Set([...STATIC_IMAGES, ...Object.values(BOY_SPRITES), ...Object.values(GIRL_SPRITES), ...Object.values(DUO_SPRITES).flat()]).size;
+const REQUIRED_IMAGES = new Set([...STATIC_IMAGES, ...Object.values(BOY_SPRITES), ...Object.values(GIRL_SPRITES), ...Object.values(DUO_SPRITES).flat(), ...DUO_COMPANION_PAT_SPRITES]).size;
 type Size = { width: number; height: number };
 
 const depth = (ny: number) => Math.round(ny * 1000);
@@ -49,11 +55,17 @@ const SpriteFrames = memo(function SpriteFrames({ sources, current, onLoad }: {
   </View>)}</>;
 });
 
-const DUO_TEXTURES = Object.fromEntries(Object.entries(DUO_SPRITES).flatMap(([action, images]) =>
-  images.map((source, index) => [`${action}:${index}`, source])));
+const DUO_TEXTURES = Object.fromEntries([
+  ...Object.entries(DUO_SPRITES).flatMap(([action, images]) => images.map((source, index) => [`${action}:${index}`, source])),
+  ...DUO_COMPANION_PAT_SPRITES.map((source, index) => [`PAT_HEAD_COMPANION:${index}`, source]),
+]);
 
 function spriteFor(frame: ActorFrame): CharacterAction {
-  if (frame.phase === "WALK") return WALK[frame.step];
+  if (frame.phase === "WALK") {
+    if (frame.facingDir === "front") return WALK_FRONT[frame.step];
+    if (frame.facingDir === "back") return WALK_BACK[frame.step];
+    return WALK[frame.step];
+  }
   if (frame.phase === "SLEEP") return "sleep";
   if (frame.phase === "SIT") return "sit";
   return frame.wave ? "wave" : "idle";
@@ -92,7 +104,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     let last: number | undefined;
     let raf = 0;
     const animate = (now: number) => {
-      engine.tick(last === undefined ? 0 : now - last);
+      engine.tick(last === undefined ? 0 : now - last, !isCompanionView && !menu && !capturing);
       last = now;
       if (engine.consumeChange()) setFrame(engine.snapshot());
       for (const action of engine.takeStartedActions()) actionRef.current?.(action);
@@ -100,7 +112,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     };
     raf = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf);
-  }, [awake, engine, ready]);
+  }, [awake, capturing, engine, isCompanionView, menu, ready]);
 
   function interact() {
     if (!awake || !ready || isCompanionView || sleeping) return;
@@ -112,6 +124,10 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     const action = spriteFor(actor);
     const sprites = (id === "user") !== isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
     const seated = actor.phase === "SIT";
+    const mirrored = seated ? id === "user" : actor.phase === "WALK" && (
+      actor.facingDir === "side" && actor.facingLeft
+      || actor.facingDir === "front" && actor.step === 3 && sprites === GIRL_SPRITES
+    );
     const inBed = actor.furniture === "bed" && actor.point.ny < BED_FLOOR_EDGE;
     const beforeSofaFront = actor.furniture === "sofa" && actor.point.ny < SOFA_SLOT.top + SOFA_SLOT.height;
     const zIndex = inBed ? 530 : beforeSofaFront ? 660 : depth(actor.point.ny) + 1;
@@ -120,15 +136,13 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     const width = height;
     return <View key={id} testID={`room-actor-${id}`} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
       actor.point.ny - height * .973, width, height), {
-      zIndex, opacity: frame.duo ? 0 : 1,
-      transform: [{ scaleX: (seated ? id === "user" : actor.phase === "WALK" && actor.facingLeft) ? -1 : 1 }],
+      zIndex, opacity: frame.duo ? 0 : actor.opacity ?? 1,
+      transform: [{ scaleX: mirrored ? -1 : 1 }],
     }]}>
       <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />
     </View>;
   };
 
-  const sofa = ROOM_SLOTS.find(slot => slot.id === "slot_sofa")!;
-  const bed = ROOM_SLOTS.find(slot => slot.id === "slot_bed")!;
   const companion = frame.actors.companion.point;
   const labelColor = night ? ui.onDark : skin.colors.ink;
   return <View style={[styles.frame, { borderColor: skin.colors.border, backgroundColor: skin.colors.canvas }]}
@@ -140,14 +154,14 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
       <Furniture size={size} onLoad={onLoad} />
       {renderActor("companion")}
       {renderActor("user")}
-      <View pointerEvents="none" style={[box(size, sofa.left, sofa.top, sofa.width, sofa.height), { zIndex: 680 }]}>
+      <View pointerEvents="none" style={[box(size, SOFA.left, SOFA.top, SOFA.width, SOFA.height), { zIndex: 680 }]}>
         <SceneImage source={SOFA_FRONT} onLoad={onLoad} />
       </View>
-      <View pointerEvents="none" style={[box(size, bed.left, bed.top, bed.width, bed.height), { zIndex: 531 }]}>
+      <View pointerEvents="none" style={[box(size, BED.left, BED.top, BED.width, BED.height), { zIndex: 531 }]}>
         <SceneImage source={BED_QUILT_OVERLAY} onLoad={onLoad} />
       </View>
       <View testID="room-duo-sprite" pointerEvents="none" style={[box(size, DUO_SLOT.left, DUO_SLOT.top, DUO_SLOT.width, DUO_SLOT.height), { zIndex: depth(DUO_SLOT.top + DUO_SLOT.height) + 1 }]}>
-        <SpriteFrames sources={DUO_TEXTURES} current={frame.duo ? `${frame.duo.action}:${frame.duo.frame}` : ""} onLoad={onLoad} />
+        <SpriteFrames sources={DUO_TEXTURES} current={frame.duo ? `${frame.duo.initiator === "COMPANION" && frame.duo.action === "PAT_HEAD" ? "PAT_HEAD_COMPANION" : frame.duo.action}:${frame.duo.frame}` : ""} onLoad={onLoad} />
       </View>
       {night && <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.night, { backgroundColor: ui.roomNight }]} />}
       {sleeping && <Text style={[styles.zzz, { left: size.width * .25, top: size.height * .235,
@@ -172,19 +186,20 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
           engine.floor({ nx: x / size.width, ny: y / size.height });
         }} />
       <Pressable accessibilityRole="button" accessibilityLabel={sleeping ? "从床上起身" : "在床上休息"}
-        style={[box(size, bed.left, bed.top, bed.width, bed.height), styles.target]}
+        style={[box(size, BED.left, BED.top, BED.width, BED.height), styles.target]}
         onPress={() => { setMenu(false); engine.furniture("bed"); }} />
       <Pressable accessibilityRole="button" accessibilityLabel="在沙发一起坐"
-        style={[box(size, sofa.left, sofa.top, sofa.width, sofa.height), styles.target]}
+        style={[box(size, SOFA.left, SOFA.top, SOFA.width, SOFA.height), styles.target]}
         onPress={() => { setMenu(false); engine.furniture("sofa"); }} />
       {!isCompanionView && !sleeping && !frame.duo && <Pressable accessibilityRole="button" accessibilityState={{ expanded: menu }}
         accessibilityLabel={`与 ${companionName} 互动`} onPress={interact}
         style={[box(size, companion.nx - .05, companion.ny - .15, .1, .14), styles.actorTarget]} />}
       <Pressable accessibilityRole="button" accessibilityLabel="窗台小猫"
-        style={[box(size, .49, .21, .16, .10), styles.objectTarget]}
-        onPress={() => engine.addEffect("heart", { nx: .57, ny: .21 })} />
-      <Pressable accessibilityRole="button" accessibilityLabel="粉色日记本"
-        style={[box(size, .576, .68, .138, .102), styles.objectTarget]} onPress={onOpenDiary} />
+        style={[box(size, PET.left - .014, PET.top, PET.width + .028, PET.height), styles.objectTarget]}
+        onPress={() => engine.addEffect("heart", { nx: PET.left + PET.width / 2, ny: PET.top })} />
+      {onOpenDiary && <Pressable accessibilityRole="button" accessibilityLabel="粉色日记本"
+        style={[box(size, DIARY.left - .024, DIARY.top - .02, DIARY.width + .048, DIARY.height + .04), styles.objectTarget]}
+        onPress={onOpenDiary} />}
     </>}
 
     <View style={styles.tools}>
