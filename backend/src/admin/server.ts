@@ -20,6 +20,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { AdminRefusal, type AdminDb } from "./db.ts";
 import { hosts, type FlyAccess } from "./fly.ts";
+import { vendorStatus, type VendorKey } from "./vendors.ts";
 import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
 import { chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
@@ -46,6 +47,10 @@ interface Common {
   readonly onError?: (error: unknown) => void;
   /** A read-only Fly token and the apps to show on the 系统 page; without it the page says so. */
   readonly fly?: FlyAccess;
+  /** The model companies the catalog uses, with the console's own copy of each key (for balances). */
+  readonly vendors?: readonly VendorKey[];
+  /** Answers the companies' balance APIs; tests pass a stand-in. */
+  readonly fetch?: typeof fetch;
 }
 
 const COOKIE = "admin_console";
@@ -123,6 +128,8 @@ export function createAdminServer(options: AdminServerOptions): Server {
   const zone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const now = options.now ?? (() => new Date());
   const targets = new Set(switchTargets(catalog).map(t => t.value));
+  // The API server is the first app the console watches.
+  const vendorsNow = () => vendorStatus(options.vendors ?? [], options.fly ?? null, options.fly?.apps[0] ?? "", options.fetch);
 
   /** The months of a year, January up to this month when it is this year. */
   function yearMonths(year: string): string[] {
@@ -150,7 +157,10 @@ export function createAdminServer(options: AdminServerOptions): Server {
       return ownerPage(zone, detail, await db.call<ChatList>("chats", m[1]), await db.call<LogPage>("log", null, m[1]), done);
     }
     if ((m = ROUTES.chat.exec(path))) return chatGatePage(m[1]!);
-    if (path === "/models") return modelsPage(zone, now(), await db.call<Models>("models"), catalog, await db.call<Feature[]>("features"), done);
+    if (path === "/models") {
+      const [models, features, vendors] = await Promise.all([db.call<Models>("models"), db.call<Feature[]>("features"), vendorsNow()]);
+      return modelsPage(zone, now(), models, catalog, features, done, vendors);
+    }
     if (path === "/costs/settings") return costSettingsPage(zone, await db.call<Costs>("costs", `${now().toISOString().slice(0, 7)}-01`), done);
     if (path === "/costs/export.xlsx") {
       const year = query.get("year");
@@ -177,9 +187,9 @@ export function createAdminServer(options: AdminServerOptions): Server {
       const costs = await db.call<Costs>("costs", month);
       // Today's spend against the daily cap belongs to the running month only; so does reading itself again.
       // So does the Fly estimate, from the servers as they are now.
-      const [cap, fly] = month === thisMonth
-        ? await Promise.all([db.call<Models>("models").then(m => m.cap), hosts(options.fly ?? null)]) : [null, null];
-      return costsPage(zone, now(), costs, cap, done, fly);
+      const [cap, fly, vendors] = month === thisMonth
+        ? await Promise.all([db.call<Models>("models").then(m => m.cap), hosts(options.fly ?? null), vendorsNow()]) : [null, null, []];
+      return costsPage(zone, now(), costs, cap, done, fly, vendors);
     }
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
