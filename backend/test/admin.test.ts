@@ -8,7 +8,7 @@ import type { Activity, ChatList, ChatPage, Costs, LogPage, SystemInfo, Models, 
 import type { FlyAccess } from "../src/admin/fly.ts";
 import { createAdminServer } from "../src/admin/server.ts";
 
-const TOKEN = "t".repeat(64);
+const HOST = "companion-admin", LOGIN = "op@x.test";
 const id = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const OWNER = id(1), TWIN = id(2), REPORT = id(3), POST = id(4), COMMENT = id(5), CHAT = id(6), COMPANION = id(7);
 const AT = "2026-11-23T08:00:00.123456+00:00";
@@ -79,20 +79,20 @@ const catalog = [{ name: "Big", provider: "claude", model: "claude-big" }, { nam
 const servers: ReturnType<typeof createAdminServer>[] = [];
 after(() => { for (const server of servers) server.close(); });
 
-interface Sent { method?: string; cookie?: string | null; host?: string; origin?: string; form?: Record<string, string>; body?: string; type?: string }
+interface Sent { method?: string; login?: string | null; host?: string; origin?: string; form?: Record<string, string>; body?: string; type?: string }
 async function start(returns: Returned = {}, failure?: unknown, fly?: FlyAccess, more: Partial<Parameters<typeof createAdminServer>[0]> = {}) {
   const { db, calls } = fakeDb(returns, failure);
   const errors: unknown[] = [];
-  const server = createAdminServer({ db, token: TOKEN, catalog, timeZone: "UTC", now: () => new Date("2026-11-23T12:00:00Z"), onError: e => errors.push(e),
+  const server = createAdminServer({ tailnet: { hostname: HOST, operators: new Map([[LOGIN, db]]) }, catalog, timeZone: "UTC", now: () => new Date("2026-11-23T12:00:00Z"), onError: e => errors.push(e),
     ...(fly === undefined ? {} : { fly }), ...more } as Parameters<typeof createAdminServer>[0]);
   servers.push(server);
   const port = await new Promise<number>(resolve => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
   const send = (path: string, sent: Sent = {}) => new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string; raw: Buffer }>((resolve, reject) => {
     const body = sent.body ?? (sent.form === undefined ? undefined : new URLSearchParams(sent.form).toString());
     const req = httpRequest({ host: "127.0.0.1", port, path, method: sent.method ?? (body === undefined ? "GET" : "POST"), headers: {
-      Host: sent.host ?? `127.0.0.1:${port}`,
-      ...(sent.cookie === null ? {} : { Cookie: sent.cookie ?? `other=1; admin_console=${TOKEN}` }),
-      ...(body === undefined && sent.origin === undefined || sent.origin === "" ? {} : { Origin: sent.origin ?? `http://127.0.0.1:${port}` }),
+      Host: sent.host ?? HOST,
+      ...(sent.login === null ? {} : { "Tailscale-User-Login": sent.login ?? LOGIN }),
+      ...(body === undefined && sent.origin === undefined || sent.origin === "" ? {} : { Origin: sent.origin ?? `http://${HOST}` }),
       ...(body === undefined ? {} : { "Content-Type": sent.type ?? "application/x-www-form-urlencoded" }),
     } }, response => {
       const chunks: Buffer[] = [];
@@ -106,25 +106,15 @@ async function start(returns: Returned = {}, failure?: unknown, fly?: FlyAccess,
 }
 const change = (fields: Record<string, string> = {}) => ({ reason: " because ", confirm: "yes", ...fields });
 
-it("lets in only this machine, the start-up token and the console's own forms", async () => {
+it("lets in only a listed login at the tailnet name, and only the console's own forms", async () => {
   const { send, calls, errors, port } = await start();
-  assert.throws(() => createAdminServer({ db: fakeDb().db, token: "short", catalog }));
-  for (const host of ["evil.example", `evil.example:${port}`, `127.0.0.1:${port + 1}`]) {
+  for (const host of ["evil.example", `127.0.0.1:${port}`, `localhost:${port}`]) {
     assert.deepEqual([(await send("/reports", { host })).status, (await send("/reports", { host })).body], [403, "Forbidden"]);
   }
-  for (const cookie of [null, "admin_console=", `admin_console=${"x".repeat(64)}`, `admin_console=${TOKEN}x`, `admin_console=${"é".repeat(64)}`]) {
-    const refused = await send("/reports", { cookie });
-    assert.equal(refused.status, 403);
-    assert.match(refused.body, /请用后台启动时终端里打印的链接打开/);
-  }
-  assert.equal((await send(`/?token=${"x".repeat(64)}`, { cookie: null })).status, 403);
-  assert.equal((await send(`/reports?token=${TOKEN}`, { cookie: null })).status, 403, "the token is taken only at the start page");
-  const entered = await send(`/?token=${TOKEN}`, { cookie: null });
-  assert.deepEqual([entered.status, entered.headers.location, entered.headers["set-cookie"]],
-    [303, "/reports", [`admin_console=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`]]);
-  assert.equal(calls.length, 0, "nothing is read before the token is shown");
+  for (const login of [null, "", "mallory@x.test"]) assert.equal((await send("/reports", { login })).status, 403);
+  assert.equal(calls.length, 0, "nothing is read for someone not let in");
 
-  const opened = await send("/reports", { host: `localhost:${port}` });
+  const opened = await send("/reports", { host: `${HOST}.tail1234.ts.net` });
   assert.equal(opened.status, 200);
   assert.match(String(opened.headers["content-security-policy"]), /default-src 'none'/);
   // Not no-referrer: a browser posts forms from a no-referrer page with "Origin: null", which the console refuses.
@@ -133,14 +123,14 @@ it("lets in only this machine, the start-up token and the console's own forms", 
   assert.equal((await send("/nowhere")).status, 404);
   assert.equal((await send("/owners/not-an-id")).status, 404);
   assert.equal((await send("/reports", { method: "PUT" })).status, 405);
-  assert.deepEqual([(await send("//[", { cookie: null })).status, (await send("//[")).status, errors], [400, 400, []], "an address that is not one is refused quietly");
+  assert.deepEqual([(await send("//[", { login: null })).status, (await send("//[")).status, errors], [400, 400, []], "an address that is not one is refused quietly");
 
   const before = calls.length;
-  for (const origin of ["https://evil.example", `http://127.0.0.1:${port + 1}`, "null", ""]) {
+  for (const origin of ["https://evil.example", `http://127.0.0.1:${port}`, `http://${HOST}.tail1234.ts.net`, "null", ""]) {
     assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change(), origin })).status, 403);
   }
   assert.equal(calls.length, before, "a form from another page changes nothing");
-  assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change(), origin: `http://localhost:${port}` })).status, 303);
+  assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change() })).status, 303);
   assert.equal((await send("/elsewhere", { form: change() })).status, 404);
   assert.equal((await send(`/owners/${OWNER}/suspend`, { body: "{}", type: "application/json" })).status, 409);
   for (const length of [20_000, 300_000]) {
@@ -373,7 +363,7 @@ it("shows model switches and the quota, and changes only what the catalog names"
   assert.deepEqual(switches("/models/feature", "key"), [["GROUP_CHAT_CREATE", "on", "点开关:打开新建群聊", "", "false"],
     ["GROUP_CHAT_SEND", "off", "点开关:关掉在已有群聊里发消息", "on", "true"]]);
   assert.ok(!page.body.includes("<select"), "no drop-downs left on the page");
-  assert.match(page.body, /每天 200 次调用、1\.00 USD/);
+  assert.match(page.body, /每天 200 次调用、\$1\.00/);
   assert.ok(!page.body.includes("花费上限</h2>"), "the spend cap lives on the costs page");
   assert.match(page.body, /aria-label="主人积分钱包" title="点一下打开"><\/button>关\(只按每个家机每天的免费额度限制\)<\/form><\/div>\s*<p>模型花费每 1 分/);
   assert.ok(!page.body.includes("新人赠送") && !page.body.includes("开关的历史"), "the gift is changed in one place; switch history is in the log");
@@ -392,6 +382,12 @@ it("shows model switches and the quota, and changes only what the catalog names"
   const switched = await send("/models/switch", { form: change({ target: "MODEL:claude/claude-big", enabled: "off", back }) });
   assert.deepEqual([switched.status, switched.headers.location], [303, "/models?ok=1"]);
   await send("/models/switch", { form: change({ target: "ALL:*", enabled: "on" }) });
+  const single = [{ name: "Big", provider: "claude", model: "claude-big" }, { name: "Small", provider: "claude", model: "claude-small" }];
+  const one = await (await start({ models: { ...fixtures.models, switches: [] } }, undefined, undefined, { catalog: single })).send("/models");
+  assert.ok(!one.body.includes("厂商 claude"), "one company: its switch would do what the switch for everything does");
+  const oneOff = await (await start({ models: { ...fixtures.models, switches: [{ scope: "PROVIDER", key: "claude", enabled: false, note: null, updatedAt: AT }] } },
+    undefined, undefined, { catalog: single })).send("/models");
+  assert.match(oneOff.body, /aria-label="厂商 claude"/, "…unless it was turned off: then it can be turned on again");
   await send("/models/switch", { form: change({ target: "PROVIDER:other", enabled: "off" }) });
   assert.deepEqual(calls, [["model_switch_set", "MODEL", "claude/claude-big", false, "because"], ["model_switch_set", "ALL", "*", true, "because"],
     ["model_switch_set", "PROVIDER", "other", false, "because"]]);
@@ -400,11 +396,11 @@ it("shows model switches and the quota, and changes only what the catalog names"
     change({ target: "ALL:*" }), change({ target: "ALL:*", enabled: "maybe" }), change({ enabled: "off" })]) {
     assert.equal((await send("/models/switch", { form })).status, 409);
   }
-  for (const form of [change({ calls: "150" }), change({ calls: "-1", cents: "80" }), change({ calls: "1.5", cents: "80" }), change({ calls: "150", cents: "lots" })]) {
+  for (const form of [change({ calls: "150" }), change({ calls: "-1", dollars: "0.80" }), change({ calls: "1.5", dollars: "0.80" }), change({ calls: "150", dollars: "lots" }), change({ calls: "150", cents: "80" })]) {
     assert.equal((await send("/models/quota", { form })).status, 409);
   }
   assert.deepEqual(calls, []);
-  assert.equal((await send("/models/quota", { form: change({ calls: "150", cents: "80" }) })).status, 303);
+  assert.equal((await send("/models/quota", { form: change({ calls: "150", dollars: "0.8" }) })).status, 303);
   assert.deepEqual(calls, [["chat_quota_set", 150, 80, "because"]]);
   calls.length = 0;
   for (const form of [change({ key: "GROUP_CHAT_SEND" }), change({ key: "NOPE", enabled: "on" }), change({ enabled: "on" })]) {
@@ -493,7 +489,6 @@ it("on the tailnet, lets in only its own name, people on the list (as their own 
     const refused = await send("/reports", headers);
     assert.deepEqual([refused.status, /不在管理员名单里/.test(refused.body)], [403, true]);
   }
-  assert.equal((await send(`/?token=${TOKEN}`, { Host: "companion-admin", Cookie: `admin_console=${TOKEN}` })).status, 403, "no token way in on the tailnet");
   assert.equal(alice.calls.length + bob.calls.length, 0, "nothing is read for someone not on the list");
 
   assert.equal((await send("/reports", as("Alice@X.test"))).status, 200, "the login is matched without case");
@@ -523,8 +518,8 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.deepEqual(calls, [["costs", "2026-11-01"], ["models"]], "this month (UTC) by default, with today's cap");
   assert.ok(!page.body.includes("http-equiv") && !page.body.includes("自动刷新"), "the page is read again when the browser reloads it");
   assert.ok(!page.body.includes(">刷新<") && !page.body.includes("每天明细"), "no second refresh button, no daily table (it is in the export)");
-  assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">3\.45 USD<\/div>/);
-  assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
+  assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">\$3\.45<\/div>/);
+  assert.match(page.body, /每天上限 \$20\.00 · 用了 17%/);
   assert.match(page.body, /<summary>改金额<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
   assert.match(page.body, /name="dollars" required inputmode="decimal" size="6" value="20">/);
   assert.match(page.body, /<a href="\/costs" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
@@ -565,8 +560,12 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   const october = await quiet.send("/costs?month=2026-10&ok=1");
   assert.deepEqual(quiet.calls, [["costs", "2026-10-01"]], "a past month: no cap, no reloading");
   assert.ok(!october.body.includes("http-equiv") && !october.body.includes("自动刷新"));
-  assert.match(october.body, /这个月总花费<\/div><div class="big">\$0\.00/);
-  assert.match(october.body, /这个月还没有按用量的花费/);
+  assert.match(october.body, /2026-10 还没有任何用量,也不算固定月费/, "a month before the App started costs nothing");
+  assert.match(october.body, /操作已完成/);
+  assert.match(october.body, /<input type="month" name="month" value="2026-10" max="2026-11" required>/, "no month after this one to pick");
+  await quiet.send("/costs?month=2027-03");
+  await quiet.send("/stats?month=2027-03");
+  assert.deepEqual(quiet.calls.slice(-3), [["costs", "2026-11-01"], ["models"], ["activity", "2026-11-01"]], "a month to come is read as this month");
   assert.ok(!october.body.includes("估算"), "a past month has no estimate: the servers then are not known");
   assert.ok(!october.body.includes("card vendor\"><div class=\"vhead\"><span><i style=\"background:#2a78d6"), "no model company without calls");
   assert.match((await quiet.send("/costs/settings")).body, /还没有填/);
@@ -612,6 +611,9 @@ it("shows a year as a ledger, and exports a month or a year as an Excel file", a
   assert.match(year.body, /<th class="num">MiniMax<\/th><th class="num">claude<\/th><th class="num">合计<\/th>/);
   assert.match(year.body, /<td><b>全年<\/b><\/td><td class="num"><b>\$55\.00<\/b><\/td><td class="num"><b>\$37\.95<\/b><\/td>/);
   assert.match(year.body, /href="\/costs\/export\.xlsx\?year=2026"/);
+  assert.match(year.body, /href="\/costs\?year=2025">← 2025/, "used since January: the year before may have been used too");
+  const lateStart = await start({ costs: { ...month, days: [], models: { ...month.models, byDay: [], byCompanion: [] } } });
+  assert.ok(!(await lateStart.send("/costs?year=2026")).body.includes("← 2025"), "nothing used this year: nothing to look for before it");
   assert.ok(!year.body.includes("http-equiv") && !year.body.includes("2027 →"));
   for (const [asked, months] of [["2025", 12], ["1999", 11], ["2099", 11], ["x", 11]] as const) {
     const other = await start({ costs: month });

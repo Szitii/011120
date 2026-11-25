@@ -17,7 +17,6 @@
     "dev:mobile:api": "node --experimental-strip-types backend/src/dev/mobile-http-server.ts",
     "test:mobile:residency": "node --experimental-strip-types backend/scripts/smoke-companion-residency.ts",
     "start:mobile:api": "node --experimental-strip-types backend/src/http/supabase-mobile-server.ts",
-    "admin": "node --experimental-strip-types backend/scripts/admin-console.ts",
     "chat:try": "node --experimental-strip-types backend/scripts/chat-model-try.ts"
   },
   "devDependencies": {
