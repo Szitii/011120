@@ -176,8 +176,10 @@ export function createAdminServer(options: AdminServerOptions): Server {
       const thisMonth = `${now().toISOString().slice(0, 7)}-01`, month = dayOr(`${query.get("month")}-01`, thisMonth);
       const costs = await db.call<Costs>("costs", month);
       // Today's spend against the daily cap belongs to the running month only; so does reading itself again.
-      const cap = month === thisMonth ? (await db.call<Models>("models")).cap : null;
-      return costsPage(zone, now(), costs, cap, cap !== null && query.get("auto") !== "off", done);
+      // So does the Fly estimate, from the servers as they are now.
+      const [cap, fly] = month === thisMonth
+        ? await Promise.all([db.call<Models>("models").then(m => m.cap), hosts(options.fly ?? null)]) : [null, null];
+      return costsPage(zone, now(), costs, cap, cap !== null && query.get("auto") !== "off", done, fly);
     }
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;

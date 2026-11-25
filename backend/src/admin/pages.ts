@@ -3,7 +3,7 @@
  * database goes through `html`, which escapes it; only values built by `html` itself are trusted.
  */
 
-import type { Hosts } from "./fly.ts";
+import { flyMonthCents, machineCents, volumeCents, type Hosts } from "./fly.ts";
 
 // ---------- what the console functions return (schema companion_admin) ----------
 
@@ -176,7 +176,8 @@ svg.chart .grid{stroke:#eef0f3}svg.chart rect.hit{fill:transparent}svg.chart rec
 .legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:#4b5563;margin:0 0 6px}
 .legend i,.vhead i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px}
 .vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:8px 0 16px}.vendors .card{margin:0}
-.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines td{padding:5px 0;border-bottom:1px solid #f3f4f6}table.lines tr:hover td{background:none}
+.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:6px 0;border-bottom:1px solid #f3f4f6}
+table.lines td:first-child{white-space:normal;word-break:break-word}table.lines td.num{width:88px}table.lines .muted{display:block;font-size:12px}table.lines tr:hover td{background:none}
 .sub{margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}svg.spark{width:100%;height:36px;display:block;margin:4px 0}`;
 
 const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户"], ["/stats", "运营数据"], ["/costs", "花费"],
@@ -529,7 +530,14 @@ const reloadOf = (self: string, auto: boolean) => auto ? `${RELOAD_SECONDS};url=
 const costsTabs = (year: boolean, month: string) => html`<span class="seg"><a class="btn ${year ? "" : "on"}" href="/costs?month=${month}">按月</a><a class="btn ${
   year ? "on" : ""}" href="/costs?year=${month.slice(0, 4)}">按年</a></span>`;
 
-function vendorCard(v: Vendor, total: number, c: Costs, days: readonly string[]): Safe {
+/** The Fly estimate under its card: a month at today's machine sizes, from Fly's list prices. Not in any total. */
+const FLY_ESTIMATE_NOTE = "按 Fly 公布的单价和现在每台机器的配置算,运行中的机器按整月算。不含流量和 IP 等小额费用,也没扣 Fly 每月的免费额度;以 Fly 账单为准。";
+function flyEstimate(h: Hosts): Safe {
+  return h.ok ? html`<div class="sub"><div>估算:按现在的配置,一整月约 <b>${usd(flyMonthCents(h))}</b> <span class="tag">估算</span></div>
+<div class="muted">${FLY_ESTIMATE_NOTE}不计入上面的总花费。</div></div>` : html`<div class="sub muted">估算不出:${h.why}</div>`;
+}
+
+function vendorCard(v: Vendor, total: number, c: Costs, days: readonly string[], fly: Hosts | null): Safe {
   const p = c.prices, used = p.planPoints > 0 ? c.totals.speakPoints / p.planPoints : 0;
   return html`<div class="card vendor"><div class="vhead"><span><i style="background:${vendorColor(v.key)}"></i><b>${v.name}</b></span>
 <span class="muted">占 ${percent(v.cents, total)}</span></div><div class="big">${usd(v.cents)}</div>
@@ -541,14 +549,16 @@ ${v.key === "minimax" ? html`<div class="sub"><div>语音包月点数:已用 ${c
 ${v.models.map(m => html`<div class="sub model"><div class="mhead"><b>${m.model}</b><b>${m.currency === "USD" ? usd(m.costMinor) : money(m.costMinor, m.currency)}</b></div>
 ${spark(days.map(d => m.perDay.get(d) ?? 0), vendorColor(v.key))}
 <div class="muted">调用 ${count(m.calls)} 次${m.failed > 0 ? ` · 未成功 ${count(m.failed)}` : ""} · 输入 ${compact(m.inputTokens)} token · 输出 ${compact(m.outputTokens)} token</div></div>`)}
+${v.key === "fly" && fly !== null ? flyEstimate(fly) : ""}
 ${v.key === "supabase" || v.key === "fly" ? html`<p class="muted"><a href="/system">${v.key === "supabase" ? "数据库" : "主机"}现在的状态 →</a></p>` : ""}</div>`;
 }
 
 /**
  * Everything the platform paid for in one month: the total and today first, then a chart, then each company.
  * `cap` is today's platform spend and its ceiling, shown only for the running month; `auto` makes the page reload itself.
+ * `fly` is the servers as they are now, for an estimate under Fly's card (running month only).
  */
-export function costsPage(zone: string, now: Date, c: Costs, cap: Models["cap"] | null, auto: boolean, done: boolean): string {
+export function costsPage(zone: string, now: Date, c: Costs, cap: Models["cap"] | null, auto: boolean, done: boolean, fly: Hosts | null = null): string {
   const t = c.totals, self = `/costs?month=${c.month}`;
   const vendors = vendorsOf(c), days = daysOf(c.from, c.to, now);
   const usage = t.modelCents + t.hearCents + t.speakOverCents, total = usage + t.fixedCents;
@@ -571,7 +581,7 @@ ${cap.enabled ? html`${meter(capShare)}<div class="muted">每天上限 ${money(c
 ${panel("每天按用量的花费", html`${series.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : lineChart(days, series, usd, d => d.slice(5))}
 <p class="muted">鼠标停在某一天上,能看到那天每家花了多少。固定月费和语音包月不按天算,不在图里。</p>`)}
 <h2>按厂商</h2>
-<div class="vendors">${vendors.map(v => vendorCard(v, total, c, days))}</div>
+<div class="vendors">${vendors.map(v => vendorCard(v, total, c, days, fly))}</div>
 ${panel("每天明细", c.days.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : html`<details class="edit"><summary>展开每天的表</summary><div class="scroll"><table>
 <tr><th>日期</th><th class="num">AI 模型</th><th class="num">模型调用</th><th class="num">语音转文字</th><th class="num">识别时长</th>
 <th class="num">文字转语音(点数)</th><th class="num">当天合计</th></tr>${c.days.map(d => html`
@@ -705,14 +715,21 @@ export function systemPage(zone: string, now: Date, s: SystemInfo, h: Hosts, aut
 <div class="muted">现在打开的连接 / 最多能开的</div></div>
 <div class="card ${h.ok && running < h.machines.length ? "warn" : ""}"><div class="muted">主机</div>
 <div class="big">${h.ok ? `${running} / ${h.machines.length}` : "—"}</div><div class="muted">${h.ok ? "在运行的机器 / 全部机器" : "读不到"}</div></div>
+${h.ok ? html`<div class="card"><div class="muted">Fly 一整月约 <span class="tag">估算</span></div><div class="big">${usd(flyMonthCents(h))}</div>
+<div class="muted">按现在的配置 · 每台的明细在下面</div></div>` : ""}
 </div>
-${panel("主机(Fly.io)", h.ok ? html`<div class="scroll"><table><tr><th>应用</th><th>机器</th><th>状态</th><th>地区</th><th>配置</th><th>版本</th><th>最近一次停止</th></tr>
+${panel("主机(Fly.io)", h.ok ? html`<div class="scroll"><table><tr><th>应用</th><th>机器</th><th>状态</th><th>地区</th><th>配置</th><th class="num">一整月约</th><th>版本</th><th>最近一次停止</th></tr>
 ${h.machines.map(m => html`<tr><td>${m.app}</td><td>${m.name} <span class="muted">${m.id}</span></td>
 <td><span class="tag ${m.state === "started" ? "" : "bad"}">${word(MACHINE_STATE, m.state)}</span></td><td>${m.region}</td>
-<td>${m.cpus === null ? "" : `${m.cpus} 核`}${m.memoryMb === null ? "" : ` · ${m.memoryMb} MB 内存`}</td><td>${m.image}</td>
+<td>${m.cpus === null ? "" : `${m.cpus} 核`}${m.memoryMb === null ? "" : ` · ${m.memoryMb} MB 内存`}</td>
+<td class="num">${machineCents(m) === null ? html`<span class="muted">停止时只收磁盘</span>` : usd(machineCents(m)!)}</td><td>${m.image}</td>
 <td>${m.lastExit === null ? html`<span class="muted">没有记录</span>` : html`${time(zone, m.lastExit.at)}${m.lastExit.code === null ? "" : ` · 退出码 ${m.lastExit.code}`}${
     m.lastExit.oom ? html` <span class="tag bad">内存不够被杀掉</span>` : ""}`}</td></tr>`)}</table></div>
-<p class="muted">“最近一次停止”包括每次部署时的正常重启;如果写着“内存不够被杀掉”,说明机器内存太小了。</p>`
+${h.volumes.length === 0 ? "" : html`<div class="scroll"><table><tr><th>应用</th><th>磁盘</th><th>地区</th><th class="num">大小</th><th class="num">一整月约</th></tr>
+${h.volumes.map(v => html`<tr><td>${v.app}</td><td>${v.name} <span class="muted">${v.id}</span></td><td>${v.region}</td>
+<td class="num">${v.sizeGb} GB</td><td class="num">${usd(volumeCents(v))}</td></tr>`)}</table></div>`}
+<p class="muted">“最近一次停止”包括每次部署时的正常重启;如果写着“内存不够被杀掉”,说明机器内存太小了。</p>
+<p class="muted">费用是估算:${FLY_ESTIMATE_NOTE}</p>`
     : html`<p class="err">${h.why}</p>`)}
 ${panel("数据库(Supabase 免费版)", html`<p>PostgreSQL ${s.version} · 上次重启 ${time(zone, s.startedAt)}</p>
 <div class="scroll"><table><tr><th>最大的表</th><th class="num">占用</th><th class="num">大约行数</th></tr>${s.tables.map(t => html`
