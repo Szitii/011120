@@ -21,7 +21,9 @@ export interface ChatMessage {
   /** null when the reply failed or was blocked, and for an action. */
   body: string | null;
   /**
-   * Set when the Owner did a home-room action (show it as a grey line, e.g. "你摸了摸 TA 的头"); then body is null.
+   * A home-room action; then body is null. Show it as a grey line by who did it: companionId null is
+   * the Owner ("你摸了摸 TA 的头"), otherwise that Companion did it to the Owner ("TA 摸了摸你的头").
+   * A Companion decides by itself to do one while it replies in a one-to-one chat, at most one per reply.
    * The server always sends it (null for ordinary messages); optional here so app code written before it still compiles.
    */
   action?: CompanionAction | null;
@@ -76,6 +78,8 @@ export interface PlatformFeatures {
   groupChatSend: boolean;
   /** Connecting the Owner's own key or agent (PUT .../connection). Off: 501. */
   connections: boolean;
+  /** The Owner's voice messages (POST /v0/chats/{id}/voice); the same as `input` in GET /v0/voices. Off: 503. */
+  voiceInput?: boolean;
 }
 
 /** GET /v0/badges: every unread count for the tab badges. */
@@ -153,6 +157,18 @@ export interface ChatSettings {
    * Always sent; on PUT, leaving it out keeps the current voice.
    */
   voice?: string | null;
+  /**
+   * What the Companion calls the Owner (TA 怎么称呼你), 1 to 20 characters. null (default): the
+   * Owner's community display name, or no name when there is none.
+   * Always sent; on PUT, leaving it out keeps the current one.
+   */
+  preferredUserTitle?: string | null;
+  /**
+   * 自动记忆: the Companion notes down by itself what is worth remembering from the one-to-one chat,
+   * as memories with source AUTO. OFF (default); SOMETIMES: after every 30 messages of the Owner;
+   * OFTEN: after every 10. Always sent; on PUT, leaving it out keeps the current one.
+   */
+  autoMemory?: "OFF" | "SOMETIMES" | "OFTEN";
   revision: number;
 }
 
@@ -256,12 +272,13 @@ export interface DiaryWriteResult {
 /**
  * 长期记忆: one thing a Companion remembers, used when it chats and writes its diary. Only the Owner
  * adds memories (by hand, or by approving them one by one when importing a card), and sees and
- * deletes all of them. IMPORT: came from an approved card. OWNER: added by hand.
+ * deletes all of them. IMPORT: came from an approved card. OWNER: added by hand. AUTO: the Companion
+ * noted it down itself (ChatSettings.autoMemory). More sources may come: show an unknown one plainly.
  */
 export interface CompanionMemory {
   id: string;
   body: string;
-  source: "IMPORT" | "OWNER";
+  source: "IMPORT" | "OWNER" | "AUTO";
   createdAt: string;
 }
 

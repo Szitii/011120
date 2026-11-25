@@ -5,14 +5,15 @@
  * budget) and settled with the real usage after (chat_settle). A turn that may stay quiet first
  * asks the cheap decision model "should it speak?"; only a yes pays for the reply model.
  * Diary entries are booked and settled the same way (diary_reserve, reason DIARY_ENTRY), and so are
- * the community posts a Companion writes on its own (agent_auto_reserve, reason COMMUNITY_POST).
+ * the community posts a Companion writes on its own (agent_auto_reserve, reason COMMUNITY_POST) and
+ * the memories it notes down (memory_auto_reserve, reason MEMORY_CONSOLIDATION, on the cheap model).
  */
 import type { CatalogModel, ChatCatalog } from "./models.ts";
 import { PRICING_VERSION } from "./models.ts";
-import type { Booking, ChatClaim, ChatPort, DiaryJob, PostJob, ReservationDecision } from "./port.ts";
-import { decisionPrompt, diaryPrompt, parseDecision, parsePost, parseReply, postPrompt, replyPrompt } from "./prompt.ts";
+import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob, ReservationDecision } from "./port.ts";
+import { decisionPrompt, diaryPrompt, memoryPrompt, parseDecision, parseMemories, parsePost, parseReply, postPrompt, replyPrompt } from "./prompt.ts";
 import type { CallModel, ModelResult } from "./providers.ts";
-import type { Answer, ChatModel, DiaryAnswer, PostAnswer } from "./replies.ts";
+import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer } from "./replies.ts";
 
 /** Within the ledger's limits for these reasons (16000 input; 2000 reply, 100 decision, 2000 diary output tokens). */
 const MAX_INPUT_TOKENS = 16_000;
@@ -20,6 +21,9 @@ const REPLY_TOKENS = 2_000;
 const DECIDE_TOKENS = 100;
 const DIARY_TOKENS = 2_000;
 const POST_TOKENS = 1_000;
+/** The ledger allows this reason 8000 input and 1000 output tokens. */
+const MEMORY_INPUT_TOKENS = 8_000;
+const MEMORY_TOKENS = 300;
 
 type Failed = { failed: "DISABLED" | "QUOTA" };
 /** Books one call in the ledger, for a chat turn or a diary entry. */
@@ -74,6 +78,17 @@ export class PlatformChatModel implements ChatModel {
     return result.refused ? { refused: true } : parsePost(result.text);
   }
 
+  /** On the cheap decision model when there is one (else the default): notes are short and need no fine writing. */
+  async memory(job: MemoryJob, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<MemoryAnswer> {
+    const model = this.#catalog.decisionModel() ?? this.#catalog.defaultModel();
+    if (model === undefined) return { failed: "UNAVAILABLE" };
+    const book: Book = booking => port.memoryReserve(job.companion.companionId, job.claimId, booking);
+    const result = await this.#withFallback(model,
+      m => this.#run(port, book, m, memoryPrompt(job), MEMORY_TOKENS, signal, MEMORY_INPUT_TOKENS));
+    if ("failed" in result) return result;
+    return result.refused ? { refused: true } : { memories: parseMemories(result.text) };
+  }
+
   /** One booked call for a diary entry or a post, with the Companion's model or the default. */
   async #write(chosen: string | null, port: ChatPort, book: Book, prompt: { system: string; user: string }, maxTokens: number,
     signal: AbortSignal): Promise<ModelResult | Failed | { failed: "UNAVAILABLE" }> {
@@ -96,9 +111,9 @@ export class PlatformChatModel implements ChatModel {
    * whose provider reported no usage, is charged its whole reservation.
    */
   async #run(port: ChatPort, book: Book, model: CatalogModel,
-    prompt: { system: string; user: string }, maxTokens: number, signal: AbortSignal): Promise<ModelResult | Failed> {
+    prompt: { system: string; user: string }, maxTokens: number, signal: AbortSignal, maxInput = MAX_INPUT_TOKENS): Promise<ModelResult | Failed> {
     // About one token per character for Chinese, fewer for other text: a safe upper estimate.
-    const inputTokens = Math.min(MAX_INPUT_TOKENS, prompt.system.length + prompt.user.length);
+    const inputTokens = Math.min(maxInput, prompt.system.length + prompt.user.length);
     const costMinor = Math.ceil(this.#catalog.cost(model, inputTokens, maxTokens));
     const booked = await book({
       provider: model.provider, model: model.model, pricingVersion: PRICING_VERSION, inputTokens, outputTokens: maxTokens, costMinor,

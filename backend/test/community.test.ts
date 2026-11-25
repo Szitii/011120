@@ -75,6 +75,28 @@ it("takes who can see a post and who is mentioned, and keeps a plain post's hash
   }
 });
 
+it("takes the images of a new post: uploaded files named by their path, nine at most", async () => {
+  const send = async (path: string, body: unknown) => {
+    const response = await handleCommunityRequest(request(path, "POST", body), session, "t");
+    assert.equal(response?.status, 201);
+    return commands.at(-1)!;
+  };
+  const file = (n: number, type = "jpg") => `${ownerId}/00000000-0000-4000-8000-${String(n).padStart(12, "0")}.${type}`;
+  assert.equal((await send("posts", { body: "hi" })).media, undefined);
+  assert.deepEqual((await send("posts", { body: "hi", media: [] })).media, []);
+  assert.deepEqual((await send("posts", { body: "hi", media: [{ path: file(1), width: 1080, height: 1440, alt: " 晚霞 " }, { path: file(2, "webp"), alt: "  " }] })).media,
+    [{ path: file(1), width: 1080, height: 1440, alt: "晚霞" }, { path: file(2, "webp") }]);
+  assert.equal((await send("posts", { body: "hi", media: Array.from({ length: 9 }, (_, i) => ({ path: file(i) })) })).media!.length, 9);
+  for (const media of ["a.jpg", [file(1)], [{ path: "a.jpg" }], [{ path: `../${file(1)}` }], [{ path: file(1, "gif") }], [{ path: file(1).toUpperCase() }],
+    [{ path: file(1), width: 0 }], [{ path: file(1), height: 1.5 }], [{ path: file(1), width: 100_000 }], [{ path: file(1), alt: 7 }],
+    [{ path: file(1), alt: "字".repeat(201) }], [{ path: file(1), url: "https://x" }], [{ path: file(1) }, { path: file(1) }],
+    Array.from({ length: 10 }, (_, i) => ({ path: file(i) }))]) {
+    await assert.rejects(handleCommunityRequest(request("posts", "POST", { body: "x", media }), session, "t"), { code: "INVALID_INPUT" }, JSON.stringify(media).slice(0, 90));
+  }
+  await assert.rejects(handleCommunityRequest(request(`posts/${target}/comments`, "POST", { body: "x", media: [] }), session, "t"), { code: "INVALID_INPUT" },
+    "comments carry no images");
+});
+
 it("likes and unlikes a post as the chosen identity, without a retry key", async () => {
   const bare = (method: string, body?: unknown): MvpHttpRequest => ({ method, url: `/v0/community/posts/${target}/like?${query}`,
     headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body }) });
@@ -159,8 +181,11 @@ it("parameterizes all PostgreSQL community inputs and validates payload shape", 
   assert.equal(calls[0]!.values[1], ownerId);
   // A post goes through the wrapper that also takes the visibility and the mentions.
   assert.deepEqual([calls[1]!.text, calls[1]!.values.slice(2, 6)],
-    ["select public.community_publish($1,$2,$3,$4,$5,$6::uuid[],$7,$8) as payload", [null, "hello", null, []]]);
+    ["select public.community_publish($1,$2,$3,$4,$5,$6::uuid[],$7,$8,$9::jsonb) as payload", [null, "hello", null, []]]);
+  assert.equal(calls[1]!.values[8], null, "no images named: null");
   assert.ok(!calls[1]!.text.includes("hello"));
+  await adapter.command({ ...commands[0]!, media: [{ path: "a/b.jpg", width: 3 }] });
+  assert.equal(calls.at(-1)!.values[8], '[{"path":"a/b.jpg","width":3}]');
   await adapter.command({ ...commands[0]!, action: "COMMENT", targetId: target, mentions: [ownerId] });
   assert.deepEqual(calls.at(-1)!.values.slice(2, 6), [target, "hello", null, [ownerId]]);
   await adapter.command({ ...commands[0]!, action: "FOLLOW", targetId: target, body: null });

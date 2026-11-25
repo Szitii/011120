@@ -22,6 +22,12 @@ export interface ChatClaim {
     /** A voice message (the body is what was said). */
     voice?: boolean;
   }[];
+  /** The Owner's time zone (an IANA name); left out by an older database: Asia/Shanghai. */
+  timeZone?: string;
+  /** What the Companion calls the Owner: the chat setting, else their community name; null or left out: no name. */
+  ownerName?: string | null;
+  /** true: in this reply it may do one home-room action to the Owner (one-to-one chats, when switched on). */
+  canAct?: boolean;
 }
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
@@ -54,6 +60,8 @@ export interface DiaryJob {
   messages: { companionId: string | null; body: string | null; action: CompanionAction | null; sentAt: string }[];
   /** Its own community posts and comments, oldest first. */
   posts: { kind: "POST" | "COMMENT"; body: string; at: string }[];
+  timeZone?: ChatClaim["timeZone"];
+  ownerName?: ChatClaim["ownerName"];
 }
 
 /** A community post to write on its own (agent_auto_begin said WRITE). */
@@ -69,6 +77,21 @@ export interface PostJob {
   /** A few recent public posts by others, oldest first. */
   others: { author: string; body: string; at: string }[];
 }
+
+/** Memories to note down from the one-to-one chat (memory_auto_begin said WRITE). */
+export interface MemoryJob {
+  status: "WRITE";
+  claimId: string;
+  companion: Pick<ChatClaim["companion"], "companionId" | "displayName">;
+  /** The chat since the last time, oldest first; companionId null is the Owner. */
+  messages: { companionId: string | null; body: string; action: null; sentAt: string }[];
+  /** What it already remembers, newest first. */
+  memories: string[];
+  timeZone?: ChatClaim["timeZone"];
+}
+
+/** memory_auto_begin: a job, or why nothing is noted down now. */
+export type MemoryStart = MemoryJob | { status: "OFF" | "WRITING" | "NOT_DUE" };
 
 /** agent_auto_begin: a job, or why nothing is written now. */
 export type PostStart = PostJob | { status: "OFF" | "WRITING" } | { status: "NOT_DUE"; nextAt: string }
@@ -129,14 +152,17 @@ export interface ChatPort {
   removeConnection(companionId: string): Promise<unknown>;
   /** Server only: the connection with its sealed secret, or null for the platform. */
   connection(companionId: string): Promise<Connection | null>;
+  /** A setting left out (voice aside, which the caller fills in) keeps its stored value. */
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown>;
   /** Server only: the next reply to write, or null. */
   claim(chatId: string): Promise<ChatClaim | null>;
   /**
    * Server only: `bodies` are 1 to 3 messages for SENT, else null; `clips` (SENT only) has one entry
-   * per body, a Clip for a voice message or null for text. False when the claim is stale.
+   * per body, a Clip for a voice message or null for text; `action` (SENT only) is a home-room action
+   * the Companion does first, and then `bodies` may be empty. False when the claim is stale.
    */
-  finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[]): Promise<boolean>;
+  finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[],
+    action?: CompanionAction): Promise<boolean>;
   /** Server only: how many voice messages the Owner may still get from Companions today, and send. */
   voiceLeft(): Promise<{ companion: number; owner: number }>;
   /** Server only: the Owner's voice message, `body` being what the server recognised in `recording`. */
@@ -171,4 +197,10 @@ export interface ChatPort {
   postReserve(runId: string, claimId: string, booking: Booking): Promise<ReservationDecision>;
   /** Server only: hand in the text (body), or end the run with nothing to say or as failed. Null when the run was given up. */
   postFinish(runId: string, claimId: string, body: string | null, nothing: boolean): Promise<PostOutcome | null>;
+  /** Server only: start noting memories down if enough was said since the last time. */
+  memoryBegin(companionId: string): Promise<MemoryStart>;
+  /** Server only: book the model call for the attempt (like reserve). */
+  memoryReserve(companionId: string, claimId: string, booking: Booking): Promise<ReservationDecision>;
+  /** Server only: keep the sentences (0 to 2), or null when the attempt failed. False when it was given up. */
+  memoryFinish(companionId: string, claimId: string, bodies: string[] | null): Promise<boolean>;
 }

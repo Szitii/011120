@@ -91,18 +91,27 @@ function text(value: unknown, max: number): string {
 }
 
 /**
- * Every setting is required but `voice`; `model` is null (platform default) or an id from the
- * catalog; `voice` is null (text only) or an id from the voice catalog, and left out keeps the current one.
+ * Every setting is required but `voice`, `preferredUserTitle` and `autoMemory`, which keep their
+ * current value when left out. `model` is null (platform default) or an id from the catalog;
+ * `voice` is null (text only) or an id from the voice catalog; `preferredUserTitle` is null or
+ * empty (the default) or 1 to 20 characters on one line.
  */
 function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined, voices: Voices | undefined): ChatSettings {
-  const { groupActivity, companionInteraction, model, voice, revision } =
-    body(request, ["groupActivity", "companionInteraction", "model", "voice", "revision"]);
+  const { groupActivity, companionInteraction, model, voice, preferredUserTitle: title, autoMemory, revision } =
+    body(request, ["groupActivity", "companionInteraction", "model", "voice", "preferredUserTitle", "autoMemory", "revision"]);
   if (!["QUIET", "NORMAL", "ACTIVE"].includes(groupActivity as string)
     || !["NONE", "RARE", "NORMAL", "LIVELY"].includes(companionInteraction as string)
     || !(model === null || (typeof model === "string" && catalog?.has(model)))
     || !(voice === undefined || voice === null || (typeof voice === "string" && voices?.catalog.find(voice) !== undefined))
+    || !(title === undefined || title === null || (typeof title === "string" && Array.from(title.trim()).length <= 20
+      && !/[\p{Cc}\u2028\u2029]/u.test(title.trim())))
+    || !(autoMemory === undefined || ["OFF", "SOMETIMES", "OFTEN"].includes(autoMemory as string))
     || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
-  return { groupActivity, companionInteraction, model, ...(voice === undefined ? {} : { voice }), revision } as ChatSettings;
+  return {
+    groupActivity, companionInteraction, model, ...(voice === undefined ? {} : { voice }),
+    ...(title === undefined ? {} : { preferredUserTitle: (title as string | null)?.trim() || null }),
+    ...(autoMemory === undefined ? {} : { autoMemory }), revision,
+  } as ChatSettings;
 }
 
 /** Audio bytes, or the part a Range header asks for (players seek and stream with it). */
@@ -124,11 +133,16 @@ function audio(request: MvpHttpRequest, clip: { mime: string; bytes: Uint8Array 
   };
 }
 
-function voiceList(voices: Voices | undefined): VoiceList {
+/** Whether the Owner can send voice messages now: speech recognition is configured and the operators' switch is on. */
+async function hears(voices: Voices | undefined, port: ChatPort): Promise<boolean> {
+  return voices?.listening === true && (await port.features() as { voiceInput?: unknown }).voiceInput === true;
+}
+
+async function voiceList(voices: Voices | undefined, port: ChatPort): Promise<VoiceList> {
   return {
     items: (voices?.catalog.voices ?? []).map(v => ({ id: v.id, name: v.name, gender: v.gender, description: v.description })),
     available: voices?.available === true,
-    input: voices?.listening === true,
+    input: await hears(voices, port),
   };
 }
 
@@ -247,11 +261,12 @@ export async function handleChatRequest(
   if (featuresRoute) {
     if (method !== "GET") return notFound();
     const switches = await port.features() as Omit<PlatformFeatures, "connections">;
-    return response(200, { ...switches, connections: connections !== undefined } satisfies PlatformFeatures);
+    return response(200, { ...switches, voiceInput: switches.voiceInput === true && replies.voices?.listening === true,
+      connections: connections !== undefined } satisfies PlatformFeatures);
   }
   if (voicesRoute) {
     if (method !== "GET") return notFound();
-    if (path.length === 2) return response(200, voiceList(replies.voices));
+    if (path.length === 2) return response(200, await voiceList(replies.voices, port));
     const voice = replies.voices?.available ? replies.voices.catalog.find(path[2]!) : undefined;
     if (voice === undefined) return notFound();
     // A sample made now (not one kept from before) used MiniMax points: book them like a voice message.
@@ -377,7 +392,7 @@ export async function handleChatRequest(
     const said = recording(request);
     const key = retryKey(request, session.ownerId);
     const voices = replies.voices;
-    if (voices === undefined || !voices.listening) return response(503, { code: "VOICE_UNAVAILABLE" });
+    if (voices === undefined || !await hears(voices, port)) return response(503, { code: "VOICE_UNAVAILABLE" });
     // Checked before paying for recognition; the database checks again when it stores the message.
     if ((await port.voiceLeft()).owner <= 0) return response(429, { code: "VOICE_LIMIT" });
     let heard: Heard;

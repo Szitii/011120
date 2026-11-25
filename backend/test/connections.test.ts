@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { LookupAddress } from "node:dns";
 import { it } from "node:test";
 import { handleChatRequest } from "../src/chat/http.ts";
-import type { ChatClaim, ChatPort, DiaryJob } from "../src/chat/port.ts";
+import type { ChatClaim, ChatPort, DiaryJob, MemoryJob } from "../src/chat/port.ts";
 import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { checkUrl, createPostJson, isPublicAddress, publicLookup, type PostJson } from "../src/connections/guard.ts";
 import { checkConnection, ConnectedChatModel, Connections, testConnection, type Connection, type ConnectionCheck } from "../src/connections/model.ts";
@@ -201,6 +201,21 @@ it("answers through the Owner's key or agent, and through the platform without a
   assert.deepEqual(await new ConnectedChatModel(undefined, box, async () => ({ status: 200, body: { choices: [{ message: { content: "" },
     finish_reason: "content_filter" }] } })).diary(job, { port: storePort(byok), signal }), { refused: true });
   await assert.rejects(new ConnectedChatModel(undefined, box, post("半", "length")).diary(job, { port: storePort(byok), signal }), /cut off/);
+
+  // Memory notes: through the Owner's key; an agent keeps its own memories and is not asked.
+  const notes: MemoryJob = { status: "WRITE", claimId: "c", companion: job.companion, memories: [],
+    messages: [{ companionId: null, body: "我怕黑", action: null, sentAt: "2026-11-25T02:00:00Z" }] };
+  sent.length = 0;
+  assert.deepEqual(await new ConnectedChatModel(undefined, box, post("主人怕黑")).memory(notes, { port: storePort(byok), signal }), { memories: ["主人怕黑"] });
+  assert.match(sent[0]!.body.messages[1]!.content, /【主人】我怕黑/);
+  sent.length = 0;
+  assert.deepEqual(await new ConnectedChatModel(devChatModel, box, post("x")).memory(notes, { port: storePort(external), signal }), { memories: [] });
+  assert.equal(sent.length, 0);
+  assert.deepEqual(await new ConnectedChatModel(undefined, box, post("x")).memory(notes, { port: storePort(null), signal }), { failed: "UNAVAILABLE" });
+  assert.match((await new ConnectedChatModel(devChatModel, box, post("x")).memory(notes, { port: storePort(null), signal }) as { memories: string[] }).memories[0]!, /开发环境假记忆/);
+  assert.deepEqual(await new ConnectedChatModel(undefined, box, post("x")).memory(notes, { port: storePort(byok, false), signal }), { failed: "DISABLED" });
+  assert.deepEqual(await new ConnectedChatModel(undefined, box, async () => ({ status: 200, body: { choices: [{ message: { content: "" },
+    finish_reason: "content_filter" }] } })).memory(notes, { port: storePort(byok), signal }), { refused: true });
 });
 
 it("limits connection tests per Owner", () => {

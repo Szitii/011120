@@ -4,7 +4,7 @@ import { handleChatRequest } from "../src/chat/http.ts";
 import { sha256 } from "../src/companion-import/canonical.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { ChatReplies, devChatModel, type ChatModel } from "../src/chat/replies.ts";
-import type { ChatClaim, ChatOutcome, ChatPort } from "../src/chat/port.ts";
+import type { ChatClaim, ChatOutcome, ChatPort, MemoryJob, MemoryStart } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
 import { PostgresPersistenceError, type SqlExecutor } from "../src/persistence/postgres/types.ts";
@@ -71,6 +71,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     postBegin: async () => ({ status: "OFF" }),
     postReserve: async () => ({ decision: "STALE" }),
     postFinish: async () => null,
+    memoryBegin: async (...args) => { calls.push(["memoryBegin", ...args]); return { status: "OFF" }; },
+    memoryReserve: async () => ({ decision: "STALE" }),
+    memoryFinish: async (...args) => { calls.push(["memoryFinish", ...args]); return true; },
     voiceLeft: async () => ({ companion: 0, owner: 0 }),
     voiceUsed: async (...args) => { calls.push(["voiceUsed", ...args]); },
     sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
@@ -174,9 +177,9 @@ it("routes read state, badges and the anniversary", async () => {
 it("tells the app which features it may offer", async () => {
   const { port, calls } = fakePort();
   const off = await handleChatRequest(request("features"), session(port), "trace", replies);
-  assert.deepEqual(off?.body, { groupChatCreate: false, groupChatSend: true, connections: false });
+  assert.deepEqual(off?.body, { groupChatCreate: false, groupChatSend: true, voiceInput: false, connections: false });
   const on = await handleChatRequest(request("features"), session(port), "trace", replies, undefined, {} as Connections);
-  assert.deepEqual(on?.body, { groupChatCreate: false, groupChatSend: true, connections: true });
+  assert.deepEqual(on?.body, { groupChatCreate: false, groupChatSend: true, voiceInput: false, connections: true });
   assert.equal(await refusal(port, request("features", "POST")), "NOT_FOUND");
   assert.deepEqual(calls, [["features"], ["features"]]);
 });
@@ -354,6 +357,60 @@ it("writes queued replies through the model and the safety scan", async () => {
     assert.equal(await new ChatReplies(chosen).drain(chatId, port), 1);
     assert.deepEqual(finished, [[messageId, outcome, bodies]], JSON.stringify(claim.history));
   }
+  // A Companion's own home-room action: only where the turn allows one; its mark never reaches the text.
+  const act = async (claim: ChatClaim, messages: string[]) => {
+    const sent: unknown[][] = [];
+    const port = { ...fakePort([claim]).port, finish: async (...args: unknown[]) => { sent.push(args.slice(2)); return true; } } as ChatPort;
+    await new ChatReplies(model({ messages })).drain(chatId, port);
+    return sent[0];
+  };
+  const may = turn({ direct: true, canAct: true });
+  assert.deepEqual(await act(may, ["[动作:抱抱]", "辛苦啦"]), ["SENT", ["辛苦啦"], undefined, "HUG"]);
+  assert.deepEqual(await act(may, ["[动作：摸头] 乖", "[动作:贴贴]"]), ["SENT", ["乖"], undefined, "PAT_HEAD"], "one action per reply: the first");
+  assert.deepEqual(await act(may, ["[动作:挥手]"]), ["SENT", [], undefined, "WAVE"], "an action alone is a reply");
+  assert.deepEqual(await act(may, ["[动作:亲亲]", "嗯"]), ["SENT", ["嗯"]], "not one of ours: only removed");
+  assert.deepEqual(await act(may, ["[动作:亲亲]"]), ["ERROR", null]);
+  assert.deepEqual(await act(turn(), ["[动作:抱抱]", "辛苦啦"]), ["SENT", ["辛苦啦"]], "not allowed in this turn: the mark is removed and nothing is done");
+  // The dev model answers the Owner's action, not one of its own that came after.
+  const hugged = turn({ direct: true, optional: true, history: [
+    { companionId: null, body: null, action: "WAVE", mentions: [], sentAt: "t" }, { companionId: companion, body: null, action: "HUG", mentions: [], sentAt: "t" }] });
+  assert.deepEqual((await devChatModel.reply(hugged, {} as never) as { messages: string[] }).messages, ["（开发环境假回复）小光知道你在小家里向你挥了挥手"]);
+
+  // Memories it notes down by itself: the database is asked after a reply in a one-to-one chat (it knows the setting).
+  const asked = async (claim: ChatClaim, chosen: ChatModel = devChatModel) => {
+    const { port, calls } = fakePort([claim]);
+    await new ChatReplies(chosen).drain(chatId, port);
+    return calls.filter(call => call[0] === "memoryBegin").length;
+  };
+  assert.deepEqual([await asked(turn({ direct: true })), await asked(turn()), await asked(turn({ direct: true }), model(new Error("down")))],
+    [1, 0, 0], "one-to-one, and it answered");
+  const job: MemoryJob = { status: "WRITE", claimId: "c", companion: turn().companion, memories: [],
+    messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T10:00:00Z" }] };
+  const note = async (chosen: ChatModel | undefined, start: MemoryStart = job, accepted = true) => {
+    const kept: unknown[] = [];
+    const port = { ...fakePort().port, memoryBegin: async () => start,
+      memoryFinish: async (...args: unknown[]) => { kept.push(args[2]); return accepted; } } as ChatPort;
+    return [await new ChatReplies(chosen).remember(companion, port), ...kept];
+  };
+  const notes = (memory: NonNullable<ChatModel["memory"]>): ChatModel => ({ reply: async () => ({ pass: true }), memory });
+  assert.deepEqual(await note(devChatModel), ["DONE", ["（开发环境假记忆）主人说过：「我下周三生日」"]]);
+  assert.deepEqual(await note(notes(async () => ({ memories: [" 主人下周三生日 ", "", "主人的密码是 password: hunter2", "主人电话 13800138000", "三", "四"] }))),
+    ["DONE", ["主人下周三生日", "三"]], "trimmed; what the safety scan would block or change is not kept; two at most");
+  assert.deepEqual(await note(notes(async () => ({ memories: [] }))), ["DONE", []], "nothing worth remembering still counts as read");
+  assert.deepEqual(await note(notes(async () => ({ refused: true }))), ["DONE", []], "a chat the provider will not read is not read again");
+  assert.deepEqual(await note(notes(async () => ({ failed: "QUOTA" }))), ["FAILED", null]);
+  assert.deepEqual(await note(notes(async () => { throw new Error("down"); })), ["FAILED", null]);
+  assert.deepEqual(await note(undefined), ["FAILED", null], "no model takes notes");
+  assert.deepEqual(await note(devChatModel, job, false), ["FAILED", ["（开发环境假记忆）主人说过：「我下周三生日」"]], "given up meanwhile");
+  assert.deepEqual(await note(devChatModel, { status: "NOT_DUE" }), ["NOT_DUE"]);
+  const broken = { ...fakePort().port, memoryBegin: async () => { throw new Error("db down"); } } as ChatPort;
+  assert.equal(await new ChatReplies(devChatModel).remember(companion, broken), "FAILED", "never throws");
+  // kick: the same, in the background.
+  const background = fakePort([turn({ direct: true })]);
+  const done = new Promise<void>(resolve => { background.port.memoryBegin = async () => { resolve(); return { status: "OFF" }; }; });
+  new ChatReplies(devChatModel).kick(chatId, background.port);
+  await done;
+
   const hung = fakePort([turn()]);
   let aborted = false;
   await new ChatReplies({ reply: (_turn, { signal }) => new Promise(() => signal.addEventListener("abort", () => { aborted = true; })) }, 5)
@@ -403,7 +460,12 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(seen.at(-1)![1], [companion, null]);
   await adapter.settings(companion);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: "m", revision: 1 });
-  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1]);
+  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1, null, null]);
+  await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: null, voice: "warm",
+    preferredUserTitle: "阿澈", autoMemory: "OFTEN", revision: 2 });
+  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", null, "warm", 2, "阿澈", "OFTEN"]);
+  await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: null, preferredUserTitle: null, revision: 3 });
+  assert.deepEqual(seen.at(-1)![1].slice(5), [3, "", null], "a title left out is null (keep); one cleared is the empty string");
   rows = [{ payload: { decision: "QUOTA" } }];
   assert.deepEqual(await adapter.reserve({ replyId: messageId, claimId: "c", purpose: "REPLY", provider: "p", model: "m",
     pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3, traceId: "t" }), { decision: "QUOTA" });
@@ -420,6 +482,19 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(await adapter.claim(chatId), { ok: true });
   rows = [{ payload: { accepted: true } }];
   assert.equal(await adapter.finish(messageId, "c", "SENT", ["hi"]), true);
+  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "SENT", ["hi"], null, null]);
+  await adapter.finish(messageId, "c", "SENT", [], undefined, "HUG");
+  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "SENT", [], null, "HUG"], "an action of the Companion's own, with nothing said");
+  rows = [{ payload: { status: "NOT_DUE" } }];
+  assert.deepEqual(await adapter.memoryBegin(companion), { status: "NOT_DUE" });
+  rows = [{ payload: { decision: "RESERVED", transactionId: "tx" } }];
+  await adapter.memoryReserve(companion, "c", { provider: "p", model: "m", pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3 });
+  assert.deepEqual(seen.at(-1)![1], [companion, "c", "p", "m", "v", 1, 2, 3, "c"]);
+  rows = [{ payload: { accepted: true, added: 1 } }];
+  assert.equal(await adapter.memoryFinish(companion, "c", ["主人喜欢乌龙茶"]), true);
+  assert.deepEqual(seen.at(-1)![1], [companion, "c", ["主人喜欢乌龙茶"]]);
+  rows = [{ payload: { accepted: false, added: 0 } }];
+  assert.equal(await adapter.memoryFinish(companion, "c", null), false);
   rows = [{ payload: null }];
   assert.equal(await adapter.claim(chatId), null);
   await assert.rejects(adapter.list(), { code: "DATABASE_ERROR" });

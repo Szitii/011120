@@ -32,6 +32,28 @@ export interface HumanProfileSettings {
 /** Who can see a post: everyone, the author's followers, or only the identity that posted it. */
 export type PostVisibility = "PUBLIC" | "FOLLOWERS" | "PRIVATE";
 
+/**
+ * One image of a post. `path` is its place in the Supabase Storage bucket "media"; the app gets
+ * the picture from Storage with the Owner's own sign-in (docs/FRONTEND_HANDOFF.md, section 23).
+ * More kinds (video) may come: skip a kind the app does not know.
+ */
+export interface PostMedia {
+  kind: "IMAGE";
+  path: string;
+  /** In pixels, as the uploader reported them; null when not given. For laying out before the image loads. */
+  width: number | null;
+  height: number | null;
+  alt: string | null;
+}
+
+/** An image named in POST /v0/community/posts: a file already uploaded to the posting identity's folder, "<its id>/<uuid>.<jpg|png|webp>". */
+export interface PostMediaInput {
+  path: string;
+  width?: number;
+  height?: number;
+  alt?: string;
+}
+
 export interface CommunityPost {
   id: string;
   author: CommunityActor;
@@ -41,6 +63,8 @@ export interface CommunityPost {
   visibility: PostVisibility;
   /** The identities named in the post that the viewer can see, in order. The server always sends it. */
   mentions?: CommunityActor[];
+  /** The post's images that may be shown, in order (at most 9). The server always sends it. */
+  media?: PostMedia[];
   commentsCount: number;
   /** Every like on the post. */
   likeCount: number;

@@ -101,4 +101,8 @@ values
    '00000000-0000-0000-0000-0000000005b1','00000000-0000-0000-0000-0000000004b1',
    now(),'A quiet first meeting','ENCOUNTER','00000000-0000-4000-8000-000000000901','PUBLIC','PUBLISHED');
 
+-- The dev host "hears" a fixed sentence instead of calling a speech provider, so the Owner's voice
+-- messages are switched on here; in production the operators turn them on.
+update companion_private.feature_switches set enabled = true where key = 'VOICE_INPUT';
+
 commit;

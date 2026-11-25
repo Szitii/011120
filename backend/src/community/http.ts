@@ -3,7 +3,7 @@ import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, runAgentTool, type AgentArgs, type AgentTool } from "../agent/tools.ts";
-import type { AgentSettings, HumanProfileSettings, PostVisibility } from "../../../contracts/community.ts";
+import type { AgentSettings, HumanProfileSettings, PostMediaInput, PostVisibility } from "../../../contracts/community.ts";
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid community request."); };
@@ -14,6 +14,26 @@ const isJson = (request: MvpHttpRequest): boolean =>
   header(request, "content-type")?.split(";")[0]?.trim().toLowerCase() === "application/json";
 type Respond = (status: number, body: unknown) => MvpHttpResponse;
 const VISIBILITIES: readonly PostVisibility[] = ["PUBLIC", "FOLLOWERS", "PRIVATE"];
+
+/** "<the posting identity's id>/<uuid>.<type>" in the Storage bucket "media". Whose folder it is, the database checks. */
+const MEDIA_PATH = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.(?:jpg|png|webp)$/;
+const pixels = (value: unknown): boolean => value === undefined || (Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 99_999);
+
+/** The images of a new post: at most 9 different files, each with an optional size in pixels and alt text. */
+function postMedia(input: unknown): PostMediaInput[] {
+  if (!Array.isArray(input) || input.length > 9) return invalid();
+  const media = input.map((item: unknown): PostMediaInput => {
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || Object.keys(item).some(key => !["path", "width", "height", "alt"].includes(key))) return invalid();
+    const { path, width, height, alt } = item as Record<string, unknown>;
+    if (typeof path !== "string" || !MEDIA_PATH.test(path) || !pixels(width) || !pixels(height)
+      || !(alt === undefined || (typeof alt === "string" && Array.from(alt.trim()).length <= 200 && !/[\p{Cc}\u2028\u2029]/u.test(alt.trim())))) return invalid();
+    const text = (alt as string | undefined)?.trim();
+    return { path, ...(width === undefined ? {} : { width: width as number }), ...(height === undefined ? {} : { height: height as number }),
+      ...(text ? { alt: text } : {}) };
+  });
+  return new Set(media.map(item => item.path)).size === media.length ? media : invalid();
+}
 
 /** Keyset cursor "createdAt|id" from `?cursor=`, as [beforeAt, beforeId]; both null without one. */
 function cursorOf(url: URL): [string | null, string | null] {
@@ -180,10 +200,11 @@ export async function handleCommunityRequest(
   let body: string | null = null;
   let visibility: PostVisibility | undefined;
   let mentions: string[] | undefined;
+  let media: PostMediaInput[] | undefined;
   if (action === "POST" || action === "COMMENT") {
     if (!isJson(request)) invalid();
     const value = request.body as Record<string, unknown> | undefined;
-    const allowed = action === "POST" ? ["body", "visibility", "mentions"] : ["body", "mentions"];
+    const allowed = action === "POST" ? ["body", "visibility", "mentions", "media"] : ["body", "mentions"];
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !allowed.includes(k))) invalid();
     if (typeof value!.body !== "string") invalid();
     body = (value!.body as string).trim();
@@ -199,6 +220,7 @@ export async function handleCommunityRequest(
       if (!Array.isArray(named) || named.length > 10 || named.some(m => typeof m !== "string")) invalid();
       mentions = [...new Set((named as string[]).map(id))];
     }
+    if (value!.media !== undefined) media = postMedia(value!.media);
   } else if (action.startsWith("REPORT_")) {
     if (!isJson(request)) invalid();
     const value = request.body as Record<string, unknown> | undefined;
@@ -211,6 +233,7 @@ export async function handleCommunityRequest(
   } else if (request.body !== undefined) invalid();
   const result = await port.command({
     actor, action, targetId, body, ...(visibility === undefined ? {} : { visibility }), ...(mentions === undefined ? {} : { mentions }),
+    ...(media === undefined ? {} : { media }),
     keyHash,
     requestHash: sha256(JSON.stringify({ actor, action, targetId, body })),
   });

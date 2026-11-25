@@ -7,11 +7,15 @@
  * as voice messages aloud (when the Companion has a voice) and stores the result (chat_finish).
  * If the server stops halfway, the claim expires after two minutes and the next request that
  * touches the chat picks it up again.
+ *
+ * After the replies of a one-to-one chat the Companion may note down what is worth remembering
+ * (remember); the database decides whether the Owner asked for it and enough was said.
  */
-import { ACTION_TEXT, answersAction, splitVoice } from "./prompt.ts";
+import { ACTION_TEXT, MAX_NOTES, answersAction, splitAction, splitVoice } from "./prompt.ts";
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { DiaryWriteResult } from "../../../contracts/chat.ts";
-import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob, PostJob, PostOutcome, PostStart } from "./port.ts";
+import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryStart, PostJob, PostOutcome, PostStart } from "./port.ts";
 import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
@@ -30,6 +34,9 @@ export type DiaryAnswer = { text: string } | { refused: true } | { failed: "UNAV
 
 /** A community post the model wrote on its own; `pass` when it had nothing to say. */
 export type PostAnswer = DiaryAnswer | { pass: true };
+
+/** What the model found worth remembering: 0 to 2 sentences. */
+export type MemoryAnswer = { memories: string[] } | Exclude<DiaryAnswer, { text: string }>;
 
 /**
  * Why one message of a reply is, or is not, a voice message. SPOKEN: a clip was made. NO_VOICE: the
@@ -71,6 +78,8 @@ export interface ChatModel {
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
   /** Writes a community post of its own; without it, such posts fail. */
   post?(job: PostJob, context: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer>;
+  /** Picks what is worth remembering from the chat; without it, nothing is noted down. */
+  memory?(job: MemoryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<MemoryAnswer>;
 }
 
 const MAX_MESSAGES = 3;
@@ -98,7 +107,7 @@ export const devChatModel: ChatModel = {
   async reply(turn) {
     const name = turn.companion.displayName;
     if (answersAction(turn)) {
-      const action = [...turn.history].reverse().find(message => message.action !== null)?.action;
+      const action = [...turn.history].reverse().find(message => message.action !== null && message.companionId === null)?.action;
       return { messages: [`（开发环境假回复）${name}知道你${action ? ACTION_TEXT[action] : "来过"}`] };
     }
     if (turn.replyTo === "OWNER") {
@@ -113,7 +122,7 @@ export const devChatModel: ChatModel = {
   },
   async diary(job) {
     const said = job.messages.filter(message => message.companionId === null && message.body !== null);
-    const actions = job.messages.filter(message => message.action !== null).length;
+    const actions = job.messages.filter(message => message.action !== null && message.companionId === null).length;
     const last = said.at(-1)?.body;
     return { text: [
       `（开发环境假日记）主人和我说了 ${said.length} 句话`,
@@ -126,9 +135,13 @@ export const devChatModel: ChatModel = {
   async post(job) {
     return { text: `（开发环境假动态）我是${job.companion.displayName}，现在是 ${job.localTime}，这是我发的第 ${job.own.length + 1} 条。` };
   },
+  async memory(job) {
+    const last = job.messages.findLast(message => message.companionId === null)?.body ?? "";
+    return { memories: [`（开发环境假记忆）主人说过：「${preview(last)}」`] };
+  },
 };
 
-type Answered = [outcome: ChatOutcome, bodies: string[] | null, clips?: (Clip | null)[] | undefined];
+type Answered = [outcome: ChatOutcome, bodies: string[] | null, clips?: (Clip | null)[] | undefined, action?: CompanionAction | undefined];
 
 /** The turn as the model should see it: without a voice when voice messages cannot be made now. */
 const speakable = (turn: ChatClaim, voices: Voices | undefined): ChatClaim =>
@@ -167,9 +180,13 @@ export class ChatReplies {
     void this.drain(chatId, port).catch(() => undefined).finally(() => this.#running.delete(chatId));
   }
 
-  /** Writes queued turns until none is left (or another server holds the chat). */
+  /**
+   * Writes queued turns until none is left (or another server holds the chat). Then, if the
+   * Companion of a one-to-one chat answered, it notes its memories down when that is due.
+   */
   async drain(chatId: string, port: ChatPort): Promise<number> {
     let written = 0;
+    let remember: string | undefined;
     for (let claim = await port.claim(chatId); claim !== null; claim = await port.claim(chatId)) {
       const turn = speakable(claim, this.#voices);
       const trace: ReplyTrace = {
@@ -177,20 +194,59 @@ export class ChatReplies {
         channel: "PLATFORM", outcome: "ERROR", modelMs: 0, speechMs: 0, voice: [], stored: false,
       };
       const silent = turn.companion.settings.voice ? null : claim.companion.settings.voice ? "VOICE_UNAVAILABLE" : "NO_VOICE";
-      const [outcome, bodies, clips] = await this.#answer(turn, port, trace, silent);
+      const [outcome, bodies, clips, action] = await this.#answer(turn, port, trace, silent);
       // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
       const final = outcome === "ERROR" && answersAction(turn) ? "PASSED" : outcome;
       trace.outcome = final;
       try {
-        // Text-only replies call finish as before; clips go along only when there are some.
-        trace.stored = await (clips === undefined ? port.finish(turn.replyId, turn.claimId, final, bodies)
+        // Text-only replies call finish as before; clips and an action go along only when there are some.
+        trace.stored = await (action !== undefined ? port.finish(turn.replyId, turn.claimId, final, bodies, clips, action)
+          : clips === undefined ? port.finish(turn.replyId, turn.claimId, final, bodies)
           : port.finish(turn.replyId, turn.claimId, final, bodies, clips));
       } finally {
         this.#trace(trace);
       }
+      if (final === "SENT" && turn.direct) remember = turn.companion.companionId;
       written += 1;
     }
+    // The chat is free for the next message while the memories are noted down.
+    this.#running.delete(chatId);
+    if (remember) await this.remember(remember, port);
     return written;
+  }
+
+  /**
+   * Notes down what is worth remembering from the Companion's one-to-one chat, if the Owner asked
+   * for it and enough was said since the last time (the database decides), through the same output
+   * safety scan as its other words. Returns how it ended, or why nothing started. Never throws.
+   */
+  async remember(companionId: string, port: ChatPort): Promise<"DONE" | "FAILED" | Exclude<MemoryStart["status"], "WRITE">> {
+    try {
+      const job = await port.memoryBegin(companionId);
+      if (job.status !== "WRITE") return job.status;
+      const notes = await this.#notes(job, port);
+      return await port.memoryFinish(companionId, job.claimId, notes) && notes !== null ? "DONE" : "FAILED";
+    } catch {
+      return "FAILED";
+    }
+  }
+
+  /**
+   * The sentences to keep (maybe none), or null when the attempt failed. One the scan would change
+   * is not kept, and a chat the provider refuses to read is not read again.
+   */
+  async #notes(job: MemoryJob, port: ChatPort): Promise<string[] | null> {
+    const model = this.#model;
+    if (model?.memory === undefined) return null;
+    try {
+      const result = await this.#timed(signal => model.memory!(job, { port, signal }));
+      if ("failed" in result) return null;
+      if ("refused" in result) return [];
+      return result.memories.map(text => text.trim())
+        .filter(text => text.length > 0 && this.#safety.scanOutput(text).decision === "ALLOW").slice(0, MAX_NOTES);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -314,12 +370,15 @@ export class ChatReplies {
       if ("refused" in result) return ["BLOCKED", null];
       // An optional turn that cannot be made simply stays quiet; one that must answer says why.
       if ("failed" in result) return [turn.optional ? "PASSED" : result.failed, null];
-      const marked = result.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
+      // An action of its own, where it may do one; its mark is removed from the text either way.
+      const acted = splitAction(result.messages);
+      const action = turn.canAct && acted.action !== null ? acted.action : undefined;
+      const marked = acted.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
       const parts = marked.map(part => part.text);
       const messages = parts.length <= MAX_MESSAGES ? parts
         : [...parts.slice(0, MAX_MESSAGES - 1), parts.slice(MAX_MESSAGES - 1).join("\n")];
-      // Nothing to say or an over-long message is the model misbehaving, not a safety problem: it may be retried.
-      if (messages.length === 0 || messages.some(text => text.length > MAX_CHARS)) return ["ERROR", null];
+      // Nothing to say (and nothing done) or an over-long message is the model misbehaving, not a safety problem: it may be retried.
+      if ((messages.length === 0 && action === undefined) || messages.some(text => text.length > MAX_CHARS)) return ["ERROR", null];
       const scans = messages.map(text => this.#safety.scanOutput(text));
       if (scans.some(scan => scan.decision === "BLOCK")) return ["BLOCKED", null];
       const safe = scans.map(scan => scan.sanitized.trim());
@@ -335,7 +394,7 @@ export class ChatReplies {
           : Array.from(text).length > MAX_VOICE_CHARS ? "TOO_LONG" : null));
       const clips = await this.#speak(turn, port, safe, marked.map(part => part.voice || null), results, trace);
       trace.voice = results.map(result => result ?? "VOICE_UNAVAILABLE");
-      return ["SENT", safe, clips];
+      return ["SENT", safe, clips, action];
     } catch {
       return ["ERROR", null]; // the model failed, timed out, or answered in the wrong shape
     }
