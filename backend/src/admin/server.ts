@@ -19,7 +19,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { AdminRefusal, type AdminDb } from "./db.ts";
-import { chatGatePage, chatPage, costsPage, errorPage, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
+import { chatGatePage, chatPage, costSettingsPage, costsPage, errorPage, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
   type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue,
   type Feature } from "./pages.ts";
 
@@ -133,10 +133,14 @@ export function createAdminServer(options: AdminServerOptions): Server {
       return ownerPage(zone, detail, await db.call<ChatList>("chats", m[1]), await db.call<LogPage>("log", null, m[1]), done);
     }
     if ((m = ROUTES.chat.exec(path))) return chatGatePage(m[1]!);
-    if (path === "/models") return modelsPage(zone, await db.call<Models>("models"), catalog, done, await db.call<Feature[]>("features"));
+    if (path === "/models") return modelsPage(zone, now(), await db.call<Models>("models"), catalog, await db.call<Feature[]>("features"), done);
+    if (path === "/costs/settings") return costSettingsPage(zone, await db.call<Costs>("costs", `${now().toISOString().slice(0, 7)}-01`), done);
     if (path === "/costs") {
-      const month = dayOr(`${query.get("month")}-01`, `${now().toISOString().slice(0, 7)}-01`);
-      return costsPage(zone, await db.call<Costs>("costs", month), done);
+      const thisMonth = `${now().toISOString().slice(0, 7)}-01`, month = dayOr(`${query.get("month")}-01`, thisMonth);
+      const costs = await db.call<Costs>("costs", month);
+      // Today's spend against the daily cap belongs to the running month only; so does reading itself again.
+      const cap = month === thisMonth ? (await db.call<Models>("models")).cap : null;
+      return costsPage(zone, now(), costs, cap, cap !== null && query.get("auto") !== "off", done);
     }
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
