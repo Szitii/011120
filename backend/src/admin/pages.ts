@@ -278,9 +278,8 @@ function page(title: string, at: string, body: Safe, done = false, tools: Safe |
 const panel = (title: string | Safe, body: Safe) => html`<section class="panel"><h2>${title}</h2>${body}</section>`;
 /** A change form folded away under a link, so the page reads as the current state first. */
 const edit = (label: string, form: Safe) => html`<details class="edit"><summary>${label}</summary>${form}</details>`;
-/** When the numbers were read, and a button that reads them again. */
-const fresh = (zone: string, now: Date, self: string, more: Safe | "" = "") =>
-  html`<div class="tools">${more}<span>数据时间 ${time(zone, now.toISOString())}</span><a class="btn" href="${self}">刷新</a></div>`;
+/** What goes to the right of a page's title. */
+const bar = (tools: Safe) => html`<div class="tools">${tools}</div>`;
 /** A bar filled to `share` (0..1+): blue, amber from 80 %, red past 100 %. */
 const meter = (share: number) =>
   html`<div class="bar"><span class="${share > 1 ? "over" : share > 0.8 ? "near" : ""}" style="width:${Math.min(100, Math.round(share * 100))}%"></span></div>`;
@@ -290,11 +289,12 @@ export function errorPage(title: string, message: string, back: string): string 
   return page(title, "", html`<p class="err">${message}</p><p><a href="${back}">返回</a></p>`);
 }
 
-/** A form that changes something: the operator must give a reason and tick the box. */
+const hidden = (name: string, value: string | number) => html`<input type="hidden" name="${name}" value="${String(value)}">`;
+/** A form that changes something: the operator must give a reason; a dangerous change also needs the box ticked. */
 function act(path: string, label: string, back: string, fields: Safe | "" = "", danger = false): Safe {
   return html`<form class="act" method="post" action="${path}"><input type="hidden" name="back" value="${back}">${fields}
 <input name="reason" required maxlength="500" placeholder="原因(必填,会记入日志)">
-<label><input type="checkbox" name="confirm" value="yes" required> 确认</label><button class="${danger ? "danger" : ""}">${label}</button></form>`;
+${danger ? html`<label><input type="checkbox" name="confirm" value="yes" required> 确认</label>` : hidden("confirm", "yes")}<button class="${danger ? "danger" : ""}">${label}</button></form>`;
 }
 /**
  * A switch like a phone's: one click flips it. The reason in the log says which switch and which way;
@@ -306,7 +306,6 @@ function toggle(path: string, on: boolean, what: string, back: string, fields: S
 <input type="hidden" name="confirm" value="yes"><button class="switch ${on ? "on" : ""}" role="switch" aria-checked="${on ? "true" : "false"}"
  aria-label="${what}" title="${on ? "点一下关掉" : "点一下打开"}"></button>${text}</form>`;
 }
-const hidden = (name: string, value: string | number) => html`<input type="hidden" name="${name}" value="${String(value)}">`;
 const ownerLink = (id: string, label: string | null) => html`<a href="/owners/${id}">${name(label)}</a>`;
 const status = (table: Readonly<Record<string, string>>, value: string | null) =>
   html`<span class="tag ${value === "ACTIVE" ? "" : "bad"}">${word(table, value)}</span>`;
@@ -347,14 +346,13 @@ ${queue.items.length === 0 ? html`<p class="empty">${state === "SUBMITTED" ? "�
 ${queue.items.map(r => reportCard(zone, r, back))}
 ${queue.items.length === 100 ? html`<p class="muted">只显示前 100 条。</p>` : ""}`, done, html`<div class="tools">
 <span class="seg"><a class="btn ${state === "SUBMITTED" ? "on" : ""}" href="/reports?status=SUBMITTED">待处理(${queue.pending})</a>
-<a class="btn ${state === "REVIEWED" ? "on" : ""}" href="/reports?status=REVIEWED">已处理</a></span><a class="btn" href="${back}">刷新</a></div>`);
+<a class="btn ${state === "REVIEWED" ? "on" : ""}" href="/reports?status=REVIEWED">已处理</a></span></div>`);
 }
 
 export function ownersPage(zone: string, list: OwnerList, search: string): string {
-  return page("用户", "/owners", html`<form method="get" action="/owners" class="act">
+  return page("用户与聊天", "/owners", html`<form method="get" action="/owners" class="act">
 <input name="q" type="search" value="${search}" placeholder="搜索邮箱、名字,或完整的主人编号"><button>搜索</button></form>
 ${list.more ? html`<p class="muted">结果超过 100 个,只显示最新的 100 个。请用搜索缩小范围。</p>` : ""}
-<p class="muted">要看某个人的聊天记录:点他那一行的“聊天记录”,再点某个会话,填写原因后就能看。</p>
 <div class="scroll"><table><tr><th>邮箱</th><th>名字</th><th>状态</th><th>家机</th><th>帖子</th><th>注册时间</th><th></th></tr>${list.items.map(o => html`
 <tr><td><a href="/owners/${o.id}">${o.email ?? "(没有邮箱)"}</a></td><td>${name(o.displayName)}</td><td>${status(OWNER_STATUS, o.status)}</td>
 <td>${o.companions}</td><td>${o.posts}</td><td>${time(zone, o.createdAt)}</td><td><a href="/owners/${o.id}#chats">聊天记录</a></td></tr>`)}</table></div>
@@ -432,28 +430,18 @@ export function switchTargets(catalog: readonly CatalogEntry[]): { value: string
     ...catalog.map(m => ({ value: `MODEL:${m.provider}/${m.model}`, label: `模型 ${m.name}(${m.provider}/${m.model})` }))];
 }
 
-export function modelsPage(zone: string, now: Date, models: Models, catalog: readonly CatalogEntry[], features: readonly Feature[],
+export function modelsPage(zone: string, models: Models, catalog: readonly CatalogEntry[], features: readonly Feature[],
   done: boolean, vendors: readonly VendorStatus[] = []): string {
   const q = models.quota, w = models.wallet, back = "/models";
-  const offModels = catalog.filter(m => switchState(models, m) !== "开").length;
   const ownOn = (scope: string, key: string) => !models.switches.some(s => s.scope === scope && s.key === key && !s.enabled);
   const gift = w.welcomeCredits > 0 ? w.welcomeCredits : 1000;
   return page("模型与额度", "/models", html`
-<div class="cards">
-<div class="card ${offModels > 0 ? "warn" : ""}"><div class="muted">平台模型</div><div class="big">${catalog.length - offModels} / ${catalog.length}</div>
-<div class="muted">${offModels > 0 ? `有 ${offModels} 个关着` : "全部开着"}</div></div>
-<div class="card"><div class="muted">每个家机每天免费</div><div class="big">${q.dailyCalls} 次</div><div class="muted">最多 ${money(q.dailyCostMinor, q.currency)}</div></div>
-<div class="card"><div class="muted">主人积分钱包</div><div class="big">${w.enabled ? "开" : "关"}</div><div class="muted">每 1 分 = ${w.creditsPerCent} 积分</div></div>
-<div class="card ${w.welcomeCredits > 0 ? "" : "warn"}"><div class="muted">新人送积分</div><div class="big">${w.welcomeCredits > 0 ? "开" : "关"}</div>
-<div class="muted">${w.welcomeCredits > 0 ? `每个新主人 ${count(w.welcomeCredits)} 积分${w.enabled ? "" : "(钱包关着,暂时不送)"}` : "新主人不送积分"}</div></div>
-</div>
 ${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>模型</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
 ${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td><td>${catalog.filter(m => m.provider === v.key).map(m => m.name).join("、")}</td>
 <td>${v.serverKey === null ? html`<span class="tag bad">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
     ? html`<span class="muted">看不到:${v.serverKey.why}</span>` : html`<span class="tag">已设置</span> <span class="muted">更新于 ${time(zone, v.serverKey.at)}</span>`}</td>
 <td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
-<p class="muted">Key 只放在服务器的密钥里,后台看得到有没有、什么时候换过,看不到 Key 本身,也改不了:这样即使有人进了后台,也换不掉线上用的 Key。
-要加一家或换 Key,找 Claude 弹出输入框,Key 直接存进服务器,不经过聊天。余额每次打开这页时从厂商那里读。</p>`)}
+<p class="muted">后台只看得到 Key 有没有、何时换过,看不到也改不了 Key 本身。要加或换 Key,找 Claude 弹输入框直接存进服务器。</p>`)}
 ${panel("模型开关", html`<div class="scroll"><table><tr><th>开关</th><th>厂商 / 模型名</th><th>现在</th></tr>${switchTargets(catalog).map(t => {
     const cut = t.value.indexOf(":"), scope = t.value.slice(0, cut), key = t.value.slice(cut + 1), on = ownOn(scope, key);
     const entry = scope === "MODEL" ? catalog.find(m => `${m.provider}/${m.model}` === key) : undefined;
@@ -462,9 +450,7 @@ ${panel("模型开关", html`<div class="scroll"><table><tr><th>开关</th><th>�
     return html`<tr><td>${toggle("/models/switch", on, t.label, back, hidden("target", t.value), text)}</td><td>${scope === "ALL" ? "" : key}</td><td><span class="tag ${state === "开" ? "" : "bad"}">${state}</span></td></tr>`;
   })}</table></div>
 <p class="muted">点一下就生效,并记进操作日志。关掉后:回复显示“平台模型暂时关闭”,不扣额度。上面的开关关着时,下面的模型也停,“现在”一栏写的是实际能不能用。</p>
-${models.switches.length === 0 ? "" : html`<details class="edit"><summary>开关的历史</summary><div class="scroll"><table>
-<tr><th>开关</th><th>状态</th><th>最近一次的原因</th><th>时间</th></tr>${models.switches.map(s => html`
-<tr><td>${word(TARGETS, s.scope)} ${s.key}</td><td>${s.enabled ? "开" : "关"}</td><td>${s.note}</td><td>${time(zone, s.updatedAt)}</td></tr>`)}</table></div></details>`}`)}
+`)}
 ${panel("功能开关", html`<div class="scroll"><table><tr><th>功能</th><th>改于</th></tr>${features.map(f => html`
 <tr><td>${toggle("/models/feature", f.enabled, word(FEATURES, f.key), back, hidden("key", f.key), word(FEATURES, f.key))}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>
 <p class="muted">点一下就生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>`)}
@@ -482,15 +468,14 @@ ${w.welcomeCredits > 0 ? edit("改送多少", act("/models/welcome", "保存", b
 ${panel("主人积分钱包", html`
 <div>${toggle("/models/wallet", w.enabled, "主人积分钱包", back, html`${hidden("welcome", w.welcomeCredits)}${hidden("rate", w.creditsPerCent)}${hidden("floor", w.backgroundFloor)}`,
     w.enabled ? "开" : "关(只按每个家机每天的免费额度限制)")}</div>
-<p>新主人送 ${w.welcomeCredits} 积分;模型花费每 1 分 = ${w.creditsPerCent} 积分;写日记要给聊天留 ${w.backgroundFloor} 积分。调用失败不扣积分。</p>
-${edit("修改钱包规则", act("/models/wallet", "修改钱包规则", back, html`${hidden("enabled", w.enabled ? "on" : "off")}
-<label>新人赠送 <input name="welcome" type="number" min="0" required value="${w.welcomeCredits}"></label>
+<p>模型花费每 1 分 = ${w.creditsPerCent} 积分;写日记要给聊天留 ${w.backgroundFloor} 积分。调用失败不扣积分。</p>
+${edit("修改钱包规则", act("/models/wallet", "修改钱包规则", back, html`${hidden("enabled", w.enabled ? "on" : "off")}${hidden("welcome", w.welcomeCredits)}
 <label>每分积分 <input name="rate" type="number" min="1" required value="${w.creditsPerCent}"></label>
 <label>给聊天保留 <input name="floor" type="number" min="0" required value="${w.backgroundFloor}"></label>`))}
 ${edit("给某个主人调整积分", act("/models/credit", "调整积分", back, html`<input name="owner" placeholder="主人编号" required size="38">
 <label>积分(可以是负数)<input name="credits" type="number" required></label>`))}
-<p class="muted">调整的是赠送积分;负数最多扣到 0。改赠送数量只影响之后第一次用钱包的主人。</p>`)}
-<p class="muted">每一笔花了多少钱、全平台每天的花费上限,在<a href="/costs">“花费”页</a>。</p>`, done, fresh(zone, now, back));
+<p class="muted">调整的是赠送积分;负数最多扣到 0。</p>`)}
+<p class="muted">每一笔花了多少钱、全平台每天的花费上限,在<a href="/costs">“花费”页</a>。</p>`, done);
 }
 
 // ---------- charts: inline SVG, no script; the hover text of a day is the SVG <title> ----------
@@ -680,7 +665,7 @@ ${v.key === "fly" && fly !== null ? flyEstimate(fly) : ""}
  * `fly` is the servers as they are now, for an estimate under Fly's card; `statuses`, what each model company says is left
  * (both for the running month only).
  */
-export function costsPage(zone: string, now: Date, c: Costs, cap: Models["cap"] | null, done: boolean, fly: Hosts | null = null,
+export function costsPage(now: Date, c: Costs, cap: Models["cap"] | null, done: boolean, fly: Hosts | null = null,
   statuses: readonly VendorStatus[] = []): string {
   const t = c.totals, self = `/costs?month=${c.month}`;
   const used = new Set([...c.days.map(d => d.day), ...c.models.byDay.map(d => d.day)]);
@@ -711,28 +696,15 @@ ${panel("每天按用量的花费", html`${series.length === 0 ? html`<p class="
 <p class="muted">鼠标停在某一天上,能看到那天每家花了多少。固定月费和语音包月不按天算,不在图里。</p>`)}
 <h2>按厂商</h2>
 <div class="vendors">${vendors.map(v => vendorCard(v, total, c, days, fly, statuses.find(s => s.key === v.key)))}</div>
-${panel("每天明细", c.days.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : html`<details class="edit"><summary>展开每天的表</summary><div class="scroll"><table>
-<tr><th>日期</th><th class="num">AI 模型</th><th class="num">模型调用</th><th class="num">语音转文字</th><th class="num">识别时长</th>
-<th class="num">文字转语音(点数)</th><th class="num">当天合计</th></tr>${c.days.map(d => html`
-<tr><td>${d.day}</td><td class="num">${usd(d.modelCents)}</td><td class="num">${count(d.modelCalls)}</td><td class="num">${usd(d.hearCents)}</td>
-<td class="num">${count(d.hearSeconds)} 秒 / ${d.hears} 条</td><td class="num">${count(d.speakPoints)} / ${d.speaks} 条</td>
-<td class="num"><b>${usd(d.modelCents + d.hearCents)}</b></td></tr>`)}</table></div>
-${m.byDay.length === 0 ? "" : html`<div class="scroll"><table>
-<tr><th>日期</th><th>厂商 / 模型</th><th class="num">调用</th><th class="num">其中未成功</th><th class="num">输入 token</th><th class="num">输出 token</th><th class="num">花费</th></tr>
-${m.byDay.map(d => html`<tr><td>${d.day}</td><td>${d.provider}/${d.model}</td><td class="num">${d.calls}</td><td class="num">${d.failed}</td>
-<td class="num">${count(d.inputTokens)}</td><td class="num">${count(d.outputTokens)}</td><td class="num">${d.currency === "USD" ? usd(d.costMinor) : money(d.costMinor, d.currency)}</td></tr>`)}</table></div>`}
-</details>
-<p class="muted">“未成功”包括调用失败、被安全扫描拦下、结果不明(按占用额全额记账)。主人自带 Key 和自己的 Agent 不花平台的钱,不在这里。</p>`)}
 ${m.byCompanion.length === 0 ? "" : panel("AI 模型:花费最多的家机(前 20)", html`<div class="scroll"><table><tr><th>家机</th><th class="num">调用</th><th class="num">花费</th></tr>${
     m.byCompanion.map(x => html`
 <tr><td>${ownerLink(x.ownerId, x.displayName)}</td><td class="num">${x.calls}</td><td class="num">${x.currency === "USD" ? usd(x.costMinor) : money(x.costMinor, x.currency)}</td></tr>`)}</table></div>`)}
-<p class="muted">按 UTC 日期,金额都是美元。每次打开或点“刷新”都直接从数据库读,模型调用和语音一发生就记账。
-固定月费和语音单价在 <a href="/costs/settings">费用设置</a> 里改。</p>`, done,
-  fresh(zone, now, self, tools));
+<p class="muted">按 UTC 日期,美元。“未成功”包括调用失败、被安全扫描拦下、结果不明(按占用额全额记账)。主人自带 Key 和自己的 Agent 不花平台的钱,不在这里。
+每天的明细在导出的 xlsx 里;固定月费和语音单价在 <a href="/costs/settings">费用设置</a> 里改。</p>`, done, bar(tools));
 }
 
 /** A year of months (oldest first), each company's share, like a ledger. */
-export function costsYearPage(zone: string, now: Date, year: string, months: readonly Costs[]): string {
+export function costsYearPage(now: Date, year: string, months: readonly Costs[]): string {
   const rows = usedMonths(months).map(c => ({ c, vendors: vendorsOf(c) }));
   const keys = [...new Set(rows.flatMap(r => r.vendors.filter(v => v.cents > 0).map(v => v.key)))];
   const cents = (r: (typeof rows)[number], key: string) => r.vendors.find(v => v.key === key)?.cents ?? 0;
@@ -740,7 +712,7 @@ export function costsYearPage(zone: string, now: Date, year: string, months: rea
   const total = rows.reduce((n, r) => n + sum(r), 0);
   const series = [...(keys.length > 1 ? [{ name: "合计", color: INK, values: rows.map(sum) }] : []),
     ...keys.map(k => ({ name: vendorName(k), color: k === "supabase" || k === "fly" || k === "other" ? "#9ca3af" : vendorColor(k), values: rows.map(r => cents(r, k)) }))];
-  const self = `/costs?year=${year}`, y = Number(year);
+  const y = Number(year);
   const tools = html`${costsTabs(true, `${year}-${months.at(-1)?.month.slice(5) ?? "01"}`)}
 <span class="seg"><a class="btn" href="/costs?year=${y - 1}">← ${y - 1}</a>${y < now.getUTCFullYear() ? html`<a class="btn" href="/costs?year=${y + 1}">${y + 1} →</a>` : ""}</span>
 <a class="btn" href="/costs/export.xlsx?year=${year}">导出 xlsx</a>`;
@@ -752,7 +724,7 @@ ${panel("账本", html`<div class="scroll"><table><tr><th>月份</th>${keys.map(
 ${[...rows].reverse().map(r => html`<tr><td><a href="/costs?month=${r.c.month}">${r.c.month}</a></td>${keys.map(k => html`<td class="num">${usd(cents(r, k))}</td>`)}
 <td class="num"><b>${usd(sum(r))}</b></td></tr>`)}
 <tr><td><b>全年</b></td>${keys.map(k => html`<td class="num"><b>${usd(rows.reduce((n, r) => n + cents(r, k), 0))}</b></td>`)}<td class="num"><b>${usd(total)}</b></td></tr></table></div>
-<p class="muted">点月份看那个月的明细。从第一次有用量的月份开始算。固定月费用的是现在填的数:改了以后,以前的月份也按新数算。</p>`)}`}`, false, fresh(zone, now, self, tools));
+<p class="muted">点月份看明细。固定月费按现在填的数算,改了以后以前的月份也跟着变。</p>`)}`}`, false, bar(tools));
 }
 
 /** The numbers the costs page is worked out from: fixed monthly bills and voice prices. */
@@ -786,8 +758,8 @@ export interface ActivityDay {
 /** companion_admin.activity (migration 0059): one month, counts only. */
 export interface Activity { month: string; from: string; to: string; owners: number; companions: number; chatters: number; days: ActivityDay[] }
 
-export function statsPage(zone: string, now: Date, a: Activity): string {
-  const self = `/stats?month=${a.month}`, thisMonth = a.month === now.toISOString().slice(0, 7);
+export function statsPage(now: Date, a: Activity): string {
+  const thisMonth = a.month === now.toISOString().slice(0, 7);
   const days = fromFirst(a.days, d => Object.values(d).some(v => typeof v === "number" && v > 0));
   const sum = (k: keyof Omit<ActivityDay, "day">) => days.reduce((n, d) => n + d[k], 0);
   const today = thisMonth ? days.at(-1) : undefined;
@@ -803,7 +775,6 @@ ${card(thisMonth ? "本月聊天的人" : "这个月聊天的人", count(a.chatt
 ${today === undefined ? "" : card("今天聊天的人", count(today.chatters), `主人发 ${count(today.ownerMessages)} 条 · 家机回 ${count(today.replies)} 条`)}
 ${card("消息", count(sum("ownerMessages") + sum("replies")), `主人发 ${count(sum("ownerMessages"))} · 家机回 ${count(sum("replies"))}${sum("failed") > 0 ? ` · 失败 ${count(sum("failed"))}` : ""}`)}
 ${card("积分消耗", count(sum("creditsSpent")), "钱包开着时,模型调用扣的积分")}
-${card("充值", count(sum("creditsBought")), "App 还没有付费功能,接上之后这里会有数")}
 </div>
 ${days.length === 0 ? html`<p class="muted">这个月还没有任何使用。</p>` : html`${panel("每天的人", lineChart(labels, [line("聊天的人", 0, "chatters"), line("新注册", 1, "newOwners")], count, d => d.slice(5), true))}
 ${panel("每天的消息", lineChart(labels, [line("主人发的", 0, "ownerMessages"), line("家机回的", 1, "replies")], count, d => d.slice(5), true))}
@@ -816,8 +787,8 @@ ${[...days].reverse().map(d => html`<tr><td>${d.day}</td><td class="num">${count
 <td class="num">${count(d.ownerMessages)}</td><td class="num">${count(d.replies)}</td><td class="num">${count(d.failed)}</td><td class="num">${count(d.voiceIn)}</td>
 <td class="num">${count(d.voiceOut)}</td><td class="num">${count(d.posts)}</td><td class="num">${count(d.aiPosts)}</td><td class="num">${count(d.comments)}</td>
 <td class="num">${count(d.creditsSpent)}</td></tr>`)}</table></div></details>`)}`}
-<p class="muted">按 UTC 日期,只有数量,不含任何内容。“聊天的人”= 那天至少发过一条消息的主人。删掉的会话里的消息不再算。帖子数含家机帖子。“家机发的语音”也含选声音时的试听(每次服务器重启后,每个声音第一次试听要重新生成,也花点数)。从第一天有使用的日子开始画。</p>`,
-  false, fresh(zone, now, self, tools));
+<p class="muted">按 UTC 日期,只有数量,不含内容。“聊天的人”= 那天至少发过一条消息的主人。“家机发的语音”含选声音时的试听。</p>`,
+  false, bar(tools));
 }
 
 // ---------- 系统 ----------
@@ -832,8 +803,8 @@ export const DATABASE_LIMIT_BYTES = 500 * 1024 * 1024;
 const MACHINE_STATE: Readonly<Record<string, string>> = { started: "运行中", stopped: "已停止", suspended: "已休眠", starting: "正在启动",
   stopping: "正在停止", replacing: "正在更新", destroyed: "已删除", failed: "失败" };
 
-export function systemPage(zone: string, now: Date, s: SystemInfo, h: Hosts): string {
-  const self = "/system", space = s.databaseBytes / DATABASE_LIMIT_BYTES, conns = s.maxConnections > 0 ? s.connections / s.maxConnections : 0;
+export function systemPage(zone: string, s: SystemInfo, h: Hosts): string {
+  const space = s.databaseBytes / DATABASE_LIMIT_BYTES, conns = s.maxConnections > 0 ? s.connections / s.maxConnections : 0;
   const running = h.ok ? h.machines.filter(m => m.state === "started").length : 0;
   const level = (share: number) => share > 0.9 ? "alarm" : share > 0.7 ? "warn" : "";
   return page("系统", "/system", html`
@@ -844,8 +815,6 @@ export function systemPage(zone: string, now: Date, s: SystemInfo, h: Hosts): st
 <div class="muted">现在打开的连接 / 最多能开的</div></div>
 <div class="card ${h.ok && running < h.machines.length ? "warn" : ""}"><div class="muted">主机</div>
 <div class="big">${h.ok ? `${running} / ${h.machines.length}` : "—"}</div><div class="muted">${h.ok ? "在运行的机器 / 全部机器" : "读不到"}</div></div>
-${h.ok ? html`<div class="card"><div class="muted">Fly 一整月约 <span class="tag">估算</span></div><div class="big">${usd(flyMonthCents(h))}</div>
-<div class="muted">按现在的配置 · 每台的明细在下面</div></div>` : ""}
 </div>
 ${panel(html`主机(Fly.io) <span class="muted links">${billingLink("fly")}</span>`, h.ok ? html`<div class="scroll"><table><tr><th>应用</th><th>机器</th><th>状态</th><th>地区</th><th>配置</th><th class="num">一整月约</th><th>版本</th><th>最近一次停止</th></tr>
 ${h.machines.map(m => html`<tr><td>${m.app}</td><td>${m.name} <span class="muted">${m.id}</span></td>
@@ -865,7 +834,7 @@ ${panel(html`数据库(Supabase 免费版) <span class="muted links">${billingLi
 <tr><td>${t.name}</td><td class="num">${mb(t.bytes)}</td><td class="num">${t.rows === null ? "—" : count(t.rows)}</td></tr>`)}</table></div>
 <p class="muted">免费版的限制:数据库 500 MB(满了只能读不能写)、每月流出流量 5 GB、文件存储 1 GB;
 连续 7 天没有任何请求,项目会被暂停。流量和文件存储只能在 <a href="https://supabase.com/dashboard">Supabase 控制台</a> 的 Usage 里看。</p>`)}`,
-  false, fresh(zone, now, self));
+  false);
 }
 
 // ---------- 家机说明: what a model is told, and the blocks the operators can reword ----------
@@ -958,7 +927,7 @@ ${promptViews(zone, now, texts).map(view => panel(view.title, html`<p class="mut
 ${cutPrompt(view.system, view.blocks, texts).map(part => typeof part === "string" ? html`<pre class="fixed">${part}</pre>`
     : promptBox(zone, part, saved[part.key], view.editable))}
 ${view.user === null ? "" : html`<details class="edit"><summary>和这段说明一起发给模型的材料(示例)</summary><pre class="fixed">${view.user}</pre></details>`}`))}`,
-  done, fresh(zone, now, "/prompts"));
+  done);
 }
 
 export function logPage(zone: string, log: LogPage, owner: string | null): string {
