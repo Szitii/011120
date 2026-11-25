@@ -495,6 +495,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(vendor("claude"), /<b>claude-big<\/b><b>\$3\.45<\/b>[\s\S]*调用 12 次 · 未成功 1 · 输入 9,000 token · 输出 700 token/);
   assert.match(vendor("Supabase"), /免费版没有月费/);
   assert.match(vendor("Fly.io"), /<a href="\/system">主机现在的状态/);
+  assert.match(vendor("Fly.io"), /估算不出:后台还没有 Fly 只读令牌/, "the running month guesses Fly's bill from the servers");
   assert.match(page.body, /<title>2026-11-23\n合计:\$3\.45\nMiniMax:&lt; \$0\.01\nclaude:\$3\.45<\/title>/, "a day's hover text");
   assert.match(page.body, /<td>2026-11-23<\/td><td class="num">\$3\.45<\/td><td class="num">12<\/td>/);
   assert.match(page.body, /38 秒 \/ 4 条/);
@@ -518,6 +519,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.ok(!october.body.includes("http-equiv") && !october.body.includes("自动刷新"));
   assert.match(october.body, /这个月总花费<\/div><div class="big">\$0\.00/);
   assert.match(october.body, /这个月还没有按用量的花费/);
+  assert.ok(!october.body.includes("估算"), "a past month has no estimate: the servers then are not known");
   assert.ok(!october.body.includes("card vendor\"><div class=\"vhead\"><span><i style=\"background:#2a78d6"), "no model company without calls");
   assert.match((await quiet.send("/costs/settings")).body, /还没有填/);
   assert.match(october.body, /操作已完成/);
@@ -616,16 +618,21 @@ it("shows how much the App is used, and the database and the servers", async () 
   const asked: [string, string][] = [];
   const fly = (answer: (app: string) => Response): FlyAccess => ({ token: "fly-ro", apps: ["api", "admin"], fetch: (async (url: string, init: RequestInit) => {
     asked.push([url, (init.headers as Record<string, string>).Authorization!]);
-    return answer(url.split("/apps/")[1]!.split("/")[0]!);
+    const [app, what] = url.split("/apps/")[1]!.split("/");
+    return what === "volumes" ? Response.json(app === "admin" ? [{ id: "v1", name: "data", region: "nrt", size_gb: 1 }] : []) : answer(app!);
   }) as typeof fetch });
   const machines = (app: string) => Response.json(app === "api" ? [{ id: "m1", name: "api-1", state: "started", region: "nrt",
     config: { guest: { cpus: 1, memory_mb: 512 } }, image_ref: { tag: "deployment-7" }, updated_at: AT,
     events: [{ type: "start", timestamp: 2 }, { type: "exit", timestamp: 1_764_000_000_000, request: { exit_event: { exit_code: 137, oom_killed: true } } },
       { type: "exit", timestamp: 5 }] }] : [{ id: "m2", state: "stopped", events: "nonsense" }, "junk"]);
   const page = await (await start({ system }, undefined, fly(machines))).send("/system");
-  assert.deepEqual(asked, [["https://api.machines.dev/v1/apps/api/machines", "Bearer fly-ro"], ["https://api.machines.dev/v1/apps/admin/machines", "Bearer fly-ro"]]);
+  assert.deepEqual(asked, ["api/machines", "api/volumes", "admin/machines", "admin/volumes"].map(p => [`https://api.machines.dev/v1/apps/${p}`, "Bearer fly-ro"]));
   assert.match(page.body, /主机<\/div>\s*<div class="big">1 \/ 3<\/div>/);
-  assert.match(page.body, /<td>api<\/td><td>api-1 <span class="muted">m1<\/span><\/td>\s*<td><span class="tag ">运行中<\/span><\/td><td>nrt<\/td>\s*<td>1 核 · 512 MB 内存<\/td><td>deployment-7<\/td>/);
+  assert.match(page.body, /<td>api<\/td><td>api-1 <span class="muted">m1<\/span><\/td>\s*<td><span class="tag ">运行中<\/span><\/td><td>nrt<\/td>\s*<td>1 核 · 512 MB 内存<\/td>\s*<td class="num">\$4\.83<\/td><td>deployment-7<\/td>/);
+  // shared-cpu-1x with 512 MB in Tokyo: ($0.69 + $3.00) × 1.308; the 1 GB disk $0.15; stopped machines nothing.
+  assert.match(page.body, /<td class="num">1 GB<\/td><td class="num">\$0\.15<\/td>/);
+  assert.match(page.body, /Fly 一整月约 <span class="tag">估算<\/span><\/div><div class="big">\$4\.98<\/div>/);
+  assert.match(page.body, /停止时只收磁盘/);
   assert.match(page.body, /2025\/11\/24 16:00:00 · 退出码 137 <span class="tag bad">内存不够被杀掉<\/span>/, "the latest exit");
   assert.match(page.body, /<td><span class="tag bad">已停止<\/span><\/td>/);
   assert.match(page.body, /<span class="muted">没有记录<\/span>/);
