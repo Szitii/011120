@@ -7,19 +7,34 @@ import {
   ActivityIndicator, BackHandler, Image, Keyboard, KeyboardAvoidingView, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import type { ActorContext, CommunityPost, CommunityActor } from "../../../contracts/community";
+import type { ActorContext, CommunityPost, PostVisibility } from "../../../contracts/community";
 import { communityWriteMessage } from "../adapters/real-api";
 import { BottomSheet } from "../components/BottomSheet";
-import { PixelAvatar } from "../components/PixelAvatar";
-import type { OwnerCompanionSummary } from "../contracts";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { communityRequestKey, type CommunityClient } from "./client";
-import { ActorLine, CommunityButton } from "./components";
+import { ActorLine, CommunityButton, POST_VISIBILITY_LABELS } from "./components";
+import { MAX_MENTIONS, MentionChips, MentionPicker, type Mention } from "./MentionPicker";
 
 const MAX_PHOTOS = 9;
-type Draft = { text: string; key: string; photos: string[] };
+const VISIBILITIES = ["PUBLIC", "FOLLOWERS", "PRIVATE"] as const;
+type Draft = { text: string; key: string; photos: string[]; visibility: PostVisibility; mentions: Mention[] };
+
+function hasDraftContent(draft?: Draft) {
+  return Boolean(draft && (draft.text.trim() || draft.photos.length || draft.mentions.length || draft.visibility !== "PUBLIC"));
+}
+
+function readMentions(value: unknown): Mention[] {
+  if (!Array.isArray(value)) return [];
+  const entries = new Map<string, Mention>();
+  for (const item of value) {
+    if (item && typeof item.id === "string" && typeof item.displayName === "string" && typeof item.handle === "string") {
+      entries.set(item.id, { id: item.id, displayName: item.displayName, handle: item.handle });
+    }
+  }
+  return [...entries.values()].slice(0, MAX_MENTIONS);
+}
 function DraftPhotoPreview({ path }: { path: string }) {
   const { ui } = useSkin();
   const [uri, setUri] = useState<string>();
@@ -42,11 +57,10 @@ function DraftPhotoPreview({ path }: { path: string }) {
   </View>;
 }
 
-export function ComposePostScreen({ client, viewer, ownerId, companions = [], onBack, onPublished }: {
+export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished }: {
   client: CommunityClient;
   viewer: ActorContext;
   ownerId: string;
-  companions?: OwnerCompanionSummary[];
   onBack: () => void;
   onPublished: (post: CommunityPost) => void;
 }) {
@@ -55,17 +69,13 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
   const storageKey = `companion:post-draft:v1:${ownerId}:${viewer.kind}:${viewer.id}`;
   const [draft, setDraft] = useState<Draft>();
   const photos = draft?.photos ?? [];
-  const hasContent = Boolean(draft?.text.trim() || photos.length);
+  const hasContent = hasDraftContent(draft);
   const picking = useRef(false);
-  const [following, setFollowing] = useState<CommunityActor[]>([]);
-  const mentionItems = [...companions.map(item => ({ id: item.socialTwinId ?? item.companionId, name: item.displayName, role: "companion" as const })),
-    ...following.map(actor => ({ id: actor.id, name: actor.displayName, role: actor.kind === "AI" ? "companion" as const : "owner" as const }))]
-    .filter((item, index, all) => all.findIndex(other => other.id === item.id) === index);
   const [author, setAuthor] = useState<Awaited<ReturnType<CommunityClient["profile"]>>>();
   const [busy, setBusy] = useState(false);
   const [closing, setClosing] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
   const alive = useRef(false);
@@ -73,34 +83,25 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
 
   useEffect(() => {
     alive.current = true;
+    let current = true;
+    const empty = (): Draft => ({ text: "", key: communityRequestKey(), photos: [], visibility: "PUBLIC", mentions: [] });
     void AsyncStorage.getItem(storageKey).then(raw => {
-      if (!alive.current) return;
+      if (!current) return;
       const saved: unknown = raw ? JSON.parse(raw) : null;
       if (saved && typeof saved === "object" && "text" in saved && "key" in saved &&
           typeof saved.text === "string" && typeof saved.key === "string") {
         const paths = "photos" in saved && Array.isArray(saved.photos)
           ? saved.photos.filter((path): path is string => typeof path === "string" && /^post-community-[a-z0-9-]+\.[a-z0-9]{1,8}$/.test(path)) : [];
-        setDraft({ text: saved.text, key: saved.key, photos: [...new Set(paths)].slice(0, MAX_PHOTOS) });
-      } else setDraft({ text: "", key: communityRequestKey(), photos: [] });
+        const rawVisibility = "visibility" in saved ? saved.visibility : undefined;
+        const visibility = rawVisibility === undefined ? "PUBLIC"
+          : VISIBILITIES.find(value => value === rawVisibility) ?? "PRIVATE";
+        setDraft({ text: saved.text, key: saved.key, photos: [...new Set(paths)].slice(0, MAX_PHOTOS),
+          visibility, mentions: readMentions("mentions" in saved ? saved.mentions : undefined) });
+      } else setDraft(empty());
     }).catch(() => {
-      if (alive.current) { setDraft({ text: "", key: communityRequestKey(), photos: [] }); setError("本机草稿暂时无法读取。"); }
+      if (current) { setDraft(empty()); setError("本机草稿暂时无法读取。"); }
     });
-    void client.profile(viewer).then(value => { if (alive.current) setAuthor(value); }).catch(() => undefined);
-    let current = true;
-    void (async () => {
-      const actors: CommunityActor[] = [];
-      let cursor: string | undefined;
-      const seen = new Set<string>();
-      do {
-        const page = await client.following(viewer, cursor);
-        if (!current) return;
-        actors.push(...page.items.map(item => item.actor));
-        setFollowing([...actors]);
-        cursor = page.nextCursor ?? undefined;
-        if (!cursor || seen.has(cursor)) break;
-        seen.add(cursor);
-      } while (current && seen.size < 10);
-    })().catch(() => undefined);
+    void client.profile(viewer).then(value => { if (current) setAuthor(value); }).catch(() => undefined);
     return () => { alive.current = false; current = false; };
   }, [storageKey, client, viewer.kind, viewer.id]);
 
@@ -117,28 +118,18 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
   }, [hasContent, closing, onBack]);
 
   function persist(next?: Draft) {
-    const operation = writes.current.then(() => next && (next.text.trim() || next.photos.length)
+    const operation = writes.current.then(() => next && hasDraftContent(next)
       ? AsyncStorage.setItem(storageKey, JSON.stringify(next))
       : AsyncStorage.removeItem(storageKey));
     writes.current = operation.catch(() => undefined);
     return operation;
   }
 
-  function edit(text: string) {
+  function edit(options: Partial<Pick<Draft, "text" | "visibility" | "mentions">>) {
     if (!draft || pending.current || picking.current) return;
-    const next = { ...draft, text, key: communityRequestKey() };
+    const next = { ...draft, ...options, key: communityRequestKey() };
     setDraft(next);
-    setMentionOpen(text.endsWith("@") && mentionItems.length > 0);
     void persist(next).catch(() => { if (alive.current) setError("草稿未保存，请保留页面再试。"); });
-  }
-
-  function insertToken(token: string) {
-    if (!draft) return;
-    const base = draft.text.endsWith("@") && token.startsWith("@")
-      ? draft.text.slice(0, -1)
-      : draft.text;
-    edit(`${base}${token}`);
-    setMentionOpen(false);
   }
 
   async function pickPhotos(camera: boolean) {
@@ -215,7 +206,14 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
     setBusy(true);
     setError("");
     try {
-      const post = await client.publish(viewer, draft.text, draft.key);
+      const post = await client.publish(viewer, draft.text, draft.key, {
+        visibility: draft.visibility,
+        mentions: draft.mentions.map(mention => mention.id),
+      });
+      if (draft.visibility !== "PUBLIC" && post.visibility !== draft.visibility) {
+        if (alive.current) setError("服务端返回的可见范围与你选择的不一致。请先核对动态，草稿已保留。");
+        return;
+      }
       await persist().catch(() => undefined);
       if (alive.current) onPublished(post);
     } catch (problem) {
@@ -258,12 +256,14 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
             {author ? <ActorLine actor={author} /> : <View />}
             <Pressable
               accessibilityRole="button"
-              onPress={() => setNotice("目前仅支持所有人可见，仅关注 / 仅自己可见将随服务端更新开放。")}
+              accessibilityLabel={`可见范围：${POST_VISIBILITY_LABELS[draft?.visibility ?? "PUBLIC"]}`}
+              disabled={busy || closing || !draft}
+              onPress={() => { Keyboard.dismiss(); setVisibilityOpen(true); }}
               style={s.visibilityPill}
             >
               <Ionicons name="globe-outline" size={13} color={ui.accentInk} />
               <Text style={s.visibilityText}>
-                {viewer.kind === "OWNER" ? "所有人可见" : "公开 · 家机身份"}
+                {POST_VISIBILITY_LABELS[draft?.visibility ?? "PUBLIC"]}
               </Text>
               <Ionicons name="chevron-down" size={13} color={ui.accentInk} />
             </Pressable>
@@ -275,8 +275,8 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
               multiline
               editable={!busy && !closing}
               value={draft.text}
-              onChangeText={edit}
-              placeholder="分享今天的小事、心情，输入 @ 可提及家机…"
+              onChangeText={text => edit({ text })}
+              placeholder="分享今天的小事和心情…"
               placeholderTextColor={ui.muted}
               style={s.textInput}
             />
@@ -294,30 +294,12 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
             </View>
             <Text style={s.noticeText}>照片仅保存在本机草稿；目前移除照片后才能发布文字动态。</Text>
           </>}
-          {draft && /[#@]/.test(draft.text) && <Text style={s.noticeText}># 和 @ 暂按正文发布，不会发送提及通知。</Text>}
+          {draft && <MentionChips mentions={draft.mentions} disabled={busy || closing}
+            onRemove={id => edit({ mentions: draft.mentions.filter(mention => mention.id !== id) })} />}
         </View>
 
-        {!!notice && <Text style={s.noticeText}>{notice}</Text>}
         {!!error && <Text accessibilityRole="alert" style={s.errorText}>{error}</Text>}
       </ScrollView>
-
-      {mentionOpen && mentionItems.length > 0 && (
-        <View style={s.mentionTray}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.mentionList}>
-            {mentionItems.map(item => (
-              <Pressable
-                key={item.id}
-                accessibilityRole="button" disabled={busy || closing}
-                onPress={() => insertToken(`@${item.name} `)}
-                style={({ pressed }) => [s.mentionChip, pressed && { opacity: 0.8 }]}
-              >
-                <PixelAvatar name={item.name} role={item.role} size={20} />
-                <Text style={s.mentionName}>@{item.name}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        </View>
-      )}
 
       <View style={s.toolbar}>
         <View style={s.toolbarLeft}>
@@ -343,7 +325,7 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
             accessibilityRole="button"
             accessibilityLabel="添加话题"
             disabled={busy || closing || !draft}
-            onPress={() => insertToken("#")}
+            onPress={() => { if (draft) edit({ text: `${draft.text}#` }); }}
             style={s.toolBtn}
           >
             <Text style={s.toolGlyph}>#</Text>
@@ -351,14 +333,8 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="提及"
-            disabled={busy || closing || !draft}
-            onPress={() => {
-              if (mentionItems.length > 0) setMentionOpen(prev => !prev);
-              else {
-                insertToken("@");
-                setNotice("添加家机后，点 @ 即可快速选择家机名称。");
-              }
-            }}
+            disabled={busy || closing || !draft || !author}
+            onPress={() => { Keyboard.dismiss(); setMentionOpen(true); }}
             style={s.toolBtn}
           >
             <Text style={s.toolGlyph}>@</Text>
@@ -366,6 +342,22 @@ export function ComposePostScreen({ client, viewer, ownerId, companions = [], on
         </View>
         <Text style={length > 4000 ? s.errorText : s.counter}>{length} / 4000</Text>
       </View>
+
+      {mentionOpen && author && draft && <MentionPicker client={client} viewer={viewer} selfId={author.id}
+        selected={draft.mentions} onChange={mentions => edit({ mentions })} onClose={() => setMentionOpen(false)} />}
+
+      <BottomSheet visible={visibilityOpen} title="谁可以看这条动态？" onClose={() => setVisibilityOpen(false)}>
+        <View style={s.sheetActions}>
+          {VISIBILITIES.map(visibility => (
+            <CommunityButton key={visibility} label={POST_VISIBILITY_LABELS[visibility]} selected={draft?.visibility === visibility}
+              onPress={() => {
+                if (draft && draft.visibility !== visibility) edit({ visibility });
+                setVisibilityOpen(false);
+              }} />
+          ))}
+          <Text style={s.sheetHint}>仅当前身份可见时，切换到其他身份也看不到这条动态。</Text>
+        </View>
+      </BottomSheet>
 
       <BottomSheet visible={closing} title="这条动态还没发布" onClose={() => { if (!busy) setClosing(false); }}>
         <View style={s.sheetActions}>
@@ -441,23 +433,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   },
   noticeText: { fontSize: 12.5, color: ui.accentInk, paddingHorizontal: 4 },
   errorText: { fontSize: 12.5, color: ui.danger, paddingHorizontal: 4 },
-  mentionTray: {
-    paddingHorizontal: CHROME.screenInset,
-    paddingBottom: 8,
-  },
-  mentionList: { gap: 8 },
-  mentionChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: RADIUS.pill,
-    backgroundColor: ui.accentWash,
-    borderWidth: 1,
-    borderColor: ui.line,
-  },
-  mentionName: { fontSize: 13, fontWeight: "600", color: ui.accentInk },
   toolbar: {
     flexDirection: "row",
     alignItems: "center",

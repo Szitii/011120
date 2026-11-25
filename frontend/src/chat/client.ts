@@ -53,6 +53,7 @@ export interface ChatClient {
   listMemories?(id: string): Promise<MemoryList>;
   addMemory?(id: string, body: string, key: string): Promise<CompanionMemory>;
   deleteMemory?(id: string, memoryId: string): Promise<unknown>;
+  deleteCompanion?(id: string): Promise<{ deleted: true }>;
   getConnection?(id: string): Promise<CompanionConnection>;
   saveConnection?(id: string, input: ConnectionInput): Promise<ConnectionSaveResult>;
   removeConnection?(id: string): Promise<CompanionConnection>;
@@ -94,6 +95,7 @@ export function makeIdempotencyKey(prefix: string): string {
 export function createChatClient(send: SendFn, getAudio?: (path: string) => Promise<AudioClip>): ChatClient {
   const companion = (id: string) => `/v0/companions/${encodeURIComponent(id)}`;
   return {
+    deleteCompanion: id => send("DELETE", companion(id)),
     listAgentKeys: id => send("GET", `${companion(id)}/agent-keys`),
     createAgentKey: (id, name) => send("POST", `${companion(id)}/agent-keys`, { name }),
     revokeAgentKey: (id, keyId) => send("DELETE", `${companion(id)}/agent-keys/${encodeURIComponent(keyId)}`),

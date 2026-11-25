@@ -2,10 +2,16 @@ import { useThemedStyles, useSkin } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import type { CommunityActor, CommunityComment, CommunityPost } from "../../../contracts/community.ts";
+import type { CommunityActor, CommunityComment, CommunityPost, PostVisibility } from "../../../contracts/community.ts";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
+
+export const POST_VISIBILITY_LABELS = {
+  PUBLIC: "所有人可见",
+  FOLLOWERS: "仅粉丝可见",
+  PRIVATE: "仅当前身份可见",
+} satisfies Record<PostVisibility, string>;
 
 function formatRelativeTime(iso: string): string {
   const diffMin = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
@@ -18,6 +24,7 @@ function formatRelativeTime(iso: string): string {
 
 export function CommunityButton({
   label,
+  accessibilityLabel,
   onPress,
   disabled = false,
   selected = false,
@@ -25,6 +32,7 @@ export function CommunityButton({
   primary = false,
 }: {
   label: string;
+  accessibilityLabel?: string;
   onPress: () => void;
   disabled?: boolean;
   selected?: boolean;
@@ -35,6 +43,7 @@ export function CommunityButton({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled, selected }}
       disabled={disabled}
       onPress={onPress}
@@ -108,12 +117,20 @@ export function ContentCard({
   onDetail,
   onDelete,
   onReport,
+  onMention,
+  onLike,
+  likeDisabled,
+  highlighted,
 }: {
   item: CommunityPost | CommunityComment;
   onActor: () => void;
   onDetail?: () => void;
   onDelete: () => void;
   onReport?: () => void;
+  onMention: (actorId: string) => void;
+  onLike?: () => void;
+  likeDisabled?: boolean;
+  highlighted?: boolean;
 }) {
   const { ui } = useSkin();
   const communityStyles = useCommunityStyles();
@@ -122,14 +139,37 @@ export function ContentCard({
     : item.author.kind === "AI" ? `${timeText} · 家机` : timeText;
 
   return (
-    <View style={communityStyles.card}>
+    <View style={[communityStyles.card, highlighted && { borderColor: ui.accent }]}>
+      {highlighted && <Text style={communityStyles.meta}>通知指向的评论</Text>}
       <ActorLine actor={item.author} onPress={onActor} subtitle={subtitle} />
+      {"visibility" in item && (item.visibility === "PRIVATE" || item.visibility === "FOLLOWERS") && (
+        <Text style={communityStyles.meta}>{POST_VISIBILITY_LABELS[item.visibility]}</Text>
+      )}
       <Text selectable style={communityStyles.body}>{item.body}</Text>
+      {item.mentions && item.mentions.length > 0 && <View style={communityStyles.row}>
+        {item.mentions.map(actor => (
+          <Pressable key={actor.id} accessibilityRole="link" accessibilityLabel={`查看${actor.displayName}的主页（@${actor.handle}）`}
+            onPress={() => onMention(actor.id)} style={communityStyles.actionChip}>
+            <Text style={[communityStyles.actionChipText, { color: ui.accentInk }]}>@{actor.displayName}</Text>
+          </Pressable>
+        ))}
+      </View>}
       <View style={communityStyles.cardFooter}>
         <View style={communityStyles.cardFooterLeft}>
+          {onLike && "likeCount" in item && (
+            <Pressable accessibilityRole="button" accessibilityLabel={item.likedByMe ? "取消点赞" : "点赞"}
+              accessibilityState={{ selected: item.likedByMe, disabled: likeDisabled }}
+              disabled={likeDisabled} onPress={onLike}
+              style={({ pressed }) => [communityStyles.actionChip, pressed && { opacity: 0.65 }]}>
+              <Ionicons name={item.likedByMe ? "heart" : "heart-outline"} size={15}
+                color={item.likedByMe ? ui.accentInk : ui.muted} />
+              <Text style={communityStyles.actionChipText}>{item.likeCount}</Text>
+            </Pressable>
+          )}
           {onDetail && "commentsCount" in item && (
             <Pressable
               accessibilityRole="button"
+              accessibilityLabel={`查看评论（${item.commentsCount}）`}
               onPress={onDetail}
               style={({ pressed }) => [communityStyles.actionChip, pressed && { opacity: 0.65 }]}
             >

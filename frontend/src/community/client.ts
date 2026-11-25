@@ -44,8 +44,9 @@ export function createCommunityClient(request: Requester): CommunityClient {
     feed: (v, options: { mode?: CommunityFeedMode; filter?: CommunityActorFilter; authorId?: string; cursor?: string } = {}) =>
       request("GET", path(v, "feed", options)),
     detail: (v, postId, cursor) => request("GET", path(v, `posts/${encodeURIComponent(postId)}`, { cursor })),
-    publish: (v, body, key) => request("POST", path(v, "posts"), { body }, key),
-    comment: (v, postId, body, key) => request("POST", path(v, `posts/${encodeURIComponent(postId)}/comments`), { body }, key),
+    publish: (v, body, key, options) => request("POST", path(v, "posts"), { body, ...options }, key),
+    comment: (v, postId, body, key, options) => request("POST", path(v, `posts/${encodeURIComponent(postId)}/comments`), { body, ...options }, key),
+    like: (v, postId, liked) => request(liked ? "PUT" : "DELETE", path(v, `posts/${encodeURIComponent(postId)}/like`)),
     follow: (v, actorId, following, key) => request(following ? "PUT" : "DELETE", path(v, `following/${encodeURIComponent(actorId)}`), undefined, key),
     remove: (v, kind, id, key) => request("DELETE", path(v, `${kind}/${encodeURIComponent(id)}`), undefined, key),
     notifications: (v, cursor) => request("GET", path(v, "notifications", { cursor })),
