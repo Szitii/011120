@@ -12,7 +12,7 @@ import { ACTION_TEXT, answersAction, splitVoice } from "./prompt.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { DiaryWriteResult } from "../../../contracts/chat.ts";
 import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob, PostJob, PostOutcome, PostStart } from "./port.ts";
-import type { Clip, Emotion, Voices } from "./voices.ts";
+import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
  * What a model made of a turn: 1 to 3 short messages, like texting (more are joined into the
@@ -31,9 +31,42 @@ export type DiaryAnswer = { text: string } | { refused: true } | { failed: "UNAV
 /** A community post the model wrote on its own; `pass` when it had nothing to say. */
 export type PostAnswer = DiaryAnswer | { pass: true };
 
-/** Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on. */
+/**
+ * Why one message of a reply is, or is not, a voice message. SPOKEN: a clip was made. NO_VOICE: the
+ * Owner chose none. VOICE_UNAVAILABLE: the chosen voice cannot be made on this server. NO_MARK: the
+ * model wrote it as text. MERGED: lines past the third, joined. REDACTED: the safety scan changed
+ * it. TOO_LONG: over 120 characters. OVER_LIMIT: today's voice messages are used up. LIMIT_UNKNOWN:
+ * the count could not be read. SPEECH_TIMEOUT and SPEECH_FAILED (with the provider's status when
+ * it gave one): the speech provider.
+ */
+export type VoiceResult = "SPOKEN" | "NO_VOICE" | "VOICE_UNAVAILABLE" | "NO_MARK" | "MERGED" | "REDACTED" | "TOO_LONG"
+  | "OVER_LIMIT" | "LIMIT_UNKNOWN" | "SPEECH_TIMEOUT" | `SPEECH_FAILED${string}`;
+
+/**
+ * One line per turn, so "why did this reply come as text?" can be answered afterwards: ids, the
+ * channel, how long the model and the speech took, how the turn ended, and why each message is or
+ * is not a voice message. Never what was said, a memory, a key, audio or a provider's own words.
+ * `stored` false with a SPOKEN message: the clip was made but the reply was not saved.
+ */
+export interface ReplyTrace {
+  event: "chat_reply";
+  chatId: string;
+  replyId: string;
+  companionId: string;
+  channel: "PLATFORM" | "BYOK" | "EXTERNAL";
+  outcome: ChatOutcome;
+  modelMs: number;
+  speechMs: number;
+  voice: VoiceResult[];
+  stored: boolean;
+}
+
+/**
+ * Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on.
+ * A model that answers through the Owner's own key or agent says so with `via`, for the trace.
+ */
 export interface ChatModel {
-  reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal }): Promise<Answer>;
+  reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void }): Promise<Answer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
   /** Writes a community post of its own; without it, such posts fail. */
@@ -107,18 +140,21 @@ export class ChatReplies {
   readonly #timeoutMs: number;
   readonly #voices: Voices | undefined;
   readonly #speechTimeoutMs: number;
+  readonly #trace: (trace: ReplyTrace) => void;
   readonly #safety = new SafetyPipeline();
   readonly #running = new Set<string>();
 
   /**
    * Without a model, turns that must answer end as FAILED / UNAVAILABLE ("coming soon"); optional ones stay quiet.
-   * Without `voices` (or a speaker in it), every reply is text.
+   * Without `voices` (or a speaker in it), every reply is text. `trace` gets one record per turn.
    */
-  constructor(model?: ChatModel, timeoutMs = MODEL_TIMEOUT_MS, voices?: Voices, speechTimeoutMs = SPEECH_TIMEOUT_MS) {
+  constructor(model?: ChatModel, timeoutMs = MODEL_TIMEOUT_MS, voices?: Voices, speechTimeoutMs = SPEECH_TIMEOUT_MS,
+    trace: (trace: ReplyTrace) => void = () => undefined) {
     this.#model = model;
     this.#timeoutMs = timeoutMs;
     this.#voices = voices;
     this.#speechTimeoutMs = speechTimeoutMs;
+    this.#trace = trace;
   }
 
   /** The voices an Owner can pick, if this server has a voice catalog. */
@@ -136,12 +172,22 @@ export class ChatReplies {
     let written = 0;
     for (let claim = await port.claim(chatId); claim !== null; claim = await port.claim(chatId)) {
       const turn = speakable(claim, this.#voices);
-      const [outcome, bodies, clips] = await this.#answer(turn, port);
+      const trace: ReplyTrace = {
+        event: "chat_reply", chatId: turn.chatId, replyId: turn.replyId, companionId: turn.companion.companionId,
+        channel: "PLATFORM", outcome: "ERROR", modelMs: 0, speechMs: 0, voice: [], stored: false,
+      };
+      const silent = turn.companion.settings.voice ? null : claim.companion.settings.voice ? "VOICE_UNAVAILABLE" : "NO_VOICE";
+      const [outcome, bodies, clips] = await this.#answer(turn, port, trace, silent);
       // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
       const final = outcome === "ERROR" && answersAction(turn) ? "PASSED" : outcome;
-      // Text-only replies call finish as before; clips go along only when there are some.
-      await (clips === undefined ? port.finish(turn.replyId, turn.claimId, final, bodies)
-        : port.finish(turn.replyId, turn.claimId, final, bodies, clips));
+      trace.outcome = final;
+      try {
+        // Text-only replies call finish as before; clips go along only when there are some.
+        trace.stored = await (clips === undefined ? port.finish(turn.replyId, turn.claimId, final, bodies)
+          : port.finish(turn.replyId, turn.claimId, final, bodies, clips));
+      } finally {
+        this.#trace(trace);
+      }
       written += 1;
     }
     return written;
@@ -222,33 +268,48 @@ export class ChatReplies {
   }
 
   /**
-   * Says the messages marked as voice messages, in the Companion's voice, while today's voice
-   * messages last. A message that cannot be said (too long, over the limit, the provider failed or
-   * took too long) stays text: undefined when every message is text.
+   * Says the messages still to be said (`results` null), in the Companion's voice, while today's
+   * voice messages last. A message that cannot be said (over the limit, the provider failed or took
+   * too long) stays text, and `results` says why: undefined when every message is text.
    */
-  async #speak(turn: ChatClaim, port: ChatPort, texts: readonly string[], tones: readonly (false | Emotion | null)[]) {
+  async #speak(turn: ChatClaim, port: ChatPort, texts: readonly string[], tones: readonly (Emotion | null)[],
+    results: (VoiceResult | null)[], trace: ReplyTrace) {
     const voices = this.#voices;
     const voice = voices?.pick(turn.companion.settings.voice);
-    const wanted = tones.map((tone, i) => tone !== false && Array.from(texts[i]!).length <= MAX_VOICE_CHARS);
-    if (voices === undefined || voice === undefined || !wanted.includes(true)) return undefined;
-    let left = await port.voiceLeft().then(left => left.companion, () => 0);
+    if (voices === undefined || voice === undefined || !results.includes(null)) return undefined;
+    const started = Date.now();
+    let left = await port.voiceLeft().then(left => left.companion, () => null);
     const signal = AbortSignal.timeout(this.#speechTimeoutMs);
     const clips = await Promise.all(texts.map(async (text, i): Promise<Clip | null> => {
-      if (!wanted[i] || left <= 0) return null;
+      if (results[i] !== null) return null;
+      if (left === null || left <= 0) {
+        results[i] = left === null ? "LIMIT_UNKNOWN" : "OVER_LIMIT";
+        return null;
+      }
       left -= 1;
-      const clip = await voices.speak(text, voice, tones[i] || null, signal).catch(() => null);
-      // Booked for the cost page; a booking that fails must not cost the Owner the message.
-      if (clip !== null) await port.voiceUsed("SPEAK", clip.characters).catch(() => undefined);
-      return clip;
+      try {
+        const clip = await voices.speak(text, voice, tones[i]!, signal);
+        // Booked for the cost page; a booking that fails must not cost the Owner the message.
+        await port.voiceUsed("SPEAK", clip.characters).catch(() => undefined);
+        results[i] = "SPOKEN";
+        return clip;
+      } catch (error) {
+        results[i] = signal.aborted ? "SPEECH_TIMEOUT" : error instanceof SpeechError ? `SPEECH_FAILED_${error.code}` : "SPEECH_FAILED";
+        return null;
+      }
     }));
+    trace.speechMs = Date.now() - started;
     return clips.some(clip => clip !== null) ? clips : undefined;
   }
 
-  async #answer(turn: ChatClaim, port: ChatPort): Promise<Answered> {
+  /** `silent`: why this Companion has no voice messages now, or null when it has a voice. */
+  async #answer(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
     const model = this.#model;
     if (model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
     try {
-      const result = await this.#timed(signal => model.reply(turn, { port, signal }));
+      const started = Date.now();
+      const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; } }))
+        .finally(() => { trace.modelMs = Date.now() - started; });
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];
       // An optional turn that cannot be made simply stays quiet; one that must answer says why.
@@ -257,8 +318,6 @@ export class ChatReplies {
       const parts = marked.map(part => part.text);
       const messages = parts.length <= MAX_MESSAGES ? parts
         : [...parts.slice(0, MAX_MESSAGES - 1), parts.slice(MAX_MESSAGES - 1).join("\n")];
-      // When more than three came, the third holds the rest joined together: that one is text.
-      const tones = marked.slice(0, MAX_MESSAGES).map((part, i) => (parts.length > MAX_MESSAGES && i === MAX_MESSAGES - 1 ? false : part.voice));
       // Nothing to say or an over-long message is the model misbehaving, not a safety problem: it may be retried.
       if (messages.length === 0 || messages.some(text => text.length > MAX_CHARS)) return ["ERROR", null];
       const scans = messages.map(text => this.#safety.scanOutput(text));
@@ -266,8 +325,16 @@ export class ChatReplies {
       const safe = scans.map(scan => scan.sanitized.trim());
       // Redaction markers can make a message longer than the database accepts.
       if (safe.some(text => text.length > MAX_CHARS)) return ["ERROR", null];
-      // A message the scan changed (a redacted phone number, say) is sent as text, not read out with its markers.
-      const clips = await this.#speak(turn, port, safe, tones.map((tone, i) => (safe[i] === messages[i]!.trim() ? tone : false)));
+      // Why each message is text, or null when it is to be said. When more than three came, the third
+      // holds the rest joined together: that one is text. So is a message the scan changed (a redacted
+      // phone number, say): it is not read out with its markers.
+      const results = safe.map((text, i): VoiceResult | null => silent
+        ?? (parts.length > MAX_MESSAGES && i === MAX_MESSAGES - 1 ? "MERGED"
+          : marked[i]!.voice === false ? "NO_MARK"
+          : text !== messages[i]!.trim() ? "REDACTED"
+          : Array.from(text).length > MAX_VOICE_CHARS ? "TOO_LONG" : null));
+      const clips = await this.#speak(turn, port, safe, marked.map(part => part.voice || null), results, trace);
+      trace.voice = results.map(result => result ?? "VOICE_UNAVAILABLE");
       return ["SENT", safe, clips];
     } catch {
       return ["ERROR", null]; // the model failed, timed out, or answered in the wrong shape
