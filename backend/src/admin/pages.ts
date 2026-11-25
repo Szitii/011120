@@ -134,7 +134,8 @@ const word = (table: Readonly<Record<string, string>>, key: string | null) => ke
 /** A moment as the operator reads it, in the IANA time zone `zone`. */
 const time = (zone: string, value: string | null) => value === null ? "" :
   new Date(value).toLocaleString("zh-CN", { timeZone: zone, hour12: false });
-const money = (minor: number, currency: string) => `${(minor / 100).toFixed(2)} ${currency}`;
+/** Money in a currency's minor unit: "$1.23" for dollars, else "1.23 CNY". */
+const money = (minor: number, currency: string) => currency === "USD" ? `$${(minor / 100).toFixed(2)}` : `${(minor / 100).toFixed(2)} ${currency}`;
 /** Dollars from cents that may be a fraction: a little that is not nothing shows as "< $0.01". */
 const usd = (cents: number) => cents > 0 && cents < 1 ? "< $0.01" : `$${(Math.round(cents) / 100).toFixed(2)}`;
 const count = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -433,6 +434,7 @@ export function switchTargets(catalog: readonly CatalogEntry[]): { value: string
 export function modelsPage(zone: string, models: Models, catalog: readonly CatalogEntry[], features: readonly Feature[],
   done: boolean, vendors: readonly VendorStatus[] = []): string {
   const q = models.quota, w = models.wallet, back = "/models";
+  const vendorsUsed = new Set(catalog.map(m => m.provider)).size;
   const ownOn = (scope: string, key: string) => !models.switches.some(s => s.scope === scope && s.key === key && !s.enabled);
   const gift = w.welcomeCredits > 0 ? w.welcomeCredits : 1000;
   return page("模型与额度", "/models", html`
@@ -442,7 +444,9 @@ ${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td><td>${catalog.filter(m 
     ? html`<span class="muted">看不到:${v.serverKey.why}</span>` : html`<span class="tag">已设置</span> <span class="muted">更新于 ${time(zone, v.serverKey.at)}</span>`}</td>
 <td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
 <p class="muted">后台只看得到 Key 有没有、何时换过,看不到也改不了 Key 本身。要加或换 Key,找 Claude 弹输入框直接存进服务器。</p>`)}
-${panel("模型开关", html`<div class="scroll"><table><tr><th>开关</th><th>厂商 / 模型名</th><th>现在</th></tr>${switchTargets(catalog).map(t => {
+${panel("模型开关", html`<div class="scroll"><table><tr><th>开关</th><th>厂商 / 模型名</th><th>现在</th></tr>${switchTargets(catalog).filter(t =>
+    // With one company, its switch does exactly what the switch for everything does: shown only if someone turned it off.
+    !t.value.startsWith("PROVIDER:") || vendorsUsed > 1 || !ownOn("PROVIDER", t.value.slice(9))).map(t => {
     const cut = t.value.indexOf(":"), scope = t.value.slice(0, cut), key = t.value.slice(cut + 1), on = ownOn(scope, key);
     const entry = scope === "MODEL" ? catalog.find(m => `${m.provider}/${m.model}` === key) : undefined;
     const state = entry === undefined ? (on ? "开" : "关") : switchState(models, entry);
@@ -457,7 +461,7 @@ ${panel("功能开关", html`<div class="scroll"><table><tr><th>功能</th><th>�
 ${panel("每个家机每天的免费额度", html`
 <p>现在:每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
 ${edit("修改额度", act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
-<label>金额(分)<input name="cents" type="number" min="0" required value="${q.dailyCostMinor}"></label>`))}`)}
+<label>金额(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(q.dailyCostMinor / 100).toString()}"></label>`))}`)}
 ${panel("新人送积分", html`
 <div>${toggle("/models/welcome", w.welcomeCredits > 0, "新人送积分", back, hidden("welcome", gift),
     w.welcomeCredits > 0 ? `开:每个新主人第一次用钱包时送 ${count(w.welcomeCredits)} 积分(只送一次)` : "关:新主人不送积分")}${
@@ -676,8 +680,12 @@ export function costsPage(now: Date, c: Costs, cap: Models["cap"] | null, done: 
   const daily = vendors.filter(v => v.perDay.size > 0).map(v => ({ name: v.name, color: vendorColor(v.key), values: days.map(d => v.perDay.get(d) ?? 0) }));
   const series = daily.length > 1 ? [{ name: "合计", color: INK, values: days.map((_, i) => daily.reduce((n, s) => n + s.values[i]!, 0)) }, ...daily] : daily;
   const m = c.models;
-  const tools = html`${costsTabs(false, c.month)}<form method="get" action="/costs" class="act"><input type="month" name="month" value="${c.month}" required><button>看这个月</button></form>
+  const tools = html`${costsTabs(false, c.month)}<form method="get" action="/costs" class="act"><input type="month" name="month" value="${c.month}" max="${now.toISOString().slice(0, 7)}" required><button>看这个月</button></form>
 <a class="btn" href="/costs/export.xlsx?month=${c.month}">导出 xlsx</a>`;
+  // A past month with no use at all is before the App started: nothing was paid, not even the fixed bills.
+  if (!thisMonth && usedMonths([c]).length === 0) {
+    return page(`花费 · ${c.month}`, "/costs", html`<p class="empty">${c.month} 还没有任何用量,也不算固定月费。</p>`, done, bar(tools));
+  }
   return page(`花费 · ${c.month}`, "/costs", html`
 <div class="cards hero">
 <div class="card total"><div class="muted">${thisMonth ? "本月到今天" : "这个月"}总花费</div><div class="big">${usd(total)}</div>
@@ -714,7 +722,7 @@ export function costsYearPage(now: Date, year: string, months: readonly Costs[])
     ...keys.map(k => ({ name: vendorName(k), color: k === "supabase" || k === "fly" || k === "other" ? "#9ca3af" : vendorColor(k), values: rows.map(r => cents(r, k)) }))];
   const y = Number(year);
   const tools = html`${costsTabs(true, `${year}-${months.at(-1)?.month.slice(5) ?? "01"}`)}
-<span class="seg"><a class="btn" href="/costs?year=${y - 1}">← ${y - 1}</a>${y < now.getUTCFullYear() ? html`<a class="btn" href="/costs?year=${y + 1}">${y + 1} →</a>` : ""}</span>
+<span class="seg">${rows.length > 0 && rows.length === months.length ? html`<a class="btn" href="/costs?year=${y - 1}">← ${y - 1}</a>` : ""}${y < now.getUTCFullYear() ? html`<a class="btn" href="/costs?year=${y + 1}">${y + 1} →</a>` : ""}</span>
 <a class="btn" href="/costs/export.xlsx?year=${year}">导出 xlsx</a>`;
   return page(`花费 · ${year} 年`, "/costs", html`
 <div class="cards hero"><div class="card total"><div class="muted">${year} 年${y === now.getUTCFullYear() ? "到今天" : ""}总花费</div><div class="big">${usd(total)}</div>
@@ -765,7 +773,7 @@ export function statsPage(now: Date, a: Activity): string {
   const today = thisMonth ? days.at(-1) : undefined;
   const labels = days.map(d => d.day);
   const line = (name: string, slot: number, k: keyof Omit<ActivityDay, "day">) => ({ name, color: SLOTS[slot]!, values: days.map(d => d[k]) });
-  const tools = html`<form method="get" action="/stats" class="act"><input type="month" name="month" value="${a.month}" required><button>看这个月</button></form>`;
+  const tools = html`<form method="get" action="/stats" class="act"><input type="month" name="month" value="${a.month}" max="${now.toISOString().slice(0, 7)}" required><button>看这个月</button></form>`;
   const card = (label: string, value: string, note: string) => html`<div class="card"><div class="muted">${label}</div><div class="big">${value}</div><div class="muted">${note}</div></div>`;
   return page(`运营数据 · ${a.month}`, "/stats", html`
 <div class="cards">

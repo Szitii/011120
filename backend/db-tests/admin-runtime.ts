@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import pg from "pg";
 import { PgAdminDb } from "../src/admin/db.ts";
@@ -375,21 +375,24 @@ try {
   passed("the log cannot be changed, names who did what and why, and pages without gaps");
 
   // ---- the console itself, connected as an operator, against the real database ----
-  const TOKEN = "c".repeat(64);
-  consoleServer = createAdminServer({ db: new PgAdminDb(consolePool), token: TOKEN, timeZone: "UTC",
+  consoleServer = createAdminServer({ tailnet: { hostname: "companion-admin", operators: new Map([["op@x.test", new PgAdminDb(consolePool)]]) }, timeZone: "UTC",
     catalog: [{ name: "Spend fixture", provider: "admin-test-provider", model: "m-spend" }] });
-  const base = await new Promise<string>(resolve => consoleServer!.listen(0, "127.0.0.1", () =>
-    resolve(`http://127.0.0.1:${(consoleServer!.address() as AddressInfo).port}`)));
-  const web = async (path: string, form?: Record<string, string>) => {
-    const response = await fetch(`${base}${path}`, { method: form ? "POST" : "GET", redirect: "manual",
-      headers: { Cookie: `admin_console=${TOKEN}`, ...(form ? { "Content-Type": "application/x-www-form-urlencoded", Origin: base } : {}) },
-      ...(form ? { body: new URLSearchParams(form).toString() } : {}) });
-    return { status: response.status, location: response.headers.get("location"), body: await response.text() };
-  };
+  const port = await new Promise<number>(resolve => consoleServer!.listen(0, "127.0.0.1", () => resolve((consoleServer!.address() as AddressInfo).port)));
+  // As Tailscale hands it on: the tailnet name and the login (fetch would not send this Host).
+  const web = (path: string, form?: Record<string, string>, login = "op@x.test") =>
+    new Promise<{ status: number; location: string | null; body: string }>((resolve, reject) => {
+      const body = form ? new URLSearchParams(form).toString() : undefined;
+      const sent = httpRequest({ host: "127.0.0.1", port, path, method: form ? "POST" : "GET", headers: { Host: "companion-admin", "Tailscale-User-Login": login,
+        ...(form ? { "Content-Type": "application/x-www-form-urlencoded", Origin: "http://companion-admin" } : {}) } }, response => {
+        const chunks: Buffer[] = [];
+        response.on("data", chunk => chunks.push(chunk as Buffer));
+        response.on("end", () => resolve({ status: response.statusCode!, location: response.headers.location ?? null, body: Buffer.concat(chunks).toString("utf8") }));
+      });
+      sent.on("error", reject);
+      sent.end(body);
+    });
   const why = (reason: string, more: Record<string, string> = {}) => ({ reason, confirm: "yes", ...more });
-  assert.equal((await fetch(`${base}/reports`)).status, 403, "no token, no console");
-  const entered = await fetch(`${base}/?token=${TOKEN}`, { redirect: "manual" });
-  assert.deepEqual([entered.status, entered.headers.get("location")], [303, "/reports"]);
+  assert.equal((await web("/reports", undefined, "mallory@x.test")).status, 403, "not on the list, no console");
 
   const third = await person("Third");
   const fresh = await report(third.actor, target.actor, "POST", first, "Admin fixture post one");
@@ -462,7 +465,7 @@ try {
   assert.ok((await web("/models")).body.includes("关(模型关闭)"));
   assert.equal((await web("/models/switch", why("Console switch on", { target: "MODEL:admin-test-provider/m-spend", enabled: "on" }))).status, 303);
   assert.ok(!(await web("/models")).body.includes("关(模型关闭)"));
-  assert.equal((await web("/models/quota", why("Console quota", { calls: String(quotaBefore.dailyCalls), cents: String(quotaBefore.dailyCostMinor) }))).status, 303);
+  assert.equal((await web("/models/quota", why("Console quota", { calls: String(quotaBefore.dailyCalls), dollars: (quotaBefore.dailyCostMinor / 100).toString() }))).status, 303);
   const logged = await web("/log");
   assert.ok(logged.status === 200 && ["Console quota", "Console switch on", "Console check", "查看私聊", "每日额度"].every(text => logged.body.includes(text)));
   assert.ok((await web(`/log?owner=${target.owner}`)).body.includes("Console suspension"));
