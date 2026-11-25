@@ -51,6 +51,8 @@ export function ChatSettingsScreen({
   const [modelError, setModelError] = useState(false);
   const [deleteSheetOpen, setDeleteSheetOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const deletingRef = useRef(false);
   const [reload, setReload] = useState(0);
   const pending = useRef(false);
   const settingsRead = useRef(0);
@@ -58,7 +60,7 @@ export function ChatSettingsScreen({
   const saveDisabled = busy || (voiceChanged && !voices?.available);
 
   const handleBack = useCallback(() => {
-    if (pending.current || deleting) return;
+    if (pending.current || deletingRef.current) return;
     if (connectionMode) {
       setConnectionMode(undefined);
       return;
@@ -68,7 +70,7 @@ export function ChatSettingsScreen({
       return;
     }
     onBack?.();
-  }, [connectionMode, deleting, onBack, voiceChanged]);
+  }, [connectionMode, onBack, voiceChanged]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -144,22 +146,18 @@ export function ChatSettingsScreen({
   }
 
   async function confirmDelete() {
-    if (!onDeleteCompanion) {
-      setDeleteSheetOpen(false);
-      setNotice("删除家机需要后端删除接口就绪后开放，目前已在排期中。");
-      return;
-    }
+    if (!onDeleteCompanion || deletingRef.current || pending.current) return;
+    deletingRef.current = true;
     const read = settingsRead.current;
+    setDeleteError("");
     setDeleting(true);
     try {
       await onDeleteCompanion();
       if (read === settingsRead.current) setDeleteSheetOpen(false);
     } catch (error) {
-      if (read === settingsRead.current) {
-        setDeleteSheetOpen(false);
-        setNotice(safeClientMessage(error).title);
-      }
+      if (read === settingsRead.current) setDeleteError(`暂时无法删除。${safeClientMessage(error).title}`);
     } finally {
+      deletingRef.current = false;
       if (read === settingsRead.current) setDeleting(false);
     }
   }
@@ -286,14 +284,14 @@ export function ChatSettingsScreen({
                   />
                 )}
 
-                <Pressable
+                {onDeleteCompanion && <Pressable
                   accessibilityRole="button"
                   disabled={busy || deleting}
-                  onPress={() => setDeleteSheetOpen(true)}
+                  onPress={() => { setDeleteError(""); setDeleteSheetOpen(true); }}
                   style={({ pressed }) => [s.deleteBtn, pressed && { opacity: 0.78 }]}
                 >
                   <Text style={s.deleteBtnText}>删除这位家机</Text>
-                </Pressable>
+                </Pressable>}
               </>
             )}
           </>
@@ -322,15 +320,14 @@ export function ChatSettingsScreen({
         <CommunityButton label="放弃更改并返回" onPress={() => { setLeaveSheetOpen(false); onBack?.(); }} />
       </BottomSheet>
 
-      <BottomSheet visible={deleteSheetOpen} title="删除这位家机？" onClose={() => { if (!deleting) setDeleteSheetOpen(false); }}>
+      <BottomSheet visible={deleteSheetOpen} title="删除这位家机？" onClose={() => { if (!deletingRef.current) setDeleteSheetOpen(false); }}>
         <View style={{ gap: 12 }}>
           <Text style={s.mutedText}>
-            {onDeleteCompanion
-              ? "删除后将无法恢复该家机的聊天与小家记录，请确认是否继续。"
-              : "服务端删除家机接口正在接入中，上线后即可在这里一键移除不需要的家机。"}
+            删除后，该家机的聊天、日记和记忆无法恢复，社区动态也会撤下。
           </Text>
+          {deleteError !== "" && <Text accessibilityRole="alert" style={s.deleteError}>{deleteError}</Text>}
           <CommunityButton
-            label={deleting ? "正在删除…" : onDeleteCompanion ? "确认删除" : "我知道了"}
+            label={deleting ? "正在删除…" : "确认删除"}
             disabled={deleting}
             onPress={() => void confirmDelete()}
           />
@@ -411,4 +408,5 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     justifyContent: "center",
   },
   deleteBtnText: { fontSize: 14.5, fontWeight: "600", color: ui.danger },
+  deleteError: { fontSize: 13, color: ui.danger },
 });

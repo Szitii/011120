@@ -26,11 +26,11 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { LinearGradient } from "expo-linear-gradient";
 import { createClientBootstrap, type ClientBootstrap } from "./src/adapters";
-import { RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
+import { ApiProblemError, RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
 import { AccountGate } from "./src/auth/AccountGate";
 import type { AccountBinding } from "./src/auth/account-session";
 import type { CommunityPost, CommunityProfile } from "../contracts/community";
-import { SecondaryHeading } from "./src/community/components";
+import { CommunityButton, SecondaryHeading } from "./src/community/components";
 import { ChatSettingsScreen } from "./src/chat/ChatSettingsScreen";
 import { CreateGroupScreen } from "./src/messages/CreateGroupScreen";
 import { ComposePostScreen } from "./src/community/ComposePostScreen";
@@ -180,6 +180,7 @@ function WorldApp({ client, account, isMockMode }: {
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const [communityRevision, setCommunityRevision] = useState(0);
   const invalidateCommunity = useCallback(() => setCommunityRevision(value => value + 1), []);
+  const [companionDeleteRevision, setCompanionDeleteRevision] = useState(0);
   const [createdHome, setCreatedHome] = useState<OwnerCompanionSummary>();
   const [selectedHomeCompanionId, setSelectedHomeCompanionId] = useState<string>();
   const ownerCompanionsRequest = useRef(0);
@@ -220,10 +221,12 @@ function WorldApp({ client, account, isMockMode }: {
     ?? createdHome
   ) : undefined;
   useEffect(() => {
-    if (!homeSelectionLoaded || !ownerId || !homeSelectionKey || ownerCompanions.kind !== "success" || !homeCompanion) return;
-    if (selectedHomeCompanionId === homeCompanion.companionId) return;
-    setSelectedHomeCompanionId(homeCompanion.companionId);
-    void AsyncStorage.setItem(homeSelectionKey, homeCompanion.companionId).catch(() => undefined);
+    if (!homeSelectionLoaded || !ownerId || !homeSelectionKey
+      || (ownerCompanions.kind !== "success" && ownerCompanions.kind !== "empty")) return;
+    const next = homeCompanion?.companionId;
+    if (selectedHomeCompanionId === next) return;
+    setSelectedHomeCompanionId(next);
+    void (next ? AsyncStorage.setItem(homeSelectionKey, next) : AsyncStorage.removeItem(homeSelectionKey)).catch(() => undefined);
   }, [homeSelectionLoaded, ownerId, homeSelectionKey, ownerCompanions.kind, homeCompanion?.companionId, selectedHomeCompanionId]);
   const worldVisible = route.type === "root" && route.tab === "world";
   const homeScope = ownerId && homeCompanion ? { ownerId, companionId: homeCompanion.companionId } : undefined;
@@ -341,6 +344,39 @@ function WorldApp({ client, account, isMockMode }: {
     setProfileResult(undefined);
   }
 
+  async function deleteOwnedCompanion(companionId: string) {
+    const remove = client.api.chat?.deleteCompanion;
+    if (!ownerId || !remove) return;
+    let roster: OwnerCompanionCollection | undefined;
+    try {
+      const result = await remove(companionId);
+      if (result.deleted !== true) throw new Error("Companion removal was not confirmed.");
+    } catch (error) {
+      if (!(error instanceof ApiProblemError) || error.status !== 404) throw error;
+      // A prior delete can succeed even when its response was lost. Confirm absence under this owner.
+      roster = await client.api.ownerCompanions();
+      if (roster.items.some(item => item.companionId === companionId)) throw error;
+    }
+    setOwnerCompanions(previous => {
+      const items = (roster?.items ?? (previous.kind === "success" ? previous.value.items : []))
+        .filter(item => item.companionId !== companionId);
+      return items.length ? { kind: "success", value: { items } } : { kind: "empty" };
+    });
+    setCreatedHome(previous => previous?.companionId === companionId ? undefined : previous);
+    invalidateCompanionViews();
+    invalidateCommunity();
+    refreshBadges();
+    setCompanionDeleteRevision(value => value + 1);
+    setNav(current => {
+      if (current.stack.at(-1) === route) return selectTab(current, "home");
+      const stack = current.stack.filter(item => !("companionId" in item && item.companionId === companionId));
+      return stack.length === current.stack.length ? current : { ...current, stack };
+    });
+    if (roster) ownerCompanionsRequest.current++;
+    else void loadOwnerCompanions(true);
+    void AsyncStorage.removeItem(`companion:import-review:v1:${ownerId}:${companionId}`).catch(() => undefined);
+  }
+
   async function loadIdentityOwner(current: () => boolean) {
     setIdentity({ kind: "loading" });
     try {
@@ -364,16 +400,16 @@ function WorldApp({ client, account, isMockMode }: {
     }
   }
 
-  async function loadOwnerCompanions() {
+  async function loadOwnerCompanions(keepCurrentOnFailure = false) {
     const request = ++ownerCompanionsRequest.current;
-    setOwnerCompanions(previous => previous.kind === "success" ? previous : { kind: "loading" });
+    if (!keepCurrentOnFailure) setOwnerCompanions(previous => previous.kind === "success" ? previous : { kind: "loading" });
     try {
       const value = await client.api.ownerCompanions();
       if (request !== ownerCompanionsRequest.current) return;
       setOwnerCompanions(value.items.length ? { kind: "success", value } : { kind: "empty" });
     } catch (error) {
       const safe = safeClientMessage(error);
-      if (request === ownerCompanionsRequest.current) setOwnerCompanions({ kind: "error", ...safe });
+      if (!keepCurrentOnFailure && request === ownerCompanionsRequest.current) setOwnerCompanions({ kind: "error", ...safe });
     }
   }
 
@@ -651,7 +687,13 @@ function WorldApp({ client, account, isMockMode }: {
             : { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, opacity: 0, zIndex: -1 }
         }
       >
-        <PrivateHomeScreen
+        {!isMockMode && ownerId && ownerCompanions.kind === "empty" && !homeScope ? (
+          <View style={styles.center}>
+            <Text style={styles.centerTitle}>小家还没有家机</Text>
+            <CommunityButton label="接入家机" primary
+              onPress={() => setNav(current => pushRoute(current, { type: "bring-companion" }))} />
+          </View>
+        ) : <PrivateHomeScreen
           key={JSON.stringify([viewerKey, homeScope?.ownerId, homeCompanion?.companionId])}
           chatClient={canUseChat ? client.api.chat : undefined}
           scope={homeScope}
@@ -662,7 +704,7 @@ function WorldApp({ client, account, isMockMode }: {
           onSelectCompanion={selectHomeCompanion}
           onOpenDiary={diaryClient && homeScope ? () => openDiary(homeScope.companionId) : undefined}
           onOpenAlbum={homeScope ? () => openFromTab("home", { type: "album", companionId: homeScope.companionId }) : undefined}
-        />
+        />}
       </View>
 
       {viewer && (
@@ -674,7 +716,7 @@ function WorldApp({ client, account, isMockMode }: {
           style={messagesVisible ? { flex: 1 } : styles.inactiveRoot}
         >
           <MessagesScreen
-            key={viewerKey}
+            key={JSON.stringify([viewerKey, companionDeleteRevision])}
             api={client.api}
             viewer={viewer}
             chatClient={canUseChat ? client.api.chat : undefined}
@@ -706,7 +748,7 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "compose-post" && viewer && identityValue && client.api.community && (
         <ComposePostScreen key={viewerKey} client={client.api.community} viewer={viewer}
-          ownerId={identityValue.viewer.ownerId} companions={viewer.kind === "OWNER" ? availableCompanions : []} onBack={goBack} onPublished={() => {
+          ownerId={identityValue.viewer.ownerId} onBack={goBack} onPublished={() => {
             setCommunityRevision(value => value + 1);
             goBack();
           }} />
@@ -733,7 +775,8 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
         <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId])} client={client.api.chat} companionId={route.companionId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
-          onAvailabilityChanged={refreshFeatures} onBack={goBack} />
+          onAvailabilityChanged={refreshFeatures} onBack={goBack}
+          onDeleteCompanion={client.api.chat.deleteCompanion ? () => deleteOwnedCompanion(route.companionId) : undefined} />
       )}
 
       {route.type === "chat" && canUseChat && client.api.chat && (
@@ -874,6 +917,7 @@ function WorldApp({ client, account, isMockMode }: {
           api={client.api}
           existingCompanionId={route.companionId}
           ownerId={ownerId}
+          companionCount={availableCompanions.length}
           canConfigureConnection={connectionsEnabled && Boolean(client.api.chat?.saveConnection)}
           onCreated={(created, approvedFields, connectionKind) => {
             setCreatedHome({

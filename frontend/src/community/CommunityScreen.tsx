@@ -3,6 +3,7 @@ import type { UiPalette } from "../theme/skinTokens";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Keyboard,
   Modal,
   Pressable,
   SafeAreaView,
@@ -24,12 +25,13 @@ import type {
   CommunityPage,
   CommunityFeedMode,
 } from "../../../contracts/community.ts";
-import { communityWriteMessage, safeClientMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
+import { ApiProblemError, communityWriteMessage, safeClientMessage, type CommunityWriteAction } from "../adapters/real-api.ts";
 import { type FollowDirection } from "./CommunityFollowList.tsx";
 import { communityRequestKey, type CommunityClient } from "./client.ts";
 import type { CommunityTarget } from "../state/navigation";
 import { CommunityRequestScope } from "./request-scope.ts";
 import { ActorLine, CommunityButton as Button, ContentCard, useCommunityStyles } from "./components.tsx";
+import { MentionChips, MentionPicker, type Mention } from "./MentionPicker";
 import { ReportForm } from "./ReportForm.tsx";
 import { HumanProfileEditor } from "./HumanProfileEditor.tsx";
 import { BottomSheet } from "../components/BottomSheet.tsx";
@@ -37,11 +39,7 @@ import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
 
-type Page =
-  | { type: "feed" }
-  | { type: "profile"; id?: string }
-  | { type: "detail"; id: string }
-  | { type: "blocks" };
+type Page = { type: "feed" } | CommunityTarget;
 
 function mergeRows<T extends { id: string }>(previous: T[], incoming: T[]): T[] {
   return [...new Map([...previous, ...incoming].map(item => [item.id, item])).values()];
@@ -94,6 +92,8 @@ export function CommunityScreen({
   const busyRef = useRef(false);
   const [error, setError] = useState("");
   const [commentDraft, setCommentDraft] = useState("");
+  const [commentMentions, setCommentMentions] = useState<Mention[]>([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
   const commentKey = useRef(communityRequestKey());
 
   const [editingProfile, setEditingProfile] = useState(false);
@@ -117,27 +117,24 @@ export function CommunityScreen({
     const current = scope.begin();
     setLoading(true);
     setError("");
-    const ownProfile = cursor ? undefined : client.profile(viewer).then(
+    if (!cursor) void client.profile(viewer).then(
       (profile) => {
         if (current()) {
           setOwn(profile);
           setOwnUnavailable(false);
         }
-        return profile;
       },
       () => {
         if (current()) {
           setOwn(undefined);
           setOwnUnavailable(true);
         }
-        return undefined;
       },
     );
     try {
       let next: Data;
       if (page.type === "profile") {
-        const profile = cursor ? visibleProfile.current
-          : page.id ? await client.profile(viewer, page.id) : await ownProfile;
+        const profile = cursor ? visibleProfile.current : await client.profile(viewer, page.id);
         if (!profile || !current()) return;
         next = {
           type: "profile",
@@ -182,7 +179,10 @@ export function CommunityScreen({
         return next;
       });
     } catch (e) {
-      if (current()) setError(safeClientMessage(e).title);
+      if (current()) {
+        if (e instanceof ApiProblemError && (e.status === 403 || e.status === 404)) setData(undefined);
+        setError(safeClientMessage(e).title);
+      }
     } finally {
       if (current()) setLoading(false);
     }
@@ -201,21 +201,26 @@ export function CommunityScreen({
     void load();
   }, [load, revision]);
 
-  async function mutate(action: () => Promise<unknown>, success?: () => void, write?: CommunityWriteAction, nextPage?: Page) {
+  async function mutate<T>(action: () => Promise<T>, options: {
+    success?: (result: T) => void;
+    write?: CommunityWriteAction;
+    nextPage?: Page;
+    refreshCommunity?: boolean;
+  } = {}) {
     if (busyRef.current) return false;
     busyRef.current = true;
     setBusy(true);
     setError("");
     try {
-      await action();
+      const result = await action();
       if (!active.current) return false;
-      success?.();
-      if (nextPage) onChanged();
-      if (nextPage) navigate(nextPage, true);
-      else await load();
+      options.success?.(result);
+      if (options.nextPage || options.refreshCommunity) onChanged();
+      if (options.nextPage) navigate(options.nextPage, true);
+      else if (!options.refreshCommunity) await load();
       return true;
     } catch (e) {
-      if (active.current) setError(communityWriteMessage(e, viewer.kind, write));
+      if (active.current) setError(communityWriteMessage(e, viewer.kind, options.write));
       return false;
     } finally {
       busyRef.current = false;
@@ -223,11 +228,29 @@ export function CommunityScreen({
     }
   }
 
+  function toggleLike(post: CommunityPost) {
+    if (!client.like || loading) return;
+    const like = client.like;
+    void mutate(() => like(viewer, post.id, !post.likedByMe), { refreshCommunity: true, success: result => {
+      const update = (item: CommunityPost) => item.id === post.id
+        ? { ...item, likedByMe: result.liked, likeCount: result.likeCount } : item;
+      setData(previous => {
+        if (previous?.type === "detail") return { ...previous, value: { ...previous.value, post: update(previous.value.post) } };
+        if (previous?.type === "feed" || previous?.type === "profile") {
+          return { ...previous, value: { ...previous.value, items: previous.value.items.map(update) } };
+        }
+        return previous;
+      });
+      // Another mounted screen needs to refresh its copy. Keep this screen's current pagination.
+      seenRevision.current = revision + 1;
+    } });
+  }
+
   function navigate(next: Page, afterWrite = false) {
     if (busyRef.current && !afterWrite) return;
     if (next.type === "feed") onBack();
     else if (next.type === "blocks") onNavigate(next);
-    else if (next.id) onNavigate({ type: next.type, id: next.id });
+    else onNavigate(next);
   }
 
   async function refresh() {
@@ -243,11 +266,16 @@ export function CommunityScreen({
 
   const posts = data?.type === "feed" || data?.type === "profile" ? data.value.items : [];
   const nextCursor = data?.type === "detail" ? data.value.comments.nextCursor : data?.value.nextCursor;
-  const draftLimit = page.type === "detail" ? 2000 : 4000;
+  const draftLimit = 2000;
   const draftLength = Array.from(commentDraft.trim()).length;
   const canSubmit = draftLength > 0 && draftLength <= draftLimit;
   const canCompose = own?.canPublish === true;
   const openActor = (id: string) => navigate({ type: "profile", id });
+
+  function editCommentMentions(mentions: Mention[]) {
+    setCommentMentions(mentions);
+    commentKey.current = communityRequestKey();
+  }
 
   function closeConfirmation() {
     if (busyRef.current) return;
@@ -290,6 +318,9 @@ export function CommunityScreen({
         keyExtractor={post => post.id}
         renderItem={({ item: post }) => <ContentCard item={post}
           onActor={() => openActor(post.author.id)}
+          onMention={openActor}
+          onLike={client.like ? () => toggleLike(post) : undefined}
+          likeDisabled={busy || loading}
           onDetail={() => navigate({ type: "detail", id: post.id })}
           onDelete={() => remove("posts", post.id)}
           onReport={own && post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined} />}
@@ -432,8 +463,7 @@ export function CommunityScreen({
                       const p = data.profile;
                       void mutate(
                         () => client.follow(viewer, p.id, !p.following, communityRequestKey()),
-                        undefined,
-                        p.following ? "取关" : "关注",
+                        { write: p.following ? "取关" : "关注" },
                       );
                     }}
                   />
@@ -478,6 +508,9 @@ export function CommunityScreen({
             <ContentCard
               item={data.value.post}
               onActor={() => openActor(data.value.post.author.id)}
+              onMention={openActor}
+              onLike={client.like ? () => toggleLike(data.value.post) : undefined}
+              likeDisabled={busy || loading}
               onDelete={() => remove("posts", data.value.post.id)}
               onReport={
                 own && data.value.post.author.id !== own.id
@@ -503,20 +536,25 @@ export function CommunityScreen({
                     commentKey.current = communityRequestKey();
                   }}
                 />
+                <MentionChips mentions={commentMentions} disabled={busy}
+                  onRemove={id => editCommentMentions(commentMentions.filter(mention => mention.id !== id))} />
                 <Text style={draftLength > draftLimit ? s.error : s.meta}>{draftLength} / {draftLimit}</Text>
-                <View style={{ alignItems: "flex-end" }}>
+                <View style={[s.row, { justifyContent: "space-between" }]}>
+                  <Button label="@ 提及" disabled={busy || loading}
+                    onPress={() => { Keyboard.dismiss(); setMentionOpen(true); }} />
                   <Button
                     primary
                     disabled={busy || loading || !canSubmit}
                     label={busy ? "正在提交…" : "发表评论"}
                     onPress={() =>
                       void mutate(
-                        () => client.comment(viewer, data.value.post.id, commentDraft, commentKey.current),
-                        () => {
+                        () => client.comment(viewer, data.value.post.id, commentDraft, commentKey.current, {
+                          mentions: commentMentions.map(mention => mention.id),
+                        }),
+                        { write: "评论", success: () => {
                           setCommentDraft("");
-                          commentKey.current = communityRequestKey();
-                        },
-                        "评论",
+                          editCommentMentions([]);
+                        } },
                       )
                     }
                   />
@@ -529,6 +567,8 @@ export function CommunityScreen({
                 key={comment.id}
                 item={comment}
                 onActor={() => openActor(comment.author.id)}
+                onMention={openActor}
+                highlighted={page.type === "detail" && comment.id === page.commentId}
                 onDelete={() => remove("comments", comment.id)}
                 onReport={
                   own && comment.author.id !== own.id
@@ -537,6 +577,9 @@ export function CommunityScreen({
                 }
               />
             ))}
+            {mentionOpen && own && <MentionPicker client={client} viewer={viewer} selfId={own.id}
+              related={[data.value.post.author, ...data.value.comments.items.map(comment => comment.author)]}
+              selected={commentMentions} onChange={editCommentMentions} onClose={() => setMentionOpen(false)} />}
             {data.value.comments.items.length === 0 && (
               <View style={localStyles.emptyCard}>
                 <Text style={s.meta}>还没有评论，来留第一条吧。</Text>
@@ -589,7 +632,7 @@ export function CommunityScreen({
                   const target = blockTarget;
                   void mutate(
                     () => client.block(viewer, target.id, true, communityRequestKey()),
-                    undefined, undefined, { type: "blocks" },
+                    { nextPage: { type: "blocks" } },
                   );
                 }}
               />
@@ -611,9 +654,8 @@ export function CommunityScreen({
                   const target = deleteTarget;
                   void mutate(
                     () => client.remove(viewer, target.kind, target.id, communityRequestKey()),
-                    () => setDeleteTarget(undefined),
-                    undefined,
-                    target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined,
+                    { success: () => setDeleteTarget(undefined),
+                      nextPage: target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined },
                   );
                 }}
               />

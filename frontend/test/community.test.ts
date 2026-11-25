@@ -53,6 +53,38 @@ it("drops old feed and inbox results after navigation and identity switches", as
   scope.begin(); assert.equal(fresh(), false);
 });
 
+it("sends visibility and actor mentions, keeps exact retries, and uses keyless likes and owner deletion", async t => {
+  const calls: { path: string; query: URLSearchParams; method?: string; body: unknown; key: string | null }[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string, init: RequestInit) => {
+    const url = new URL(input);
+    calls.push({ path: url.pathname, query: url.searchParams, method: init.method, body: init.body,
+      key: new Headers(init.headers).get("Idempotency-Key") });
+    return Response.json(url.pathname.endsWith("/like") ? { liked: init.method === "PUT", likeCount: 3 }
+      : url.pathname.startsWith("/v0/companions/") ? { deleted: true } : { id: "post" });
+  });
+  const { community, chat } = new RealApiAdapter({ baseUrl: "https://community.test", bearerToken: "test" });
+  const viewer = { kind: "SOCIAL_TWIN", id: "active-twin" } as const;
+  const publishOptions = { visibility: "PRIVATE", mentions: ["public-actor-id"] } as const;
+  const payload = { ...publishOptions, mentions: [...publishOptions.mentions] };
+  await community.publish(viewer, "仅当前身份可见", "post-key", payload);
+  await community.publish(viewer, "仅当前身份可见", "post-key", payload);
+  await community.comment(viewer, "post", "回应", "comment-key", { mentions: ["public-actor-id"] });
+  assert.deepEqual(await community.like!(viewer, "post", true), { liked: true, likeCount: 3 });
+  assert.deepEqual(await community.like!(viewer, "post", false), { liked: false, likeCount: 3 });
+  assert.deepEqual(await chat.deleteCompanion!("companion"), { deleted: true });
+  assert.deepEqual(calls.map(({ method, path, key }) => [method, path, key]), [
+    ["POST", "/v0/community/posts", "post-key"], ["POST", "/v0/community/posts", "post-key"],
+    ["POST", "/v0/community/posts/post/comments", "comment-key"], ["PUT", "/v0/community/posts/post/like", null],
+    ["DELETE", "/v0/community/posts/post/like", null], ["DELETE", "/v0/companions/companion", null],
+  ]);
+  assert.deepEqual(JSON.parse(String(calls[0]!.body)), { body: "仅当前身份可见", ...payload });
+  assert.equal(calls[0]!.body, calls[1]!.body);
+  assert.deepEqual(JSON.parse(String(calls[2]!.body)), { body: "回应", mentions: ["public-actor-id"] });
+  assert.ok(calls.slice(0, 5).every(call => call.query.get("actorId") === viewer.id
+    && call.query.get("actorKind") === viewer.kind));
+  assert.equal(calls[5]!.query.size, 0);
+});
+
 it("surfaces a denied community mutation and never substitutes mock success", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({ code: "FORBIDDEN", messageClass: "PERMISSION", retryHint: "DO_NOT_RETRY" }), { status: 403 })) as typeof fetch;

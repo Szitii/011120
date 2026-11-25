@@ -33,10 +33,14 @@ const options = [
     help: "第一次来、还没有现成资料，直接填写名字和性格就能开始，记忆可以在日常相处里慢慢积累。" },
 ] as const;
 
-export function BringCompanionScreen({ api, existingCompanionId, ownerId, canConfigureConnection, onCreated, onBack }: {
+const COMPANION_LIMIT = 10;
+const COMPANION_LIMIT_MESSAGE = `每个账号最多可接入 ${COMPANION_LIMIT} 位家机。移除一位后可继续添加。`;
+
+export function BringCompanionScreen({ api, existingCompanionId, ownerId, companionCount, canConfigureConnection, onCreated, onBack }: {
   api: ClientApi;
   existingCompanionId?: string;
   ownerId?: string;
+  companionCount: number;
   canConfigureConnection: boolean;
   onCreated: (identity: CompanionIdentity, approvedFields: string[], connectionKind?: "key" | "external") => void;
   onBack: () => void;
@@ -68,6 +72,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
   const pending = useRef(false);
   const mounted = useRef(false);
   const keys = useCommandKeys();
+  const atLimit = !existingCompanionId && companionCount >= COMPANION_LIMIT;
 
   useEffect(() => {
     mounted.current = true;
@@ -314,8 +319,9 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
         <Text style={s.body}>{subtitle}</Text>
       </Pressable>
 
-      {step === "entry" && savedImportId && <BringButton label="继续上次审核" secondary disabled={busy} onPress={resumeReview} />}
-      {step === "entry" && options.filter(option => option.id !== "external" || (!existingCompanionId && canConfigureConnection)).map(option => (
+      {step === "entry" && atLimit && <Text accessibilityRole="alert" style={s.alert}>{COMPANION_LIMIT_MESSAGE}</Text>}
+      {step === "entry" && !atLimit && savedImportId && <BringButton label="继续上次审核" secondary disabled={busy} onPress={resumeReview} />}
+      {step === "entry" && !atLimit && options.filter(option => option.id !== "external" || (!existingCompanionId && canConfigureConnection)).map(option => (
         <Choice key={option.id} icon={option.icon} title={existingCompanionId && option.id === "manual" ? "手动填写" : option.title}
           description={option.description} note={option.tags} onPress={() => {
             setMessage("");
@@ -445,6 +451,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, canCon
 
 function importMessage(error: unknown): string {
   if (error instanceof ApiProblemError) {
+    if (error.code === "COMPANION_LIMIT") return COMPANION_LIMIT_MESSAGE;
     if (error.code === "IMPORT_NAME_REQUIRED") return "请先给家机填一个名字。";
     if (error.status === 413) return "角色卡超过 256 KB，请删减后再试。";
     if (error.status === 415 || error.status === 400) return "这份资料无法读取，请检查名字与角色卡格式。";

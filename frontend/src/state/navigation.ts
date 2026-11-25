@@ -1,7 +1,10 @@
 export const ROOT_TABS = ["world", "home", "messages", "my"] as const;
 export type RootTab = typeof ROOT_TABS[number];
 
-export type CommunityTarget = { type: "detail" | "profile"; id: string } | { type: "blocks" };
+export type CommunityTarget =
+  | { type: "detail"; id: string; commentId?: string }
+  | { type: "profile"; id: string }
+  | { type: "blocks" };
 export type Route =
   | { type: "root"; tab: RootTab }
   | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: RootTab }
