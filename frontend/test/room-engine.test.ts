@@ -37,20 +37,26 @@ test("sleep and seated phases stay anchored while a movement command uses walk s
     assert.deepEqual(actor.point, FURNITURE.bed[id].anchor);
   }
   engine.wake();
+  // Waking fades the sleeper out on the pillow and in on the floor: no pose ever slides off the bed.
   for (let frame = 0; frame < 180; frame++) {
-    const before = engine.snapshot().actors;
     engine.tick(16);
     for (const id of ["companion", "user"] as const) {
       const after = engine.snapshot().actors[id];
-      const point = before[id].point;
-      if (frame === 0) assert.equal(after.phase, "SIT");
-      assert.notEqual(after.phase, "SLEEP");
-      if (after.point.ny < BED_FLOOR_EDGE) assert.notEqual(after.phase, "WALK");
-      assert.ok(Math.hypot((after.point.nx - point.nx) * .8, after.point.ny - point.ny) <= .004001);
+      if (after.point.ny < BED_FLOOR_EDGE) {
+        assert.equal(after.phase, "SLEEP");
+        assert.deepEqual(after.point, FURNITURE.bed[id].anchor);
+      } else {
+        assert.equal(after.phase, "IDLE");
+        assert.equal(after.furniture, undefined);
+        assert.deepEqual(after.point, WAKE_POINTS[id]);
+      }
+      if (frame === 4 || frame === 5) assert.ok((after.opacity ?? 1) <= .2);
     }
   }
-  assert.deepEqual(engine.snapshot().actors.companion.point, WAKE_POINTS.companion);
-  assert.deepEqual(engine.snapshot().actors.user.point, WAKE_POINTS.user);
+  for (const id of ["companion", "user"] as const) {
+    assert.deepEqual(engine.snapshot().actors[id].point, WAKE_POINTS[id]);
+    assert.equal(engine.snapshot().actors[id].opacity ?? 1, 1);
+  }
   for (let frame = 0; frame < 300; frame++) engine.tick(16);
   engine.furniture("sofa");
   for (let frame = 0; frame < 300; frame++) engine.tick(16);

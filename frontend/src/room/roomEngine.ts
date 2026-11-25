@@ -1,5 +1,5 @@
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import { BED_FLOOR_EDGE, DUO_POINTS, FURNITURE, SPAWN, WAKE_POINTS, type ActorId, type FurnitureId, type RoomPoint } from "./geometry.ts";
+import { DUO_POINTS, FURNITURE, SPAWN, WAKE_POINTS, type ActorId, type FurnitureId, type RoomPoint } from "./geometry.ts";
 import { findSafePath } from "./pathfinding.ts";
 
 const ACTORS = ["companion", "user"] as const;
@@ -122,18 +122,8 @@ export class RoomEngine {
   wake() {
     this.resetIdle();
     if (this.locked || !this.sleeping) return;
-    this.begin(ACTORS.map(actor => {
-      const pillow = FURNITURE.bed[actor].anchor;
-      const onBed = this.tracks[actor].frame.point;
-      return {
-        actor,
-        steps: [
-          { point: { nx: pillow.nx, ny: onBed.ny }, furniture: "bed", transition: "SIT" },
-          { point: { nx: FURNITURE.bed[actor].approach.nx, ny: BED_FLOOR_EDGE }, transition: "SIT" },
-          { point: WAKE_POINTS[actor], pose: "IDLE" },
-        ],
-      };
-    }));
+    // Same fade as getting into bed: sliding a seated sprite to the floor passes under the quilt.
+    this.begin(ACTORS.map(actor => ({ actor, steps: [{ point: WAKE_POINTS[actor], pose: "IDLE", place: true }] })));
   }
 
   action(action: CompanionAction, initiator: ActionInitiator = "OWNER") {
@@ -158,13 +148,7 @@ export class RoomEngine {
     const path = findSafePath(from, dock?.approach ?? target, exact || Boolean(dock));
     if (!path) return;
     const steps: Step[] = [];
-    if (start.furniture && exit) {
-      steps.push({
-        point: exit.approach,
-        transition: start.phase === "SLEEP" ? "SIT" : "WALK",
-        place: start.furniture === "sofa",
-      });
-    }
+    if (exit) steps.push({ point: exit.approach, place: true });
     steps.push(...path.map(point => ({ point })));
     if (dock) {
       steps.push({
@@ -212,7 +196,8 @@ export class RoomEngine {
         track.frame = {
           ...track.frame,
           point: arrived ? next.point : track.frame.point,
-          phase: arrived ? next.pose ?? "IDLE" : "IDLE",
+          // A sleeper fades out lying down; standing it up first would flash it on the pillow.
+          phase: arrived ? next.pose ?? "IDLE" : track.frame.phase === "SLEEP" ? "SLEEP" : "IDLE",
           facingDir: "front",
           furniture: arrived ? next.furniture : track.frame.furniture,
           opacity: Math.abs(1 - 2 * progress),
