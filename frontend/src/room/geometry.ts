@@ -14,8 +14,8 @@ export const BED_FLOOR_EDGE = .56;
 export const FURNITURE = {
   sofa: {
     bounds: bounds(SOFA_SLOT),
-    user: { approach: point(.79, .704), anchor: point(.615, .639) },
-    companion: { approach: point(.365, .704), anchor: point(.545, .639) },
+    user: { approach: point(.79, .704), anchor: point(.64, .646) },
+    companion: { approach: point(.365, .704), anchor: point(.525, .646) },
   },
   bed: {
     bounds: { x1: .02, y1: .22, x2: .35, y2: BED_FLOOR_EDGE },
