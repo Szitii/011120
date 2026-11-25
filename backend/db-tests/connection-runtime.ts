@@ -66,6 +66,31 @@ try {
   assert.equal(box.open(row.secret, A.companion), "sk-owner-secret-9876");
   passed("a tested BYOK connection is saved sealed; the Owner sees only the last 4 characters");
 
+  // ---- 沿用: another Companion of the same Owner takes the connection over, without the key being typed again ----
+  const review = (await call<{ id: string }>(0, "companion-imports", "POST", { spec: "chara_card_v2", data: { name: "Borrower", description: "Takes over a connection." } })).data;
+  const other = (await call<{ companionId: string }>(0, `companion-imports/${review.id}/approve`, "POST",
+    { approvedCandidateIds: ["candidate-displayName", "candidate-identitySummary"] })).data.companionId;
+  const otherPath = `companions/${other}/connection`;
+  assert.equal((await call(0, path, "PUT", { copyFrom: other, consent: true })).status, 409, "nothing to take over from a Companion on the platform");
+  assert.equal((await call(0, otherPath, "PUT", { copyFrom: A.companion })).status, 400, "the Owner agrees again");
+  assert.equal((await call(0, otherPath, "PUT", { copyFrom: other, consent: true })).status, 400, "not from itself");
+  assert.equal((await call(0, otherPath, "PUT", { copyFrom: B.companion, consent: true })).status, 404, "not from another Owner's Companion");
+  assert.equal((await call(1, `companions/${B.companion}/connection`, "PUT", { copyFrom: A.companion, consent: true })).status, 404, "nor into one's own from someone else's");
+  const copied = await call<ConnectionSaveResult>(0, otherPath, "PUT", { copyFrom: A.companion, consent: true });
+  assert.deepEqual([copied.status, copied.data.result, copied.data.connection.kind, copied.data.connection.provider, copied.data.connection.model,
+    copied.data.connection.baseUrl, copied.data.connection.keyHint], [200, "CONNECTED", "BYOK", "deepseek", "deepseek-chat", "https://api.deepseek.com/v1", "9876"]);
+  assert.doesNotMatch(JSON.stringify(copied.data), /owner-secret/);
+  const sealed = Object.fromEntries((await pool.query("select companion_id, secret from companion_private.companion_connections where companion_id = any($1)",
+    [[A.companion, other]])).rows.map(r => [r.companion_id, r.secret])) as Record<string, string>;
+  assert.equal(box.open(sealed[other]!, other), "sk-owner-secret-9876", "sealed again for the Companion that takes it over");
+  assert.throws(() => box.open(sealed[A.companion]!, other), "one Companion's sealed key does not open as another's");
+  assert.equal((await pool.query("select count(*)::int n from public.audit_events where companion_id = $1 and action = 'CONNECTION_SAVE_BYOK'", [other])).rows[0]!.n, 1);
+  // Two separate connections from here on: removing one leaves the other.
+  assert.equal((await call<CompanionConnection>(0, otherPath, "DELETE")).data.kind, "PLATFORM");
+  assert.equal((await call<CompanionConnection>(0, path)).data.kind, "BYOK");
+  assert.equal((await call(0, `companions/${other}`, "DELETE")).status, 200);
+  passed("another Companion of the same Owner takes a connection over: copied on the server, sealed for itself, separate afterwards");
+
   assert.equal(await lastReply("用我自己的模型回"), "来自主人自己的模型");
   assert.deepEqual(outside.at(-1), { url: "https://api.deepseek.com/v1/chat/completions", auth: "Bearer sk-owner-secret-9876" });
   const external = await call<ConnectionSaveResult>(0, path, "PUT",

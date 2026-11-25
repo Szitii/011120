@@ -272,6 +272,47 @@ it("routes connections: tests before saving, never returns the key, 501 without 
   assert.equal((await handle(request("PUT", byok), busy))!.status, 429);
 });
 
+it("takes over another Companion's connection: opened and sealed again on the server, tested, never sent back", async () => {
+  const other = "00000000-0000-0000-0000-0000000002a9";
+  const calls: unknown[][] = [];
+  let source: Connection | null = { kind: "BYOK", provider: "glm", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash", name: null,
+    secret: box.seal("sk-glm-abcd1234", other) };
+  const port = {
+    connectionView: async () => ({ kind: "PLATFORM" }),
+    connection: async (...args: unknown[]) => { calls.push(["secret", ...args]); return source; },
+    saveConnection: async (...args: unknown[]) => { calls.push(["save", ...args]); return { kind: "BYOK", keyHint: args[2] }; },
+  } as unknown as ChatPort;
+  const session: AuthenticatedOwnerSession = { ownerId, owner: {} as OwnerApiPort, chat: port };
+  const put = (body: unknown): MvpHttpRequest => ({ method: "PUT", url: `/v0/companions/${companion}/connection`, headers: { "Content-Type": "application/json" }, body });
+  const tested: Connection[] = [];
+  let result: ConnectionCheck = { result: "AUTH_FAILED", httpStatus: 401 };
+  const connections = new Connections(box, async connection => { tested.push(connection); return result; });
+  const handle = (body: unknown, c: Connections | undefined = connections) => handleChatRequest(put(body), session, "t", new ChatReplies(), undefined, c);
+  const copy = { copyFrom: other, consent: true };
+
+  assert.deepEqual((await handle(copy))!.body, { result: "AUTH_FAILED", connection: { kind: "PLATFORM" }, httpStatus: 401 }, "a key that stopped working is not copied");
+  assert.equal(tested[0]!.secret, "sk-glm-abcd1234", "the test call uses the opened key");
+  assert.ok(!calls.some(c => c[0] === "save"));
+  result = { result: "CONNECTED" };
+  const saved = await handle(copy);
+  assert.deepEqual(saved!.body, { result: "CONNECTED", connection: { kind: "BYOK", keyHint: "1234" } });
+  const [, target, stored, hint] = calls.find(c => c[0] === "save")! as [string, string, Connection, string];
+  assert.deepEqual([target, stored.provider, stored.baseUrl, stored.model, hint], [companion, "glm", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash", "1234"]);
+  assert.equal(box.open(stored.secret, companion), "sk-glm-abcd1234", "sealed again for the Companion that takes it over");
+  assert.throws(() => box.open(stored.secret, other));
+  assert.doesNotMatch(JSON.stringify(saved!.body), /sk-glm/);
+  assert.deepEqual(calls.filter(c => c[0] === "secret").map(c => c[1]), [other, other]);
+
+  const refusal = (body: unknown, c?: Connections) => handle(body, c).then(r => r!.status, (e: PostgresPersistenceError) => e.code);
+  for (const bad of [{ copyFrom: other }, { copyFrom: other, consent: false }, { copyFrom: companion, consent: true }, { copyFrom: "not-a-uuid", consent: true },
+    { copyFrom: other, consent: true, kind: "BYOK" }]) {
+    assert.equal(await refusal(bad), "INVALID_INPUT", JSON.stringify(bad));
+  }
+  source = null;
+  assert.equal(await refusal(copy), "INVALID_STATE", "the other Companion uses the platform");
+  assert.equal((await handleChatRequest(put(copy), session, "t", new ChatReplies()))!.status, 501);
+});
+
 it("turns connections on only with a server key", () => {
   assert.equal("connections" in chatFromEnvironment("supabase-auth", {}), false);
   const on = chatFromEnvironment("supabase-auth", { CONNECTION_SECRET_KEY: Buffer.alloc(32, 1).toString("base64") });

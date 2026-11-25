@@ -30,6 +30,7 @@
  *   GET|POST /v0/companions/{id}/agent-keys             keys for the Owner's own agent to check in (agent/heartbeat.ts)
  *   DELETE /v0/companions/{id}/agent-keys/{keyId}      revoke one
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
+ *                                                      (PUT { copyFrom } takes over another of the Owner's Companions' connection)
  *   DELETE /v0/companions/{id}                         delete the Companion and what was private to it
  *   PUT    /v0/owner/avatar, /v0/companions/{id}/avatar { avatar }  a built-in avatar ("preset:<id>") or null
  *
@@ -346,10 +347,22 @@ export async function handleChatRequest(
     if (method === "GET") return response(200, await port.connectionView(companionId));
     if (method === "DELETE") return response(200, await port.removeConnection(companionId));
     if (method !== "PUT") return notFound();
-    const input = connectionInput(request);
+    // Either a new connection, or the one another Companion of this Owner already has ({ copyFrom, consent }).
+    const copyFrom = (request.body as { copyFrom?: unknown } | undefined)?.copyFrom;
+    const input = copyFrom === undefined ? connectionInput(request) : body(request, ["copyFrom", "consent"]);
+    if (copyFrom !== undefined && (input.consent !== true || id(copyFrom) === companionId)) return invalid();
     if (connections === undefined) return response(501, { code: "CONNECTIONS_UNAVAILABLE" });
     const current = await port.connectionView(companionId) as CompanionConnection; // 404 unless it is the Owner's
-    const checked = checkConnection(input);
+    let checked: ReturnType<typeof checkConnection>;
+    if (copyFrom === undefined) {
+      checked = checkConnection(input as ConnectionInput);
+    } else {
+      // 404 unless the other Companion is the Owner's too. Its key is opened here and sealed again
+      // for this Companion below: it never leaves the server and the Owner does not type it twice.
+      const source = await port.connection(copyFrom as string);
+      if (source === null) throw new PostgresPersistenceError("INVALID_STATE", "The other Companion has no connection of its own.");
+      checked = { ...source, secret: connections.box.open(source.secret, copyFrom as string) };
+    }
     if (checked === "INVALID_INPUT" || checked === "INVALID_URL") return invalid();
     if (checked === "BLOCKED_ADDRESS") return response(200, { result: "BLOCKED_ADDRESS", connection: current } satisfies ConnectionSaveResult);
     if (!connections.allow(session.ownerId)) return response(429, { code: "TOO_MANY_TESTS" });

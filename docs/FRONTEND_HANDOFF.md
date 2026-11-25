@@ -964,3 +964,32 @@ apikey: <EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY>
 - 保存成功后提示"已保存，下一条回复起生效"。
 - 主人接了自己的 agent（`connection.kind` 是 `EXTERNAL`）时，人设对聊天不起作用（agent 有自己的人设），建议在页面上说明一句；日记和动态如果走平台模型，还是会用这里的人设。
 
+## 25. 沿用另一个家机的连接（2026-11-26）
+
+**还没上线**（等合并和部署）。类型在 `contracts/chat.ts`（`ConnectionCopyInput`）。
+
+Key 是每个家机单独存的。主人给家机 A 配过自带 Key（或自建家机）以后，想让家机 B 也用，以前得把 Key 再粘贴一遍。现在可以直接沿用：
+
+`PUT /v0/companions/{B 的 id}/connection`
+
+```json
+{ "copyFrom": "<A 的 companionId>", "consent": true }
+```
+
+- 服务器把 A 的连接（厂商、地址、模型、Key）复制一份给 B，**Key 不经过 App**。
+- 和新配一个连接一样，服务器会先试一次；返回值也一样是 `ConnectionSaveResult`：`result` 是 `CONNECTED` 才算成功，否则 B 的连接不变（比如 A 的 Key 已经失效，会是 `AUTH_FAILED`）。
+- **复制完以后两个连接互不相干**：B 恢复平台托管、换模型，都不影响 A；A 以后换了 Key，B 不会跟着换。
+- `consent` 还是必须是 `true`：B 的聊天内容也会发给这家厂商，要让主人再确认一次隐私说明。
+
+出错时：
+
+| 状态 | 原因 |
+| --- | --- |
+| 400 | 没带 `consent: true`，或者 `copyFrom` 就是 B 自己 |
+| 404 | `copyFrom` 不是这个主人的家机 |
+| 409 | A 自己没有连接（它是平台托管） |
+| 429 | 10 分钟内试了超过 10 次（和新配连接共用这个次数） |
+| 501 | 服务器没开连接功能（和原来一样） |
+
+界面建议：在"家机连接方式"里，"配置自带 API Key""配置自建家机"旁边加一项"和另一个家机用同一个连接"，点开列出这个主人名下**已经有连接**的其他家机（对每个家机 `GET /v0/companions/{id}/connection`，`kind` 不是 `PLATFORM` 的），显示名字、厂商和 Key 的后 4 位（`keyHint`）。一个都没有时不显示这一项。
+

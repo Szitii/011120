@@ -360,6 +360,15 @@ export type ConnectionInput =
   | { kind: "EXTERNAL"; name: string; endpoint: string; bearerToken: string; model?: string | null; consent: boolean };
 
 /**
+ * PUT /v0/companions/{id}/connection, the other way: use the connection another Companion of the
+ * same Owner already has (沿用), so the key is not typed twice. The server copies it (provider,
+ * address, model, key), tests it like a new one and answers a ConnectionSaveResult. Afterwards the
+ * two connections are separate: changing or removing one leaves the other. 404: `copyFrom` is not
+ * the Owner's Companion. 409: that Companion has no connection of its own (it uses the platform).
+ */
+export interface ConnectionCopyInput { copyFrom: string; consent: boolean }
+
+/**
  * The server tries one tiny call before saving. CONNECTED: saved. AUTH_FAILED: the key or token was
  * refused. NOT_FOUND: wrong address or model name. UNREACHABLE: no answer in time. BAD_ANSWER: it
  * answered, but not in the /chat/completions format. BLOCKED_ADDRESS: not a public address. ERROR: other.
