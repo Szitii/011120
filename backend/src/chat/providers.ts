@@ -62,6 +62,8 @@ async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiK
       model: model.model,
       messages: [{ role: "system", content: request.system }, { role: "user", content: request.user }],
       [model.options?.maxTokensParam ?? "max_tokens"]: request.maxTokens,
+      // DeepSeek thinks by default; a chat reply does not need it (slower, and the thinking is paid output).
+      ...(model.options?.thinking === "disabled" ? { thinking: { type: "disabled" } } : {}),
     }),
     signal: request.signal,
   });
