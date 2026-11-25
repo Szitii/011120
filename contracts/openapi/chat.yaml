@@ -959,6 +959,9 @@ paths:
         characters). result says how the test went; the connection changes only when it is CONNECTED.
         501 when the server has no CONNECTION_SECRET_KEY (connections are off). 429 after 10 tests in
         10 minutes.
+        With `copyFrom` instead: take over the connection another Companion of the same Owner already
+        has, so the key is not typed twice. The server copies and tests it; afterwards the two are
+        separate. 404 when `copyFrom` is not the Owner's Companion, 409 when it has no connection.
       x-capability-status: implemented
       requestBody:
         required: true
@@ -985,6 +988,12 @@ paths:
                   endpoint: {type: string, description: 'The full https URL that answers in the OpenAI /chat/completions format.'}
                   bearerToken: {type: string, maxLength: 512, description: Empty for none.}
                   model: {type: [string, 'null'], maxLength: 120}
+                  consent: {const: true}
+              - type: object
+                required: [copyFrom, consent]
+                additionalProperties: false
+                properties:
+                  copyFrom: {type: string, format: uuid, description: Another Companion of the same Owner that has a connection of its own.}
                   consent: {const: true}
       responses:
         '200':
