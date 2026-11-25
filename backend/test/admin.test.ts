@@ -308,7 +308,7 @@ it("shows a private chat only after a reason is given", async () => {
   assert.equal(shown.status, 200);
   assert.deepEqual(calls, [["chat_read", CHAT, "Checking a report", null, null]]);
   assert.ok(!shown.body.includes("<script>alert"));
-  const speakers = [...shown.body.matchAll(/<div class="msg"><b>([^<]+)<\/b>/g)].map(m => m[1]);
+  const speakers = [...shown.body.matchAll(/<div class="msg(?: me)?"><b>([^<]+)<\/b>/g)].map(m => m[1]);
   assert.deepEqual(speakers, ["Mochi", "主人", "主人", "Mochi", "(已离开的家机)"], "oldest first");
   assert.match(shown.body, /\(正在回复\)/);
   assert.match(shown.body, /\(小家动作:抱抱\)/);
@@ -376,7 +376,7 @@ it("shows model switches and the quota, and changes only what the catalog names"
   assert.match(page.body, /每天 200 次调用、1\.00 USD/);
   assert.ok(!page.body.includes("花费上限</h2>"), "the spend cap lives on the costs page");
   assert.match(page.body, /aria-label="主人积分钱包" title="点一下打开"><\/button>关\(只按每个家机每天的免费额度限制\)<\/form><\/div>\s*<p>新主人送 1000 积分/);
-  assert.match(page.body, /<a href="\/costs" class="">花费<\/a>/);
+  assert.match(page.body, /<a href="\/costs" class=""[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
   assert.ok(!page.body.includes("<script>alert"));
 
   const allOff = await start({ models: { ...fixtures.models, switches: [{ scope: "ALL", key: "*", enabled: false, note: "stop", updatedAt: AT }] } });
@@ -526,7 +526,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
   assert.match(page.body, /<summary>改金额<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
   assert.match(page.body, /name="dollars" required inputmode="decimal" size="6" value="20">/);
-  assert.match(page.body, /<a href="\/costs" class="on">花费<\/a>/);
+  assert.match(page.body, /<a href="\/costs" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
   assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
   assert.match(page.body, /按用量的 \$5\.45 \+ 固定月费 \$35\.00/);
   const vendor = (name: string) => page.body.split('<div class="card vendor">').find(card => card.includes(`<b>${name}</b>`)) ?? "";
@@ -559,7 +559,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(settings.body, /size="8" value="100">/, "the price per million characters in dollars");
   assert.match(settings.body, /size="8" value="0\.38">/);
   assert.match(settings.body, /name="back" value="\/costs\/settings"/);
-  assert.match(settings.body, /<a href="\/costs" class="on">花费<\/a>/);
+  assert.match(settings.body, /<a href="\/costs" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
 
   const quiet = await start({ costs: { ...costs, month: "2026-10", days: [], fixed: [], models: { ...fixtures.spend, byDay: [], byCompanion: [] },
     totals: { modelCents: 0, hearCents: 0, speakPoints: 10, speakOverCents: 0, fixedCents: 0 } } });
@@ -646,7 +646,7 @@ it("shows how much the App is used, and the database and the servers", async () 
   const { send, calls } = await start({ activity });
   const stats = await send("/stats");
   assert.deepEqual(calls, [["activity", "2026-11-01"]]);
-  assert.match(stats.body, /<a href="\/stats" class="on">运营数据<\/a>/);
+  assert.match(stats.body, /<a href="\/stats" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>运营数据<\/a>/);
   assert.match(stats.body, /本月聊天的人<\/div><div class="big">12<\/div><div class="muted">新注册 3 人/);
   assert.match(stats.body, /今天聊天的人<\/div><div class="big">3<\/div><div class="muted">主人发 20 条 · 家机回 18 条/);
   assert.match(stats.body, /消息<\/div><div class="big">57<\/div><div class="muted">主人发 30 · 家机回 27 · 失败 3/);
@@ -697,7 +697,7 @@ it("shows what the models are told, and rewords a block only when the wording ca
   const { send, calls } = await start({ prompts: {} });
   const page = await send("/prompts");
   assert.deepEqual(calls, [["prompts"]]);
-  assert.match(page.body, /<a href="\/prompts" class="on">家机说明<\/a>/);
+  assert.match(page.body, /<a href="\/prompts" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>家机说明<\/a>/);
   assert.match(page.body, /现在有 0 \/ 7 段改过/);
   // Each prompt whole: the fixed lines, and every block in its place with a form.
   for (const title of ["聊天回复", "写日记", "发社区动态", "自动记忆", "主人自己接的 agent(自建家机)", "群聊里要不要开口"]) assert.ok(page.body.includes(`<h2>${title}</h2>`), title);

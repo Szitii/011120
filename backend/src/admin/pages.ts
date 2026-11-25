@@ -143,66 +143,135 @@ const name = (value: string | null) => value ?? "(未命名)";
 // ---------- shared pieces ----------
 
 const STYLE = `
+:root{color-scheme:light dark;--bg:#f5f5f7;--card:#fff;--fill:#f2f2f7;--fill2:#e8e8ed;--text:#1d1d1f;--sub:#6e6e73;--faint:#86868b;
+--line:rgba(0,0,0,.08);--blue:#0071e3;--blue-soft:rgba(0,113,227,.1);--red:#e30000;--red-soft:rgba(255,59,48,.12);--green:#1a9e47;
+--green-soft:rgba(52,199,89,.14);--orange:#c25e00;--orange-soft:rgba(255,149,0,.14);--ink:#1d1d1f;--shadow:0 1px 2px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.04);
+--side:rgba(246,246,248,.82)}
+@media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--fill:#2c2c2e;--fill2:#3a3a3c;--text:#f5f5f7;--sub:#a1a1a6;--faint:#8e8e93;
+--line:rgba(255,255,255,.1);--blue:#2997ff;--blue-soft:rgba(41,151,255,.16);--red:#ff6961;--red-soft:rgba(255,69,58,.18);--green:#30d158;
+--green-soft:rgba(48,209,88,.16);--orange:#ffb340;--orange-soft:rgba(255,159,10,.16);--ink:#f5f5f7;--shadow:none;--side:rgba(28,28,30,.82)}}
 *{box-sizing:border-box}
-body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;margin:0;color:#1f2328;background:#f3f4f6}
-a{color:#2563eb}
-nav{background:#111827;padding:0 24px;min-height:56px;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
-nav b{color:#fff;margin-right:20px;font-size:16px}nav a{color:#cbd5e1;text-decoration:none;font-size:15px;padding:8px 14px;border-radius:8px}
-nav a:hover{color:#fff;background:#1f2937}nav a.on{color:#111827;background:#fff;font-weight:600}
-main{max-width:1100px;margin:0 auto;padding:20px 16px 60px}
-.head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 16px}
-h1{font-size:22px;margin:0}h2{font-size:15px;margin:0 0 12px}main>h2{margin:28px 0 8px}h2 .links{font-weight:400;font-size:13px;margin-left:8px}
-.tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;color:#6b7280;font-size:13px}.tools form{margin:0}
-.btn,button{display:inline-block;font:inherit;font-size:13px;padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#1f2328;
-cursor:pointer;text-decoration:none}.btn:hover,button:hover{background:#f3f4f6}.btn.on{background:#e8f0fe;border-color:#93b4f5;color:#1d4ed8}
-section.panel{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin:16px 0}
-.card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 16px;margin:12px 0}
-.scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}
-th,td{border-bottom:1px solid #eef0f3;padding:7px 10px;text-align:left;vertical-align:top}
-th{background:#f9fafb;color:#6b7280;font-weight:600;font-size:13px;white-space:nowrap}tr:hover td{background:#fafbfc}
+body{font:15px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;margin:0;color:var(--text);
+background:var(--bg);-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+:focus-visible{outline:3px solid var(--blue);outline-offset:2px;border-radius:6px}
+.shell{display:flex;min-height:100vh}
+aside{width:232px;flex:none;position:sticky;top:0;height:100vh;overflow-y:auto;padding:20px 12px;background:var(--side);
+-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);border-right:1px solid var(--line)}
+aside .brand{display:block;font-size:17px;font-weight:600;color:var(--text);padding:4px 10px 14px;text-decoration:none}
+nav p{margin:14px 10px 4px;font-size:12px;font-weight:600;color:var(--faint)}
+nav a{display:flex;align-items:center;gap:10px;color:var(--text);font-size:14px;padding:6px 10px;border-radius:8px;margin:1px 0}
+nav a:hover{background:var(--fill2);text-decoration:none}
+nav a.on{background:var(--blue);color:#fff;font-weight:500}
+nav a svg{width:22px;height:22px;flex:none;padding:4px;border-radius:6px;color:#fff;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+nav a.on svg{background:rgba(255,255,255,.22)!important}
+main{flex:1;min-width:0;max-width:1120px;margin:0 auto;padding:36px 40px 80px}
+@media (max-width:860px){.shell{display:block}
+aside{position:sticky;z-index:5;width:auto;height:auto;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+aside .brand{padding:4px 6px;font-size:15px;white-space:nowrap}nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}nav p{display:none}
+nav a{white-space:nowrap;padding:6px 10px}nav a svg{display:none}main{padding:20px 16px 60px}}
+.head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 16px;margin:0 0 24px}
+h1{font-size:32px;line-height:1.15;font-weight:700;letter-spacing:-.025em;margin:0}
+h2{font-size:17px;font-weight:600;letter-spacing:-.015em;margin:0 0 14px}main>h2{font-size:20px;margin:36px 0 12px}
+h2 .links{font-weight:400;font-size:13px;margin-left:8px}
+p{margin:10px 0}
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;color:var(--sub);font-size:13px}.tools form,.tools form.act{margin:0;gap:8px}.tools input[type=month]{padding:5px 10px}
+.btn,button{display:inline-flex;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:14px;font-weight:500;line-height:20px;padding:6px 16px;
+border:0;border-radius:980px;background:var(--fill2);color:var(--text);cursor:pointer;text-decoration:none;white-space:nowrap;transition:filter .15s,background .15s}
+.btn:hover,button:hover{filter:brightness(.95);text-decoration:none}.btn:active,button:active{filter:brightness(.88)}
+form.act button,.primary{background:var(--blue);color:#fff}form.act button.danger,button.danger{background:var(--red);color:#fff}
+.btn.on{background:var(--blue-soft);color:var(--blue)}.tools form.act button{background:var(--fill2);color:var(--text)}
+section.panel{background:var(--card);border-radius:18px;padding:22px 24px;margin:20px 0;box-shadow:var(--shadow)}
+.card{background:var(--card);border-radius:16px;padding:18px 20px;margin:14px 0;box-shadow:var(--shadow)}
+.panel .card{background:var(--fill);box-shadow:none}
+.scroll{overflow-x:auto;margin:0 -4px;padding:0 4px}table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+th{color:var(--sub);font-weight:500;font-size:12px;white-space:nowrap;border-bottom-color:var(--line)}
+tr:last-child td{border-bottom:0}tr:hover td{background:var(--fill)}
+main>table,main>.scroll>table{background:var(--card);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}td:first-child{white-space:nowrap}
-blockquote{margin:8px 0;padding:8px 12px;background:#f9fafb;border-left:3px solid #9ca3af;white-space:pre-wrap;word-break:break-word}
-form.act{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}input,select{font:inherit;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px}
-input[name=reason]{flex:1;min-width:200px}
-form.sw{display:inline-flex;align-items:center;gap:8px;margin:0;vertical-align:middle}
-button.switch,button.switch:hover{position:relative;width:46px;height:28px;padding:0;border:0;border-radius:14px;background:#d1d5db;flex:none;transition:background .2s}
-button.switch::after{content:"";position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:left .2s}
-button.switch.on,button.switch.on:hover{background:#34c759}button.switch.on::after{left:20px}button.switch:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
-textarea{font:inherit;line-height:1.6;width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;resize:vertical}
-pre.fixed{color:#6b7280}.own{border:1px solid #f5c26b;background:#fffbeb;border-radius:8px;padding:8px 12px;margin:8px 0}.own.off{border-color:#f1b0b0;background:#fef2f2}
+blockquote{margin:10px 0;padding:12px 16px;background:var(--fill);border-radius:12px;white-space:pre-wrap;word-break:break-word}
+form.act{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0 4px}
+input,select,textarea{font:inherit;font-size:14px;color:var(--text);padding:7px 12px;border:1px solid transparent;border-radius:10px;background:var(--fill);
+transition:box-shadow .15s,border-color .15s}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--blue);box-shadow:0 0 0 4px var(--blue-soft);background:var(--card)}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--blue);vertical-align:-3px;margin:0 4px 0 0}
+form.act label{display:inline-flex;align-items:center;gap:6px;color:var(--sub);font-size:14px}
+input[name=reason]{flex:1;min-width:220px}input[name=q]{flex:1;min-width:240px;padding:9px 14px}
+form.sw{display:inline-flex;align-items:center;gap:12px;margin:0;vertical-align:middle}
+button.switch,button.switch:hover{position:relative;width:51px;height:31px;padding:0;border:0;border-radius:16px;background:var(--fill2);flex:none;
+transition:background .25s;filter:none}
+button.switch::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;
+box-shadow:0 3px 8px rgba(0,0,0,.15),0 1px 1px rgba(0,0,0,.16);transition:left .25s}
+button.switch.on,button.switch.on:hover{background:#34c759}button.switch.on::after{left:22px}
+textarea{line-height:1.6;width:100%;padding:12px 14px;resize:vertical}
+pre.fixed{color:var(--sub)}
+.own{background:var(--orange-soft);border-radius:14px;padding:14px 16px;margin:12px 0}.own.off{background:var(--red-soft)}
 .own>b{margin-right:8px}
-details.edit{margin-top:12px;padding-top:8px;border-top:1px dashed #e5e7eb}details.edit>summary{cursor:pointer;color:#2563eb;width:max-content}
-.muted{color:#6b7280}.tag{display:inline-block;padding:0 8px;border-radius:999px;background:#eef0f3;font-size:13px}
-.bad{background:#fde8e8;color:#b42318}.ok{background:#e6f4ea;border:1px solid #b7dfc3;padding:8px 12px;border-radius:8px}
-.err{background:#fde8e8;border:1px solid #f1b0b0;padding:8px 12px;border-radius:8px}pre{white-space:pre-wrap;word-break:break-word;margin:4px 0}
-.msg{margin:6px 0}.msg b{margin-right:8px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}.cards .card{margin:0}
+details.edit{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+details>summary{cursor:pointer;color:var(--blue);width:max-content;list-style:none;font-weight:500}details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"";display:inline-block;width:6px;height:6px;margin:0 9px 2px 2px;border:solid currentColor;border-width:0 2px 2px 0;
+transform:rotate(-45deg);transition:transform .2s}details[open]>summary::before{transform:rotate(45deg)}
+.muted{color:var(--sub)}p.muted,div.muted{font-size:13px}
+.tag{display:inline-block;padding:1px 9px;border-radius:980px;background:var(--fill2);color:var(--sub);font-size:12px;font-weight:500;line-height:20px}
+.tag.bad{background:var(--red-soft);color:var(--red)}.bad{color:var(--red)}
+.ok{background:var(--green-soft);color:var(--green);padding:10px 16px;border-radius:12px;font-weight:500}
+.toast{position:fixed;z-index:20;top:16px;left:50%;transform:translateX(-50%);margin:0;background:var(--card);color:var(--text);
+box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;animation:toast 4.5s ease forwards;pointer-events:none}
+.toast::before{content:"✓";display:inline-grid;place-items:center;width:20px;height:20px;margin-right:8px;border-radius:50%;background:#34c759;color:#fff;font-size:12px}
+@keyframes toast{0%{opacity:0;top:4px}8%,80%{opacity:1;top:16px}100%{opacity:0;visibility:hidden}}
+.err{background:var(--red-soft);color:var(--red);padding:12px 16px;border-radius:12px}pre{white-space:pre-wrap;word-break:break-word;margin:6px 0;font:inherit}
+.thread{display:flex;flex-direction:column;gap:12px}
+.msg{display:flex;flex-direction:column;align-items:flex-start;max-width:78%}.msg b{font-size:12px;font-weight:500;color:var(--sub);margin:0 12px 2px}
+.msg pre{margin:0;padding:9px 14px;border-radius:18px;background:var(--fill2);line-height:1.45}
+.msg .muted{font-size:11px;margin:2px 12px 0}.msg.me{align-self:flex-end;align-items:flex-end}.msg.me pre{background:var(--blue);color:#fff}
+.msg.me pre .muted{color:rgba(255,255,255,.8)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:0 0 20px}.cards .card{margin:0}
 .cards.hero{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
-.big{font-size:28px;font-weight:700;line-height:1.25;font-variant-numeric:tabular-nums}.hero .big{font-size:36px}
-.total{background:#111827;color:#fff;border-color:#111827}.total .muted{color:#9ca3af}
-.warn{border-color:#f5c26b;background:#fffbeb}.alarm{border-color:#f1b0b0;background:#fef2f2}
-.bar{height:10px;background:#eef0f3;border-radius:5px;overflow:hidden;margin:8px 0}
-.bar span{display:block;height:100%;background:#2563eb}.bar span.over{background:#d1242f}.bar span.near{background:#d97706}
-.seg{display:inline-flex}.seg .btn{border-radius:0;margin-left:-1px}.seg .btn:first-child{border-radius:6px 0 0 6px;margin-left:0}
-.seg .btn:last-child{border-radius:0 6px 6px 0}
-svg.chart{width:100%;height:auto;display:block}svg.chart text{font-size:12px;fill:#6b7280}svg.chart text.end{fill:#1f2328;font-size:13px}
-svg.chart .grid{stroke:#eef0f3}svg.chart rect.hit{fill:transparent}svg.chart rect.hit:hover{fill:rgba(17,24,39,.05)}
-.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:#4b5563;margin:0 0 6px}
-.legend i,.vhead i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px}
-.links a{margin-right:16px}.vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:8px 0 16px}.vendors .card{margin:0}
-.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:6px 0;border-bottom:1px solid #f3f4f6}
-table.lines td:first-child{white-space:normal;word-break:break-word}table.lines td.num{width:88px}table.lines .muted{display:block;font-size:12px}table.lines tr:hover td{background:none}
-.sub{margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}svg.spark{width:100%;height:36px;display:block;margin:4px 0}`;
+.card>.muted:first-child{font-size:13px;font-weight:500}
+.big{font-size:30px;font-weight:600;line-height:1.2;letter-spacing:-.02em;margin:4px 0;font-variant-numeric:tabular-nums}.hero .big{font-size:44px;letter-spacing:-.03em}
+.total{background:linear-gradient(160deg,#1d1d1f,#3a3a3c);color:#fff}.total .muted{color:rgba(255,255,255,.65)}
+.warn{box-shadow:inset 0 0 0 2px var(--orange-soft),var(--shadow)}.warn .big{color:var(--orange)}
+.alarm{box-shadow:inset 0 0 0 2px var(--red-soft),var(--shadow)}.alarm .big{color:var(--red)}
+.bar{height:8px;background:var(--fill2);border-radius:4px;overflow:hidden;margin:10px 0}
+.bar span{display:block;height:100%;background:var(--blue);border-radius:4px}.bar span.over{background:var(--red)}.bar span.near{background:#ff9500}
+.seg{display:inline-flex;padding:2px;background:var(--fill2);border-radius:9px;gap:0}
+.seg .btn{border-radius:7px;background:transparent;padding:4px 14px;font-size:13px}.seg .btn.on{background:var(--card);color:var(--text);
+box-shadow:0 1px 3px rgba(0,0,0,.12)}.seg .btn:hover{filter:none;background:var(--fill)}.seg .btn.on:hover{background:var(--card)}
+svg.chart{width:100%;height:auto;display:block;color:var(--ink)}svg.chart text{font-size:12px;fill:var(--faint)}svg.chart text.end{fill:var(--text);font-size:13px}
+svg.chart .grid{stroke:var(--line)}svg.chart rect.hit{fill:transparent}svg.chart rect.hit:hover{fill:var(--line)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--sub);margin:0 0 8px}
+.legend i,.vhead i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:0;margin-right:6px}
+.links a{margin-right:16px}.vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:8px 0 20px}.vendors .card{margin:0}
+.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:7px 0;border-bottom:1px solid var(--line)}
+table.lines td:first-child{white-space:normal;word-break:break-word}table.lines td.num{width:88px}table.lines .muted{display:block;font-size:12px}
+table.lines tr:hover td{background:none}
+.sub{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}svg.spark{width:100%;height:36px;display:block;margin:4px 0}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px 24px;margin:4px 0 8px}.facts div{font-size:13px;color:var(--sub)}
+.facts div b{display:block;font-size:15px;font-weight:500;color:var(--text)}
+.report-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px}.report-head b{font-size:17px}
+.empty{text-align:center;padding:48px 16px;color:var(--sub);background:var(--card);border-radius:18px;box-shadow:var(--shadow)}
+@media (max-width:860px){h1{font-size:26px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.cards.hero{grid-template-columns:1fr}
+.card{padding:14px 16px}.big{font-size:24px}.hero .big{font-size:36px}section.panel{padding:18px 16px}.msg{max-width:90%}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}.toast{animation-duration:6s}}`;
 
-const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户与聊天"], ["/stats", "运营数据"], ["/costs", "花费"],
-  ["/system", "系统"], ["/models", "模型与额度"], ["/prompts", "家机说明"], ["/log", "操作日志"]];
+/** The sidebar: grouped like a phone's settings, each with a small line icon. */
+const NAV: readonly (readonly [string, readonly (readonly [string, string, string, string])[]])[] = [
+  ["处理", [["/reports", "举报", "#ff3b30", "M5 21V4h11l-2 4 2 4H5"], ["/owners", "用户与聊天", "#0a84ff", "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c0-4 4-6 8-6s8 2 8 6"]]],
+  ["数据", [["/stats", "运营数据", "#30b0c7", "M5 20V11M12 20V4M19 20v-6"], ["/costs", "花费", "#34c759", "M3 6h18v13H3zM3 10h18M7 15h4"],
+    ["/system", "系统", "#8e8e93", "M4 4h16v7H4zM4 13h16v7H4zM8 7.5h.01M8 16.5h.01"]]],
+  ["设置", [["/models", "模型与额度", "#5e5ce6", "M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4"],
+    ["/prompts", "家机说明", "#ff9500", "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"]]],
+  ["记录", [["/log", "操作日志", "#636366", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2"]]],
+];
 
 /** `tools` goes to the right of the title. */
 function page(title: string, at: string, body: Safe, done = false, tools: Safe | "" = ""): string {
   return html`<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} · 管理后台</title><style>${new Safe(STYLE)}</style></head><body>
-<nav><b>管理后台</b>${NAV.map(([path, label]) => html`<a href="${path}" class="${at === path ? "on" : ""}">${label}</a>`)}</nav>
-<main>${done ? html`<p class="ok">操作已完成,已记入日志。</p>` : ""}<div class="head"><h1>${title}</h1>${tools}</div>${body}</main></body></html>`.text;
+<title>${title} · 管理后台</title><style>${new Safe(STYLE)}</style></head><body><div class="shell">
+<aside><a class="brand" href="/reports">管理后台</a><nav>${NAV.map(([group, items]) => html`<p>${group}</p>${items.map(([path, label, color, icon]) =>
+    html`<a href="${path}" class="${at === path ? "on" : ""}"${at === path ? html` aria-current="page"` : ""}><svg viewBox="0 0 24 24" style="background:${color}" aria-hidden="true"><path d="${icon}"/></svg>${label}</a>`)}`)}</nav></aside>
+<main>${done ? html`<p class="ok toast" role="status">操作已完成,已记入日志。</p>` : ""}<div class="head"><h1>${title}</h1>${tools}</div>${body}</main></div></body></html>`.text;
 }
 
 /** A titled white block of the page. */
@@ -222,10 +291,10 @@ export function errorPage(title: string, message: string, back: string): string 
 }
 
 /** A form that changes something: the operator must give a reason and tick the box. */
-function act(path: string, label: string, back: string, fields: Safe | "" = ""): Safe {
+function act(path: string, label: string, back: string, fields: Safe | "" = "", danger = false): Safe {
   return html`<form class="act" method="post" action="${path}"><input type="hidden" name="back" value="${back}">${fields}
 <input name="reason" required maxlength="500" placeholder="原因(必填,会记入日志)">
-<label><input type="checkbox" name="confirm" value="yes" required> 确认</label><button>${label}</button></form>`;
+<label><input type="checkbox" name="confirm" value="yes" required> 确认</label><button class="${danger ? "danger" : ""}">${label}</button></form>`;
 }
 /**
  * A switch like a phone's: one click flips it. The reason in the log says which switch and which way;
@@ -257,8 +326,8 @@ function reportCard(zone: string, r: Report, back: string): Safe {
   const options = ["NONE", ...(r.targetType === "ACTOR" ? [] : ["REMOVED"]), ...(r.target.kind === "AI" ? ["TWIN_SUSPENDED"] : []), "OWNER_SUSPENDED"];
   const who = (a: Actor) => html`${ownerLink(a.ownerId, a.displayName)} <span class="muted">${a.kind === "AI" ? "家机" : "真人"}</span>`;
   return html`<div class="card">
-<div><b>${word(REASONS, r.reason)}</b> · 举报的是${word(TARGETS, r.targetType)} · ${time(zone, r.createdAt)}
-${r.others > 0 ? html` · <span class="tag bad">同一对象还有 ${r.others} 条待处理举报,会一起结案</span>` : ""}</div>
+<div class="report-head"><b>${word(REASONS, r.reason)}</b><span class="tag">${word(TARGETS, r.targetType)}</span><span class="muted">${time(zone, r.createdAt)}</span>
+${r.others > 0 ? html`<span class="tag bad">同一对象还有 ${r.others} 条待处理举报,会一起结案</span>` : ""}</div>
 <div>举报人:${who(r.reporter)} 被举报:${who(r.target)}
  主人${status(OWNER_STATUS, r.target.ownerStatus)}${r.target.twinStatus === null ? "" : html` 家机${status(TWIN_STATUS, r.target.twinStatus)}`}</div>
 ${r.details === "" ? "" : html`<div>举报说明:${r.details}</div>`}
@@ -274,16 +343,16 @@ ${r.status === "SUBMITTED"
 export function reportsPage(zone: string, queue: ReportQueue, state: "SUBMITTED" | "REVIEWED", done: boolean): string {
   const back = `/reports?status=${state}`;
   return page("举报", "/reports", html`
-${queue.items.length === 0 ? html`<p class="muted">${state === "SUBMITTED" ? "没有待处理的举报。" : "还没有处理过的举报。"}</p>` : ""}
+${queue.items.length === 0 ? html`<p class="empty">${state === "SUBMITTED" ? "没有待处理的举报。" : "还没有处理过的举报。"}</p>` : ""}
 ${queue.items.map(r => reportCard(zone, r, back))}
 ${queue.items.length === 100 ? html`<p class="muted">只显示前 100 条。</p>` : ""}`, done, html`<div class="tools">
-<a class="btn ${state === "SUBMITTED" ? "on" : ""}" href="/reports?status=SUBMITTED">待处理(${queue.pending})</a>
-<a class="btn ${state === "REVIEWED" ? "on" : ""}" href="/reports?status=REVIEWED">已处理</a><a class="btn" href="${back}">刷新</a></div>`);
+<span class="seg"><a class="btn ${state === "SUBMITTED" ? "on" : ""}" href="/reports?status=SUBMITTED">待处理(${queue.pending})</a>
+<a class="btn ${state === "REVIEWED" ? "on" : ""}" href="/reports?status=REVIEWED">已处理</a></span><a class="btn" href="${back}">刷新</a></div>`);
 }
 
 export function ownersPage(zone: string, list: OwnerList, search: string): string {
   return page("用户", "/owners", html`<form method="get" action="/owners" class="act">
-<input name="q" value="${search}" placeholder="邮箱或名字的一部分,或完整的主人编号"><button>搜索</button></form>
+<input name="q" type="search" value="${search}" placeholder="搜索邮箱、名字,或完整的主人编号"><button>搜索</button></form>
 ${list.more ? html`<p class="muted">结果超过 100 个,只显示最新的 100 个。请用搜索缩小范围。</p>` : ""}
 <p class="muted">要看某个人的聊天记录:点他那一行的“聊天记录”,再点某个会话,填写原因后就能看。</p>
 <div class="scroll"><table><tr><th>邮箱</th><th>名字</th><th>状态</th><th>家机</th><th>帖子</th><th>注册时间</th><th></th></tr>${list.items.map(o => html`
@@ -299,25 +368,26 @@ function contentRows(zone: string, kind: "post" | "comment", items: Content[], b
     : c.deletedAt === null ? "" : html` · <span class="tag">作者已删除</span>`}</div>
 <blockquote>${c.body}</blockquote>
 ${c.removedByAdmin ? act(`/content/${kind}/${c.id}/restore`, "恢复", back)
-    : c.deletedAt === null ? act(`/content/${kind}/${c.id}/remove`, "移除", back) : ""}</div>`)}`;
+    : c.deletedAt === null ? act(`/content/${kind}/${c.id}/remove`, "移除", back, "", true) : ""}</div>`)}`;
 }
 
 export function ownerPage(zone: string, detail: OwnerDetail, chats: ChatList, log: LogPage, done: boolean): string {
   const o = detail.owner, back = `/owners/${o.id}`, suspended = o.status === "SUSPENDED";
   return page(`用户:${o.email ?? name(o.displayName)}`, "/owners", html`
-<div class="card">名字:${name(o.displayName)} · 邮箱:${o.email ?? "(没有)"} · 注册:${time(zone, o.createdAt)} · 状态:${status(OWNER_STATUS, o.status)}
+<div class="card"><div class="facts"><div>名字<b>${name(o.displayName)}</b></div><div>邮箱<b>${o.email ?? "(没有)"}</b></div>
+<div>注册<b>${time(zone, o.createdAt)}</b></div><div>状态<b>${status(OWNER_STATUS, o.status)}</b></div></div>
 <div class="muted">主人编号:${o.id}</div>
-${o.status === "DELETED" ? "" : act(`/owners/${o.id}/${suspended ? "restore" : "suspend"}`, suspended ? "解封" : "封禁", back)}
+${o.status === "DELETED" ? "" : act(`/owners/${o.id}/${suspended ? "restore" : "suspend"}`, suspended ? "解封" : "封禁", back, "", !suspended)}
 <div class="muted">封禁后:这个人的所有请求立刻被拒绝,他和他的家机在社区里对别人不可见。</div></div>
 <h2 id="chats">聊天记录(私聊会话)</h2>${chats.items.length === 0 ? html`<p class="muted">没有会话。</p>` : html`
-<table><tr><th>会话</th><th>成员</th><th>消息数</th><th>最近活动</th></tr>${chats.items.map(c => html`
+<div class="scroll"><table><tr><th>会话</th><th>成员</th><th>消息数</th><th>最近活动</th></tr>${chats.items.map(c => html`
 <tr><td><a href="/chats/${c.id}">${c.title ?? (c.direct ? "一对一" : "群聊")}</a></td><td>${c.members.map(m => name(m.displayName)).join("、")}</td>
-<td>${c.messages}</td><td>${time(zone, c.activeAt)}</td></tr>`)}</table>`}
+<td>${c.messages}</td><td>${time(zone, c.activeAt)}</td></tr>`)}</table></div>`}
 <p class="muted">点会话名打开,要填写原因,每次查看都会记入日志。</p>
 <h2>家机</h2>${detail.companions.length === 0 ? html`<p class="muted">没有家机。</p>` : detail.companions.map(c => html`<div class="card">
 <b>${name(c.displayName)}</b> <span class="muted">${word(COMPANION_STATUS, c.status)}</span> · 社区身份:${c.twinId === null ? "还没有" : status(TWIN_STATUS, c.twinStatus)}
 ${c.twinId === null ? "" : act(`/twins/${c.twinId}/${c.twinStatus === "SUSPENDED" ? "restore" : "suspend"}`,
-    c.twinStatus === "SUSPENDED" ? "恢复社区身份" : "停用社区身份", back)}</div>`)}
+    c.twinStatus === "SUSPENDED" ? "恢复社区身份" : "停用社区身份", back, "", c.twinStatus !== "SUSPENDED")}</div>`)}
 <p class="muted">停用社区身份后:这个家机发不了帖,别人看不到它;和主人的私聊不受影响。</p>
 <h2>最近的帖子</h2>${contentRows(zone, "post", detail.posts, back)}
 <h2>最近的评论</h2>${contentRows(zone, "comment", detail.comments, back)}
@@ -342,10 +412,10 @@ ${chat.next === null ? html`<p class="muted">已经是最早的消息。</p>` : 
 <input type="hidden" name="back" value="/chats/${chat.chat.id}"><input type="hidden" name="reason" value="${reason}">
 <input type="hidden" name="at" value="${chat.next.at}">
 <input type="hidden" name="id" value="${chat.next.id}"><button>更早的消息</button></form>`}
-<div class="card">${chat.items.length === 0 ? html`<span class="muted">没有消息。</span>` : [...chat.items].reverse().map(m => html`
-<div class="msg"><b>${speaker(m.companionId)}</b><span class="muted">${time(zone, m.createdAt)}</span>
+<div class="card thread">${chat.items.length === 0 ? html`<span class="muted">没有消息。</span>` : [...chat.items].reverse().map(m => html`
+<div class="msg${m.companionId === null ? " me" : ""}"><b>${speaker(m.companionId)}</b>
 <pre>${m.body ?? html`<span class="muted">${m.action ? word(ACTION_WORD, m.action)
-  : `${word(MESSAGE_STATUS, m.status)}${m.failure === null ? "" : ` ${m.failure}`}`}</span>`}</pre></div>`)}</div>`);
+  : `${word(MESSAGE_STATUS, m.status)}${m.failure === null ? "" : ` ${m.failure}`}`}</span>`}</pre><span class="muted">${time(zone, m.createdAt)}</span></div>`)}</div>`);
 }
 
 /** Whether a catalog model can be called now, and which switch stops it. */
@@ -428,7 +498,8 @@ ${edit("给某个主人调整积分", act("/models/credit", "调整积分", back
 interface Series { readonly name: string; readonly color: string; readonly values: readonly number[] }
 /** The reference categorical palette, in its fixed order: a series gets its slot by what it is, never by rank. */
 const SLOTS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"] as const;
-const INK = "#111827";
+/** The total's line: the text colour, so it reads in light and dark. */
+const INK = "currentColor";
 const r1 = (n: number) => Math.round(n * 10) / 10;
 /** A round number at or above `max`, for the top of a y axis. */
 function niceMax(max: number): number {
