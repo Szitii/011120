@@ -87,7 +87,7 @@ test("furniture rectangles block the feet margin and duo sprites clear the coffe
   for (const point of Object.values(DUO_POINTS)) assert.ok(findSafePath(start, point, true));
 });
 
-test("seated actors leave the sofa from their respective openings before a duo action", () => {
+test("seated actors fade to sofa exits before a duo action", () => {
   const engine = new RoomEngine();
   const settle = () => { for (let frame = 0; frame < 300; frame++) engine.tick(16); };
   engine.furniture("sofa");
@@ -100,9 +100,13 @@ test("seated actors leave the sofa from their respective openings before a duo a
   for (let frame = 0; frame < 15; frame++) {
     const previous = engine.snapshot().actors;
     engine.tick(16);
+    const current = engine.snapshot().actors;
     for (const id of ["companion", "user"] as const) {
-      const { point } = engine.snapshot().actors[id];
-      assert.ok(Math.hypot((point.nx - previous[id].point.nx) * .8, point.ny - previous[id].point.ny) <= .004001);
+      const moved = Math.hypot((current[id].point.nx - previous[id].point.nx) * .8, current[id].point.ny - previous[id].point.ny);
+      if (moved > .004001) {
+        assert.ok((current[id].opacity ?? 1) <= .2);
+        assert.deepEqual(current[id].point, FURNITURE.sofa[id].approach);
+      }
     }
   }
   settle();
@@ -111,7 +115,7 @@ test("seated actors leave the sofa from their respective openings before a duo a
   assert.deepEqual(engine.snapshot().actors.companion.point, DUO_POINTS.companion);
 });
 
-test("sofa entry and exit clear the coffee table and use walk frames until seated", () => {
+test("sofa entry and exit clear the coffee table without walking across sofa armrests", () => {
   const engine = new RoomEngine();
   const inTable = ({ nx, ny }: { nx: number; ny: number }) =>
     nx >= TABLE_SLOT.left - .016 && nx <= TABLE_SLOT.left + TABLE_SLOT.width + .016 &&
@@ -125,7 +129,7 @@ test("sofa entry and exit clear the coffee table and use walk frames until seate
       if (actor.furniture === "sofa" && actor.phase === "WALK") walkingAtSofa = true;
     }
   }
-  assert.equal(walkingAtSofa, true);
+  assert.equal(walkingAtSofa, false);
   assert.equal(engine.snapshot().actors.user.phase, "SIT");
 
   engine.floor({ nx: .59, ny: .84 });

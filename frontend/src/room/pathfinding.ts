@@ -8,8 +8,8 @@ const WALK_MAX_X = 0.81;
 const WALK_MIN_Y = 0.42;
 const WALK_MAX_Y = 0.87;
 
-const FOOT_MARGIN_X = .016;
-const FOOT_MARGIN_Y = .012;
+const FOOT_MARGIN_X = .024;
+const FOOT_MARGIN_Y = .018;
 
 function isPointBlocked(nx: number, ny: number): boolean {
   if (nx < WALK_MIN_X || nx > WALK_MAX_X || ny < WALK_MIN_Y || ny > WALK_MAX_Y) return true;

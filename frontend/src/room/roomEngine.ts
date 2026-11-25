@@ -159,14 +159,14 @@ export class RoomEngine {
     if (!path) return;
     const steps: Step[] = [];
     if (start.furniture && exit) {
-      if (exit.entry) steps.push({ point: exit.entry, furniture: start.furniture, transition: "WALK" });
-      steps.push({ point: exit.approach, transition: start.phase === "SLEEP" ? "SIT" : "WALK" });
+      steps.push({
+        point: exit.approach,
+        transition: start.phase === "SLEEP" ? "SIT" : "WALK",
+        place: start.furniture === "sofa",
+      });
     }
     steps.push(...path.map(point => ({ point })));
     if (dock) {
-      if (dock.entry) {
-        steps.push({ point: dock.entry, furniture, transition: "WALK" });
-      }
       steps.push({
         point: dock.anchor,
         furniture,
@@ -189,7 +189,7 @@ export class RoomEngine {
     track.placementMs = 0;
     if (track.frame.phase !== "WALK") track.travelled = 0;
     const firstMove = plan.steps.find(step => distance(track.frame.point, step.point) > 1e-6);
-    if (firstMove && !plan.steps[0].pose && (plan.steps[0].transition ?? "WALK") === "WALK") {
+    if (firstMove && !plan.steps[0].place && !plan.steps[0].pose && (plan.steps[0].transition ?? "WALK") === "WALK") {
       track.frame = {
         ...track.frame, phase: "WALK", step: Math.floor(track.travelled / WALK_FRAME_DISTANCE) % 4,
         facingLeft: faceSide(track.frame.point, firstMove.point, track.frame.facingLeft),
