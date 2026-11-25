@@ -147,10 +147,10 @@ try {
   assert.match(page.items[0]!.body!, /SecondCompanion接着SampleCompanion的话说一句/);
   passed("a group: both answer the Owner, then they talk to each other within their interaction limit");
 
-  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, preferredUserTitle: null, autoMemory: "OFF", revision: 1 });
+  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", revision: 1 });
   assert.equal((await call(1, `companions/${second}/chat-settings`)).status, 404);
   const quiet = await putSettings(second, { groupActivity: "QUIET", companionInteraction: "NONE" });
-  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: null, autoMemory: "OFF", revision: 2 });
+  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", revision: 2 });
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: null, revision: 1 })).status, 409);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "LOUD", companionInteraction: "NONE", model: null, revision: 2 })).status, 400);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: "not-in-catalog", revision: 2 })).status, 400);
@@ -245,7 +245,7 @@ try {
   assert.deepEqual([claim.timeZone, claim.ownerName], ["Asia/Shanghai", "阿澈"], "no community settings: the default zone; the chosen title");
   assert.deepEqual([claim.companion.displayName, claim.optional, claim.direct, claim.replyTo], ["SecondCompanion", false, false, "OWNER"]);
   assert.deepEqual(claim.companion.identity, { persona: "calm" });
-  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: "阿澈", autoMemory: "OFF", revision: 0 });
+  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: "阿澈", autoMemory: "SOMETIMES", revision: 0 });
   assert.equal(claim.history.at(-1)!.body, "抢一下");
   assert.equal(await portA.claim(fresh.id), null);
   assert.equal(await portA.finish(claim.replyId, randomUUID(), "SENT", ["冒名"]), false);
@@ -558,6 +558,18 @@ try {
     select $1, '记忆测试 ' || g, 'SENT', encode(sha256(convert_to(gen_random_uuid()::text,'UTF8')), 'hex'), clock_timestamp() from generate_series(1, $2::int) g`,
     [secondChat.id, n]);
   const fake = new ChatReplies(devChatModel);
+  // On unless the Owner turns it off, at the slow pace: every 50 messages of the Owner; everything said so far counts the first time.
+  assert.equal((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data.autoMemory, "SOMETIMES");
+  const soFar = (await pool.query(`select count(*)::int as n from companion_private.chat_messages
+    where chat_id = $1 and companion_id is null and body is not null and status = 'SENT' and shown_at is not null`, [secondChat.id])).rows[0].n as number;
+  assert.ok(soFar < 49, `the fixture chat is short (${soFar})`);
+  await ownerSays(49 - soFar);
+  assert.equal((await portA.memoryBegin(second)).status, "NOT_DUE", "49 are not 50");
+  await ownerSays(1);
+  const fiftieth = await portA.memoryBegin(second);
+  assert.equal(fiftieth.status, "WRITE");
+  assert.equal(await portA.memoryFinish(second, (fiftieth as MemoryJob).claimId, []), true);
+  await putSettings(second, { autoMemory: "OFF" });
   assert.equal(await fake.remember(second, portA), "OFF");
   assert.equal((await putSettings(second, { autoMemory: "LOUD" as never })).status, 400);
   assert.equal((await putSettings(second, { autoMemory: "OFTEN" })).data.autoMemory, "OFTEN");
@@ -629,7 +641,7 @@ try {
   await assert.rejects(new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).memoryBegin(second), { code: "NOT_FOUND" });
   await pool.query("delete from companion_private.companion_memories where companion_id = $1", [second]);
   await putSettings(second, { autoMemory: "OFF" });
-  passed("memories it notes down by itself: every 10 messages when asked, two at most, booked, 200 kept with the Owner's own never removed");
+  passed("memories it notes down by itself: on by default every 50 messages, every 10 when asked, two at most, booked, 200 kept with the Owner's own never removed");
 
   // ---- background diaries (autoWrite, migration 0052) ----
   const background = (platform: boolean, written: string[]) => new BackgroundScheduler({

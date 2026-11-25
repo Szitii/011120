@@ -165,8 +165,8 @@ export interface ChatSettings {
   preferredUserTitle?: string | null;
   /**
    * 自动记忆: the Companion notes down by itself what is worth remembering from the one-to-one chat,
-   * as memories with source AUTO. OFF (default); SOMETIMES: after every 30 messages of the Owner;
-   * OFTEN: after every 10. Always sent; on PUT, leaving it out keeps the current one.
+   * as memories with source AUTO. SOMETIMES (default): after every 50 messages of the Owner;
+   * OFTEN: after every 10; OFF: the Owner turned it off. Always sent; on PUT, leaving it out keeps the current one.
    */
   autoMemory?: "OFF" | "SOMETIMES" | "OFTEN";
   revision: number;
