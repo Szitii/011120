@@ -254,9 +254,13 @@ export async function handleChatRequest(
     if (path.length === 2) return response(200, voiceList(replies.voices));
     const voice = replies.voices?.available ? replies.voices.catalog.find(path[2]!) : undefined;
     if (voice === undefined) return notFound();
-    return audio(request, await replies.voices!.sample(voice).catch(() => {
+    // A sample made now (not one kept from before) used MiniMax points: book them like a voice message.
+    let made: number | undefined;
+    const clip = await replies.voices!.sample(voice, c => { made = c.characters; }).catch(() => {
       throw new PostgresPersistenceError("DATABASE_UNAVAILABLE", "The voice sample could not be made.");
-    }), traceId);
+    });
+    if (made !== undefined) await port.voiceUsed("SPEAK", made).catch(() => undefined);
+    return audio(request, clip, traceId);
   }
   if (badgesRoute) return method === "GET" ? response(200, await port.badges()) : notFound();
   if (anniversaryRoute) {

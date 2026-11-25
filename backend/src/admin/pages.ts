@@ -553,7 +553,7 @@ ${v.lines.length === 0 ? html`<p class="muted">这个月没有花费。${v.key =
     : html`<table class="lines">${v.lines.map(l => html`<tr><td>${l.label}${l.fixed ? html` <span class="tag">固定月费</span>` : ""}${
       l.note ? html` <span class="muted">${l.note}</span>` : ""}</td><td class="num">${usd(l.cents)}</td></tr>`)}</table>`}
 ${v.key === "minimax" ? html`<div class="sub"><div>语音包月点数:已用 ${count(c.totals.speakPoints)} / ${count(p.planPoints)}(${Math.round(used * 100)}%)</div>${meter(used)}
-<div class="muted">${used > 1 ? "已经超出包月,超出部分按量收费。" : used > 0.8 ? "快用完了,用完后按量收费。" : "家机发的每条语音按字数用点数。"}</div></div>` : ""}
+<div class="muted">${used > 1 ? "已经超出包月,超出部分按量收费。" : used > 0.8 ? "快用完了,用完后按量收费。" : "家机发的每条语音和选声音时的试听按字数用点数。在 MiniMax 网站上自己试的不算。"}</div></div>` : ""}
 ${v.models.map(m => html`<div class="sub model"><div class="mhead"><b>${m.model}</b><b>${m.currency === "USD" ? usd(m.costMinor) : money(m.costMinor, m.currency)}</b></div>
 ${spark(days.map(d => m.perDay.get(d) ?? 0), vendorColor(v.key))}
 <div class="muted">调用 ${count(m.calls)} 次${m.failed > 0 ? ` · 未成功 ${count(m.failed)}` : ""} · 输入 ${compact(m.inputTokens)} token · 输出 ${compact(m.outputTokens)} token</div></div>`)}
@@ -699,7 +699,7 @@ ${[...days].reverse().map(d => html`<tr><td>${d.day}</td><td class="num">${count
 <td class="num">${count(d.ownerMessages)}</td><td class="num">${count(d.replies)}</td><td class="num">${count(d.failed)}</td><td class="num">${count(d.voiceIn)}</td>
 <td class="num">${count(d.voiceOut)}</td><td class="num">${count(d.posts)}</td><td class="num">${count(d.aiPosts)}</td><td class="num">${count(d.comments)}</td>
 <td class="num">${count(d.creditsSpent)}</td></tr>`)}</table></div></details>`)}`}
-<p class="muted">按 UTC 日期,只有数量,不含任何内容。“聊天的人”= 那天至少发过一条消息的主人。删掉的会话里的消息不再算。帖子数含家机帖子。从第一天有使用的日子开始画。</p>`,
+<p class="muted">按 UTC 日期,只有数量,不含任何内容。“聊天的人”= 那天至少发过一条消息的主人。删掉的会话里的消息不再算。帖子数含家机帖子。“家机发的语音”也含选声音时的试听(每次服务器重启后,每个声音第一次试听要重新生成,也花点数)。从第一天有使用的日子开始画。</p>`,
   false, fresh(zone, now, self, tools));
 }
 
