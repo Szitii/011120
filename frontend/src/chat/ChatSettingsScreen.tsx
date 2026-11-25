@@ -42,83 +42,104 @@ export function ChatSettingsScreen({
   const [connectionMode, setConnectionMode] = useState<"key" | "external" | undefined>(connectionKind);
   const [form, setForm] = useState<ChatSettings>();
   const [voices, setVoices] = useState<VoiceList>();
-  const [voiceChanged, setVoiceChanged] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState<string | null>();
   const [models, setModels] = useState<ChatModelList>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [saveNotice, setSaveNotice] = useState("");
+  const [leaveSheetOpen, setLeaveSheetOpen] = useState(false);
   const [modelError, setModelError] = useState(false);
   const [deleteSheetOpen, setDeleteSheetOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reload, setReload] = useState(0);
   const pending = useRef(false);
-  const mounted = useRef(false);
+  const settingsRead = useRef(0);
+  const voiceChanged = voiceDraft !== undefined;
+  const saveDisabled = busy || (voiceChanged && !voices?.available);
 
   const handleBack = useCallback(() => {
+    if (pending.current || deleting) return;
     if (connectionMode) {
       setConnectionMode(undefined);
       return;
     }
+    if (voiceChanged) {
+      setLeaveSheetOpen(true);
+      return;
+    }
     onBack?.();
-  }, [connectionMode, onBack]);
+  }, [connectionMode, deleting, onBack, voiceChanged]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (connectionMode) {
-        setConnectionMode(undefined);
-        return true;
-      }
-      if (onBack) {
-        onBack();
-        return true;
-      }
-      return false;
+      if (!connectionMode && !onBack) return false;
+      handleBack();
+      return true;
     });
     return () => sub.remove();
-  }, [connectionMode, onBack]);
+  }, [connectionMode, handleBack, onBack]);
 
   useEffect(() => {
-    let current = true;
-    mounted.current = true;
+    const read = ++settingsRead.current;
     setBusy(true);
     setNotice("");
-    setVoiceChanged(false);
     setVoices(undefined);
-    void client.listVoices?.().then(value => { if (current) setVoices(value); }).catch(() => { /* Older servers omit voices. */ });
-    void client.getChatSettings(companionId).then(value => { if (current) setForm(value); })
-      .catch(problem => { if (current) setNotice(safeClientMessage(problem).title); })
-      .finally(() => { if (current) setBusy(false); });
+    void client.listVoices?.().then(value => { if (read === settingsRead.current) setVoices(value); }).catch(() => { /* Older servers omit voices. */ });
+    void client.getChatSettings(companionId).then(value => {
+      if (read !== settingsRead.current) return;
+      setForm(value);
+      setVoiceDraft(draft => draft === value.voice ? undefined : draft);
+    })
+      .catch(problem => { if (read === settingsRead.current) setNotice(safeClientMessage(problem).title); })
+      .finally(() => { if (read === settingsRead.current) setBusy(false); });
     setModelError(false);
-    void client.listModels?.().then(value => { if (current) setModels(value); })
-      .catch(() => { if (current) setModelError(true); });
-    return () => { current = false; mounted.current = false; };
+    void client.listModels?.().then(value => { if (read === settingsRead.current) setModels(value); })
+      .catch(() => { if (read === settingsRead.current) setModelError(true); });
+    return () => { settingsRead.current++; pending.current = false; };
   }, [client, companionId, reload]);
 
   async function save() {
-    if (!form || busy || pending.current) return;
+    if (!form || saveDisabled || pending.current) return;
+    const read = settingsRead.current;
     pending.current = true;
     setBusy(true);
-    setNotice("");
+    setSaveNotice("");
     try {
-      const { voice, ...settings } = form;
-      const saved = await client.updateChatSettings(companionId, voiceChanged && voices?.available ? { ...settings, voice } : settings);
-      if (mounted.current) {
-        setForm(saved);
-        setVoiceChanged(false);
-        setNotice("聊天设置已保存。");
+      const { voice: _savedVoice, ...settings } = form;
+      const saved = await client.updateChatSettings(companionId, voiceDraft === undefined ? settings : { ...settings, voice: voiceDraft });
+      if (read !== settingsRead.current) return;
+      setForm(saved);
+      if (voiceDraft !== undefined && saved.voice !== voiceDraft) {
+        setSaveNotice("服务端未确认新的音色，请核对后重试。");
+      } else {
+        setVoiceDraft(undefined);
+        setSaveNotice(voiceChanged ? "音色已保存。" : "聊天设置已保存。");
       }
     } catch (error) {
-      if (!mounted.current) return;
+      if (read !== settingsRead.current) return;
       if (error instanceof ApiProblemError && error.status === 409) {
         try {
           const latest = await client.getChatSettings(companionId);
-          if (mounted.current) { setForm(latest); setVoiceChanged(false); setNotice("设置已在另一台设备修改，请核对后再保存。"); }
+          if (read !== settingsRead.current) return;
+          setForm(latest);
+          if (voiceDraft !== undefined && latest.voice !== voiceDraft) {
+            setSaveNotice("设置已在别处更新。已保留你选的音色，其余设置已重新读取，请核对后再保存。");
+          } else {
+            setVoiceDraft(undefined);
+            setSaveNotice(voiceChanged ? "已同步最新设置，所选音色已生效。" : "设置已在别处更新，请核对后再保存。");
+          }
         } catch {
-          if (mounted.current) { setForm(undefined); setNotice("无法读取最新设置，请重新加载。"); }
+          if (read === settingsRead.current) {
+            setForm(undefined);
+            setSaveNotice("无法读取最新设置，请重新加载。");
+          }
         }
-      } else setNotice(safeClientMessage(error).title);
+      } else setSaveNotice(`保存失败。${safeClientMessage(error).title}`);
     } finally {
-      pending.current = false;
-      if (mounted.current) setBusy(false);
+      if (read === settingsRead.current) {
+        pending.current = false;
+        setBusy(false);
+      }
     }
   }
 
@@ -128,17 +149,18 @@ export function ChatSettingsScreen({
       setNotice("删除家机需要后端删除接口就绪后开放，目前已在排期中。");
       return;
     }
+    const read = settingsRead.current;
     setDeleting(true);
     try {
       await onDeleteCompanion();
-      if (mounted.current) setDeleteSheetOpen(false);
+      if (read === settingsRead.current) setDeleteSheetOpen(false);
     } catch (error) {
-      if (mounted.current) {
+      if (read === settingsRead.current) {
         setDeleteSheetOpen(false);
         setNotice(safeClientMessage(error).title);
       }
     } finally {
-      if (mounted.current) setDeleting(false);
+      if (read === settingsRead.current) setDeleting(false);
     }
   }
 
@@ -165,9 +187,9 @@ export function ChatSettingsScreen({
       )}
 
       <ScrollView style={s.scroll} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-        {!!notice && (
+        {!!(notice || (!form && saveNotice)) && (
           <View style={s.noticeBanner}>
-            <Text accessibilityLiveRegion="polite" style={s.noticeText}>{notice}</Text>
+            <Text accessibilityLiveRegion="polite" style={s.noticeText}>{notice || saveNotice}</Text>
           </View>
         )}
 
@@ -190,7 +212,10 @@ export function ChatSettingsScreen({
               busy ? (
                 <ActivityIndicator accessibilityLabel="正在读取聊天设置" color={ui.accent} style={{ marginVertical: 20 }} />
               ) : (
-                <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />
+                <CommunityButton label="重新加载" onPress={() => {
+                  setSaveNotice("");
+                  setReload(value => value + 1);
+                }} />
               )
             ) : (
               <>
@@ -251,23 +276,15 @@ export function ChatSettingsScreen({
                   <VoicePicker
                     voices={voices.items}
                     sample={client.voiceSample}
-                    selected={form.voice}
+                    saved={form.voice}
+                    selected={voiceDraft === undefined ? form.voice : voiceDraft}
                     disabled={busy}
                     onSelect={voice => {
-                      setVoiceChanged(true);
-                      setForm({ ...form, voice });
+                      setVoiceDraft(voice === (form.voice ?? null) ? undefined : voice);
+                      setSaveNotice("");
                     }}
                   />
                 )}
-
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={busy}
-                  onPress={() => void save()}
-                  style={({ pressed }) => [s.saveBtn, busy && { opacity: 0.55 }, pressed && { opacity: 0.85 }]}
-                >
-                  <Text style={s.saveBtnText}>{busy ? "正在保存…" : "保存设置"}</Text>
-                </Pressable>
 
                 <Pressable
                   accessibilityRole="button"
@@ -282,6 +299,28 @@ export function ChatSettingsScreen({
           </>
         )}
       </ScrollView>
+
+      {!connectionMode && form && (
+        <View style={s.saveBar}>
+          {(saveNotice || voiceChanged) && (
+            <Text accessibilityLiveRegion="polite" style={s.noticeText}>
+              {saveNotice || (voices?.available ? "音色尚未保存。" : "音色列表暂不可用，当前选择尚未保存。")}
+            </Text>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            disabled={saveDisabled}
+            onPress={() => void save()}
+            style={({ pressed }) => [s.saveBtn, saveDisabled && { opacity: 0.55 }, pressed && { opacity: 0.85 }]}
+          >
+            <Text style={s.saveBtnText}>{busy ? "正在保存…" : "保存设置"}</Text>
+          </Pressable>
+        </View>
+      )}
+
+      <BottomSheet visible={leaveSheetOpen} title="音色尚未保存" onClose={() => setLeaveSheetOpen(false)}>
+        <CommunityButton label="放弃更改并返回" onPress={() => { setLeaveSheetOpen(false); onBack?.(); }} />
+      </BottomSheet>
 
       <BottomSheet visible={deleteSheetOpen} title="删除这位家机？" onClose={() => { if (!deleting) setDeleteSheetOpen(false); }}>
         <View style={{ gap: 12 }}>
@@ -324,7 +363,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   content: {
     paddingHorizontal: CHROME.screenInset,
     paddingTop: 6,
-    paddingBottom: CHROME.scrollBottomClearance + 24,
+    paddingBottom: 24,
     gap: 14,
   },
   noticeBanner: {
@@ -345,13 +384,21 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: "700", color: ui.ink },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   mutedText: { fontSize: 13, color: ui.muted, lineHeight: 19 },
+  saveBar: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.line,
+    backgroundColor: ui.background[0],
+    paddingHorizontal: CHROME.screenInset,
+    paddingTop: 8,
+    paddingBottom: 12,
+    gap: 6,
+  },
   saveBtn: {
     height: 48,
     borderRadius: RADIUS.pill,
     backgroundColor: ui.accent,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 4,
   },
   saveBtnText: { fontSize: 15, fontWeight: "700", color: ui.onAccent },
   deleteBtn: {
