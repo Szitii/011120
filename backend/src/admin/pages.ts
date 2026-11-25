@@ -160,6 +160,10 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:now
 blockquote{margin:8px 0;padding:8px 12px;background:#f9fafb;border-left:3px solid #9ca3af;white-space:pre-wrap;word-break:break-word}
 form.act{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}input,select{font:inherit;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px}
 input[name=reason]{flex:1;min-width:200px}
+form.sw{display:inline-flex;align-items:center;gap:8px;margin:0;vertical-align:middle}
+button.switch,button.switch:hover{position:relative;width:46px;height:28px;padding:0;border:0;border-radius:14px;background:#d1d5db;flex:none;transition:background .2s}
+button.switch::after{content:"";position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:left .2s}
+button.switch.on,button.switch.on:hover{background:#34c759}button.switch.on::after{left:20px}button.switch:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
 details.edit{margin-top:12px;padding-top:8px;border-top:1px dashed #e5e7eb}details.edit>summary{cursor:pointer;color:#2563eb;width:max-content}
 .muted{color:#6b7280}.tag{display:inline-block;padding:0 8px;border-radius:999px;background:#eef0f3;font-size:13px}
 .bad{background:#fde8e8;color:#b42318}.ok{background:#e6f4ea;border:1px solid #b7dfc3;padding:8px 12px;border-radius:8px}
@@ -216,6 +220,17 @@ function act(path: string, label: string, back: string, fields: Safe | "" = ""):
 <input name="reason" required maxlength="500" placeholder="原因(必填,会记入日志)">
 <label><input type="checkbox" name="confirm" value="yes" required> 确认</label><button>${label}</button></form>`;
 }
+/**
+ * A switch like a phone's: one click flips it. The reason in the log says which switch and which way;
+ * `fields` carries what else the route needs, unchanged.
+ */
+function toggle(path: string, on: boolean, what: string, back: string, fields: Safe | "" = "", text: Safe | string = ""): Safe {
+  return html`<form class="sw" method="post" action="${path}"><input type="hidden" name="back" value="${back}">${fields}
+<input type="hidden" name="enabled" value="${on ? "off" : "on"}"><input type="hidden" name="reason" value="点开关:${on ? "关掉" : "打开"}${what}">
+<input type="hidden" name="confirm" value="yes"><button class="switch ${on ? "on" : ""}" role="switch" aria-checked="${on ? "true" : "false"}"
+ aria-label="${what}" title="${on ? "点一下关掉" : "点一下打开"}"></button>${text}</form>`;
+}
+const hidden = (name: string, value: string | number) => html`<input type="hidden" name="${name}" value="${String(value)}">`;
 const ownerLink = (id: string, label: string | null) => html`<a href="/owners/${id}">${name(label)}</a>`;
 const status = (table: Readonly<Record<string, string>>, value: string | null) =>
   html`<span class="tag ${value === "ACTIVE" ? "" : "bad"}">${word(table, value)}</span>`;
@@ -344,7 +359,8 @@ export function modelsPage(zone: string, now: Date, models: Models, catalog: rea
   done: boolean, vendors: readonly VendorStatus[] = []): string {
   const q = models.quota, w = models.wallet, back = "/models";
   const offModels = catalog.filter(m => switchState(models, m) !== "开").length;
-  const onOff = html`<select name="enabled" required><option value="">开还是关…</option><option value="off">关掉</option><option value="on">打开</option></select>`;
+  const ownOn = (scope: string, key: string) => !models.switches.some(s => s.scope === scope && s.key === key && !s.enabled);
+  const gift = w.welcomeCredits > 0 ? w.welcomeCredits : 1000;
   return page("模型与额度", "/models", html`
 <div class="cards">
 <div class="card ${offModels > 0 ? "warn" : ""}"><div class="muted">平台模型</div><div class="big">${catalog.length - offModels} / ${catalog.length}</div>
@@ -361,36 +377,36 @@ ${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td><td>${catalog.filter(m 
 <td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
 <p class="muted">Key 只放在服务器的密钥里,后台看得到有没有、什么时候换过,看不到 Key 本身,也改不了:这样即使有人进了后台,也换不掉线上用的 Key。
 要加一家或换 Key,找 Claude 弹出输入框,Key 直接存进服务器,不经过聊天。余额每次打开这页时从厂商那里读。</p>`)}
-${panel("模型开关", html`<div class="scroll"><table><tr><th>模型</th><th>厂商 / 模型名</th><th>现在</th></tr>${catalog.map(m => {
-    const state = switchState(models, m);
-    return html`<tr><td>${m.name}</td><td>${m.provider}/${m.model}</td><td><span class="tag ${state === "开" ? "" : "bad"}">${state}</span></td></tr>`;
+${panel("模型开关", html`<div class="scroll"><table><tr><th>开关</th><th>厂商 / 模型名</th><th>现在</th></tr>${switchTargets(catalog).map(t => {
+    const cut = t.value.indexOf(":"), scope = t.value.slice(0, cut), key = t.value.slice(cut + 1), on = ownOn(scope, key);
+    const entry = scope === "MODEL" ? catalog.find(m => `${m.provider}/${m.model}` === key) : undefined;
+    const state = entry === undefined ? (on ? "开" : "关") : switchState(models, entry);
+    const text = entry?.name ?? (scope === "ALL" ? html`<b>全部平台模型</b>` : `${vendorName(key)}的全部模型`);
+    return html`<tr><td>${toggle("/models/switch", on, t.label, back, hidden("target", t.value), text)}</td><td>${scope === "ALL" ? "" : key}</td><td><span class="tag ${state === "开" ? "" : "bad"}">${state}</span></td></tr>`;
   })}</table></div>
-<p class="muted">关掉后立刻生效:回复显示“平台模型暂时关闭”,不扣额度。</p>
-${edit("打开或关掉模型", act("/models/switch", "执行", back, html`<select name="target" required><option value="">开关哪一个…</option>${
-    switchTargets(catalog).map(t => html`<option value="${t.value}">${t.label}</option>`)}</select>${onOff}`))}
+<p class="muted">点一下就生效,并记进操作日志。关掉后:回复显示“平台模型暂时关闭”,不扣额度。上面的开关关着时,下面的模型也停,“现在”一栏写的是实际能不能用。</p>
 ${models.switches.length === 0 ? "" : html`<details class="edit"><summary>开关的历史</summary><div class="scroll"><table>
 <tr><th>开关</th><th>状态</th><th>最近一次的原因</th><th>时间</th></tr>${models.switches.map(s => html`
 <tr><td>${word(TARGETS, s.scope)} ${s.key}</td><td>${s.enabled ? "开" : "关"}</td><td>${s.note}</td><td>${time(zone, s.updatedAt)}</td></tr>`)}</table></div></details>`}`)}
-${panel("功能开关", html`<div class="scroll"><table><tr><th>功能</th><th>现在</th><th>时间</th></tr>${features.map(f => html`
-<tr><td>${word(FEATURES, f.key)}</td><td><span class="tag ${f.enabled ? "" : "bad"}">${f.enabled ? "开" : "关"}</span></td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>
-<p class="muted">立刻生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>
-${edit("打开或关掉功能", act("/models/feature", "执行", back, html`<select name="key" required><option value="">开关哪一个…</option>${
-    Object.entries(FEATURES).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select>${onOff}`))}`)}
+${panel("功能开关", html`<div class="scroll"><table><tr><th>功能</th><th>改于</th></tr>${features.map(f => html`
+<tr><td>${toggle("/models/feature", f.enabled, word(FEATURES, f.key), back, hidden("key", f.key), word(FEATURES, f.key))}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>
+<p class="muted">点一下就生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>`)}
 ${panel("每个家机每天的免费额度", html`
 <p>现在:每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
 ${edit("修改额度", act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
 <label>金额(分)<input name="cents" type="number" min="0" required value="${q.dailyCostMinor}"></label>`))}`)}
 ${panel("新人送积分", html`
-<p>${w.welcomeCredits > 0 ? html`现在:开,每个新主人第一次用钱包时送 ${count(w.welcomeCredits)} 积分(只送一次)。` : "现在:关,新主人不送积分。"}${
-    w.enabled ? "" : html` <span class="muted">积分钱包关着时,不管这里开不开都不送。</span>`}</p>
-${edit(w.welcomeCredits > 0 ? "关掉或改数量" : "打开", act("/models/welcome", "保存", back, html`<select name="enabled" required><option value="on">开</option><option value="off">关</option></select>
-<label>送多少积分 <input name="welcome" type="number" min="1" max="100000000" value="${w.welcomeCredits > 0 ? w.welcomeCredits : 1000}"></label>`))}
-<p class="muted">关掉期间注册的主人,之后再打开时,会在他下一次用钱包时补送一次。</p>`)}
+<div>${toggle("/models/welcome", w.welcomeCredits > 0, "新人送积分", back, hidden("welcome", gift),
+    w.welcomeCredits > 0 ? `开:每个新主人第一次用钱包时送 ${count(w.welcomeCredits)} 积分(只送一次)` : "关:新主人不送积分")}${
+    w.enabled ? "" : html` <span class="muted">积分钱包关着时,不管这里开不开都不送。</span>`}</div>
+${w.welcomeCredits > 0 ? edit("改送多少", act("/models/welcome", "保存", back, html`${hidden("enabled", "on")}
+<label>送多少积分 <input name="welcome" type="number" min="1" max="100000000" required value="${w.welcomeCredits}"></label>`)) : ""}
+<p class="muted">关掉期间注册的主人,之后再打开时,会在他下一次用钱包时补送一次。${w.welcomeCredits > 0 ? "" : `打开时送 ${count(gift)} 积分,打开后可以改。`}</p>`)}
 ${panel("主人积分钱包", html`
-<p>${w.enabled ? "现在:开。" : "现在:关(只按每个家机每天的免费额度限制)。"}新主人送 ${w.welcomeCredits} 积分;
-模型花费每 1 分 = ${w.creditsPerCent} 积分;写日记要给聊天留 ${w.backgroundFloor} 积分。调用失败不扣积分。</p>
-${edit("修改钱包规则", act("/models/wallet", "修改钱包规则", back, html`<select name="enabled" required><option value="${w.enabled ? "on" : "off"}">${
-    w.enabled ? "开" : "关"}(不变)</option><option value="on">开</option><option value="off">关</option></select>
+<div>${toggle("/models/wallet", w.enabled, "主人积分钱包", back, html`${hidden("welcome", w.welcomeCredits)}${hidden("rate", w.creditsPerCent)}${hidden("floor", w.backgroundFloor)}`,
+    w.enabled ? "开" : "关(只按每个家机每天的免费额度限制)")}</div>
+<p>新主人送 ${w.welcomeCredits} 积分;模型花费每 1 分 = ${w.creditsPerCent} 积分;写日记要给聊天留 ${w.backgroundFloor} 积分。调用失败不扣积分。</p>
+${edit("修改钱包规则", act("/models/wallet", "修改钱包规则", back, html`${hidden("enabled", w.enabled ? "on" : "off")}
 <label>新人赠送 <input name="welcome" type="number" min="0" required value="${w.welcomeCredits}"></label>
 <label>每分积分 <input name="rate" type="number" min="1" required value="${w.creditsPerCent}"></label>
 <label>给聊天保留 <input name="floor" type="number" min="0" required value="${w.backgroundFloor}"></label>`))}
@@ -607,7 +623,9 @@ ${cap === null ? "" : html`<div class="card ${cap.enabled && capShare > 1 ? "ala
 <div class="muted">今天(UTC)平台模型已花,含进行中的调用</div><div class="big">${money(cap.spentTodayMinor, cap.currency)}</div>
 ${cap.enabled ? html`${meter(capShare)}<div class="muted">每天上限 ${money(cap.dailyCostMinor, cap.currency)} · 用了 ${percent(cap.spentTodayMinor, cap.dailyCostMinor)}
 </div>` : html`<div class="muted">没有设每天上限</div>`}
-${edit(cap.enabled ? "改上限" : "设上限", act("/costs/cap", "保存", self, html`<select name="enabled" required><option value="on">开</option><option value="off">关(不设上限)</option></select>
+<div>${toggle("/costs/cap", cap.enabled, "每天花费上限", self, hidden("dollars", ((cap.dailyCostMinor > 0 ? cap.dailyCostMinor : 500) / 100).toString()),
+    cap.enabled ? "上限开着" : `上限关着${cap.dailyCostMinor > 0 ? "" : ",打开时是每天 5 美元"}`)}</div>
+${edit("改金额", act("/costs/cap", "保存", self, html`${hidden("enabled", cap.enabled ? "on" : "off")}
 <label>每天(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(cap.dailyCostMinor / 100).toString()}"></label>`))}
 <div class="muted">到了上限,平台模型当天就不再回复(显示“平台模型暂时关闭”),不扣主人额度。</div></div>`}
 </div>

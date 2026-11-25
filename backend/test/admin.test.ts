@@ -360,13 +360,22 @@ it("shows model switches and the quota, and changes only what the catalog names"
   assert.deepEqual(states, [["", "开"]]);
   assert.match(page.body, /claude\/claude-small<\/td><td><span class="tag bad">关\(模型关闭\)/);
   assert.match(page.body, /other\/other-chat<\/td><td><span class="tag bad">关\(厂商关闭\)/);
-  assert.deepEqual([...page.body.matchAll(/<option value="((?:ALL|PROVIDER|MODEL):[^"]+)"/g)].map(m => m[1]),
-    ["ALL:*", "PROVIDER:claude", "PROVIDER:other", "MODEL:claude/claude-big", "MODEL:claude/claude-small", "MODEL:other/other-chat"]);
-  assert.match(page.body, /<td>新建群聊<\/td><td><span class="tag bad">关<\/span>/);
-  assert.match(page.body, /<td>在已有群聊里发消息<\/td><td><span class="tag ">开<\/span>/);
+  // Each switch is one click: a form that posts the other way, with the reason filled in.
+  const switches = (path: string, field: string) => [...page.body.matchAll(new RegExp(`action="${path}">[^]*?name="${field}" value="([^"]+)">\\s*`
+    + `<input type="hidden" name="enabled" value="(on|off)"><input type="hidden" name="reason" value="([^"]+)">\\s*`
+    + `<input type="hidden" name="confirm" value="yes"><button class="switch ([a-z]*)" role="switch" aria-checked="(true|false)"`, "g"))].map(m => m.slice(1));
+  assert.deepEqual(switches("/models/switch", "target"), [
+    ["ALL:*", "off", "点开关:关掉全部平台模型", "on", "true"], ["PROVIDER:claude", "off", "点开关:关掉厂商 claude", "on", "true"],
+    ["PROVIDER:other", "on", "点开关:打开厂商 other", "", "false"],
+    ["MODEL:claude/claude-big", "off", "点开关:关掉模型 Big(claude/claude-big)", "on", "true"],
+    ["MODEL:claude/claude-small", "on", "点开关:打开模型 Small(claude/claude-small)", "", "false"],
+    ["MODEL:other/other-chat", "off", "点开关:关掉模型 Cheap(other/other-chat)", "on", "true"]]);
+  assert.deepEqual(switches("/models/feature", "key"), [["GROUP_CHAT_CREATE", "on", "点开关:打开新建群聊", "", "false"],
+    ["GROUP_CHAT_SEND", "off", "点开关:关掉在已有群聊里发消息", "on", "true"]]);
+  assert.ok(!page.body.includes("<select"), "no drop-downs left on the page");
   assert.match(page.body, /每天 200 次调用、1\.00 USD/);
   assert.ok(!page.body.includes("花费上限</h2>"), "the spend cap lives on the costs page");
-  assert.match(page.body, /现在:关\(只按每个家机每天的免费额度限制\)。新主人送 1000 积分/);
+  assert.match(page.body, /aria-label="主人积分钱包" title="点一下打开"><\/button>关\(只按每个家机每天的免费额度限制\)<\/form><\/div>\s*<p>新主人送 1000 积分/);
   assert.match(page.body, /<a href="\/costs" class="">花费<\/a>/);
   assert.ok(!page.body.includes("<script>alert"));
 
@@ -427,8 +436,9 @@ it("shows model switches and the quota, and changes only what the catalog names"
   assert.deepEqual(calls, [["models"], ["wallet_policy_set", false, 0, 10, 200, "because"], ["models"], ["wallet_policy_set", false, 300, 10, 200, "because"]]);
   assert.match(page.body, /新人送积分<\/div><div class="big">开<\/div>\s*<div class="muted">每个新主人 1,000 积分\(钱包关着,暂时不送\)/);
   const noGift = await (await start({ models: { ...fixtures.models, wallet: { ...fixtures.models.wallet, welcomeCredits: 0 } } })).send("/models");
-  assert.match(noGift.body, /现在:关,新主人不送积分。/);
-  assert.match(noGift.body, /<summary>打开<\/summary>[\s\S]*name="welcome" type="number" min="1" max="100000000" value="1000"/);
+  assert.match(noGift.body, /title="点一下打开"><\/button>关:新主人不送积分<\/form>/);
+  assert.match(noGift.body, /action="\/models\/welcome"><input type="hidden" name="back" value="\/models"><input type="hidden" name="welcome" value="1000">\s*<input type="hidden" name="enabled" value="on">/);
+  assert.ok(!noGift.body.includes("改送多少"), "the amount is changed once the gift is on");
 });
 
 it("pages through the log, for everyone or one Owner", async () => {
@@ -514,7 +524,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(page.body, /数据时间 2026\/11\/23 12:00:00<\/span><a class="btn" href="\/costs\?month=2026-11">刷新<\/a>/);
   assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">3\.45 USD<\/div>/);
   assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
-  assert.match(page.body, /<summary>改上限<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
+  assert.match(page.body, /<summary>改金额<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
   assert.match(page.body, /name="dollars" required inputmode="decimal" size="6" value="20">/);
   assert.match(page.body, /<a href="\/costs" class="on">花费<\/a>/);
   assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
@@ -540,7 +550,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td class="num">12</td><td class="num">\\$3\\.45<`));
   assert.match(page.body, /href="\/costs\/export\.xlsx\?month=2026-11">导出 xlsx/);
   assert.ok(!page.body.includes("<script>alert"));
-  assert.deepEqual([...page.body.matchAll(/method="post" action="([^"]+)"/g)].map(m => m[1]), ["/costs/cap"],
+  assert.deepEqual([...page.body.matchAll(/method="post" action="([^"]+)"/g)].map(m => m[1]), ["/costs/cap", "/costs/cap"],
     "the costs page changes only the cap; bills and prices are on the settings page");
   const settings = await send("/costs/settings");
   assert.deepEqual(calls.at(-1), ["costs", "2026-11-01"]);
