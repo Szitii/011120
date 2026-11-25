@@ -19,7 +19,10 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { AdminRefusal, type AdminDb } from "./db.ts";
-import { chatGatePage, chatPage, costSettingsPage, costsPage, errorPage, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
+import { hosts, type FlyAccess } from "./fly.ts";
+import { ledgerSheets } from "./ledger.ts";
+import { workbook } from "./xlsx.ts";
+import { chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
   type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue,
   type Feature } from "./pages.ts";
 
@@ -41,6 +44,8 @@ interface Common {
   readonly timeZone?: string;
   readonly now?: () => Date;
   readonly onError?: (error: unknown) => void;
+  /** A read-only Fly token and the apps to show on the 系统 page; without it the page says so. */
+  readonly fly?: FlyAccess;
 }
 
 const COOKIE = "admin_console";
@@ -67,8 +72,11 @@ const cents = (dollars: string) => Number((Number(dollars) * 100).toFixed(2));
 
 class NotFound extends Error {}
 type Form = Readonly<Record<string, string>>;
-/** What a request gets back: a page, or a redirect (with the cookie, once). */
-type Answer = { status: number; body: string } | { location: string; cookie?: string };
+/** A file to download instead of a page. */
+interface Download { readonly name: string; readonly type: string; readonly bytes: Buffer }
+/** What a request gets back: a page, a file, or a redirect (with the cookie, once). */
+type Answer = { status: number; body: string | Download } | { location: string; cookie?: string };
+const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 function same(a: string, b: string): boolean {
   const left = Buffer.from(a), right = Buffer.from(b);
@@ -116,7 +124,16 @@ export function createAdminServer(options: AdminServerOptions): Server {
   const now = options.now ?? (() => new Date());
   const targets = new Set(switchTargets(catalog).map(t => t.value));
 
-  async function get(db: AdminDb, url: URL): Promise<string> {
+  /** The months of a year, January up to this month when it is this year. */
+  function yearMonths(year: string): string[] {
+    const today = now(), last = Number(year) < today.getUTCFullYear() ? 12 : today.getUTCMonth() + 1;
+    return Array.from({ length: last }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}-01`);
+  }
+  /** A year that has started: 2020 up to this one; else this one. */
+  const yearOf = (value: string | null) => /^\d{4}$/.test(value ?? "") && Number(value) >= 2020 && Number(value) <= now().getUTCFullYear()
+    ? value! : String(now().getUTCFullYear());
+
+  async function get(db: AdminDb, url: URL): Promise<string | Download> {
     const path = url.pathname, query = url.searchParams, done = query.get("ok") === "1";
     let m: RegExpExecArray | null;
     if (path === "/reports") {
@@ -135,6 +152,26 @@ export function createAdminServer(options: AdminServerOptions): Server {
     if ((m = ROUTES.chat.exec(path))) return chatGatePage(m[1]!);
     if (path === "/models") return modelsPage(zone, now(), await db.call<Models>("models"), catalog, await db.call<Feature[]>("features"), done);
     if (path === "/costs/settings") return costSettingsPage(zone, await db.call<Costs>("costs", `${now().toISOString().slice(0, 7)}-01`), done);
+    if (path === "/costs/export.xlsx") {
+      const year = query.get("year");
+      const months = year !== null ? yearMonths(yearOf(year)) : [dayOr(`${query.get("month")}-01`, `${now().toISOString().slice(0, 7)}-01`)];
+      const costs: Costs[] = [];
+      for (const month of months) costs.push(await db.call<Costs>("costs", month));
+      return { name: `花费-${year !== null ? yearOf(year) : months[0]!.slice(0, 7)}.xlsx`, type: XLSX, bytes: workbook(ledgerSheets(costs)) };
+    }
+    if (path === "/costs" && query.has("year")) {
+      const year = yearOf(query.get("year")), costs: Costs[] = [];
+      for (const month of yearMonths(year)) costs.push(await db.call<Costs>("costs", month));
+      return costsYearPage(zone, now(), year, costs);
+    }
+    if (path === "/stats") {
+      const month = dayOr(`${query.get("month")}-01`, `${now().toISOString().slice(0, 7)}-01`);
+      return statsPage(zone, now(), await db.call<Activity>("activity", month), query.get("auto") !== "off");
+    }
+    if (path === "/system") {
+      const [system, machines] = await Promise.all([db.call<SystemInfo>("system"), hosts(options.fly ?? null)]);
+      return systemPage(zone, now(), system, machines, query.get("auto") !== "off");
+    }
     if (path === "/costs") {
       const thisMonth = `${now().toISOString().slice(0, 7)}-01`, month = dayOr(`${query.get("month")}-01`, thisMonth);
       const costs = await db.call<Costs>("costs", month);
@@ -268,8 +305,11 @@ export function createAdminServer(options: AdminServerOptions): Server {
     }).then(result => {
       if ("location" in result) {
         response.writeHead(303, { ...HEADERS, Location: result.location, ...(result.cookie ? { "Set-Cookie": result.cookie } : {}) }).end();
-      } else {
+      } else if (typeof result.body === "string") {
         response.writeHead(result.status, { ...HEADERS, "Content-Type": "text/html; charset=utf-8" }).end(result.body);
+      } else {
+        response.writeHead(result.status, { ...HEADERS, "Content-Type": result.body.type,
+          "Content-Disposition": `attachment; filename="export.xlsx"; filename*=UTF-8''${encodeURIComponent(result.body.name)}` }).end(result.body.bytes);
       }
     });
   });

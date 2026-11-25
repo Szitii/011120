@@ -4,7 +4,8 @@ import type { AddressInfo } from "node:net";
 import { after, it } from "node:test";
 import type pg from "pg";
 import { AdminRefusal, PgAdminDb, explain, type AdminDb, type AdminFunction } from "../src/admin/db.ts";
-import type { ChatList, ChatPage, Costs, LogPage, Models, OwnerDetail, OwnerList, Report, ReportQueue, Spend } from "../src/admin/pages.ts";
+import type { Activity, ChatList, ChatPage, Costs, LogPage, SystemInfo, Models, OwnerDetail, OwnerList, Report, ReportQueue, Spend } from "../src/admin/pages.ts";
+import type { FlyAccess } from "../src/admin/fly.ts";
 import { createAdminServer } from "../src/admin/server.ts";
 
 const TOKEN = "t".repeat(64);
@@ -79,13 +80,14 @@ const servers: ReturnType<typeof createAdminServer>[] = [];
 after(() => { for (const server of servers) server.close(); });
 
 interface Sent { method?: string; cookie?: string | null; host?: string; origin?: string; form?: Record<string, string>; body?: string; type?: string }
-async function start(returns: Returned = {}, failure?: unknown) {
+async function start(returns: Returned = {}, failure?: unknown, fly?: FlyAccess) {
   const { db, calls } = fakeDb(returns, failure);
   const errors: unknown[] = [];
-  const server = createAdminServer({ db, token: TOKEN, catalog, timeZone: "UTC", now: () => new Date("2026-11-23T12:00:00Z"), onError: e => errors.push(e) });
+  const server = createAdminServer({ db, token: TOKEN, catalog, timeZone: "UTC", now: () => new Date("2026-11-23T12:00:00Z"), onError: e => errors.push(e),
+    ...(fly === undefined ? {} : { fly }) });
   servers.push(server);
   const port = await new Promise<number>(resolve => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
-  const send = (path: string, sent: Sent = {}) => new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }>((resolve, reject) => {
+  const send = (path: string, sent: Sent = {}) => new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string; raw: Buffer }>((resolve, reject) => {
     const body = sent.body ?? (sent.form === undefined ? undefined : new URLSearchParams(sent.form).toString());
     const req = httpRequest({ host: "127.0.0.1", port, path, method: sent.method ?? (body === undefined ? "GET" : "POST"), headers: {
       Host: sent.host ?? `127.0.0.1:${port}`,
@@ -95,7 +97,7 @@ async function start(returns: Returned = {}, failure?: unknown) {
     } }, response => {
       const chunks: Buffer[] = [];
       response.on("data", chunk => chunks.push(chunk as Buffer));
-      response.on("end", () => resolve({ status: response.statusCode!, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
+      response.on("end", () => { const raw = Buffer.concat(chunks); resolve({ status: response.statusCode!, headers: response.headers, body: raw.toString("utf8"), raw }); });
     });
     req.on("error", reject);
     req.end(body);
@@ -476,24 +478,33 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(page.body, /href="\/costs\?month=2026-11&amp;auto=off">每 30 秒自动刷新/);
   assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">3\.45 USD<\/div>/);
   assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
-  assert.match(page.body, /AI 模型<\/div><div class="big">\$3\.45<\/div>\s*<div class="muted">聊天、日记、自动发帖 · 占 9%/);
   const stopped = await send("/costs?auto=off");
   assert.ok(!stopped.body.includes("http-equiv") && stopped.body.includes("自动刷新:关 · 点击打开"));
   assert.match(page.body, /<a href="\/costs" class="on">花费<\/a>/);
   assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
   assert.match(page.body, /按用量的 \$5\.45 \+ 固定月费 \$35\.00/);
-  assert.match(page.body, /语音转文字<\/div><div class="big">&lt; \$0\.01</, "a little that is not nothing");
-  assert.match(page.body, /已用 120,000 \/ 100,000\(120%\)/);
-  assert.match(page.body, /<span class="over" style="width:100%">/);
-  assert.match(page.body, /已经超出包月/);
+  const vendor = (name: string) => page.body.split('<div class="card vendor">').find(card => card.includes(`<b>${name}</b>`)) ?? "";
+  assert.deepEqual([...page.body.matchAll(/<div class="card vendor"><div class="vhead"><span><i [^>]*><\/i><b>([^<]+)<\/b><\/span>\s*<span class="muted">占 ([^<]+)<\/span><\/div><div class="big">([^<]+)</g)]
+    .map(m => [m[1], m[2], m[3]]), [["Fly.io", "74%", "$30.00"], ["MiniMax", "17%", "$7.00"], ["claude", "9%", "$3.45"], ["Supabase", "0%", "$0.00"]],
+    "each company, biggest first; a fixed bill goes to the company its name says");
+  assert.match(vendor("MiniMax"), /语音转文字\(按时长\)<\/td><td class="num">&lt; \$0\.01</, "a little that is not nothing");
+  assert.match(vendor("MiniMax"), /MiniMax 语音包月\(Starter\) <span class="tag">固定月费<\/span><\/td><td class="num">\$5\.00/);
+  assert.match(vendor("MiniMax"), /已用 120,000 \/ 100,000\(120%\)/);
+  assert.match(vendor("MiniMax"), /<span class="over" style="width:100%">/);
+  assert.match(vendor("MiniMax"), /已经超出包月/);
+  assert.match(vendor("claude"), /<b>claude-big<\/b><b>\$3\.45<\/b>[\s\S]*调用 12 次 · 未成功 1 · 输入 9,000 token · 输出 700 token/);
+  assert.match(vendor("Supabase"), /免费版没有月费/);
+  assert.match(vendor("Fly.io"), /<a href="\/system">主机现在的状态/);
+  assert.match(page.body, /<title>2026-11-23\n合计:\$3\.45\nMiniMax:&lt; \$0\.01\nclaude:\$3\.45<\/title>/, "a day's hover text");
   assert.match(page.body, /<td>2026-11-23<\/td><td class="num">\$3\.45<\/td><td class="num">12<\/td>/);
   assert.match(page.body, /38 秒 \/ 4 条/);
   assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td class="num">12</td><td class="num">\\$3\\.45<`));
+  assert.match(page.body, /href="\/costs\/export\.xlsx\?month=2026-11">导出 xlsx/);
   assert.ok(!page.body.includes("<script>alert"));
   assert.ok(!page.body.includes('method="post"'), "the costs page only shows; changes are on the settings page");
   const settings = await send("/costs/settings");
   assert.deepEqual(calls.at(-1), ["costs", "2026-11-01"]);
-  assert.match(settings.body, /<td>Fly 服务器<\/td><td class="num">\$30\.00<\/td>/);
+  assert.match(settings.body, /<td>Fly 服务器<\/td><td>Fly\.io<\/td><td class="num">\$30\.00<\/td>/);
   assert.ok(!settings.body.includes("<script>alert"));
   assert.match(settings.body, /size="8" value="100">/, "the price per million characters in dollars");
   assert.match(settings.body, /size="8" value="0\.38">/);
@@ -507,7 +518,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.ok(!october.body.includes("http-equiv") && !october.body.includes("自动刷新"));
   assert.match(october.body, /这个月总花费<\/div><div class="big">\$0\.00/);
   assert.match(october.body, /这个月还没有按用量的花费/);
-  assert.match(october.body, /这个月没有模型调用/);
+  assert.ok(!october.body.includes("card vendor\"><div class=\"vhead\"><span><i style=\"background:#2a78d6"), "no model company without calls");
   assert.match((await quiet.send("/costs/settings")).body, /还没有填/);
   assert.match(october.body, /操作已完成/);
   for (const month of ["2026-13", "nope", "2026-1"]) {
@@ -532,4 +543,95 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   await send("/costs/prices", { form: change({ points: "300000", speak: "60", hear: "0.38" }) });
   assert.deepEqual(calls, [["fixed_cost_set", "Fly 服务器", 1250, "两个应用", "because"], ["fixed_cost_set", "Fly 服务器", null, "", "because"],
     ["voice_prices_set", 300000, 6000, 38, "because"]]);
+});
+
+it("shows a year as a ledger, and exports a month or a year as an Excel file", async () => {
+  const month: Costs = {
+    month: "2026-11", from: "2026-11-01", to: "2026-11-30",
+    totals: { modelCents: 345, hearCents: 0, speakPoints: 0, speakOverCents: 0, fixedCents: 500 },
+    prices: { planPoints: 100000, speakCentsPerMillion: 10000, hearCentsPerHour: 38, updatedAt: AT },
+    fixed: [{ item: "MiniMax 语音包月", cents: 500, note: NASTY, updatedAt: AT }],
+    days: [{ day: "2026-11-23", modelCents: 345, modelCalls: 12, hearSeconds: 0, hears: 0, hearCents: 0, speakPoints: 0, speaks: 0 }],
+    models: fixtures.spend,
+  };
+  const { send, calls } = await start({ costs: month });
+  const year = await send("/costs?year=2026");
+  assert.equal(year.status, 200);
+  assert.deepEqual(calls.map(c => c[1]), Array.from({ length: 11 }, (_, i) => `2026-${String(i + 1).padStart(2, "0")}-01`), "January up to this month");
+  assert.match(year.body, /2026 年到今天总花费<\/div><div class="big">\$92\.95<\/div>/);
+  assert.match(year.body, /<th class="num">MiniMax<\/th><th class="num">claude<\/th><th class="num">合计<\/th>/);
+  assert.match(year.body, /<td><b>全年<\/b><\/td><td class="num"><b>\$55\.00<\/b><\/td><td class="num"><b>\$37\.95<\/b><\/td>/);
+  assert.match(year.body, /href="\/costs\/export\.xlsx\?year=2026"/);
+  assert.ok(!year.body.includes("http-equiv") && !year.body.includes("2027 →"));
+  for (const [asked, months] of [["2025", 12], ["1999", 11], ["2099", 11], ["x", 11]] as const) {
+    const other = await start({ costs: month });
+    await other.send(`/costs?year=${asked}`);
+    assert.equal(other.calls.length, months, asked);
+  }
+
+  calls.length = 0;
+  const file = await send("/costs/export.xlsx?month=2026-11");
+  assert.deepEqual(calls, [["costs", "2026-11-01"]]);
+  assert.equal(file.headers["content-type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  assert.match(String(file.headers["content-disposition"]), /^attachment; filename="export\.xlsx"; filename\*=UTF-8''%E8%8A%B1%E8%B4%B9-2026-11\.xlsx$/);
+  assert.equal(file.raw.subarray(0, 4).toString("hex"), "504b0304", "a zip");
+  assert.equal(file.raw.readUInt32LE(file.raw.length - 22), 0x06054b50, "with its directory at the end");
+  const text = file.raw.toString("utf8");
+  for (const sheet of ["按月合计", "账本", "每天", "模型"]) assert.ok(text.includes(`<sheet name="${sheet}"`), sheet);
+  assert.ok(text.includes('<t xml:space="preserve">MiniMax 语音包月</t></is></c><c r="D2" t="inlineStr"><is><t xml:space="preserve">固定月费</t></is></c><c r="E2"><v>5</v>'));
+  assert.ok(text.includes("&lt;script&gt;") && !text.includes("<script>"), "text is escaped in the sheet");
+  assert.ok(text.includes('<c r="H2"><v>3.45</v></c>'), "model cost in dollars");
+  calls.length = 0;
+  await send("/costs/export.xlsx?year=2025");
+  assert.equal(calls.length, 12);
+});
+
+it("shows how much the App is used, and the database and the servers", async () => {
+  const day = (d: string, n: number) => ({ day: d, newOwners: n, chatters: n + 1, ownerMessages: 10 * n, replies: 9 * n, failed: n, voiceIn: n, voiceOut: 2 * n,
+    posts: n, aiPosts: 1, comments: 3, creditsSpent: 100 * n, creditsBought: 0 });
+  const activity: Activity = { month: "2026-11", from: "2026-11-01", to: "2026-11-30", owners: 25, companions: 31, chatters: 12,
+    days: [day("2026-11-22", 1), day("2026-11-23", 2)] };
+  const { send, calls } = await start({ activity });
+  const stats = await send("/stats");
+  assert.deepEqual(calls, [["activity", "2026-11-01"]]);
+  assert.match(stats.body, /<a href="\/stats" class="on">运营数据<\/a>/);
+  assert.match(stats.body, /本月聊天的人<\/div><div class="big">12<\/div><div class="muted">新注册 3 人/);
+  assert.match(stats.body, /今天聊天的人<\/div><div class="big">3<\/div><div class="muted">主人发 20 条 · 家机回 18 条/);
+  assert.match(stats.body, /消息<\/div><div class="big">57<\/div><div class="muted">主人发 30 · 家机回 27 · 失败 3/);
+  assert.match(stats.body, /<title>2026-11-23\n聊天的人:3\n新注册:2<\/title>/);
+  assert.match(stats.body, /<meta http-equiv="refresh" content="30;url=\/stats\?month=2026-11">/);
+  const past = await (await start({ activity: { ...activity, month: "2026-10", days: [] } })).send("/stats?month=2026-10&auto=off");
+  assert.ok(!past.body.includes("http-equiv") && !past.body.includes("今天聊天的人") && past.body.includes("还没有数据"));
+
+  const system: SystemInfo = { databaseBytes: 400 * 1024 * 1024, connections: 12, maxConnections: 60, startedAt: AT, version: "17.4",
+    tables: [{ name: "companion_private.chat_messages", bytes: 1024 * 1024, rows: 5000 }, { name: "public.owners", bytes: 8192, rows: null }] };
+  const without = await (await start({ system })).send("/system");
+  assert.match(without.body, /数据库空间<\/div><div class="big">400\.0 MB<\/div><div class="bar"><span class="" style="width:80%"><\/span><\/div>/);
+  assert.match(without.body, /<div class="card warn"><div class="muted">数据库空间/, "80 % full is a warning");
+  assert.match(without.body, /12 \/ 60/);
+  assert.match(without.body, /<td>companion_private\.chat_messages<\/td><td class="num">1\.0 MB<\/td><td class="num">5,000<\/td>/);
+  assert.match(without.body, /<td class="num">—<\/td>/);
+  assert.match(without.body, /还没有 Fly 只读令牌/);
+
+  const asked: [string, string][] = [];
+  const fly = (answer: (app: string) => Response): FlyAccess => ({ token: "fly-ro", apps: ["api", "admin"], fetch: (async (url: string, init: RequestInit) => {
+    asked.push([url, (init.headers as Record<string, string>).Authorization!]);
+    return answer(url.split("/apps/")[1]!.split("/")[0]!);
+  }) as typeof fetch });
+  const machines = (app: string) => Response.json(app === "api" ? [{ id: "m1", name: "api-1", state: "started", region: "nrt",
+    config: { guest: { cpus: 1, memory_mb: 512 } }, image_ref: { tag: "deployment-7" }, updated_at: AT,
+    events: [{ type: "start", timestamp: 2 }, { type: "exit", timestamp: 1_764_000_000_000, request: { exit_event: { exit_code: 137, oom_killed: true } } },
+      { type: "exit", timestamp: 5 }] }] : [{ id: "m2", state: "stopped", events: "nonsense" }, "junk"]);
+  const page = await (await start({ system }, undefined, fly(machines))).send("/system");
+  assert.deepEqual(asked, [["https://api.machines.dev/v1/apps/api/machines", "Bearer fly-ro"], ["https://api.machines.dev/v1/apps/admin/machines", "Bearer fly-ro"]]);
+  assert.match(page.body, /主机<\/div>\s*<div class="big">1 \/ 3<\/div>/);
+  assert.match(page.body, /<td>api<\/td><td>api-1 <span class="muted">m1<\/span><\/td>\s*<td><span class="tag ">运行中<\/span><\/td><td>nrt<\/td>\s*<td>1 核 · 512 MB 内存<\/td><td>deployment-7<\/td>/);
+  assert.match(page.body, /2025\/11\/24 16:00:00 · 退出码 137 <span class="tag bad">内存不够被杀掉<\/span>/, "the latest exit");
+  assert.match(page.body, /<td><span class="tag bad">已停止<\/span><\/td>/);
+  assert.match(page.body, /<span class="muted">没有记录<\/span>/);
+  const refused = await (await start({ system }, undefined, fly(() => new Response("no", { status: 401 })))).send("/system");
+  assert.match(refused.body, /读不到 Fly 的主机状态:Fly 回答 401\(应用 api\)/);
+  const broken = await (await start({ system }, undefined, { token: "x", apps: ["api"], fetch: (async () => { throw "offline"; }) as typeof fetch })).send("/system?auto=off");
+  assert.match(broken.body, /读不到 Fly 的主机状态:offline/);
+  assert.ok(!broken.body.includes("http-equiv"));
 });

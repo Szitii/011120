@@ -3,6 +3,8 @@
  * database goes through `html`, which escapes it; only values built by `html` itself are trusted.
  */
 
+import type { Hosts } from "./fly.ts";
+
 // ---------- what the console functions return (schema companion_admin) ----------
 
 export interface Actor {
@@ -137,8 +139,8 @@ const STYLE = `
 *{box-sizing:border-box}
 body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;margin:0;color:#1f2328;background:#f3f4f6}
 a{color:#2563eb}
-nav{background:#111827;padding:8px 24px;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
-nav b{color:#fff;margin-right:16px;font-size:15px}nav a{color:#cbd5e1;text-decoration:none;padding:5px 12px;border-radius:6px}
+nav{background:#111827;padding:0 24px;min-height:56px;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+nav b{color:#fff;margin-right:20px;font-size:16px}nav a{color:#cbd5e1;text-decoration:none;font-size:15px;padding:8px 14px;border-radius:8px}
 nav a:hover{color:#fff;background:#1f2937}nav a.on{color:#111827;background:#fff;font-weight:600}
 main{max-width:1100px;margin:0 auto;padding:20px 16px 60px}
 .head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 16px}
@@ -167,10 +169,18 @@ details.edit{margin-top:12px;padding-top:8px;border-top:1px dashed #e5e7eb}detai
 .warn{border-color:#f5c26b;background:#fffbeb}.alarm{border-color:#f1b0b0;background:#fef2f2}
 .bar{height:10px;background:#eef0f3;border-radius:5px;overflow:hidden;margin:8px 0}
 .bar span{display:block;height:100%;background:#2563eb}.bar span.over{background:#d1242f}.bar span.near{background:#d97706}
-td.chart{width:22%;min-width:90px}td.chart .bar{margin:6px 0}`;
+.seg{display:inline-flex}.seg .btn{border-radius:0;margin-left:-1px}.seg .btn:first-child{border-radius:6px 0 0 6px;margin-left:0}
+.seg .btn:last-child{border-radius:0 6px 6px 0}
+svg.chart{width:100%;height:auto;display:block}svg.chart text{font-size:12px;fill:#6b7280}svg.chart text.end{fill:#1f2328;font-size:13px}
+svg.chart .grid{stroke:#eef0f3}svg.chart rect.hit{fill:transparent}svg.chart rect.hit:hover{fill:rgba(17,24,39,.05)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:#4b5563;margin:0 0 6px}
+.legend i,.vhead i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px}
+.vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:8px 0 16px}.vendors .card{margin:0}
+.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines td{padding:5px 0;border-bottom:1px solid #f3f4f6}table.lines tr:hover td{background:none}
+.sub{margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}svg.spark{width:100%;height:36px;display:block;margin:4px 0}`;
 
-const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户"], ["/costs", "花费"], ["/models", "模型与额度"],
-  ["/log", "操作日志"]];
+const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户"], ["/stats", "运营数据"], ["/costs", "花费"],
+  ["/system", "系统"], ["/models", "模型与额度"], ["/log", "操作日志"]];
 
 /** `tools` goes to the right of the title; `reload` (seconds;url) makes the browser read the page again by itself. */
 function page(title: string, at: string, body: Safe, done = false, tools: Safe | "" = "", reload = ""): string {
@@ -380,34 +390,175 @@ ${edit("给某个主人调整积分", act("/models/credit", "调整积分", back
 <p class="muted">每一笔花了多少钱,在<a href="/costs">“花费”页</a>。</p>`, done, fresh(zone, now, back));
 }
 
-/** How often the costs page of the running month reads itself again. */
-export const COSTS_RELOAD_SECONDS = 30;
+/** How often a page of live numbers (the running month, the servers) reads itself again. */
+export const RELOAD_SECONDS = 30;
+
+// ---------- charts: inline SVG, no script; the hover text of a day is the SVG <title> ----------
+
+interface Series { readonly name: string; readonly color: string; readonly values: readonly number[] }
+/** The reference categorical palette, in its fixed order: a series gets its slot by what it is, never by rank. */
+const SLOTS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"] as const;
+const INK = "#111827";
+const r1 = (n: number) => Math.round(n * 10) / 10;
+/** A round number at or above `max`, for the top of a y axis. */
+function niceMax(max: number): number {
+  if (max <= 0) return 1;
+  const unit = 10 ** Math.floor(Math.log10(max));
+  return [1, 2, 2.5, 5, 10].map(f => f * unit).find(v => v >= max)!;
+}
+
+/** Lines over days (or months), one y axis. Up to four series are also named at their line's end. */
+function lineChart(labels: readonly string[], series: readonly Series[], format: (n: number) => string, label: (d: string) => string, whole = false): Safe {
+  if (labels.length === 0 || series.length === 0) return html`<p class="muted">还没有数据。</p>`;
+  const named = series.length <= 4, W = 1000, H = 240, L = 64, R = named ? 110 : 16, T = 12, B = 28;
+  // Counts get whole-number ticks: the top is a multiple of the four steps.
+  const top = niceMax(Math.max(0, ...series.flatMap(s => s.values))), max = whole ? Math.max(4, Math.ceil(top / 4) * 4) : top;
+  const span = W - L - R, step = labels.length > 1 ? span / (labels.length - 1) : span;
+  const x = (i: number) => r1(labels.length === 1 ? L + span / 2 : L + i * step);
+  const y = (v: number) => r1(T + (H - T - B) * (1 - v / max));
+  const every = Math.ceil(labels.length / 10);
+  const ends = series.map(s => ({ name: s.name, y: y(s.values.at(-1) ?? 0) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) ends[i]!.y = Math.max(ends[i]!.y, ends[i - 1]!.y + 15);
+  // …and none below the x axis: push the lowest back up, and the others above it.
+  for (let i = ends.length - 1; i >= 0; i--) ends[i]!.y = Math.min(ends[i]!.y, i === ends.length - 1 ? H - B - 4 : ends[i + 1]!.y - 15);
+  return html`${series.length > 1 ? html`<div class="legend">${series.map(s => html`<span><i style="background:${s.color}"></i>${s.name}</span>`)}</div>` : ""}
+<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${series.map(s => s.name).join("、")}">
+${[0, 0.25, 0.5, 0.75, 1].map(f => html`<line class="grid" x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}"/><text x="${L - 8}" y="${y(max * f) + 4}" text-anchor="end">${format(max * f)}</text>`)}
+${labels.map((d, i) => i % every === 0 || i === labels.length - 1 ? html`<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${label(d)}</text>` : "")}
+${series.map(s => html`<polyline fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" points="${s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}"/>
+${labels.length <= 31 ? s.values.map((v, i) => html`<circle cx="${x(i)}" cy="${y(v)}" r="3" fill="${s.color}"/>`) : ""}`)}
+${named ? ends.map(e => html`<text class="end" x="${W - R + 8}" y="${e.y + 4}">${e.name}</text>`) : ""}
+${labels.map((d, i) => html`<rect class="hit" x="${r1(x(i) - step / 2)}" y="${T}" width="${r1(step)}" height="${H - T - B}"><title>${d}
+${series.map(s => `${s.name}:${format(s.values[i] ?? 0)}`).join("\n")}</title></rect>`)}
+</svg>`;
+}
+
+/** A tiny line of one model's days, no axes. */
+function spark(values: readonly number[], color: string): Safe {
+  const max = Math.max(0, ...values), W = 160, H = 36;
+  return html`<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline fill="none" stroke="${color}" stroke-width="2"
+ vector-effect="non-scaling-stroke" points="${values.map((v, i) => `${r1(values.length === 1 ? W / 2 : i * W / (values.length - 1))},${r1(H - 3 - (max > 0 ? v / max : 0) * (H - 6))}`).join(" ")}"/></svg>`;
+}
+
+/** Each day from `from` to `to`, but not past today (UTC). */
+function daysOf(from: string, to: string, now: Date): string[] {
+  const last = Math.min(Date.parse(`${to}T00:00:00Z`), Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`));
+  const out: string[] = [];
+  for (let t = Date.parse(`${from}T00:00:00Z`); t <= last; t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10));
+  return out;
+}
+const compact = (n: number) => n >= 1e6 ? `${r1(n / 1e6)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : count(n);
+const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+// ---------- vendors: the companies the money goes to ----------
+
+/** Display names; the keys are the model catalog's provider names, plus the bills that are not models. */
+const VENDOR_NAMES: Readonly<Record<string, string>> = {
+  anthropic: "Anthropic", deepseek: "DeepSeek", openai: "OpenAI", qwen: "通义千问", moonshot: "Moonshot", zhipu: "智谱",
+  openrouter: "OpenRouter", minimax: "MiniMax", supabase: "Supabase", fly: "Fly.io",
+};
+/** Each vendor's colour, the same on every chart. */
+const VENDOR_COLORS: Readonly<Record<string, string>> = {
+  anthropic: SLOTS[0], minimax: SLOTS[1], deepseek: SLOTS[2], openai: SLOTS[3], qwen: SLOTS[4], moonshot: SLOTS[5], zhipu: SLOTS[6], openrouter: SLOTS[7],
+};
+const vendorColor = (key: string) => VENDOR_COLORS[key] ?? "#6b7280";
+const vendorName = (key: string) => key === "other" ? "其他" : VENDOR_NAMES[key] ?? key;
+/** Which company a fixed bill belongs to, from its name ("Fly 服务器" → fly), or other. */
+export function billVendor(item: string): string {
+  const lower = item.toLowerCase();
+  return Object.keys(VENDOR_NAMES).find(k => lower.includes(k) || lower.includes(VENDOR_NAMES[k]!.toLowerCase())) ?? "other";
+}
+
+export interface ModelMonth {
+  provider: string; model: string; currency: string; calls: number; failed: number; inputTokens: number; outputTokens: number;
+  costMinor: number; perDay: Map<string, number>;
+}
+export interface Vendor {
+  key: string; name: string; cents: number; usageCents: number; fixedCents: number;
+  lines: { label: string; cents: number; fixed: boolean; note: string | null }[];
+  models: ModelMonth[]; perDay: Map<string, number>;
+}
+const addTo = (map: Map<string, number>, key: string, n: number) => map.set(key, (map.get(key) ?? 0) + n);
+
+/** One month's money per company, biggest first. MiniMax, Supabase and Fly are always there. Money in USD cents. */
+export function vendorsOf(c: Costs): Vendor[] {
+  const all = new Map<string, Vendor>();
+  const of = (key: string): Vendor => {
+    if (!all.has(key)) all.set(key, { key, name: vendorName(key), cents: 0, usageCents: 0, fixedCents: 0, lines: [], models: [], perDay: new Map() });
+    return all.get(key)!;
+  };
+  for (const key of ["minimax", "supabase", "fly"]) of(key);
+  const models = new Map<string, ModelMonth>();
+  for (const d of c.models.byDay) {
+    const key = `${d.provider}/${d.model} ${d.currency}`;
+    const m = models.get(key) ?? { provider: d.provider, model: d.model, currency: d.currency, calls: 0, failed: 0, inputTokens: 0,
+      outputTokens: 0, costMinor: 0, perDay: new Map<string, number>() };
+    m.calls += d.calls; m.failed += d.failed; m.inputTokens += d.inputTokens; m.outputTokens += d.outputTokens; m.costMinor += d.costMinor;
+    addTo(m.perDay, d.day, d.costMinor);
+    models.set(key, m);
+  }
+  for (const m of [...models.values()].sort((a, b) => b.costMinor - a.costMinor)) {
+    const v = of(m.provider);
+    v.models.push(m);
+    if (m.currency !== "USD") continue;
+    v.usageCents += m.costMinor;
+    for (const [day, cents] of m.perDay) addTo(v.perDay, day, cents);
+  }
+  for (const v of all.values()) if (v.models.length > 0) v.lines.push({ label: "AI 模型(按用量)", cents: v.usageCents, fixed: false, note: null });
+  const minimax = of("minimax");
+  minimax.lines.push({ label: "语音转文字(按时长)", cents: c.totals.hearCents, fixed: false, note: null },
+    { label: "文字转语音 · 超出包月", cents: c.totals.speakOverCents, fixed: false, note: null });
+  minimax.usageCents += c.totals.hearCents + c.totals.speakOverCents;
+  for (const d of c.days) if (d.hearCents > 0) addTo(minimax.perDay, d.day, d.hearCents);
+  for (const f of c.fixed) {
+    const v = of(billVendor(f.item));
+    v.lines.push({ label: f.item, cents: f.cents, fixed: true, note: f.note });
+    v.fixedCents += f.cents;
+  }
+  for (const v of all.values()) v.cents = v.usageCents + v.fixedCents;
+  return [...all.values()].sort((a, b) => b.cents - a.cents || a.name.localeCompare(b.name));
+}
+
+// ---------- 花费 ----------
+
+/** The buttons above a page of live numbers: reading itself again, and stopping that. */
+const autoButton = (self: string, auto: boolean) => html`<a class="btn ${auto ? "on" : ""}" href="${auto ? `${self}${self.includes("?") ? "&" : "?"}auto=off` : self}">${
+  auto ? `每 ${RELOAD_SECONDS} 秒自动刷新 · 点击停止` : "自动刷新:关 · 点击打开"}</a>`;
+const reloadOf = (self: string, auto: boolean) => auto ? `${RELOAD_SECONDS};url=${self}` : "";
+/** Month or year, and the export of what is shown. */
+const costsTabs = (year: boolean, month: string) => html`<span class="seg"><a class="btn ${year ? "" : "on"}" href="/costs?month=${month}">按月</a><a class="btn ${
+  year ? "on" : ""}" href="/costs?year=${month.slice(0, 4)}">按年</a></span>`;
+
+function vendorCard(v: Vendor, total: number, c: Costs, days: readonly string[]): Safe {
+  const p = c.prices, used = p.planPoints > 0 ? c.totals.speakPoints / p.planPoints : 0;
+  return html`<div class="card vendor"><div class="vhead"><span><i style="background:${vendorColor(v.key)}"></i><b>${v.name}</b></span>
+<span class="muted">占 ${percent(v.cents, total)}</span></div><div class="big">${usd(v.cents)}</div>
+${v.lines.length === 0 ? html`<p class="muted">这个月没有花费。${v.key === "supabase" ? "免费版没有月费。" : html`有月费的话,去 <a href="/costs/settings">费用设置</a> 里填。`}</p>`
+    : html`<table class="lines">${v.lines.map(l => html`<tr><td>${l.label}${l.fixed ? html` <span class="tag">固定月费</span>` : ""}${
+      l.note ? html` <span class="muted">${l.note}</span>` : ""}</td><td class="num">${usd(l.cents)}</td></tr>`)}</table>`}
+${v.key === "minimax" ? html`<div class="sub"><div>语音包月点数:已用 ${count(c.totals.speakPoints)} / ${count(p.planPoints)}(${Math.round(used * 100)}%)</div>${meter(used)}
+<div class="muted">${used > 1 ? "已经超出包月,超出部分按量收费。" : used > 0.8 ? "快用完了,用完后按量收费。" : "家机发的每条语音按字数用点数。"}</div></div>` : ""}
+${v.models.map(m => html`<div class="sub model"><div class="mhead"><b>${m.model}</b><b>${m.currency === "USD" ? usd(m.costMinor) : money(m.costMinor, m.currency)}</b></div>
+${spark(days.map(d => m.perDay.get(d) ?? 0), vendorColor(v.key))}
+<div class="muted">调用 ${count(m.calls)} 次${m.failed > 0 ? ` · 未成功 ${count(m.failed)}` : ""} · 输入 ${compact(m.inputTokens)} token · 输出 ${compact(m.outputTokens)} token</div></div>`)}
+${v.key === "supabase" || v.key === "fly" ? html`<p class="muted"><a href="/system">${v.key === "supabase" ? "数据库" : "主机"}现在的状态 →</a></p>` : ""}</div>`;
+}
 
 /**
- * Everything the platform paid for in one month: the total and today first, then where it went.
+ * Everything the platform paid for in one month: the total and today first, then a chart, then each company.
  * `cap` is today's platform spend and its ceiling, shown only for the running month; `auto` makes the page reload itself.
  */
 export function costsPage(zone: string, now: Date, c: Costs, cap: Models["cap"] | null, auto: boolean, done: boolean): string {
-  const t = c.totals, p = c.prices, self = `/costs?month=${c.month}`;
+  const t = c.totals, self = `/costs?month=${c.month}`;
+  const vendors = vendorsOf(c), days = daysOf(c.from, c.to, now);
   const usage = t.modelCents + t.hearCents + t.speakOverCents, total = usage + t.fixedCents;
-  const used = p.planPoints > 0 ? t.speakPoints / p.planPoints : 0;
   const thisMonth = c.month === now.toISOString().slice(0, 7);
-  const m = c.models;
   const capShare = cap !== null && cap.dailyCostMinor > 0 ? cap.spentTodayMinor / cap.dailyCostMinor : 0;
-  const dayCents = (d: Costs["days"][number]) => d.modelCents + d.hearCents;
-  const topDay = Math.max(0, ...c.days.map(dayCents));
-  // The month per model: byDay has one row per day and model.
-  const perModel = [...m.byDay.reduce((all, d) => {
-    const key = `${d.provider}/${d.model} ${d.currency}`, row = all.get(key) ?? { ...d, calls: 0, failed: 0, inputTokens: 0, outputTokens: 0, costMinor: 0 };
-    all.set(key, { ...row, calls: row.calls + d.calls, failed: row.failed + d.failed, inputTokens: row.inputTokens + d.inputTokens,
-      outputTokens: row.outputTokens + d.outputTokens, costMinor: row.costMinor + d.costMinor });
-    return all;
-  }, new Map<string, Costs["models"]["byDay"][number]>()).values()].sort((a, b) => b.costMinor - a.costMinor);
-  const cost = (minor: number, currency: string) => currency === "USD" ? usd(minor) : money(minor, currency);
-  const part = (label: string, cents: number, note: string) => html`<div class="card"><div class="muted">${label}</div><div class="big">${usd(cents)}</div>
-<div class="muted">${note} · 占 ${percent(cents, total)}</div></div>`;
-  const tools = html`<form method="get" action="/costs" class="act"><input type="month" name="month" value="${c.month}" required><button>看这个月</button></form>${
-    thisMonth ? html`<a class="btn ${auto ? "on" : ""}" href="${auto ? `${self}&auto=off` : self}">${auto ? `每 ${COSTS_RELOAD_SECONDS} 秒自动刷新 · 点击停止` : "自动刷新:关 · 点击打开"}</a>` : ""}`;
+  const daily = vendors.filter(v => v.perDay.size > 0).map(v => ({ name: v.name, color: vendorColor(v.key), values: days.map(d => v.perDay.get(d) ?? 0) }));
+  const series = daily.length > 1 ? [{ name: "合计", color: INK, values: days.map((_, i) => daily.reduce((n, s) => n + s.values[i]!, 0)) }, ...daily] : daily;
+  const m = c.models;
+  const tools = html`${costsTabs(false, c.month)}<form method="get" action="/costs" class="act"><input type="month" name="month" value="${c.month}" required><button>看这个月</button></form>
+<a class="btn" href="/costs/export.xlsx?month=${c.month}">导出 xlsx</a>${thisMonth ? autoButton(self, auto) : ""}`;
   return page(`花费 · ${c.month}`, "/costs", html`
 <div class="cards hero">
 <div class="card total"><div class="muted">${thisMonth ? "本月到今天" : "这个月"}总花费</div><div class="big">${usd(total)}</div>
@@ -417,39 +568,52 @@ ${cap === null ? "" : html`<div class="card ${cap.enabled && capShare > 1 ? "ala
 ${cap.enabled ? html`${meter(capShare)}<div class="muted">每天上限 ${money(cap.dailyCostMinor, cap.currency)} · 用了 ${percent(cap.spentTodayMinor, cap.dailyCostMinor)}
  · <a href="/models">改上限</a></div>` : html`<div class="muted">没有设每天上限 · <a href="/models">去设置</a></div>`}</div>`}
 </div>
-<div class="cards">
-${part("AI 模型", t.modelCents, "聊天、日记、自动发帖")}
-${part("语音转文字", t.hearCents, "主人发的语音,按时长")}
-${part("文字转语音 · 超出包月", t.speakOverCents, "包月以内不另收钱")}
-${part("固定月费", t.fixedCents, "服务器、数据库、语音包月")}
-</div>
-${panel("语音包月点数", html`已用 ${count(t.speakPoints)} / ${count(p.planPoints)}(${Math.round(used * 100)}%)${meter(used)}
-<span class="muted">${used > 1 ? "已经超出包月,超出部分按量收费。" : used > 0.8 ? "快用完了,用完后按量收费。" : "家机发的每条语音按字数用点数(以 MiniMax 账单为准)。"}</span>`)}
-
-${panel("每天", c.days.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : html`<div class="scroll"><table>
+${panel("每天按用量的花费", html`${series.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : lineChart(days, series, usd, d => d.slice(5))}
+<p class="muted">鼠标停在某一天上,能看到那天每家花了多少。固定月费和语音包月不按天算,不在图里。</p>`)}
+<h2>按厂商</h2>
+<div class="vendors">${vendors.map(v => vendorCard(v, total, c, days))}</div>
+${panel("每天明细", c.days.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : html`<details class="edit"><summary>展开每天的表</summary><div class="scroll"><table>
 <tr><th>日期</th><th class="num">AI 模型</th><th class="num">模型调用</th><th class="num">语音转文字</th><th class="num">识别时长</th>
-<th class="num">文字转语音(点数)</th><th class="num">当天合计</th><th></th></tr>${c.days.map(d => html`
+<th class="num">文字转语音(点数)</th><th class="num">当天合计</th></tr>${c.days.map(d => html`
 <tr><td>${d.day}</td><td class="num">${usd(d.modelCents)}</td><td class="num">${count(d.modelCalls)}</td><td class="num">${usd(d.hearCents)}</td>
 <td class="num">${count(d.hearSeconds)} 秒 / ${d.hears} 条</td><td class="num">${count(d.speakPoints)} / ${d.speaks} 条</td>
-<td class="num"><b>${usd(dayCents(d))}</b></td><td class="chart"><div class="bar"><span style="width:${topDay > 0 ? Math.round(dayCents(d) / topDay * 100) : 0}%"></span></div></td></tr>`)}</table></div>
-<p class="muted">“当天合计”不含固定月费和包月;文字转语音只有超出包月才另收钱,算在月合计里。</p>`)}
-
-${panel("AI 模型:按模型", m.byDay.length === 0 ? html`<p class="muted">这个月没有模型调用。</p>` : html`<div class="scroll"><table>
-<tr><th>厂商 / 模型</th><th class="num">调用</th><th class="num">其中未成功</th><th class="num">输入 token</th><th class="num">输出 token</th><th class="num">花费</th><th class="num">占模型花费</th></tr>
-${perModel.map(d => html`<tr><td>${d.provider}/${d.model}</td><td class="num">${count(d.calls)}</td><td class="num">${count(d.failed)}</td>
-<td class="num">${count(d.inputTokens)}</td><td class="num">${count(d.outputTokens)}</td><td class="num"><b>${cost(d.costMinor, d.currency)}</b></td>
-<td class="num">${d.currency === "USD" ? percent(d.costMinor, t.modelCents) : ""}</td></tr>`)}</table></div>
-<details class="edit"><summary>按天看每个模型</summary><div class="scroll"><table>
+<td class="num"><b>${usd(d.modelCents + d.hearCents)}</b></td></tr>`)}</table></div>
+${m.byDay.length === 0 ? "" : html`<div class="scroll"><table>
 <tr><th>日期</th><th>厂商 / 模型</th><th class="num">调用</th><th class="num">其中未成功</th><th class="num">输入 token</th><th class="num">输出 token</th><th class="num">花费</th></tr>
 ${m.byDay.map(d => html`<tr><td>${d.day}</td><td>${d.provider}/${d.model}</td><td class="num">${d.calls}</td><td class="num">${d.failed}</td>
-<td class="num">${count(d.inputTokens)}</td><td class="num">${count(d.outputTokens)}</td><td class="num">${cost(d.costMinor, d.currency)}</td></tr>`)}</table></div></details>
+<td class="num">${count(d.inputTokens)}</td><td class="num">${count(d.outputTokens)}</td><td class="num">${d.currency === "USD" ? usd(d.costMinor) : money(d.costMinor, d.currency)}</td></tr>`)}</table></div>`}
+</details>
 <p class="muted">“未成功”包括调用失败、被安全扫描拦下、结果不明(按占用额全额记账)。主人自带 Key 和自己的 Agent 不花平台的钱,不在这里。</p>`)}
 ${m.byCompanion.length === 0 ? "" : panel("AI 模型:花费最多的家机(前 20)", html`<div class="scroll"><table><tr><th>家机</th><th class="num">调用</th><th class="num">花费</th></tr>${
     m.byCompanion.map(x => html`
-<tr><td>${ownerLink(x.ownerId, x.displayName)}</td><td class="num">${x.calls}</td><td class="num">${cost(x.costMinor, x.currency)}</td></tr>`)}</table></div>`)}
+<tr><td>${ownerLink(x.ownerId, x.displayName)}</td><td class="num">${x.calls}</td><td class="num">${x.currency === "USD" ? usd(x.costMinor) : money(x.costMinor, x.currency)}</td></tr>`)}</table></div>`)}
 <p class="muted">按 UTC 日期,金额都是美元。每次打开或刷新都直接从数据库读,模型调用和语音一发生就记账。
 固定月费和语音单价在 <a href="/costs/settings">费用设置</a> 里改。</p>`, done,
-  fresh(zone, now, self, tools), auto ? `${COSTS_RELOAD_SECONDS};url=${self}` : "");
+  fresh(zone, now, self, tools), reloadOf(self, thisMonth && auto));
+}
+
+/** A year of months (oldest first), each company's share, like a ledger. */
+export function costsYearPage(zone: string, now: Date, year: string, months: readonly Costs[]): string {
+  const rows = months.map(c => ({ c, vendors: vendorsOf(c) }));
+  const keys = [...new Set(rows.flatMap(r => r.vendors.filter(v => v.cents > 0).map(v => v.key)))];
+  const cents = (r: (typeof rows)[number], key: string) => r.vendors.find(v => v.key === key)?.cents ?? 0;
+  const sum = (r: (typeof rows)[number]) => r.vendors.reduce((n, v) => n + v.cents, 0);
+  const total = rows.reduce((n, r) => n + sum(r), 0);
+  const series = [...(keys.length > 1 ? [{ name: "合计", color: INK, values: rows.map(sum) }] : []),
+    ...keys.map(k => ({ name: vendorName(k), color: k === "supabase" || k === "fly" || k === "other" ? "#9ca3af" : vendorColor(k), values: rows.map(r => cents(r, k)) }))];
+  const self = `/costs?year=${year}`, y = Number(year);
+  const tools = html`${costsTabs(true, `${year}-${months.at(-1)?.month.slice(5) ?? "01"}`)}
+<span class="seg"><a class="btn" href="/costs?year=${y - 1}">← ${y - 1}</a>${y < now.getUTCFullYear() ? html`<a class="btn" href="/costs?year=${y + 1}">${y + 1} →</a>` : ""}</span>
+<a class="btn" href="/costs/export.xlsx?year=${year}">导出 xlsx</a>`;
+  return page(`花费 · ${year} 年`, "/costs", html`
+<div class="cards hero"><div class="card total"><div class="muted">${year} 年${y === now.getUTCFullYear() ? "到今天" : ""}总花费</div><div class="big">${usd(total)}</div>
+<div class="muted">${rows.length} 个月 · 平均每月 ${usd(rows.length > 0 ? total / rows.length : 0)}</div></div></div>
+${panel("每月花费(含固定月费)", lineChart(rows.map(r => r.c.month), series.length > 8 ? series.slice(0, 8) : series, usd, d => `${Number(d.slice(5))}月`))}
+${panel("账本", html`<div class="scroll"><table><tr><th>月份</th>${keys.map(k => html`<th class="num">${vendorName(k)}</th>`)}<th class="num">合计</th></tr>
+${[...rows].reverse().map(r => html`<tr><td><a href="/costs?month=${r.c.month}">${r.c.month}</a></td>${keys.map(k => html`<td class="num">${usd(cents(r, k))}</td>`)}
+<td class="num"><b>${usd(sum(r))}</b></td></tr>`)}
+<tr><td><b>全年</b></td>${keys.map(k => html`<td class="num"><b>${usd(rows.reduce((n, r) => n + cents(r, k), 0))}</b></td>`)}<td class="num"><b>${usd(total)}</b></td></tr></table></div>
+<p class="muted">点月份看那个月的明细。固定月费用的是现在填的数:改了以后,以前的月份也按新数算。</p>`)}`, false, fresh(zone, now, self, tools));
 }
 
 /** The numbers the costs page is worked out from: fixed monthly bills and voice prices. */
@@ -457,13 +621,14 @@ export function costSettingsPage(zone: string, c: Costs, done: boolean): string 
   const p = c.prices, back = "/costs/settings";
   return page("费用设置", "/costs", html`<p><a href="/costs">← 回到花费</a></p>
 ${panel("固定月费", html`${c.fixed.length === 0 ? html`<p class="muted">还没有填。</p>` : html`<div class="scroll"><table>
-<tr><th>项目</th><th class="num">每月</th><th>备注</th><th>更新时间</th></tr>${c.fixed.map(f => html`
-<tr><td>${f.item}</td><td class="num">${usd(f.cents)}</td><td>${f.note}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>`}
+<tr><th>项目</th><th>归到</th><th class="num">每月</th><th>备注</th><th>更新时间</th></tr>${c.fixed.map(f => html`
+<tr><td>${f.item}</td><td>${vendorName(billVendor(f.item))}</td><td class="num">${usd(f.cents)}</td><td>${f.note}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>`}
 ${act("/costs/fixed", "保存", back, html`<input name="item" required maxlength="60" placeholder="项目,如 Fly 服务器" list="fixed-items">
 <datalist id="fixed-items">${c.fixed.map(f => html`<option value="${f.item}">`)}</datalist>
 <label>每月(美元)<input name="dollars" required inputmode="decimal" size="8" placeholder="0.00"></label>
 <input name="note" maxlength="200" placeholder="备注(可不填)">`)}
-<p class="muted">同名项目会被改成新金额;金额填 <b>删除</b> 就删掉这一项。按账单填:Fly 两个应用、Supabase、MiniMax 包月等。</p>`)}
+<p class="muted">项目名里带上厂商名(Fly、Supabase、MiniMax……),花费页就把它归到那家下面;都不带的归到“其他”。
+同名项目会被改成新金额;金额填 <b>删除</b> 就删掉这一项。</p>`)}
 ${panel("语音单价", html`
 <p>包月每月 ${count(p.planPoints)} 点;超出后每百万字符 ${usd(p.speakCentsPerMillion)};语音转文字每小时 ${usd(p.hearCentsPerHour)}。
 <span class="muted">更新于 ${time(zone, p.updatedAt)}</span></p>
@@ -471,6 +636,90 @@ ${act("/costs/prices", "修改单价", back, html`<label>包月点数 <input nam
 <label>超出后每百万字符(美元)<input name="speak" required inputmode="decimal" size="8" value="${(p.speakCentsPerMillion / 100).toString()}"></label>
 <label>转文字每小时(美元)<input name="hear" required inputmode="decimal" size="8" value="${(p.hearCentsPerHour / 100).toString()}"></label>`)}
 <p class="muted">默认值来自 MiniMax 国际版官网价格(2026-11):Starter 包月 5 美元 100,000 点,speech-2.8-hd 每百万字符 100 美元,语音识别每小时 0.38 美元。</p>`)}`, done);
+}
+
+// ---------- 运营数据 ----------
+
+export interface ActivityDay {
+  day: string; newOwners: number; chatters: number; ownerMessages: number; replies: number; failed: number;
+  voiceIn: number; voiceOut: number; posts: number; aiPosts: number; comments: number; creditsSpent: number; creditsBought: number;
+}
+/** companion_admin.activity (migration 0059): one month, counts only. */
+export interface Activity { month: string; from: string; to: string; owners: number; companions: number; chatters: number; days: ActivityDay[] }
+
+export function statsPage(zone: string, now: Date, a: Activity, auto: boolean): string {
+  const self = `/stats?month=${a.month}`, thisMonth = a.month === now.toISOString().slice(0, 7);
+  const sum = (k: keyof Omit<ActivityDay, "day">) => a.days.reduce((n, d) => n + d[k], 0);
+  const today = thisMonth ? a.days.at(-1) : undefined;
+  const labels = a.days.map(d => d.day);
+  const line = (name: string, slot: number, k: keyof Omit<ActivityDay, "day">) => ({ name, color: SLOTS[slot]!, values: a.days.map(d => d[k]) });
+  const tools = html`<form method="get" action="/stats" class="act"><input type="month" name="month" value="${a.month}" required><button>看这个月</button></form>${
+    thisMonth ? autoButton(self, auto) : ""}`;
+  const card = (label: string, value: string, note: string) => html`<div class="card"><div class="muted">${label}</div><div class="big">${value}</div><div class="muted">${note}</div></div>`;
+  return page(`运营数据 · ${a.month}`, "/stats", html`
+<div class="cards">
+${card("主人", count(a.owners), "现在的账号数,不含已删除")}
+${card("家机", count(a.companions), "不含已删除")}
+${card(thisMonth ? "本月聊天的人" : "这个月聊天的人", count(a.chatters), `新注册 ${count(sum("newOwners"))} 人`)}
+${today === undefined ? "" : card("今天聊天的人", count(today.chatters), `主人发 ${count(today.ownerMessages)} 条 · 家机回 ${count(today.replies)} 条`)}
+${card("消息", count(sum("ownerMessages") + sum("replies")), `主人发 ${count(sum("ownerMessages"))} · 家机回 ${count(sum("replies"))}${sum("failed") > 0 ? ` · 失败 ${count(sum("failed"))}` : ""}`)}
+${card("积分消耗", count(sum("creditsSpent")), "钱包开着时,模型调用扣的积分")}
+${card("充值", count(sum("creditsBought")), "App 还没有付费功能,接上之后这里会有数")}
+</div>
+${panel("每天的人", lineChart(labels, [line("聊天的人", 0, "chatters"), line("新注册", 1, "newOwners")], count, d => d.slice(5), true))}
+${panel("每天的消息", lineChart(labels, [line("主人发的", 0, "ownerMessages"), line("家机回的", 1, "replies")], count, d => d.slice(5), true))}
+${panel("每天的语音和社区", lineChart(labels, [line("主人发的语音", 0, "voiceIn"), line("家机发的语音", 1, "voiceOut"),
+    line("帖子", 2, "posts"), line("评论", 3, "comments")], count, d => d.slice(5), true))}
+${panel("每天明细", html`<details class="edit"><summary>展开每天的表</summary><div class="scroll"><table>
+<tr><th>日期</th><th class="num">新注册</th><th class="num">聊天的人</th><th class="num">主人发</th><th class="num">家机回</th><th class="num">回复失败</th>
+<th class="num">主人语音</th><th class="num">家机语音</th><th class="num">真人帖子</th><th class="num">家机帖子</th><th class="num">评论</th><th class="num">积分消耗</th></tr>
+${[...a.days].reverse().map(d => html`<tr><td>${d.day}</td><td class="num">${count(d.newOwners)}</td><td class="num">${count(d.chatters)}</td>
+<td class="num">${count(d.ownerMessages)}</td><td class="num">${count(d.replies)}</td><td class="num">${count(d.failed)}</td><td class="num">${count(d.voiceIn)}</td>
+<td class="num">${count(d.voiceOut)}</td><td class="num">${count(d.posts)}</td><td class="num">${count(d.aiPosts)}</td><td class="num">${count(d.comments)}</td>
+<td class="num">${count(d.creditsSpent)}</td></tr>`)}</table></div></details>`)}
+<p class="muted">按 UTC 日期,只有数量,不含任何内容。“聊天的人”= 那天至少发过一条消息的主人。删掉的会话里的消息不再算。帖子数含家机帖子。</p>`,
+  false, fresh(zone, now, self, tools), reloadOf(self, thisMonth && auto));
+}
+
+// ---------- 系统 ----------
+
+/** companion_admin.system (migration 0059). */
+export interface SystemInfo {
+  databaseBytes: number; connections: number; maxConnections: number; startedAt: string; version: string;
+  tables: { name: string; bytes: number; rows: number | null }[];
+}
+/** Supabase's free plan: the database may hold 500 MB. */
+export const DATABASE_LIMIT_BYTES = 500 * 1024 * 1024;
+const MACHINE_STATE: Readonly<Record<string, string>> = { started: "运行中", stopped: "已停止", suspended: "已休眠", starting: "正在启动",
+  stopping: "正在停止", replacing: "正在更新", destroyed: "已删除", failed: "失败" };
+
+export function systemPage(zone: string, now: Date, s: SystemInfo, h: Hosts, auto: boolean): string {
+  const self = "/system", space = s.databaseBytes / DATABASE_LIMIT_BYTES, conns = s.maxConnections > 0 ? s.connections / s.maxConnections : 0;
+  const running = h.ok ? h.machines.filter(m => m.state === "started").length : 0;
+  const level = (share: number) => share > 0.9 ? "alarm" : share > 0.7 ? "warn" : "";
+  return page("系统", "/system", html`
+<div class="cards">
+<div class="card ${level(space)}"><div class="muted">数据库空间</div><div class="big">${mb(s.databaseBytes)}</div>${meter(space)}
+<div class="muted">免费版上限 500 MB · 用了 ${percent(s.databaseBytes, DATABASE_LIMIT_BYTES)}</div></div>
+<div class="card ${level(conns)}"><div class="muted">数据库连接</div><div class="big">${s.connections} / ${s.maxConnections}</div>${meter(conns)}
+<div class="muted">现在打开的连接 / 最多能开的</div></div>
+<div class="card ${h.ok && running < h.machines.length ? "warn" : ""}"><div class="muted">主机</div>
+<div class="big">${h.ok ? `${running} / ${h.machines.length}` : "—"}</div><div class="muted">${h.ok ? "在运行的机器 / 全部机器" : "读不到"}</div></div>
+</div>
+${panel("主机(Fly.io)", h.ok ? html`<div class="scroll"><table><tr><th>应用</th><th>机器</th><th>状态</th><th>地区</th><th>配置</th><th>版本</th><th>最近一次停止</th></tr>
+${h.machines.map(m => html`<tr><td>${m.app}</td><td>${m.name} <span class="muted">${m.id}</span></td>
+<td><span class="tag ${m.state === "started" ? "" : "bad"}">${word(MACHINE_STATE, m.state)}</span></td><td>${m.region}</td>
+<td>${m.cpus === null ? "" : `${m.cpus} 核`}${m.memoryMb === null ? "" : ` · ${m.memoryMb} MB 内存`}</td><td>${m.image}</td>
+<td>${m.lastExit === null ? html`<span class="muted">没有记录</span>` : html`${time(zone, m.lastExit.at)}${m.lastExit.code === null ? "" : ` · 退出码 ${m.lastExit.code}`}${
+    m.lastExit.oom ? html` <span class="tag bad">内存不够被杀掉</span>` : ""}`}</td></tr>`)}</table></div>
+<p class="muted">“最近一次停止”包括每次部署时的正常重启;如果写着“内存不够被杀掉”,说明机器内存太小了。</p>`
+    : html`<p class="err">${h.why}</p>`)}
+${panel("数据库(Supabase 免费版)", html`<p>PostgreSQL ${s.version} · 上次重启 ${time(zone, s.startedAt)}</p>
+<div class="scroll"><table><tr><th>最大的表</th><th class="num">占用</th><th class="num">大约行数</th></tr>${s.tables.map(t => html`
+<tr><td>${t.name}</td><td class="num">${mb(t.bytes)}</td><td class="num">${t.rows === null ? "—" : count(t.rows)}</td></tr>`)}</table></div>
+<p class="muted">免费版的限制:数据库 500 MB(满了只能读不能写)、每月流出流量 5 GB、文件存储 1 GB;
+连续 7 天没有任何请求,项目会被暂停。流量和文件存储只能在 <a href="https://supabase.com/dashboard">Supabase 控制台</a> 的 Usage 里看。</p>`)}`,
+  false, fresh(zone, now, self, autoButton(self, auto)), reloadOf(self, auto));
 }
 
 export function logPage(zone: string, log: LogPage, owner: string | null): string {

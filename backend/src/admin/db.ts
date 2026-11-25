@@ -8,7 +8,7 @@ import type pg from "pg";
 export type AdminFunction = "reports" | "report_resolve" | "owners" | "owner_detail" | "owner_suspend" | "twin_suspend"
   | "content_remove" | "content_restore" | "chats" | "chat_read" | "models" | "model_switch_set" | "chat_quota_set"
   | "spend" | "log" | "features" | "feature_set" | "spend_cap_set" | "wallet_policy_set" | "wallet_adjust"
-  | "costs" | "fixed_cost_set" | "voice_prices_set";
+  | "costs" | "fixed_cost_set" | "voice_prices_set" | "activity" | "system";
 
 export interface AdminDb {
   /** Calls one console function and returns its JSON (undefined for the ones that return nothing). */
