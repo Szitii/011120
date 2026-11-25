@@ -6,6 +6,9 @@ const ACTORS = ["companion", "user"] as const;
 const WALK_FRAME_DISTANCE = .026;
 const MOVE_PER_MS = .00025;
 const PLACEMENT_MS = 160;
+const CROSSFADE_MS = 360;
+const SIT_UP_RISE = .02;
+const SIT_UP_MS = 420;
 const autonomousDelay = () => 20_000 + Math.random() * 20_000;
 const AUTONOMOUS_POOL: readonly DuoAction[] = ["PAT_HEAD", "HUG", "CUDDLE"];
 
@@ -21,10 +24,12 @@ export type ActorFrame = {
   facingLeft: boolean;
   facingDir: FacingDir;
   opacity?: number;
+  /** During a crossfade: the pose fading in at its own spot while this one fades out. */
+  incoming?: ActorFrame;
   furniture?: FurnitureId;
   wave?: boolean;
 };
-type Step = { point: RoomPoint; furniture?: FurnitureId; pose?: Phase; transition?: Phase; place?: boolean };
+type Step = { point: RoomPoint; furniture?: FurnitureId; pose?: Phase; transition?: Phase; place?: boolean; crossfade?: boolean; wait?: number };
 type Track = { frame: ActorFrame; steps: Step[]; travelled: number; placementMs: number };
 type Effect = { id: number; type: "heart" | "ripple"; point: RoomPoint; start: number };
 type RoomFrame = {
@@ -122,8 +127,20 @@ export class RoomEngine {
   wake() {
     this.resetIdle();
     if (this.locked || !this.sleeping) return;
-    // Same fade as getting into bed: sliding a seated sprite to the floor passes under the quilt.
-    this.begin(ACTORS.map(actor => ({ actor, steps: [{ point: WAKE_POINTS[actor], pose: "IDLE", place: true }] })));
+    // Sit up under the quilt, pause, then dissolve to standing on the floor.
+    // Sliding the seated sprite to the floor instead would pass under the quilt.
+    this.begin(ACTORS.map(actor => {
+      const pillow = FURNITURE.bed[actor].anchor;
+      const upright = { nx: pillow.nx, ny: pillow.ny - SIT_UP_RISE };
+      return {
+        actor,
+        steps: [
+          { point: upright, furniture: "bed", transition: "SIT", pose: "SIT" },
+          { point: upright, furniture: "bed", pose: "SIT", wait: SIT_UP_MS },
+          { point: WAKE_POINTS[actor], pose: "IDLE", place: true, crossfade: true },
+        ],
+      };
+    }));
   }
 
   action(action: CompanionAction, initiator: ActionInitiator = "OWNER") {
@@ -186,22 +203,31 @@ export class RoomEngine {
     let remaining = milliseconds * MOVE_PER_MS;
     while (track.steps.length && remaining > 1e-8) {
       const next = track.steps[0];
-      if (next.place) {
-        // Change anchors only while the sprite is fully faded between poses.
-        const duration = Math.min(remaining / MOVE_PER_MS, PLACEMENT_MS - track.placementMs);
+      if (next.place || next.wait !== undefined) {
+        const total = next.wait ?? (next.crossfade ? CROSSFADE_MS : PLACEMENT_MS);
+        const duration = Math.min(remaining / MOVE_PER_MS, total - track.placementMs);
         track.placementMs += duration;
         remaining -= duration * MOVE_PER_MS;
-        const progress = track.placementMs / PLACEMENT_MS;
-        const arrived = progress >= .5;
-        track.frame = {
-          ...track.frame,
-          point: arrived ? next.point : track.frame.point,
-          // A sleeper fades out lying down; standing it up first would flash it on the pillow.
-          phase: arrived ? next.pose ?? "IDLE" : track.frame.phase === "SLEEP" ? "SLEEP" : "IDLE",
-          facingDir: "front",
-          furniture: arrived ? next.furniture : track.frame.furniture,
-          opacity: Math.abs(1 - 2 * progress),
-        };
+        const progress = Math.min(1, track.placementMs / total);
+        const { incoming: _, ...current } = track.frame;
+        if (next.crossfade) {
+          // The old pose fades out where it is while the new one fades in at its own spot.
+          const arriving: ActorFrame = {
+            ...current, point: next.point, phase: next.pose ?? "IDLE", facingDir: "front", furniture: next.furniture, opacity: progress,
+          };
+          track.frame = progress === 1 ? arriving : { ...current, opacity: 1 - progress, incoming: arriving };
+        } else if (next.place) {
+          // Change anchors only while the sprite is fully faded between poses.
+          const arrived = progress >= .5;
+          track.frame = {
+            ...current,
+            point: arrived ? next.point : current.point,
+            phase: arrived ? next.pose ?? "IDLE" : "IDLE",
+            facingDir: "front",
+            furniture: arrived ? next.furniture : current.furniture,
+            opacity: Math.abs(1 - 2 * progress),
+          };
+        }
         if (progress === 1) {
           track.steps.shift();
           track.placementMs = 0;

@@ -19,8 +19,8 @@ export const FURNITURE = {
   },
   bed: {
     bounds: { x1: .02, y1: .22, x2: .35, y2: BED_FLOOR_EDGE },
-    user: { approach: point(.46, .475), anchor: point(.235, .365) },
-    companion: { approach: point(.39, .47), anchor: point(.125, .365) },
+    user: { approach: point(.46, .475), anchor: point(.235, .385) },
+    companion: { approach: point(.39, .47), anchor: point(.125, .385) },
   },
 } satisfies Record<FurnitureId, { bounds: ObstacleBox } & Record<ActorId, { approach: RoomPoint; entry?: RoomPoint; anchor: RoomPoint }>>;
 

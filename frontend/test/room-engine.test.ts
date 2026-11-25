@@ -37,22 +37,36 @@ test("sleep and seated phases stay anchored while a movement command uses walk s
     assert.deepEqual(actor.point, FURNITURE.bed[id].anchor);
   }
   engine.wake();
-  // Waking fades the sleeper out on the pillow and in on the floor: no pose ever slides off the bed.
+  // Waking: sit up under the quilt, pause, then crossfade to standing. No pose slides off the bed.
+  let sawSitting = 0;
+  let sawCrossfade = 0;
   for (let frame = 0; frame < 180; frame++) {
     engine.tick(16);
     for (const id of ["companion", "user"] as const) {
       const after = engine.snapshot().actors[id];
+      assert.notEqual(after.phase, "SLEEP");
+      assert.notEqual(after.phase, "WALK");
       if (after.point.ny < BED_FLOOR_EDGE) {
-        assert.equal(after.phase, "SLEEP");
-        assert.deepEqual(after.point, FURNITURE.bed[id].anchor);
+        assert.equal(after.phase, "SIT");
+        assert.equal(after.furniture, "bed");
+        assert.equal(after.point.nx, FURNITURE.bed[id].anchor.nx);
+        assert.ok(after.point.ny <= FURNITURE.bed[id].anchor.ny && after.point.ny > FURNITURE.bed[id].anchor.ny - .03);
+        if ((after.opacity ?? 1) === 1) sawSitting++;
       } else {
-        assert.equal(after.phase, "IDLE");
-        assert.equal(after.furniture, undefined);
         assert.deepEqual(after.point, WAKE_POINTS[id]);
+        assert.equal(after.phase, "IDLE");
+        assert.equal(after.incoming, undefined);
       }
-      if (frame === 4 || frame === 5) assert.ok((after.opacity ?? 1) <= .2);
+      if (after.incoming) {
+        sawCrossfade++;
+        assert.deepEqual(after.incoming.point, WAKE_POINTS[id]);
+        assert.equal(after.incoming.phase, "IDLE");
+        assert.ok(Math.abs((after.opacity ?? 1) + (after.incoming.opacity ?? 1) - 1) < 1e-9);
+      }
     }
   }
+  assert.ok(sawSitting >= 2 * 20, "both sit up and stay visible for a beat");
+  assert.ok(sawCrossfade >= 2 * 15, "the change of place is a crossfade, not a jump");
   for (const id of ["companion", "user"] as const) {
     assert.deepEqual(engine.snapshot().actors[id].point, WAKE_POINTS[id]);
     assert.equal(engine.snapshot().actors[id].opacity ?? 1, 1);

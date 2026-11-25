@@ -12,6 +12,7 @@ import { LiquidGlassSurface } from "./LiquidGlassSurface";
 import { PearlTransitionLoader } from "./PearlTransitionLoader";
 
 const ACTIONS = [["WAVE", "挥手"], ["PAT_HEAD", "摸头"], ["HUG", "抱抱"], ["CUDDLE", "贴贴"]] as const;
+const ACTOR_IDS = ["companion", "user"] as const;
 const WALK = ["walk_1", "walk_2", "walk_3", "walk_4"] as const;
 const WALK_FRONT = ["walk_front_1", "walk_front_2", "walk_front_3", "walk_front_4"] as const;
 const WALK_BACK = ["walk_back_1", "walk_back_2", "walk_back_3", "walk_back_4"] as const;
@@ -119,8 +120,8 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     setMenu(open => !open);
   }
 
-  const renderActor = (id: ActorId) => {
-    const actor = frame.actors[id];
+  // `incoming` is the pose fading in during a crossfade; it needs only its one image.
+  const renderActor = (id: ActorId, actor: ActorFrame = frame.actors[id], incoming = false) => {
     const action = spriteFor(actor);
     const sprites = (id === "user") !== isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
     const seated = actor.phase === "SIT";
@@ -134,12 +135,14 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
     // All poses share the same canvas and foot baseline.
     const height = .175;
     const width = height;
-    return <View key={id} testID={`room-actor-${id}`} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
+    const key = incoming ? `${id}-incoming` : id;
+    return <View key={key} testID={`room-actor-${key}`} pointerEvents="none" style={[box(size, actor.point.nx - width / 2,
       actor.point.ny - height * .973, width, height), {
       zIndex, opacity: frame.duo ? 0 : actor.opacity ?? 1,
       transform: [{ scaleX: mirrored ? -1 : 1 }],
     }]}>
-      <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />
+      {incoming ? <SceneImage source={sprites[action]} onLoad={onLoad} />
+        : <SpriteFrames sources={sprites} current={action} onLoad={onLoad} />}
     </View>;
   };
 
@@ -154,6 +157,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
       <Furniture size={size} onLoad={onLoad} />
       {renderActor("companion")}
       {renderActor("user")}
+      {ACTOR_IDS.map(id => frame.actors[id].incoming && renderActor(id, frame.actors[id].incoming, true))}
       <View pointerEvents="none" style={[box(size, SOFA.left, SOFA.top, SOFA.width, SOFA.height), { zIndex: 680 }]}>
         <SceneImage source={SOFA_FRONT} onLoad={onLoad} />
       </View>
