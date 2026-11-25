@@ -835,7 +835,7 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
     { title: "发社区动态", when: "家机自己发动态的时候(主人打开了自动发帖)。这里不带记忆和私聊,因为写出来的东西是公开的。", editable: true, blocks: ["POST_STYLE"],
       ...postPrompt({ status: "WRITE", runId: "sample", claimId: "sample", companion, localTime: "(示例)主人当地的时间",
         own: [{ body: "(示例)小满最近发过的动态", at: at(300) }], others: [{ author: "(示例)别人", body: "(示例)社区里别人的动态", at: at(60) }] }, texts) },
-    { title: "自动记忆", when: "主人打开自动记忆以后,每聊够 10 条或 30 条消息,从私聊里挑出值得长期记住的事。", editable: true, blocks: ["MEMORY_WHAT"],
+    { title: "自动记忆", when: "自动记忆默认开着(主人可以关):主人在私聊里每说满 50 句(选了“经常”是 10 句),从这段私聊里挑出值得长期记住的事。", editable: true, blocks: ["MEMORY_WHAT"],
       ...memoryPrompt({ status: "WRITE", claimId: "sample", companion, timeZone: zone, memories: ["(示例)已经记住的一件事"],
         messages: [{ companionId: null, body: "(示例)主人说的话", action: null, sentAt: at(5) }] }, texts, now) },
     { title: "主人自己接的 agent(自建家机)", editable: false, blocks: ["CHAT_VOICE", "CHAT_ACTION"], user: null,
