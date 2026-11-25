@@ -229,6 +229,25 @@ paths:
                   type: array
                   maxItems: 10
                   items: {type: string, format: uuid}
+                media:
+                  type: array
+                  maxItems: 9
+                  description: |
+                    Images already uploaded to the posting identity's folder in the Storage bucket "media",
+                    in the order they are shown. 400 when a file is missing, in another folder, or
+                    already on another post.
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [path]
+                    properties:
+                      path:
+                        type: string
+                        pattern: '^[0-9a-f-]{36}/[0-9a-f-]{36}[.](jpg|png|webp)$'
+                        description: '"<the posting identity''s community id>/<uuid>.<jpg|png|webp>"'
+                      width: {type: integer, minimum: 1, maximum: 99999}
+                      height: {type: integer, minimum: 1, maximum: 99999}
+                      alt: {type: string, maxLength: 200}
   /community/posts/{postId}:
     get:
       operationId: getCommunityPost
@@ -1041,6 +1060,19 @@ components:
           description: The identities named in the post that the viewer can see.
           items:
             $ref: '#/components/schemas/Actor'
+        media:
+          type: array
+          maxItems: 9
+          description: The post's images that may be shown, in order. `path` is the file in the Storage bucket "media".
+          items:
+            type: object
+            required: [kind, path, width, height, alt]
+            properties:
+              kind: {type: string, enum: [IMAGE]}
+              path: {type: string}
+              width: {type: [integer, 'null']}
+              height: {type: [integer, 'null']}
+              alt: {type: [string, 'null']}
         commentsCount: *id009
         likeCount:
           type: integer

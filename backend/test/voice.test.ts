@@ -383,6 +383,7 @@ it("hears the Owner's recordings through MiniMax", async () => {
 });
 
 it("marks voice messages in what the model reads", () => {
+  assert.deepEqual(splitVoice("[语音:constructor]在吗"), { text: "在吗", voice: null }, "only a tone of ours");
   const spoken = { ...turn("warm"), history: [
     { companionId: null, body: "我回来了", action: null, mentions: [], sentAt: "t1", voice: true },
     { companionId: companion, body: "欢迎回来", action: null, mentions: [], sentAt: "t2", voice: false },
@@ -395,7 +396,9 @@ it("takes the Owner's voice message: recognise, store, then reply", async () => 
   const calls: unknown[][] = [];
   const used: unknown[][] = [];
   let ownerLeft = 5;
+  let switchedOn = true;
   const port = {
+    features: async () => ({ voiceInput: switchedOn }),
     voiceLeft: async () => ({ companion: 0, owner: ownerLeft }),
     voiceUsed: async (...args: unknown[]) => { used.push(args); if (used.length === 3) throw new Error("db down"); },
     sendVoice: async (...args: unknown[]) => { calls.push(args); return { message: { id: "m" }, typing: [], replying: true }; },
@@ -424,6 +427,13 @@ it("takes the Owner's voice message: recognise, store, then reply", async () => 
     await assert.rejects(post(bad), { code: "INVALID_INPUT" }, JSON.stringify(bad).slice(0, 80));
   }
   assert.deepEqual((await post(ok, new ChatReplies()))!.body, { code: "VOICE_UNAVAILABLE" });
+  // The operators' switch: off, the app is told so (it hides the button) and nothing is recognised or paid for.
+  const listed = async () => ((await handleChatRequest(get("voices"), session(port), "trace", replies))!.body as { input: boolean }).input;
+  const offered = async () => ((await handleChatRequest(get("features"), session(port), "trace", replies))!.body as { voiceInput: boolean }).voiceInput;
+  assert.deepEqual([await listed(), await offered()], [true, true]);
+  switchedOn = false;
+  assert.deepEqual([await listed(), await offered(), (await post(ok))!.status, (await post(ok))!.body], [false, false, 503, { code: "VOICE_UNAVAILABLE" }]);
+  switchedOn = true;
   assert.deepEqual((await post(ok, new ChatReplies(undefined, undefined, new Voices(catalog))))!.body, { code: "VOICE_UNAVAILABLE" });
   assert.deepEqual(used, [["HEAR", 9]], "recognition is booked by length");
   length = 0;

@@ -226,7 +226,8 @@ paths:
       description: |
         groupChatCreate false: POST /chats with 2 or more Companions answers 409. groupChatSend false:
         existing group chats can be read and deleted, but sending and retrying in them answer 409.
-        connections false: PUT .../connection answers 501.
+        connections false: PUT .../connection answers 501. voiceInput false: POST /chats/{id}/voice
+        answers 503 (the same as `input` in GET /voices).
       x-capability-status: implemented
       responses:
         '200':
@@ -240,6 +241,7 @@ paths:
                   groupChatCreate: {type: boolean}
                   groupChatSend: {type: boolean}
                   connections: {type: boolean}
+                  voiceInput: {type: boolean}
         '401': *problem
         '403': *problem
   /companions/{companionId}/anniversary:
@@ -1133,7 +1135,10 @@ components:
           oneOf:
           - $ref: '#/components/schemas/CompanionAction'
           - type: 'null'
-          description: Set when the Owner did a home-room action (show it as a grey line); then body is null.
+          description: |
+            A home-room action (show it as a grey line); then body is null. companionId null - the Owner
+            did it; otherwise that Companion did it to the Owner, by its own choice while replying in a
+            one-to-one chat (at most one per reply).
         mentions: {type: array, items: {type: string, format: uuid}}
         status: {type: string, enum: [SENT, FAILED, BLOCKED]}
         failure:
@@ -1204,7 +1209,10 @@ components:
       properties:
         id: {type: string, format: uuid}
         body: {type: string}
-        source: {type: string, enum: [IMPORT, OWNER], description: 'IMPORT: approved from a card. OWNER: added by hand.'}
+        source:
+          type: string
+          enum: [IMPORT, OWNER, AUTO]
+          description: 'IMPORT: approved from a card. OWNER: added by hand. AUTO: noted down by the Companion itself (autoMemory).'
         createdAt: {type: string, format: date-time}
     CompanionConnection:
       type: object
@@ -1250,6 +1258,20 @@ components:
           description: |
             An id from GET /voices - the Companion sometimes answers with a voice message in this voice.
             null - text only (default). Always sent; on PUT, leaving it out keeps the current voice.
+        preferredUserTitle:
+          type: [string, 'null']
+          maxLength: 20
+          description: |
+            What the Companion calls the Owner, 1 to 20 characters on one line. null (default) - the
+            Owner's community display name, or no name when there is none. Always sent; on PUT,
+            leaving it out keeps the current one and an empty string clears it.
+        autoMemory:
+          type: string
+          enum: ['OFF', SOMETIMES, OFTEN]
+          description: |
+            自动记忆 - the Companion notes down by itself what is worth remembering from the one-to-one chat
+            (memories with source AUTO). OFF (default). SOMETIMES - after every 30 messages of the Owner.
+            OFTEN - after every 10. Always sent; on PUT, leaving it out keeps the current one.
         revision: {type: integer, minimum: 1}
     VoiceInfo:
       type: object

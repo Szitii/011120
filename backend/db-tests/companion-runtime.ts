@@ -163,7 +163,7 @@ try {
   assert.deepEqual(chats.find(c => c.id === group.id)!.members.map(m => m.companionId), [friend], "it left the group");
   const groupPage = (await call<ChatPage>(0, `chats/${group.id}`)).data;
   assert.ok(groupPage.items.length > 0 && !groupPage.items.some(m => m.companionId === doomed), "what it said in the group is gone, the rest stays");
-  for (const table of ["companion_memories", "companion_connections", "agent_keys", "diary_settings", "anniversaries", "chat_settings",
+  for (const table of ["companion_memories", "memory_notes", "companion_connections", "agent_keys", "diary_settings", "anniversaries", "chat_settings",
     "chat_members", "chat_messages"]) {
     assert.equal(await count(`companion_private.${table} where companion_id = $1`, [doomed]), 0, table);
   }

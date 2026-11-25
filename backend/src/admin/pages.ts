@@ -52,6 +52,8 @@ export const FEATURES: Readonly<Record<string, string>> = {
   GROUP_CHAT_CREATE: "新建群聊",
   GROUP_CHAT_SEND: "在已有群聊里发消息",
   COMMUNITY_NEW_NOTICES: "社区的点赞通知和 @提及通知（新版 App 上线后再开）",
+  COMPANION_ACTIONS: "家机在私聊里主动做小家动作，比如抱抱主人（新版 App 上线后再开）",
+  VOICE_INPUT: "主人发语音（语音转文字的账户充值后再开；关着时 App 不显示按住说话）",
 };
 export interface Spend {
   from: string; to: string;

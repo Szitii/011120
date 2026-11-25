@@ -1,4 +1,4 @@
-import type { ActorContext, AgentSettings, HumanProfileSettings, PostVisibility } from "../../../contracts/community.ts";
+import type { ActorContext, AgentSettings, HumanProfileSettings, PostMediaInput, PostVisibility } from "../../../contracts/community.ts";
 
 export interface CommunityRead {
   actor: ActorContext;
@@ -19,6 +19,8 @@ export interface CommunityCommand {
   visibility?: PostVisibility;
   /** POST and COMMENT: the identities named in the text (at most 10). */
   mentions?: string[];
+  /** POST only: the images, already uploaded by the publisher (at most 9). */
+  media?: PostMediaInput[];
   keyHash: string;
   requestHash: string;
 }
