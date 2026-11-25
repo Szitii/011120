@@ -257,7 +257,7 @@ const get = (path: string, headers: Record<string, string> = {}, method = "GET",
   ({ method, url: `/v0/${path}`, headers: { "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body }) });
 
 it("lists voices, plays samples and serves voice messages with ranges", async () => {
-  const saved: unknown[] = [];
+  const saved: unknown[] = [], booked: unknown[][] = [];
   const port = {
     audio: async (chat: string, message: string) => {
       if (message !== messageId || chat !== chatId) throw new Error("not this one");
@@ -265,6 +265,7 @@ it("lists voices, plays samples and serves voice messages with ranges", async ()
     },
     settings: async () => ({ voice: "warm" }),
     saveSettings: async (_id: string, value: unknown) => { saved.push(value); return value; },
+    voiceUsed: async (...args: unknown[]) => { booked.push(args); },
   } as unknown as ChatPort;
   let failSample = false;
   const voices = new Voices(catalog, { speak: async text => { if (failSample) throw new Error("down"); return clip(text); } });
@@ -279,6 +280,8 @@ it("lists voices, plays samples and serves voice messages with ranges", async ()
   assert.equal(sample.status, 200);
   assert.equal(sample.headers["content-type"], "audio/mpeg");
   assert.equal(new TextDecoder().decode(sample.body as Uint8Array), "你好呀");
+  await call(get("voices/warm/sample"));
+  assert.deepEqual(booked, [["SPEAK", 2]], "a sample made is paid for and booked once; a kept one is free");
   await assert.rejects(call(get("voices/ghost/sample")), { code: "NOT_FOUND" });
   await assert.rejects(call(get("voices/warm/sample"), new ChatReplies(undefined, undefined, new Voices(catalog))), { code: "NOT_FOUND" });
   await assert.rejects(call(get("voices", {}, "POST")), { code: "NOT_FOUND" });

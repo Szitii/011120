@@ -260,13 +260,16 @@ export class Voices {
     return this.#speaker.speak(text, voice, emotion, signal);
   }
 
-  /** The voice saying the sample text, made on first request and kept (a failure is not kept). */
-  sample(voice: VoiceEntry): Promise<Clip> {
+  /**
+   * The voice saying the sample text, made on first request and kept (a failure is not kept).
+   * `made` hears of each sample actually made, before its caller does: making one is paid for.
+   */
+  sample(voice: VoiceEntry, made?: (clip: Clip) => void): Promise<Clip> {
     let clip = this.#samples.get(voice.id);
     if (clip === undefined) {
       clip = this.speak(this.catalog.sampleText, voice, "happy", AbortSignal.timeout(30_000));
       this.#samples.set(voice.id, clip);
-      clip.catch(() => this.#samples.delete(voice.id));
+      clip.then(made, () => this.#samples.delete(voice.id));
     }
     return clip;
   }
