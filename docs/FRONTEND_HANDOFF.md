@@ -895,7 +895,7 @@ apikey: <EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY>
 
 ## 24. 家机说明（人设）：主人随时能看、能改（2026-11-26）
 
-**还没上线**（等合并和部署；上线后这里会改成"已上线"）。类型在 `contracts/chat.ts`（`CompanionPersona`、`PersonaInput`、`PersonaRefusal`）。
+**已上线**（2026-11-26，接口可以直接用；App 里的界面还没做）。类型在 `contracts/chat.ts`（`CompanionPersona`、`PersonaInput`、`PersonaRefusal`）。
 
 每次家机开口，模型拿到的说明有两层：
 
