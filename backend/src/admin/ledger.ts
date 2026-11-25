@@ -1,12 +1,12 @@
 /** The costs of one or more months as spreadsheet sheets, for the 花费 page's xlsx export. Money in US dollars. */
-import { vendorsOf, type Costs } from "./pages.ts";
+import { usedMonths, vendorsOf, type Costs } from "./pages.ts";
 import type { Cell, Sheet } from "./xlsx.ts";
 
 /** Cents (maybe a fraction) as dollars, to four places. */
 const dollars = (cents: number) => Math.round(cents * 100) / 10_000;
 
 export function ledgerSheets(months: readonly Costs[]): Sheet[] {
-  const all = months.map(c => ({ c, vendors: vendorsOf(c) }));
+  const all = usedMonths(months).map(c => ({ c, vendors: vendorsOf(c) }));
   const keys = [...new Map(all.flatMap(r => r.vendors.filter(v => v.cents > 0).map(v => [v.key, v.name] as const)))];
   const book: Cell[][] = [["月份", "厂商", "项目", "类型", "美元", "备注"]];
   for (const { c, vendors } of all) for (const v of vendors) for (const l of v.lines) {
