@@ -470,7 +470,15 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   const { send, calls } = await start({ costs });
   const page = await send("/costs");
   assert.equal(page.status, 200);
-  assert.deepEqual(calls, [["costs", "2026-11-01"]], "this month (UTC) by default");
+  assert.deepEqual(calls, [["costs", "2026-11-01"], ["models"]], "this month (UTC) by default, with today's cap");
+  assert.match(page.body, /<meta http-equiv="refresh" content="30;url=\/costs\?month=2026-11">/, "the running month reads itself again");
+  assert.match(page.body, /数据时间 2026\/11\/23 12:00:00<\/span><a class="btn" href="\/costs\?month=2026-11">刷新<\/a>/);
+  assert.match(page.body, /href="\/costs\?month=2026-11&amp;auto=off">每 30 秒自动刷新/);
+  assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">3\.45 USD<\/div>/);
+  assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
+  assert.match(page.body, /AI 模型<\/div><div class="big">\$3\.45<\/div>\s*<div class="muted">聊天、日记、自动发帖 · 占 9%/);
+  const stopped = await send("/costs?auto=off");
+  assert.ok(!stopped.body.includes("http-equiv") && stopped.body.includes("自动刷新:关 · 点击打开"));
   assert.match(page.body, /<a href="\/costs" class="on">花费<\/a>/);
   assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
   assert.match(page.body, /按用量的 \$5\.45 \+ 固定月费 \$35\.00/);
@@ -481,24 +489,31 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(page.body, /<td>2026-11-23<\/td><td class="num">\$3\.45<\/td><td class="num">12<\/td>/);
   assert.match(page.body, /38 秒 \/ 4 条/);
   assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td class="num">12</td><td class="num">\\$3\\.45<`));
-  assert.match(page.body, /<td>Fly 服务器<\/td><td class="num">\$30\.00<\/td>/);
   assert.ok(!page.body.includes("<script>alert"));
-  assert.match(page.body, /size="8" value="100">/, "the price per million characters in dollars");
-  assert.match(page.body, /size="8" value="0\.38">/);
+  assert.ok(!page.body.includes('method="post"'), "the costs page only shows; changes are on the settings page");
+  const settings = await send("/costs/settings");
+  assert.deepEqual(calls.at(-1), ["costs", "2026-11-01"]);
+  assert.match(settings.body, /<td>Fly 服务器<\/td><td class="num">\$30\.00<\/td>/);
+  assert.ok(!settings.body.includes("<script>alert"));
+  assert.match(settings.body, /size="8" value="100">/, "the price per million characters in dollars");
+  assert.match(settings.body, /size="8" value="0\.38">/);
+  assert.match(settings.body, /name="back" value="\/costs\/settings"/);
+  assert.match(settings.body, /<a href="\/costs" class="on">花费<\/a>/);
 
   const quiet = await start({ costs: { ...costs, month: "2026-10", days: [], fixed: [], models: { ...fixtures.spend, byDay: [], byCompanion: [] },
     totals: { modelCents: 0, hearCents: 0, speakPoints: 10, speakOverCents: 0, fixedCents: 0 } } });
   const october = await quiet.send("/costs?month=2026-10&ok=1");
-  assert.deepEqual(quiet.calls, [["costs", "2026-10-01"]]);
+  assert.deepEqual(quiet.calls, [["costs", "2026-10-01"]], "a past month: no cap, no reloading");
+  assert.ok(!october.body.includes("http-equiv") && !october.body.includes("自动刷新"));
   assert.match(october.body, /这个月总花费<\/div><div class="big">\$0\.00/);
   assert.match(october.body, /这个月还没有按用量的花费/);
   assert.match(october.body, /这个月没有模型调用/);
-  assert.match(october.body, /还没有填/);
+  assert.match((await quiet.send("/costs/settings")).body, /还没有填/);
   assert.match(october.body, /操作已完成/);
   for (const month of ["2026-13", "nope", "2026-1"]) {
     const fallback = await start({ costs });
     await fallback.send(`/costs?month=${month}`);
-    assert.deepEqual(fallback.calls, [["costs", "2026-11-01"]], month);
+    assert.deepEqual(fallback.calls, [["costs", "2026-11-01"], ["models"]], month);
   }
 
   calls.length = 0;
