@@ -1,4 +1,5 @@
 import type {
+  AvatarChoice,
   Anniversary, Badges, CompanionMemory, MemoryList, CompanionConnection, ConnectionInput, ConnectionSaveResult,
   Chat,
   ChatMessage,
@@ -25,11 +26,13 @@ interface ChatRetryResult {
   replying: boolean;
 }
 
+export type AgentScope = "COMMUNITY_READ" | "COMMUNITY_DRAFT";
+
 export interface AgentKey {
   id: string;
   companionId: string;
   name: string;
-  scopes: "COMMUNITY_READ"[];
+  scopes: AgentScope[];
   createdAt: string;
   expiresAt: string;
   lastUsedAt: string | null;
@@ -38,7 +41,7 @@ export interface AgentKey {
 
 export interface ChatClient {
   listAgentKeys?(id: string): Promise<{ items: AgentKey[] }>;
-  createAgentKey?(id: string, name: string): Promise<AgentKey & { token: string }>;
+  createAgentKey?(id: string, name: string, scopes?: AgentScope[]): Promise<AgentKey & { token: string }>;
   revokeAgentKey?(id: string, keyId: string): Promise<AgentKey>;
   listVoices?(): Promise<VoiceList>;
   voiceSample?(voiceId: string): Promise<AudioClip>;
@@ -54,6 +57,7 @@ export interface ChatClient {
   addMemory?(id: string, body: string, key: string): Promise<CompanionMemory>;
   deleteMemory?(id: string, memoryId: string): Promise<unknown>;
   deleteCompanion?(id: string): Promise<{ deleted: true }>;
+  saveAvatar?(id: string | null, avatar: string | null): Promise<AvatarChoice>;
   getConnection?(id: string): Promise<CompanionConnection>;
   saveConnection?(id: string, input: ConnectionInput): Promise<ConnectionSaveResult>;
   removeConnection?(id: string): Promise<CompanionConnection>;
@@ -96,8 +100,9 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
   const companion = (id: string) => `/v0/companions/${encodeURIComponent(id)}`;
   return {
     deleteCompanion: id => send("DELETE", companion(id)),
+    saveAvatar: (id, avatar) => send("PUT", id === null ? "/v0/owner/avatar" : `${companion(id)}/avatar`, { avatar }),
     listAgentKeys: id => send("GET", `${companion(id)}/agent-keys`),
-    createAgentKey: (id, name) => send("POST", `${companion(id)}/agent-keys`, { name }),
+    createAgentKey: (id, name, scopes) => send("POST", `${companion(id)}/agent-keys`, { name, ...(scopes ? { scopes } : {}) }),
     revokeAgentKey: (id, keyId) => send("DELETE", `${companion(id)}/agent-keys/${encodeURIComponent(keyId)}`),
     listVoices: () => send("GET", "/v0/voices"),
     voiceSample: getAudio ? id => getAudio(`/v0/voices/${encodeURIComponent(id)}/sample`) : undefined,

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import type { AgentSettingsView } from "../../../contracts/community.ts";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api.ts";
-import { agentLimits, settingsForm, settingsPayload, type SettingsForm } from "./agent-settings.ts";
+import { agentLimits, autoInterval, settingsForm, settingsPayload, type SettingsForm } from "./agent-settings.ts";
 import type { AgentViewer, CommunityClient } from "./client.ts";
 import { CommunityButton as Button, SecondaryHeading, useCommunityStyles } from "./components.tsx";
 import { CommunityRequestScope } from "./request-scope.ts";
@@ -102,7 +102,23 @@ export function AgentSettingsScreen({ client, viewer, onOpenDrafts }: {
         <Text accessibilityRole="header" style={s.author}>什么时候动</Text>
         <Text style={s.meta}>以家机身份发帖、评论、关注和取关时会应用这些设置。</Text>
         <View style={s.row}><Text style={s.body}>暂停活动</Text><Switch accessibilityLabel="暂停活动" value={form.paused} disabled={locked} onValueChange={v => update("paused", v)} /></View>
-        <Text style={s.meta}>自动活动与活动频率 · 即将推出</Text>
+        <View style={s.row}>
+          <Text style={s.body}>家机自己写动态</Text>
+          <Switch accessibilityLabel="家机自己写动态" value={form.autoEnabled} disabled={locked}
+            onValueChange={value => update("autoEnabled", value)} />
+        </View>
+        <Text style={s.meta}>{form.publishMode === "DIRECT"
+          ? "家机写完后会直接发布到社区。"
+          : "家机写完后会先存到草稿箱，等你审核发布。"}</Text>
+        {form.autoEnabled && <>
+          <Text style={s.body}>写动态间隔（{autoInterval.min}–{autoInterval.max} 分钟）</Text>
+          <TextInput style={inputStyle} accessibilityLabel="自动动态间隔（分钟）" editable={!locked}
+            keyboardType="number-pad" maxLength={4} value={form.intervalMinutes}
+            onChangeText={value => update("intervalMinutes", value)} />
+          {!form.canPost && <Text style={s.meta}>还需要打开下方的「发帖」。</Text>}
+          {form.paused && <Text style={s.meta}>暂停期间不会自动写动态。</Text>}
+          {form.dailyPosts === "0" && <Text style={s.meta}>每日发帖上限为 0 时不会自动写动态。</Text>}
+        </>}
         <Text style={s.body}>活动开始时间</Text>
         <TextInput style={inputStyle} accessibilityLabel="活动开始时间" editable={!locked} maxLength={5} placeholder="HH:MM" value={form.activeFrom} onChangeText={v => update("activeFrom", v)} />
         <Text style={s.body}>活动结束时间</Text>
@@ -129,7 +145,7 @@ export function AgentSettingsScreen({ client, viewer, onOpenDrafts }: {
           {usage && <Text style={s.meta}>今日用量 {view.usage[usage]}/{view[key]}</Text>}
         </View>)}
       </View>
-      {!payload && <Text accessibilityRole="alert" style={s.error}>时间请填 HH:MM，限额请填范围内的整数。</Text>}
+      {!payload && <Text accessibilityRole="alert" style={s.error}>时间请填 HH:MM，间隔和限额请填范围内的整数。</Text>}
       <View style={s.row}>
         <Button label={saving ? "正在保存…" : "保存家机设置"} selected disabled={locked || !payload} onPress={() => void save()} />
         {edited && <Button label="取消修改" disabled={locked} onPress={() => { accept(view); setMessage(""); }} />}

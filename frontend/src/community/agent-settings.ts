@@ -7,13 +7,16 @@ export const agentLimits = [
   ["commentsPerPost", "每帖评论", 1, 10, null],
 ] as const;
 
-type Limit = typeof agentLimits[number][0];
+export const autoInterval = { min: 15, max: 1440 };
+
+type Limit = typeof agentLimits[number][0] | "intervalMinutes";
 export type SettingsForm = Omit<AgentSettings, Limit> & Record<Limit, string>;
 
 export function settingsForm(view: AgentSettingsView): SettingsForm {
   const { localTime: _localTime, usage: _usage, ...settings } = view;
   return {
     ...settings,
+    intervalMinutes: String(settings.intervalMinutes),
     dailyPosts: String(settings.dailyPosts),
     dailyComments: String(settings.dailyComments),
     dailyFollows: String(settings.dailyFollows),
@@ -24,13 +27,15 @@ export function settingsForm(view: AgentSettingsView): SettingsForm {
 export function settingsPayload(form: SettingsForm, deviceZone?: string): AgentSettings | undefined {
   const time = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
   if (!time.test(form.activeFrom) || !time.test(form.activeTo)) return undefined;
+  const intervalMinutes = Number(form.intervalMinutes);
+  if (!/^\d+$/.test(form.intervalMinutes) || intervalMinutes < autoInterval.min || intervalMinutes > autoInterval.max) return undefined;
   if (agentLimits.some(([key, , min, max]) => !/^\d+$/.test(form[key]) || Number(form[key]) < min || Number(form[key]) > max)) {
     return undefined;
   }
   return {
     paused: form.paused,
     autoEnabled: form.autoEnabled,
-    intervalMinutes: form.intervalMinutes,
+    intervalMinutes,
     activeFrom: form.activeFrom,
     activeTo: form.activeTo,
     timeZone: form.revision === 1 ? deviceZone || form.timeZone : form.timeZone,

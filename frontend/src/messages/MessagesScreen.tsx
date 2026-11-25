@@ -195,7 +195,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
                 ]}
               >
                 <View style={styles.avatarWrap}>
-                  <PixelAvatar name={title} role="companion" size={46} />
+                  <PixelAvatar name={title} role="companion" uri={chat.direct ? chat.members[0]?.avatar : undefined} size={46} />
                   {hasUnread && <View style={styles.unreadDot} />}
                 </View>
                 <View style={styles.chatMain}>
@@ -237,7 +237,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
                   pressed && { backgroundColor: ui.background[0] },
                 ]}
               >
-                <PixelAvatar name={companion.displayName} role="companion" size={44} />
+                <PixelAvatar name={companion.displayName} role="companion" uri={companion.avatar} size={44} />
                 <View style={styles.chatMain}>
                   <Text style={styles.chatTitle} numberOfLines={1}>{companion.displayName}</Text>
                   <Text style={styles.chatPreview}>发第一条消息打个招呼</Text>

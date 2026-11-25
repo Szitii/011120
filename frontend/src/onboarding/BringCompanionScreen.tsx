@@ -13,7 +13,7 @@ import { useCommandKeys } from "../state/useCommandKeys";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import { BringButton, BringField, Check, Choice, GlassCard, GlassIcon, createStyles } from "./BringControls";
 import { importCardName, normalizeImportCard } from "./import-card";
-import { connectionMessages, extendedImportAvailability, validateExternal } from "./connection-client";
+import { connectionMessage, extendedImportAvailability, validateExternal } from "./connection-client";
 
 type Step = "entry" | "details" | "review" | "reply" | "external";
 type Method = "card" | "manual";
@@ -240,7 +240,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
           onCreated(identity, ["displayName"], undefined);
           return;
         }
-        setMessage(connectionMessages[saved.result] || "连通测试未通过，请检查 HTTPS 地址和密钥后再试。");
+        setMessage(connectionMessage(saved, "external"));
       } else {
         onCreated(identity, ["displayName"], "external");
       }
@@ -339,8 +339,9 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
       {step === "external" && <>
         <GlassCard>
           <BringField label="家机名称" placeholder="请输入家机名称" value={extName} onChangeText={setExtName} editable={!busy && !createdExternal} maxLength={200} />
-          <BringField label="接口地址（HTTPS）" placeholder="请输入 HTTPS 接口地址" value={extEndpoint} onChangeText={value => { setExtEndpoint(value); setExtConsent(false); setMessage(""); }}
+          <BringField label="完整接口地址（HTTPS）" placeholder="请输入完整 HTTPS 接口地址" value={extEndpoint} onChangeText={value => { setExtEndpoint(value); setExtConsent(false); setMessage(""); }}
             editable={!busy} autoCapitalize="none" autoCorrect={false} />
+          <Text style={s.hint}>填写可直接接收聊天请求的完整地址，包含接口路径。</Text>
           <BringField label="访问密钥（Bearer Token）" placeholder="选填" value={extToken} onChangeText={setExtToken}
             secureTextEntry editable={!busy} autoCapitalize="none" autoCorrect={false} autoComplete="off" />
         </GlassCard>

@@ -74,6 +74,7 @@ import { SkinProvider, useSkin, TEXT_SIZES } from "./src/theme/SkinProvider";
 import { CHROME } from "./src/theme/layoutTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
+import { PresetAvatarPicker } from "./src/components/PresetAvatarPicker";
 import { FloatingGlassTabs } from "./src/components/FloatingGlassTabs";
 import { PrivateHomeScreen } from "./src/home/PrivateHomeScreen";
 import { MessagesScreen } from "./src/messages/MessagesScreen";
@@ -197,6 +198,10 @@ function WorldApp({ client, account, isMockMode }: {
   const agentViewer = isAgentViewer(viewer) ? viewer : undefined;
   const canUseChat = viewer?.kind === "OWNER" && !identitySwitchPending && !!client.api.chat;
   const availableCompanions = ownerCompanions.kind === "success" ? ownerCompanions.value.items : [];
+  const avatarCompanion = route.type === "avatar-settings" && route.companionId
+    ? availableCompanions.find(item => item.companionId === route.companionId) : undefined;
+  const editingOwnerProfile = route.type === "edit-human-profile"
+    || (route.type === "avatar-settings" && nav.stack.at(-2)?.type === "edit-human-profile");
   const ownerId = viewer?.kind === "OWNER" && !identitySwitchPending ? identityValue?.viewer.ownerId : undefined;
   const homeSelectionKey = identityValue?.viewer.ownerId ? `companion:home-selected:v1:${identityValue.viewer.ownerId}` : undefined;
   const homeSelectionTouched = useRef(false);
@@ -238,18 +243,27 @@ function WorldApp({ client, account, isMockMode }: {
   const viewerKey = `${viewer?.kind}:${identityId}`;
   const appActive = useAppIsActive();
   const authenticatedOwner = identityValue?.viewer.ownerId;
-  const [ownerProfile, setOwnerProfile] = useState<{ id: string; name: string }>();
-  const ownerNickname = ownerProfile?.id === authenticatedOwner ? ownerProfile?.name : undefined;
-  const [nicknameRevision, reloadNickname] = useState(0);
+  const [ownerProfile, setOwnerProfile] = useState<{ id: string; name?: string; avatar: string | null }>();
+  const ownProfile = ownerProfile?.id === authenticatedOwner ? ownerProfile : undefined;
+  const ownerNickname = ownProfile?.name;
+  const ownerAvatar = ownProfile ? ownProfile.avatar : subject?.kind === "OWNER" ? subject.presentation.avatar : undefined;
+  const activeCompanion = availableCompanions.find(item => subject?.kind === "COMPANION" ? item.companionId === subject.id
+    : subject?.kind === "SOCIAL_TWIN" && item.socialTwinId === subject.id);
+  const activeAvatar = subject?.kind === "OWNER" ? ownerAvatar
+    : activeCompanion ? activeCompanion.avatar ?? null : subject?.presentation.avatar;
+  const settingsViewer = route.type === "agent-settings" && route.companionId && ownerId
+    ? { kind: "COMPANION" as const, id: route.companionId } : agentViewer;
+  const [profileRevision, reloadOwnerProfile] = useState(0);
+  const ownerProfileRequest = useRef(0);
   useEffect(() => {
     const community = client.api.community;
     if (!authenticatedOwner || !community) return;
-    let current = true;
+    const request = ++ownerProfileRequest.current;
     void community.profile({ kind: "OWNER", id: authenticatedOwner }).then(profile => {
-      if (current) setOwnerProfile({ id: authenticatedOwner, name: profile.displayName });
+      if (request === ownerProfileRequest.current) setOwnerProfile({ id: authenticatedOwner, name: profile.displayName, avatar: profile.avatar });
     }).catch(() => undefined);
-    return () => { current = false; };
-  }, [authenticatedOwner, client.api, nicknameRevision]);
+    return () => { ownerProfileRequest.current++; };
+  }, [authenticatedOwner, client.api, profileRevision]);
   const [features, setFeatures] = useState<PlatformFeatures>();
   const [featureRevision, setFeatureRevision] = useState(0);
   const refreshFeatures = useCallback(() => setFeatureRevision(value => value + 1), []);
@@ -342,6 +356,25 @@ function WorldApp({ client, account, isMockMode }: {
   function invalidateCompanionViews() {
     cache.purgeViewerSensitive();
     setProfileResult(undefined);
+  }
+
+  async function savePresetAvatar(companionId: string | null, avatar: string | null) {
+    const save = client.api.chat?.saveAvatar;
+    if (!ownerId || !save) throw new Error("Avatar settings unavailable.");
+    const confirmed = await save(companionId, avatar);
+    if (confirmed.avatar !== avatar) throw new Error("Avatar change was not confirmed.");
+    if (companionId === null) {
+      ownerProfileRequest.current++;
+      setOwnerProfile(previous => ({ id: ownerId, name: previous?.id === ownerId ? previous.name : undefined, avatar: confirmed.avatar }));
+      reloadOwnerProfile(value => value + 1);
+    } else {
+      setOwnerCompanions(previous => previous.kind === "success" ? {
+        kind: "success",
+        value: { items: previous.value.items.map(item => item.companionId === companionId ? { ...item, avatar: confirmed.avatar } : item) },
+      } : previous);
+      void loadOwnerCompanions(true);
+    }
+    invalidateCommunity();
   }
 
   async function deleteOwnedCompanion(companionId: string) {
@@ -651,7 +684,8 @@ function WorldApp({ client, account, isMockMode }: {
           rootTab={nav.rootTab}
           identityTitle={identityLabel(identityValue, ownerNickname)}
           isSampleCompanion={isSampleCompanion}
-          identity={identity}
+          avatar={activeAvatar}
+          identityLoading={identity.kind === "loading"}
           onBack={goBack}
           onIdentity={() => setSwitcherOpen(true)}
           onOpenSettings={() => setMySettingsOpen(true)}
@@ -700,6 +734,7 @@ function WorldApp({ client, account, isMockMode }: {
           isCompanion={isSampleCompanion}
           isActive={route.type === "root" && route.tab === "home"}
           companionName={homeCompanion?.displayName ?? companionDisplayName}
+          companionAvatar={homeCompanion?.avatar}
           companions={availableCompanions}
           onSelectCompanion={selectHomeCompanion}
           onOpenDiary={diaryClient && homeScope ? () => openDiary(homeScope.companionId) : undefined}
@@ -787,6 +822,7 @@ function WorldApp({ client, account, isMockMode }: {
           companionId={route.companionId}
           companionName={route.companionName ?? companionDisplayName}
           ownerName={identityLabel(identityValue, ownerNickname)}
+          ownerAvatar={ownerAvatar}
           ownerId={ownerId!}
           autoFocus={route.autoFocus === true}
           backLabel={route.fromTab === "messages" ? "返回消息" : route.fromTab === "my" ? "返回" : "返回小家"}
@@ -838,9 +874,16 @@ function WorldApp({ client, account, isMockMode }: {
           isSampleCompanion={isSampleCompanion}
           companionName={companionDisplayName}
           companions={ownerCompanions}
+          avatar={activeAvatar}
           selfProfile={profile}
           onOpenCompanionProfile={(item) => openProfile(item.companionId)}
           onUpdateCompanion={(item) => setNav(current => pushRoute(current, { type: "bring-companion", companionId: item.companionId }))}
+          onChangeAvatar={ownerId && client.api.chat?.saveAvatar ? item =>
+            setNav(current => pushRoute(current, { type: "avatar-settings", companionId: item.companionId })) : undefined}
+          onAgentSettings={ownerId && client.api.community ? item =>
+            setNav(current => pushRoute(current, { type: "agent-settings", companionId: item.companionId })) : undefined}
+          onChatSettings={canUseChat ? item =>
+            setNav(current => pushRoute(current, { type: "chat-settings", companionId: item.companionId })) : undefined}
           onOpenCompanionChat={canUseChat ? (item) => setNav((current) => pushRoute(current, { type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my" })) : undefined}
           onControls={(item) => {
             setCompanionDisplayName(item.displayName);
@@ -867,9 +910,10 @@ function WorldApp({ client, account, isMockMode }: {
         </View>
       )}
 
-      {route.type === "agent-settings" && agentViewer && client.api.community && (
-        <AgentSettingsScreen key={`${agentViewer.kind}:${agentViewer.id}`} client={client.api.community} viewer={agentViewer}
-          onOpenDrafts={() => setNav(current => pushRoute(current, { type: "agent-drafts" }))} />
+      {route.type === "agent-settings" && settingsViewer && client.api.community && (
+        <AgentSettingsScreen key={JSON.stringify([viewerKey, settingsViewer.kind, settingsViewer.id])}
+          client={client.api.community} viewer={settingsViewer}
+          onOpenDrafts={() => setNav(current => pushRoute(current, { type: "agent-drafts", companionId: route.companionId }))} />
       )}
 
       {route.type === "agent-drafts" && (agentViewer || (ownerId && route.companionId)) && client.api.community && (
@@ -878,12 +922,31 @@ function WorldApp({ client, account, isMockMode }: {
           draftId={route.draftId} onChanged={refreshBadges} />
       )}
 
-      {route.type === "edit-human-profile" && identityValue?.activeSubject.kind === "OWNER" && client.api.community && (
-        <HumanProfileEditor key={identityId} client={client.api.community}
-          viewer={{ kind: "OWNER", id: identityId }} onClose={saved => {
-            if (saved) { reloadNickname(value => value + 1); invalidateCommunity(); }
-            goBack();
-          }} />
+      {editingOwnerProfile && identityValue?.activeSubject.kind === "OWNER" && client.api.community && (
+        <View style={route.type === "edit-human-profile" ? styles.rootContent : styles.inactiveRoot}
+          pointerEvents={route.type === "edit-human-profile" ? "auto" : "none"}
+          aria-hidden={route.type !== "edit-human-profile"} accessibilityElementsHidden={route.type !== "edit-human-profile"}
+          importantForAccessibility={route.type === "edit-human-profile" ? "auto" : "no-hide-descendants"}>
+          <HumanProfileEditor key={identityId} client={client.api.community}
+            avatar={ownerAvatar} viewer={{ kind: "OWNER", id: identityId }}
+            onChangeAvatar={client.api.chat?.saveAvatar ? () =>
+              setNav(current => pushRoute(current, { type: "avatar-settings" })) : undefined}
+            onClose={saved => {
+              if (saved) { reloadOwnerProfile(value => value + 1); invalidateCommunity(); }
+              goBack();
+            }} />
+        </View>
+      )}
+
+      {route.type === "avatar-settings" && ownerId && client.api.chat?.saveAvatar && (
+        route.companionId && !avatarCompanion ? <Centered title="这位家机暂时不可用。" /> : (
+          <PresetAvatarPicker key={JSON.stringify([ownerId, route.companionId])}
+            current={avatarCompanion ? avatarCompanion.avatar : ownerAvatar}
+            name={avatarCompanion?.displayName ?? identityLabel(identityValue, ownerNickname)}
+            role={avatarCompanion ? "companion" : "owner"}
+            onClose={() => setNav(current => current.stack.at(-1) === route ? popRoute(current) : current)}
+            onSave={value => savePresetAvatar(route.companionId ?? null, value)} />
+        )
       )}
 
       {route.type === "encounter" && (
@@ -900,6 +963,7 @@ function WorldApp({ client, account, isMockMode }: {
       {route.type === "profile" && (
         <ProfileScreen
           state={profile}
+          avatar={availableCompanions.find(item => item.companionId === route.companionId)?.avatar}
           onRetry={() => void loadProfile(route.companionId)}
           onControls={() => {
             const p = profile.kind === "success" ? profile.value : undefined;
@@ -943,7 +1007,7 @@ function WorldApp({ client, account, isMockMode }: {
             <ConnectionForm kind={route.kind} onClose={goBack} handleBack closeLabel="稍后设置，先去小家" submitConnection={async input => {
               const result = await client.api.chat!.saveConnection!(route.companionId, input);
               if (result.result === "CONNECTED") setNav(current => current.stack.at(-1) === route ? popRoute(current) : current);
-              return result.result;
+              return result;
             }} />
           </ScrollView>
         </KeyboardAvoidingView>
@@ -991,6 +1055,7 @@ function WorldApp({ client, account, isMockMode }: {
         visible={switcherOpen}
         identity={identity}
         ownerNickname={ownerNickname}
+        ownerAvatar={ownerAvatar}
         companions={ownerCompanions}
         pending={identitySwitchPending}
         onClose={() => setSwitcherOpen(false)}
@@ -1021,7 +1086,8 @@ function AppHeader({
   rootTab,
   identityTitle,
   isSampleCompanion,
-  identity,
+  avatar,
+  identityLoading,
   onBack,
   onIdentity,
   onOpenSettings,
@@ -1030,14 +1096,14 @@ function AppHeader({
   rootTab: RootTab;
   identityTitle: string;
   isSampleCompanion: boolean;
-  identity: LoadState<ActiveIdentityContext>;
+  avatar?: string | null;
+  identityLoading: boolean;
   onBack: () => void;
   onIdentity: () => void;
   onOpenSettings: () => void;
 }) {
   const styles = useThemedStyles(createStyles);
   const { skin, ui } = useSkin();
-  const avatar = identity.kind === "success" ? identity.value.activeSubject.presentation.avatar : undefined;
   const defaultSkin = skin.id === "default";
   const ink = defaultSkin ? ui.ink : skin.colors.ink;
 
@@ -1076,7 +1142,7 @@ function AppHeader({
               <Ionicons name="settings-outline" size={19} color={ink} />
             </Pressable>
           )}
-          {identity.kind === "loading" && <ActivityIndicator size="small" />}
+          {identityLoading && <ActivityIndicator size="small" />}
         </View>
       </View>
 
@@ -1368,10 +1434,12 @@ function EncounterScreen({
 
 function ProfileScreen({
   state,
+  avatar,
   onRetry,
   onControls,
 }: {
   state: LoadState<CompanionProfile>;
+  avatar?: string | null;
   onRetry: () => void;
   onControls: () => void;
 }) {
@@ -1389,11 +1457,7 @@ function ProfileScreen({
   return (
     <ScrollView style={styles.secondaryPage} contentContainerStyle={styles.profilePage}>
       <View style={styles.profileTop}>
-        <View style={styles.profileAvatar}>
-          <Text style={styles.profileAvatarText}>
-            {p.displayName.slice(0, 1).toUpperCase()}
-          </Text>
-        </View>
+        <PixelAvatar name={p.displayName} role="companion" uri={avatar} size={74} />
 
         <View style={styles.profileActions}>
           {canFollow && (
@@ -1517,6 +1581,7 @@ function LifeScreen({
 
 function MyScreen({
   identity,
+  avatar,
   community,
   isSampleCompanion,
   companionName,
@@ -1524,6 +1589,9 @@ function MyScreen({
   selfProfile,
   onOpenCompanionProfile,
   onUpdateCompanion,
+  onChangeAvatar,
+  onAgentSettings,
+  onChatSettings,
   onOpenCompanionChat,
   onControls,
   onResumeCompanion,
@@ -1534,12 +1602,16 @@ function MyScreen({
 }: {
   community?: CommunityClient;
   identity: LoadState<ActiveIdentityContext>;
+  avatar?: string | null;
   isSampleCompanion: boolean;
   companionName: string;
   companions: LoadState<OwnerCompanionCollection>;
   selfProfile: LoadState<CompanionProfile>;
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
   onUpdateCompanion: (item: OwnerCompanionSummary) => void;
+  onChangeAvatar?: (item: OwnerCompanionSummary) => void;
+  onAgentSettings?: (item: OwnerCompanionSummary) => void;
+  onChatSettings?: (item: OwnerCompanionSummary) => void;
   onOpenCompanionChat?: (item: OwnerCompanionSummary) => void;
   onControls: (item: OwnerCompanionSummary) => void;
   onResumeCompanion: (item: OwnerCompanionSummary) => void;
@@ -1590,7 +1662,7 @@ function MyScreen({
         <PixelAvatar
           name={displayName}
           role={isSampleCompanion ? "companion" : "owner"}
-          uri={ownProfile?.avatar ?? subject?.presentation.avatar}
+          uri={avatar === undefined ? ownProfile?.avatar : avatar}
           size={80}
         />
 
@@ -1617,6 +1689,7 @@ function MyScreen({
         {onEditHumanProfile && (
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel="编辑资料"
             onPress={onEditHumanProfile}
             style={({ pressed }) => [styles.editProfilePill, pressed && { transform: [{ scale: 0.95 }] }]}
           >
@@ -1637,7 +1710,7 @@ function MyScreen({
             style={styles.relationMain}
             onPress={item.socialReady ? () => onOpenCompanionProfile(item) : () => onResumeCompanion(item)}
           >
-            <PixelAvatar name={item.displayName} role="companion" size={38} />
+            <PixelAvatar name={item.displayName} role="companion" uri={item.avatar} size={38} />
             <View style={{ flex: 1 }}>
               <Text style={[styles.relTitle, { color: ink }]}>{item.displayName}</Text>
               <Text style={[styles.relSub, { color: muted }]}>
@@ -1707,7 +1780,20 @@ function MyScreen({
           setCompanionMenu(undefined);
           if (item) onUpdateCompanion(item);
         }}><Text style={[styles.cleanRowTitle, { color: ink }]}>编辑 / 更新资料</Text></Pressable>
-        <Text style={[styles.heroBio, { color: muted }]}>删除家机 · 暂未开放（等待服务端接口）</Text>
+        {companionMenu && <>
+          {onChangeAvatar && <CommunityButton label="更换家机头像" onPress={() => {
+            setCompanionMenu(undefined);
+            onChangeAvatar(companionMenu);
+          }} />}
+          {onAgentSettings && companionMenu.socialReady && <CommunityButton label="家机活动设置" onPress={() => {
+            setCompanionMenu(undefined);
+            onAgentSettings(companionMenu);
+          }} />}
+          {onChatSettings && <CommunityButton label="聊天设置与家机管理" onPress={() => {
+            setCompanionMenu(undefined);
+            onChatSettings(companionMenu);
+          }} />}
+        </>}
       </BottomSheet>
     </ScrollView>
   );
@@ -1855,6 +1941,7 @@ function IdentitySwitcher({
   visible,
   identity,
   ownerNickname,
+  ownerAvatar,
   companions,
   pending,
   onClose,
@@ -1864,6 +1951,7 @@ function IdentitySwitcher({
   visible: boolean;
   identity: LoadState<ActiveIdentityContext>;
   ownerNickname?: string;
+  ownerAvatar?: string | null;
   companions: LoadState<OwnerCompanionCollection>;
   pending: boolean;
   onClose: () => void;
@@ -1875,9 +1963,6 @@ function IdentitySwitcher({
   const activeId = identity.kind === "success" ? identity.value.activeSubject.id : undefined;
   const ownerActive = activeKind === "OWNER";
   const items = companions.kind === "success" ? companions.value.items : [];
-  const ownerPresentation = identity.kind === "success" && identity.value.activeSubject.kind === "OWNER"
-    ? identity.value.activeSubject.presentation
-    : undefined;
   const ownerName = ownerNickname ?? identityLabel(ownerActive && identity.kind === "success" ? identity.value : undefined);
 
   return (
@@ -1892,7 +1977,7 @@ function IdentitySwitcher({
           <Text style={styles.sheetLabel}>现在是</Text>
 
           <Pressable style={styles.switchAccountRow} onPress={onOwner} disabled={pending}>
-            <PixelAvatar name={ownerName} role="owner" uri={ownerPresentation?.avatar} size={42} />
+            <PixelAvatar name={ownerName} role="owner" uri={ownerAvatar} size={42} />
             <View style={styles.switchAccountText}>
               <Text style={styles.switchAccountName}>{ownerName}</Text>
             </View>
@@ -1914,7 +1999,7 @@ function IdentitySwitcher({
                 onPress={() => onCompanion(item)}
                 disabled={!item.socialReady || pending}
               >
-                <PixelAvatar name={item.displayName} role="companion" size={42} />
+                <PixelAvatar name={item.displayName} role="companion" uri={item.avatar} size={42} />
                 <View style={styles.switchAccountText}>
                   <Text style={styles.switchAccountName}>{item.displayName}</Text>
                   {!item.socialReady && (
@@ -2107,15 +2192,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   secondaryPage: { flex: 1, backgroundColor: ui.background[0] },
   profilePage: { padding: CHROME.screenInset, paddingBottom: 44 },
   profileTop: { marginBottom: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  profileAvatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: ui.accentWash,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  profileAvatarText: { fontSize: 28, fontWeight: "700", color: ui.ink },
   profileActions: { flexDirection: "row", gap: 8 },
   accentSmallPill: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 999, backgroundColor: ui.accentWash },
   accentSmallPillText: { color: ui.accentInk, fontSize: 13, fontWeight: "600" },

@@ -1,13 +1,18 @@
 import { useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Image, StyleSheet, View, type ImageSourcePropType } from "react-native";
 
 type AvatarRole = "owner" | "companion";
 
+export const avatarPresets = [
+  { value: "preset:pixel_long_hair", label: "长发像素", image: require("../../assets/avatar-owner-pixel.png") },
+  { value: "preset:pixel_short_hair", label: "短发像素", image: require("../../assets/avatar-companion-pixel.png") },
+] as const;
+
 const pixelAvatars: Record<AvatarRole, ImageSourcePropType> = {
-  owner: require("../../assets/avatar-owner-pixel.png"),
-  companion: require("../../assets/avatar-companion-pixel.png"),
+  owner: avatarPresets[0].image,
+  companion: avatarPresets[1].image,
 };
 
 export function PixelAvatar({
@@ -22,42 +27,34 @@ export function PixelAvatar({
   size: number;
 }) {
   const styles = useThemedStyles(createStyles);
-  const [remoteReady, setRemoteReady] = useState(false);
-  const [remoteFailed, setRemoteFailed] = useState(false);
-
-  useEffect(() => {
-    setRemoteReady(false);
-    setRemoteFailed(false);
-  }, [uri]);
 
   const radius = Math.round(size * 0.34);
   const frame = { width: size, height: size, borderRadius: radius };
-  const showRemote = Boolean(uri) && !remoteFailed;
+  const preset = uri?.startsWith("preset:") ? avatarPresets.find(option => option.value === uri) : undefined;
 
   return (
     <View
       accessibilityLabel={name}
       style={[styles.frame, frame, role === "companion" && styles.companion]}
     >
-      {/* Always render bundled pixel avatar immediately so avatar NEVER appears blank */}
       <Image
-        source={pixelAvatars[role]}
+        source={preset?.image ?? pixelAvatars[role]}
         style={styles.image}
         resizeMode="cover"
         fadeDuration={0}
       />
-      {showRemote && (
-        <Image
-          source={{ uri: uri! }}
-          style={[styles.remoteImage, { opacity: remoteReady ? 1 : 0 }]}
-          resizeMode="cover"
-          fadeDuration={120}
-          onLoad={() => setRemoteReady(true)}
-          onError={() => setRemoteFailed(true)}
-        />
-      )}
+      {uri && !uri.startsWith("preset:") && <RemoteAvatar key={uri} uri={uri} />}
     </View>
   );
+}
+
+function RemoteAvatar({ uri }: { uri: string }) {
+  const styles = useThemedStyles(createStyles);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return <Image source={{ uri }} style={[styles.remoteImage, { opacity: ready ? 1 : 0 }]}
+    resizeMode="cover" fadeDuration={120} onLoad={() => setReady(true)} onError={() => setFailed(true)} />;
 }
 
 const createStyles = (ui: UiPalette) => StyleSheet.create({

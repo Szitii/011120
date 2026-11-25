@@ -67,6 +67,7 @@ export function ChatScreen({
   companionId,
   companionName,
   ownerName,
+  ownerAvatar,
   ownerId,
   autoFocus = false,
   backLabel = "返回",
@@ -82,6 +83,7 @@ export function ChatScreen({
   companionId?: string;
   companionName: string;
   ownerName: string;
+  ownerAvatar?: string | null;
   ownerId: string;
   autoFocus?: boolean;
   backLabel?: string;
@@ -491,7 +493,7 @@ export function ChatScreen({
         </Pressable>
 
         <View style={styles.titleBlock}>
-          <PixelAvatar name={title} role="companion" size={30} />
+          <PixelAvatar name={title} role="companion" uri={chat?.direct ? chat.members[0]?.avatar : undefined} size={30} />
           <View>
             <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
             {replyStatus ? <Text style={styles.typingText}>{replyStatus}</Text> : null}
@@ -546,9 +548,8 @@ export function ChatScreen({
           renderItem={({ item }) => {
             if (item.action) return <Text style={styles.actionEvent}>{actionLabels[item.action]}</Text>;
             const isMine = item.companionId === null;
-            const senderName = isMine
-              ? ownerName
-              : chat?.members.find((m) => m.companionId === item.companionId)?.displayName ?? title;
+            const sender = chat?.members.find(member => member.companionId === item.companionId);
+            const senderName = isMine ? ownerName : sender?.displayName ?? title;
 
             const voiceStatus = playback?.id === item.id ? playback.status : undefined;
             const audioLength = item.audio ? Math.max(1, Math.ceil(item.audio.durationMs / 1000)) : 0;
@@ -564,7 +565,7 @@ export function ChatScreen({
 
             return (
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
-                <PixelAvatar name={senderName} role={isMine ? "owner" : "companion"} size={32} />
+                <PixelAvatar name={senderName} role={isMine ? "owner" : "companion"} uri={isMine ? ownerAvatar : sender?.avatar} size={32} />
                 <View style={[styles.bubbleWrap, isMine && styles.bubbleWrapMine]}>
                   {!isMine && !chat?.direct ? (
                     <Text style={styles.senderLabel}>{senderName}</Text>

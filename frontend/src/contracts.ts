@@ -222,6 +222,7 @@ export type ControlsPatch = Partial<ControlsResource["settings"]>;
 export interface OwnerCompanionSummary {
   companionId: string;
   displayName: string;
+  avatar?: string | null;
   identityId: string;
   identityVersion: number;
   approvedFields: string[];

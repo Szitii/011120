@@ -4,9 +4,9 @@ import { AppState, BackHandler, Pressable, StyleSheet, Text, View } from "react-
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { BringButton, BringField, Check, GlassCard } from "./BringControls";
-import type { ConnectionInput, ConnectionTest } from "../../../contracts/chat";
+import type { ConnectionInput } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
-import { connectionMessages, providerPresets, validateExternal, validateApiKey, type ProviderId } from "./connection-client";
+import { connectionMessage, providerPresets, validateExternal, validateApiKey, type ConnectionFeedback, type ProviderId } from "./connection-client";
 
 const providers = Object.keys(providerPresets) as Array<keyof typeof providerPresets>;
 
@@ -15,7 +15,7 @@ export function ConnectionForm({ kind, onClose, closeLabel = "返回连接设置
   onClose: () => void;
   closeLabel?: string;
   handleBack?: boolean;
-  submitConnection: (input: ConnectionInput) => Promise<ConnectionTest>;
+  submitConnection: (input: ConnectionInput) => Promise<ConnectionFeedback>;
 }) {
   const s = useThemedStyles(createStyles);
   const { ui } = useSkin();
@@ -80,10 +80,10 @@ export function ConnectionForm({ kind, onClose, closeLabel = "返回连接设置
     setResult(undefined);
     setShowKey(false);
     try {
-      const status = await submitConnection(outcome.input);
+      const outcomeResult = await submitConnection(outcome.input);
       if (mounted.current) {
-        if (status === "CONNECTED") setSecret("");
-        setResult(connectionMessages[status]);
+        if (outcomeResult.result === "CONNECTED") setSecret("");
+        setResult(connectionMessage(outcomeResult, kind));
       }
     } catch (error) {
       if (!mounted.current) return;
@@ -97,7 +97,8 @@ export function ConnectionForm({ kind, onClose, closeLabel = "返回连接设置
   }
 
   const preset = provider && provider !== "custom" ? providerPresets[provider] : null;
-  const urlInput = <BringField label="接口地址（HTTPS）" placeholder="请输入 HTTPS 接口地址" editable={!busy} value={endpoint}
+  const urlInput = <BringField label={kind === "external" ? "完整接口地址（HTTPS）" : "服务商基础地址（HTTPS）"}
+    placeholder={kind === "external" ? "请输入完整 HTTPS 接口地址" : "请输入 HTTPS 基础地址"} editable={!busy} value={endpoint}
     onChangeText={value => { setEndpoint(value); setConsent(false); setResult(undefined); }}
     autoCapitalize="none" autoCorrect={false} keyboardType="url" />;
 
@@ -147,6 +148,7 @@ export function ConnectionForm({ kind, onClose, closeLabel = "返回连接设置
         <BringField label="家机名称" placeholder="请输入家机名称" editable={!busy} value={name}
           onChangeText={value => { setName(value); setResult(undefined); }} maxLength={200} />
         {urlInput}
+        <Text style={s.body}>填写可直接接收聊天请求的完整地址，包含接口路径。</Text>
         <BringField label="访问密钥（Bearer Token）" placeholder="选填" editable={!busy} value={secret}
           onChangeText={value => { setSecret(value); setResult(undefined); }}
           secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="off" />

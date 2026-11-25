@@ -1,4 +1,4 @@
-import type { ConnectionInput, ConnectionTest } from "../../../contracts/chat";
+import type { ConnectionInput, ConnectionSaveResult } from "../../../contracts/chat";
 
 export const providerPresets = {
   deepseek: { label: "DeepSeek", model: "deepseek-chat", baseUrl: "https://api.deepseek.com/v1" },
@@ -69,12 +69,24 @@ export function extendedImportAvailability() {
   return { status: "UNAVAILABLE", message: "Markdown 和纯文本记忆暂未接入审核。可以改用 JSON 角色卡，或填写名字和性格后开始。" };
 }
 
-export const connectionMessages: Record<ConnectionTest, string> = {
+const connectionMessages = {
   CONNECTED: "已连接并保存。",
-  AUTH_FAILED: "密钥被服务商拒绝，请检查后重试。",
-  NOT_FOUND: "接口地址或模型名称有误。",
   UNREACHABLE: "暂时连不到服务端，请稍后再试。",
-  BAD_ANSWER: "服务端回复格式不兼容。",
   BLOCKED_ADDRESS: "请使用可访问的公网 HTTPS 地址。",
   ERROR: "服务端暂时无法完成测试，请稍后再试。",
 };
+
+export type ConnectionFeedback = Pick<ConnectionSaveResult, "result" | "httpStatus">;
+
+export function connectionMessage({ result, httpStatus }: ConnectionFeedback, kind: "key" | "external") {
+  const code = typeof httpStatus === "number" && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599
+    ? `（HTTP ${httpStatus}）` : "";
+  if (result === "CONNECTED" || result === "BLOCKED_ADDRESS" || result === "UNREACHABLE") return connectionMessages[result];
+  if (result === "AUTH_FAILED") return `服务端拒绝了密钥${code}，请核对后重试。`;
+  if (result === "BAD_ANSWER") return `服务端回复格式不兼容${code}。`;
+  if (kind === "external" && (result === "NOT_FOUND" || result === "ERROR")) {
+    return `服务端未通过连通测试${code}。请确认填写了完整的 HTTPS 接口地址，包含路径。`;
+  }
+  if (result === "NOT_FOUND") return `服务商找不到该接口或模型${code}，请核对配置。`;
+  return code ? `服务商返回错误${code}，请检查配置后重试。` : connectionMessages[result];
+}
