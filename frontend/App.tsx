@@ -732,7 +732,7 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
-        <ChatSettingsScreen key={route.companionId} client={client.api.chat} companionId={route.companionId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
+        <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId])} client={client.api.chat} companionId={route.companionId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
           onAvailabilityChanged={refreshFeatures} onBack={goBack} />
       )}
 

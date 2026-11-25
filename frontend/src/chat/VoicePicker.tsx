@@ -6,9 +6,10 @@ import type { UiPalette } from "../theme/skinTokens";
 import type { ChatClient } from "./client";
 import { useVoicePlayback } from "./useVoicePlayback";
 
-export function VoicePicker({ sample, voices, selected, onSelect, disabled }: {
+export function VoicePicker({ sample, voices, saved, selected, onSelect, disabled }: {
   sample?: ChatClient["voiceSample"];
   voices: VoiceInfo[];
+  saved?: string | null;
   selected?: string | null;
   onSelect: (id: string | null) => void;
   disabled: boolean;
@@ -17,6 +18,8 @@ export function VoicePicker({ sample, voices, selected, onSelect, disabled }: {
   const s = useThemedStyles(createStyles);
   const { playback, toggle, stop } = useVoicePlayback();
   const textOnly = selected == null;
+  const savedVoice = voices.find(voice => voice.id === saved);
+  const savedLabel = saved == null ? "只打字" : savedVoice?.name ?? "已选音色暂不可用";
 
   function handleToggleTextOnly(nextTextOnly: boolean) {
     if (disabled) return;
@@ -24,19 +27,7 @@ export function VoicePicker({ sample, voices, selected, onSelect, disabled }: {
       stop();
       onSelect(null);
     } else if (voices.length > 0) {
-      const first = voices[0];
-      onSelect(first.id);
-      if (sample) void toggle(first.id, () => sample(first.id));
-    }
-  }
-
-  function handleVoicePress(voice: VoiceInfo) {
-    if (disabled) return;
-    if (selected !== voice.id) {
-      onSelect(voice.id);
-    }
-    if (sample) {
-      void toggle(voice.id, () => sample(voice.id));
+      onSelect(savedVoice?.id ?? voices[0].id);
     }
   }
 
@@ -44,7 +35,7 @@ export function VoicePicker({ sample, voices, selected, onSelect, disabled }: {
     <View style={s.card}>
       <View style={s.header}>
         <Text style={s.title}>家机声音</Text>
-        <Text style={s.subtitle}>轻点即可选中并试听</Text>
+        <Text style={s.subtitle}>当前已保存 · {savedLabel}</Text>
       </View>
 
       <View style={s.switchRow}>
@@ -52,34 +43,30 @@ export function VoicePicker({ sample, voices, selected, onSelect, disabled }: {
         <Switch
           accessibilityLabel="只打字"
           value={textOnly}
-          disabled={disabled}
+          disabled={disabled || (textOnly && voices.length === 0)}
           onValueChange={handleToggleTextOnly}
           trackColor={{ false: ui.line, true: ui.accent }}
           thumbColor={ui.white}
         />
       </View>
 
-      {!textOnly && (
+      {voices.length > 0 && (
         <View style={s.grid}>
           {voices.map(voice => {
             const isSelected = voice.id === selected;
             const status = playback?.id === voice.id ? playback.status : undefined;
             const isPlaying = status === "playing" || status === "loading";
             return (
-              <Pressable
-                key={voice.id}
-                accessibilityRole="button"
-                accessibilityLabel={`${voice.name}${voice.description ? `，${voice.description}` : ""}`}
-                accessibilityState={{ selected: isSelected }}
-                disabled={disabled}
-                onPress={() => handleVoicePress(voice)}
-                style={({ pressed }) => [
-                  s.voiceCard,
-                  isSelected && s.voiceCardSelected,
-                  pressed && !disabled && { opacity: 0.85 },
-                ]}
-              >
-                <View style={s.voiceMain}>
+              <View key={voice.id} style={[s.voiceCard, isSelected && s.voiceCardSelected]}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`选择音色 ${voice.name}`}
+                  accessibilityHint={voice.description}
+                  accessibilityState={{ selected: isSelected }}
+                  disabled={disabled}
+                  onPress={() => onSelect(voice.id)}
+                  style={s.voiceMain}
+                >
                   <Text style={[s.voiceName, isSelected && s.voiceNameSelected]} numberOfLines={1}>
                     {voice.name}
                   </Text>
@@ -88,15 +75,24 @@ export function VoicePicker({ sample, voices, selected, onSelect, disabled }: {
                       {voice.description}
                     </Text>
                   )}
-                </View>
-                {isSelected && (
-                  <Ionicons
-                    name={isPlaying ? "stop-circle-outline" : "volume-medium-outline"}
-                    size={19}
-                    color={ui.accentInk}
-                  />
+                </Pressable>
+                {sample && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${isPlaying ? "停止试听" : "试听"} ${voice.name}`}
+                    disabled={disabled}
+                    onPress={() => void toggle(voice.id, () => sample(voice.id))}
+                    style={s.preview}
+                  >
+                    <Ionicons
+                      name={isPlaying ? "stop-circle-outline" : "volume-medium-outline"}
+                      size={17}
+                      color={ui.accentInk}
+                    />
+                    <Text style={s.previewLabel}>{isPlaying ? "停止" : "试听"}</Text>
+                  </Pressable>
                 )}
-              </Pressable>
+              </View>
             );
           })}
         </View>
@@ -133,18 +129,12 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     backgroundColor: ui.background[0],
   },
   switchLabel: { fontSize: 14, fontWeight: "600", color: ui.ink },
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
+  grid: { gap: 8 },
   voiceCard: {
-    width: "48%",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingVertical: 11,
+    paddingHorizontal: 10,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: ui.line,
@@ -156,7 +146,9 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderWidth: 1.5,
     backgroundColor: ui.accentWash,
   },
-  voiceMain: { flex: 1, gap: 2 },
+  voiceMain: { flex: 1, minHeight: 48, justifyContent: "center", paddingVertical: 6, gap: 2 },
+  preview: { minHeight: 44, paddingHorizontal: 6, alignItems: "center", flexDirection: "row", gap: 4 },
+  previewLabel: { fontSize: 12, color: ui.accentInk },
   voiceName: { fontSize: 14, fontWeight: "600", color: ui.ink },
   voiceNameSelected: { color: ui.accentInk },
   voiceDesc: { fontSize: 11.5, color: ui.muted },
