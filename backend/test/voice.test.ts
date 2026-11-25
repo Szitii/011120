@@ -3,9 +3,9 @@ import { it } from "node:test";
 import { handleChatRequest } from "../src/chat/http.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { agentMessages, replyPrompt, splitVoice } from "../src/chat/prompt.ts";
-import { ChatReplies, devChatModel, type ChatModel } from "../src/chat/replies.ts";
+import { ChatReplies, devChatModel, type ChatModel, type ReplyTrace } from "../src/chat/replies.ts";
 import {
-  devSpeaker, MiniMaxSpeaker, MiniMaxTranscriber, VoiceCatalog, Voices, type Clip, type Emotion, type Speaker, type VoiceFile,
+  devSpeaker, MiniMaxSpeaker, MiniMaxTranscriber, SpeechError, VoiceCatalog, Voices, type Clip, type Emotion, type Speaker, type VoiceFile,
 } from "../src/chat/voices.ts";
 import type { ChatClaim, ChatOutcome, ChatPort } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
@@ -113,16 +113,19 @@ it("asks MiniMax for speech and reads its answer", async () => {
 
   const noUsage = { ...ok, extra_info: { audio_length: 5 } };
   assert.equal((await new MiniMaxSpeaker(file.provider, "k", answer(200, noUsage)).speak("a", file.voices[0]!, null, signal)).characters, 0);
-  const failures: [number, unknown, RegExp][] = [
-    [500, {}, /HTTP 500/],
-    [200, { base_resp: { status_code: 1008, status_msg: "insufficient balance" } }, /1008 insufficient balance/],
-    [200, { base_resp: { status_code: 0 }, data: { audio: "xyz" }, extra_info: { audio_length: 1 } }, /unexpected shape/],
-    [200, { base_resp: { status_code: 0 }, data: { audio: "fff" }, extra_info: { audio_length: 1 } }, /unexpected shape/],
-    [200, { base_resp: { status_code: 0 }, data: { audio: "ff" }, extra_info: { audio_length: 0 } }, /unexpected shape/],
-    [200, { base_resp: { status_code: 0 }, data: {}, extra_info: {} }, /unexpected shape/],
+  // Each failure has a code for the log, without the provider's own words.
+  const failures: [number, unknown, RegExp, string][] = [
+    [500, {}, /HTTP 500/, "HTTP_500"],
+    [200, { base_resp: { status_code: 1008, status_msg: "insufficient balance" } }, /1008 insufficient balance/, "REFUSED_1008"],
+    [200, {}, /refused: undefined/, "REFUSED"],
+    [200, { base_resp: { status_code: 0 }, data: { audio: "xyz" }, extra_info: { audio_length: 1 } }, /unexpected shape/, "BAD_ANSWER"],
+    [200, { base_resp: { status_code: 0 }, data: { audio: "fff" }, extra_info: { audio_length: 1 } }, /unexpected shape/, "BAD_ANSWER"],
+    [200, { base_resp: { status_code: 0 }, data: { audio: "ff" }, extra_info: { audio_length: 0 } }, /unexpected shape/, "BAD_ANSWER"],
+    [200, { base_resp: { status_code: 0 }, data: {}, extra_info: {} }, /unexpected shape/, "BAD_ANSWER"],
   ];
-  for (const [status, payload, message] of failures) {
-    await assert.rejects(new MiniMaxSpeaker(file.provider, "k", answer(status, payload)).speak("a", file.voices[0]!, null, signal), message);
+  for (const [status, payload, message, code] of failures) {
+    await assert.rejects(new MiniMaxSpeaker(file.provider, "k", answer(status, payload)).speak("a", file.voices[0]!, null, signal),
+      (error: unknown) => error instanceof SpeechError && error.code === code && message.test(error.message));
   }
 });
 
@@ -165,9 +168,15 @@ it("reads voice marks and tells the model about them only when the Companion has
 
 it("says the marked messages in the Companion's voice and keeps the rest as text", async () => {
   const { speaker, said } = recordingSpeaker();
-  const replies = new ChatReplies(says("[语音:开心]你回来啦", "今天做了什么？", "[语音]抱抱"), undefined, new Voices(catalog, speaker));
+  const traces: ReplyTrace[] = [];
+  const replies = new ChatReplies(says("[语音:开心]你回来啦", "今天做了什么？", "[语音]抱抱"), undefined, new Voices(catalog, speaker),
+    undefined, trace => traces.push(trace));
   const { port, finished, used } = replyPort(turn("warm"));
   assert.equal(await replies.drain(chatId, port), 1);
+  const [{ modelMs, speechMs, ...traced }] = traces as [ReplyTrace];
+  assert.deepEqual(traced, { event: "chat_reply", chatId, replyId: messageId, companionId: companion, channel: "PLATFORM",
+    outcome: "SENT", voice: ["SPOKEN", "NO_MARK", "SPOKEN"], stored: true }, "one line per turn, without what was said");
+  assert.ok(modelMs >= 0 && speechMs >= 0);
   assert.deepEqual(said, [["你回来啦", "warm", "happy"], ["抱抱", "warm", null]]);
   assert.deepEqual(used, [["SPEAK", 2], ["SPEAK", 2]], "each clip is booked with the characters billed");
   assert.deepEqual(finished, [["SENT", ["你回来啦", "今天做了什么？", "抱抱"], [clip("你回来啦"), null, clip("抱抱")]]]);
@@ -178,40 +187,68 @@ it("falls back to text when a voice message cannot be made", async () => {
   const run = async (model: ChatModel, claim: ChatClaim, speaker: Speaker | undefined, left = 60, timeoutMs?: number) => {
     const { port, finished } = replyPort(claim, left);
     const voices = speaker === undefined ? undefined : new Voices(catalog, speaker);
-    await new ChatReplies(model, undefined, voices, timeoutMs).drain(chatId, port);
+    await new ChatReplies(model, undefined, voices, timeoutMs, trace => { why = trace.voice; }).drain(chatId, port);
     return finished[0]!;
   };
+  // Why each message of the last reply was or was not a voice message, as the trace says it.
+  let why: ReplyTrace["voice"] = [];
   const text = (...bodies: string[]) => ["SENT", bodies, undefined];
   const { speaker, said } = recordingSpeaker(t => t === "坏");
   assert.deepEqual(await run(says("[语音]好", "[语音]坏"), turn("warm"), speaker), ["SENT", ["好", "坏"], [clip("好"), null]],
     "a failed clip is text");
+  assert.deepEqual(why, ["SPOKEN", "SPEECH_FAILED"]);
   assert.deepEqual(await run(says("[语音]坏"), turn("warm"), speaker), text("坏"), "all failed: plain text");
   assert.deepEqual(await run(says("[语音]一", "[语音]二"), turn("warm"), speaker, 1), ["SENT", ["一", "二"], [clip("一"), null]],
     "only as many as today's voice messages left");
+  assert.deepEqual(why, ["SPOKEN", "OVER_LIMIT"]);
   assert.deepEqual(await run(says("[语音]一"), turn("warm"), speaker, -1), text("一"), "the count could not be read");
+  assert.deepEqual(why, ["LIMIT_UNKNOWN"]);
   const unbooked = replyPort(turn("warm"), -2);
   (unbooked.port as unknown as { voiceLeft: () => Promise<unknown> }).voiceLeft = async () => ({ companion: 5, owner: 0 });
   await new ChatReplies(says("[语音]好"), undefined, new Voices(catalog, speaker)).drain(chatId, unbooked.port);
   assert.deepEqual(unbooked.finished[0], ["SENT", ["好"], [clip("好")]], "a booking that fails does not cost the message");
   assert.deepEqual(await run(says(`[语音]${"长".repeat(121)}`), turn("warm"), speaker), text("长".repeat(121)), "too long to say");
+  assert.deepEqual(why, ["TOO_LONG"]);
   assert.deepEqual(await run(says("[语音]一", "二", "[语音]三", "[语音]四"), turn("warm"), speaker),
     ["SENT", ["一", "二", "三\n四"], [clip("一"), null, null]], "joined messages are text");
+  assert.deepEqual(why, ["SPOKEN", "NO_MARK", "MERGED"]);
   assert.deepEqual(await run(says("[语音:开心]你好"), turn(null), speaker), text("你好"), "no voice chosen: the mark is dropped");
+  assert.deepEqual(why, ["NO_VOICE"]);
   assert.deepEqual(await run(says("[语音]", "嗯"), turn("warm"), speaker), text("嗯"), "a mark alone is nothing");
   assert.deepEqual(await run(says("[语音]手机 13800138000", "[语音]记一下"), turn("warm"), speaker),
     ["SENT", ["手机 [REDACTED_PII]", "记一下"], [null, clip("记一下")]], "what the safety scan changed is text");
+  assert.deepEqual(why, ["REDACTED", "SPOKEN"]);
   const hanging: Speaker = { speak: (_t, _v, _e, signal) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))) };
   assert.deepEqual(await run(says("[语音]嗯"), turn("warm"), hanging, 60, 5), text("嗯"), "too slow: text");
+  assert.deepEqual(why, ["SPEECH_TIMEOUT"]);
+  const refusing: Speaker = { speak: async () => { throw new SpeechError("REFUSED_1008", "insufficient balance"); } };
+  assert.deepEqual(await run(says("[语音]嗯"), turn("warm"), refusing), text("嗯"));
+  assert.deepEqual(why, ["SPEECH_FAILED_REFUSED_1008"], "the provider's status, not its words");
   assert.equal(said.filter(([t]) => t === "二").length, 0);
 
   let seen: ChatClaim | undefined;
   const watcher: ChatModel = { reply: async claim => { seen = claim; return { messages: ["[语音]嗯"] }; } };
   assert.deepEqual(await run(watcher, turn("warm"), undefined), text("嗯"), "no voices on this server");
+  assert.deepEqual(why, ["VOICE_UNAVAILABLE"]);
   assert.equal(seen?.companion.settings.voice, null, "the model is not told to speak when it cannot");
   assert.deepEqual(await run(watcher, turn("gone"), speaker), text("嗯"), "a voice no longer in the catalog");
   assert.equal(seen?.companion.settings.voice, null);
   assert.deepEqual(await run(devChatModel, turn("warm"), devSpeaker), ["SENT", ["（开发环境假回复）我是小光", "收到：「我回来了」"],
     [await devSpeaker.speak("（开发环境假回复）我是小光", file.voices[0]!, null, new AbortController().signal), null]]);
+
+  // A reply that was not saved, or not written at all, leaves its line too.
+  const traces: ReplyTrace[] = [];
+  const lost = async (finish: () => Promise<boolean>, model?: ChatModel) => {
+    const { port } = replyPort(turn("warm"));
+    (port as unknown as { finish: () => Promise<boolean> }).finish = finish;
+    await new ChatReplies(model, undefined, new Voices(catalog, speaker), undefined, trace => traces.push(trace)).drain(chatId, port).catch(() => undefined);
+    const { outcome, voice, stored } = traces.at(-1)!;
+    return [outcome, voice, stored];
+  };
+  assert.deepEqual(await lost(async () => false, says("[语音]好")), ["SENT", ["SPOKEN"], false], "spoken, but the turn had moved on");
+  assert.deepEqual(await lost(async () => { throw new Error("db down"); }, says("[语音]好")), ["SENT", ["SPOKEN"], false], "spoken, but not saved");
+  assert.deepEqual(await lost(async () => true), ["UNAVAILABLE", [], true], "no model: nothing to say");
+  assert.equal(traces.length, 3);
 });
 
 const session = (port: ChatPort): AuthenticatedOwnerSession =>

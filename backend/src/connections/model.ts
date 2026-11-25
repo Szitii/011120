@@ -131,11 +131,12 @@ export class ConnectedChatModel implements ChatModel {
     this.#post = post;
   }
 
-  async reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal }): Promise<Answer> {
+  async reply(turn: ChatClaim, context: Parameters<ChatModel["reply"]>[1]): Promise<Answer> {
     const companionId = turn.companion.companionId;
     const stored = await connectionOf(context.port, companionId);
     if (stored === null) return this.#platform ? this.#platform.reply(turn, context) : { failed: "UNAVAILABLE" };
     if (stored === "DISABLED") return { failed: "DISABLED" };
+    context.via?.(stored.kind);
     const secret = this.#box.open(stored.secret, companionId);
     const messages = stored.kind === "EXTERNAL" ? agentMessages(turn)
       : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId)));

@@ -148,7 +148,8 @@ it("answers through the Owner's key or agent, and through the platform without a
   const byok: Connection = { kind: "BYOK", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat",
     name: null, secret: box.seal("sk-ds-1234", companion) };
   const model = new ConnectedChatModel(devChatModel, box, post("好呀\n走吧"));
-  assert.deepEqual(await model.reply(turn(), { port: storePort(byok), signal }), { messages: ["好呀", "走吧"] });
+  const via: string[] = [];
+  assert.deepEqual(await model.reply(turn(), { port: storePort(byok), signal, via: channel => via.push(channel) }), { messages: ["好呀", "走吧"] });
   assert.equal(sent[0]!.url, "https://api.deepseek.com/v1/chat/completions");
   assert.deepEqual(sent[0]!.headers, { authorization: "Bearer sk-ds-1234" });
   assert.equal(sent[0]!.body.model, "deepseek-chat");
@@ -158,7 +159,7 @@ it("answers through the Owner's key or agent, and through the platform without a
     name: "本体", secret: box.seal("", companion) };
   sent.length = 0;
   const agent = new ConnectedChatModel(undefined, box, post("嗯嗯"));
-  assert.deepEqual(await agent.reply(turn(), { port: storePort(external), signal }), { messages: ["嗯嗯"] });
+  assert.deepEqual(await agent.reply(turn(), { port: storePort(external), signal, via: channel => via.push(channel) }), { messages: ["嗯嗯"] });
   const messages = sent[0]!.body.messages;
   assert.deepEqual(sent[0]!.headers, {}, "no token, no header");
   assert.deepEqual(messages.slice(1).map(m => [m.role, m.content]), [
@@ -174,6 +175,8 @@ it("answers through the Owner's key or agent, and through the platform without a
   assert.deepEqual(await new ConnectedChatModel(undefined, box, post("x")).reply(turn(), { port: storePort(null), signal }), { failed: "UNAVAILABLE" });
   assert.match((await new ConnectedChatModel(devChatModel, box, post("x")).reply(turn(), { port: storePort(null), signal }) as { messages: string[] })
     .messages[0]!, /开发环境/);
+  await model.reply(turn(), { port: storePort(null), signal, via: channel => via.push(channel) });
+  assert.deepEqual(via, ["BYOK", "EXTERNAL"], "the trace is told which of the Owner's connections answered; the platform says nothing");
   assert.deepEqual(await new ConnectedChatModel(undefined, box, async () => ({ status: 200, body: { choices: [{ message: { content: "" },
     finish_reason: "content_filter" }] } })).reply(turn(), { port: storePort(byok), signal }), { refused: true });
   await assert.rejects(new ConnectedChatModel(undefined, box, post("半句", "length")).reply(turn(), { port: storePort(byok), signal }), /cut off/);
