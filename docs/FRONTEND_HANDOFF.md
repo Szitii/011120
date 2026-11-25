@@ -966,7 +966,7 @@ apikey: <EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY>
 
 ## 25. 沿用另一个家机的连接（2026-11-26）
 
-**还没上线**（等合并和部署）。类型在 `contracts/chat.ts`（`ConnectionCopyInput`）。
+**已上线**（2026-11-26，接口可以直接用；App 里的选项还没做）。类型在 `contracts/chat.ts`（`ConnectionCopyInput`）。
 
 Key 是每个家机单独存的。主人给家机 A 配过自带 Key（或自建家机）以后，想让家机 B 也用，以前得把 Key 再粘贴一遍。现在可以直接沿用：
 
