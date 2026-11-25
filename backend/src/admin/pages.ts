@@ -176,7 +176,8 @@ svg.chart .grid{stroke:#eef0f3}svg.chart rect.hit{fill:transparent}svg.chart rec
 .legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:#4b5563;margin:0 0 6px}
 .legend i,.vhead i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px}
 .vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:8px 0 16px}.vendors .card{margin:0}
-.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines td{padding:5px 0;border-bottom:1px solid #f3f4f6}table.lines tr:hover td{background:none}
+.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:6px 0;border-bottom:1px solid #f3f4f6}
+table.lines td:first-child{white-space:normal;word-break:break-word}table.lines td.num{width:88px}table.lines .muted{display:block;font-size:12px}table.lines tr:hover td{background:none}
 .sub{margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}svg.spark{width:100%;height:36px;display:block;margin:4px 0}`;
 
 const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户"], ["/stats", "运营数据"], ["/costs", "花费"],

@@ -41,6 +41,15 @@ export interface Clip {
   readonly characters: number;
 }
 
+/** Why the speech provider made no clip. `code` is safe to log: a status, never the provider's own words. */
+export class SpeechError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 /** Something that can say a text in a voice. `signal` aborts when it takes too long: pass it on. */
 export interface Speaker {
   speak(text: string, voice: VoiceEntry, emotion: Emotion | null, signal: AbortSignal): Promise<Clip>;
@@ -138,18 +147,21 @@ export class MiniMaxSpeaker implements Speaker {
         audio_setting: { sample_rate: 24000, bitrate: 32000, format: "mp3", channel: 1 },
       }),
     });
-    if (!response.ok) throw new Error(`speech provider answered HTTP ${response.status}`);
+    if (!response.ok) throw new SpeechError(`HTTP_${response.status}`, `speech provider answered HTTP ${response.status}`);
     const payload = await response.json() as {
       data?: { audio?: unknown }; extra_info?: { audio_length?: unknown; usage_characters?: unknown };
       base_resp?: { status_code?: unknown; status_msg?: unknown };
     };
     const status = payload.base_resp?.status_code;
-    if (status !== 0) throw new Error(`speech provider refused: ${String(status)} ${String(payload.base_resp?.status_msg ?? "")}`.trim());
+    if (status !== 0) {
+      throw new SpeechError(typeof status === "number" ? `REFUSED_${status}` : "REFUSED",
+        `speech provider refused: ${String(status)} ${String(payload.base_resp?.status_msg ?? "")}`.trim());
+    }
     const hex = payload.data?.audio;
     const durationMs = payload.extra_info?.audio_length;
     if (typeof hex !== "string" || hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)
       || typeof durationMs !== "number" || !Number.isInteger(durationMs) || durationMs < 1) {
-      throw new Error("speech provider answered in an unexpected shape");
+      throw new SpeechError("BAD_ANSWER", "speech provider answered in an unexpected shape");
     }
     const characters = payload.extra_info?.usage_characters;
     return {
