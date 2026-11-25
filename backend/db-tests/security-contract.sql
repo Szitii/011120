@@ -35,7 +35,7 @@ select public.test_assert(
 select public.test_assert(
   (select count(*) = 3 and bool_and(qual like '%bucket_id = ''media''%' or with_check like '%bucket_id = ''media''%')
     from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'media_%')
-  and exists(select 1 from storage.buckets where id = 'media' and not public and file_size_limit = 5242880
+  and exists(select 1 from storage.buckets where id = 'media' and not public and file_size_limit = 1048576
     and allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp']::text[]),
   'the media bucket must be private and bounded, with upload, read and delete policies limited to it'
 );
