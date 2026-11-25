@@ -166,11 +166,11 @@ export function createAdminServer(options: AdminServerOptions): Server {
     }
     if (path === "/stats") {
       const month = dayOr(`${query.get("month")}-01`, `${now().toISOString().slice(0, 7)}-01`);
-      return statsPage(zone, now(), await db.call<Activity>("activity", month), query.get("auto") !== "off");
+      return statsPage(zone, now(), await db.call<Activity>("activity", month));
     }
     if (path === "/system") {
       const [system, machines] = await Promise.all([db.call<SystemInfo>("system"), hosts(options.fly ?? null)]);
-      return systemPage(zone, now(), system, machines, query.get("auto") !== "off");
+      return systemPage(zone, now(), system, machines);
     }
     if (path === "/costs") {
       const thisMonth = `${now().toISOString().slice(0, 7)}-01`, month = dayOr(`${query.get("month")}-01`, thisMonth);
@@ -179,7 +179,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
       // So does the Fly estimate, from the servers as they are now.
       const [cap, fly] = month === thisMonth
         ? await Promise.all([db.call<Models>("models").then(m => m.cap), hosts(options.fly ?? null)]) : [null, null];
-      return costsPage(zone, now(), costs, cap, cap !== null && query.get("auto") !== "off", done, fly);
+      return costsPage(zone, now(), costs, cap, done, fly);
     }
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
@@ -215,9 +215,9 @@ export function createAdminServer(options: AdminServerOptions): Server {
     } else if (path === "/models/feature") {
       if (!Object.hasOwn(FEATURES, form.key ?? "") || (form.enabled !== "on" && form.enabled !== "off")) throw new AdminRefusal("请选择开关哪一个,以及开还是关。");
       await db.call("feature_set", form.key, form.enabled === "on", reason);
-    } else if (path === "/models/cap") {
-      if ((form.enabled !== "on" && form.enabled !== "off") || !/^\d{1,9}$/.test(form.cents ?? "")) throw new AdminRefusal("请选择开关,金额要填整数。");
-      await db.call("spend_cap_set", form.enabled === "on", Number(form.cents), reason);
+    } else if (path === "/costs/cap") {
+      if ((form.enabled !== "on" && form.enabled !== "off") || !DOLLARS.test((form.dollars ?? "").trim())) throw new AdminRefusal("请选择开关,金额填美元(最多两位小数)。");
+      await db.call("spend_cap_set", form.enabled === "on", Math.round(Number(form.dollars!.trim()) * 100), reason);
     } else if (path === "/models/wallet") {
       if ((form.enabled !== "on" && form.enabled !== "off") || !/^\d{1,8}$/.test(form.welcome ?? "")
         || !/^[1-9]\d{0,5}$/.test(form.rate ?? "") || !/^\d{1,8}$/.test(form.floor ?? "")) throw new AdminRefusal("请选择开关,数量要填整数(每分积分至少 1)。");

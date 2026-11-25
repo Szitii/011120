@@ -272,7 +272,7 @@ it("lists and searches Owners, and opens one with what can be done about them", 
     chats: { items: [] }, log: { items: [], next: null } });
   const empty = await quiet.send(`/owners/${OWNER}`);
   assert.match(empty.body, new RegExp(`action="/owners/${OWNER}/restore"`));
-  assert.match(empty.body, /没有家机。[\s\S]*没有会话。[\s\S]*没有记录。/);
+  assert.match(empty.body, /没有会话。[\s\S]*没有家机。[\s\S]*没有记录。/);
   const deleted = await start({ owner_detail: { ...fixtures.owner_detail!, owner: { ...fixtures.owner_detail!.owner, status: "DELETED" } } });
   assert.ok(!(await deleted.send(`/owners/${OWNER}`)).body.includes(`action="/owners/${OWNER}/`));
 
@@ -340,7 +340,7 @@ it("shows model switches and the quota, and changes only what the catalog names"
   assert.match(page.body, /<td>新建群聊<\/td><td><span class="tag bad">关<\/span>/);
   assert.match(page.body, /<td>在已有群聊里发消息<\/td><td><span class="tag ">开<\/span>/);
   assert.match(page.body, /每天 200 次调用、1\.00 USD/);
-  assert.match(page.body, /每天 20\.00 USD,今天\(UTC\)已用 3\.45 USD/);
+  assert.ok(!page.body.includes("花费上限</h2>"), "the spend cap lives on the costs page");
   assert.match(page.body, /现在:关\(只按每个家机每天的免费额度限制\)。新主人送 1000 积分/);
   assert.match(page.body, /<a href="\/costs" class="">花费<\/a>/);
   assert.ok(!page.body.includes("<script>alert"));
@@ -380,14 +380,15 @@ it("shows model switches and the quota, and changes only what the catalog names"
   calls.length = 0;
   const OWNER_ID = "00000000-0000-4000-8000-000000000001";
   for (const [path, form] of [
-    ["/models/cap", change({ enabled: "maybe", cents: "2000" })], ["/models/cap", change({ enabled: "on", cents: "-1" })],
+    ["/costs/cap", change({ enabled: "maybe", dollars: "20" })], ["/costs/cap", change({ enabled: "on", dollars: "-1" })],
+    ["/costs/cap", change({ enabled: "on", dollars: "1.234" })],
     ["/models/wallet", change({ enabled: "on", welcome: "1000", rate: "0", floor: "200" })],
     ["/models/wallet", change({ enabled: "on", welcome: "x", rate: "10", floor: "200" })],
     ["/models/credit", change({ owner: "nobody", credits: "100" })], ["/models/credit", change({ owner: OWNER_ID, credits: "0" })],
     ["/models/credit", change({ owner: OWNER_ID, credits: "1.5" })],
   ] as const) assert.equal((await send(path, { form })).status, 409, `${path} ${JSON.stringify(form)}`);
   assert.deepEqual(calls, []);
-  await send("/models/cap", { form: change({ enabled: "off", cents: "2500" }) });
+  await send("/costs/cap", { form: change({ enabled: "off", dollars: "25" }) });
   await send("/models/wallet", { form: change({ enabled: "on", welcome: "500", rate: "10", floor: "0" }) });
   await send("/models/credit", { form: change({ owner: OWNER_ID, credits: "-50" }) });
   assert.deepEqual(calls, [["spend_cap_set", false, 2500, "because"], ["wallet_policy_set", true, 500, 10, 0, "because"],
@@ -473,13 +474,12 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   const page = await send("/costs");
   assert.equal(page.status, 200);
   assert.deepEqual(calls, [["costs", "2026-11-01"], ["models"]], "this month (UTC) by default, with today's cap");
-  assert.match(page.body, /<meta http-equiv="refresh" content="30;url=\/costs\?month=2026-11">/, "the running month reads itself again");
+  assert.ok(!page.body.includes("http-equiv") && !page.body.includes("自动刷新"), "the page is read again only on 刷新");
   assert.match(page.body, /数据时间 2026\/11\/23 12:00:00<\/span><a class="btn" href="\/costs\?month=2026-11">刷新<\/a>/);
-  assert.match(page.body, /href="\/costs\?month=2026-11&amp;auto=off">每 30 秒自动刷新/);
   assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">3\.45 USD<\/div>/);
   assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
-  const stopped = await send("/costs?auto=off");
-  assert.ok(!stopped.body.includes("http-equiv") && stopped.body.includes("自动刷新:关 · 点击打开"));
+  assert.match(page.body, /<summary>改上限<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
+  assert.match(page.body, /name="dollars" required inputmode="decimal" size="6" value="20">/);
   assert.match(page.body, /<a href="\/costs" class="on">花费<\/a>/);
   assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
   assert.match(page.body, /按用量的 \$5\.45 \+ 固定月费 \$35\.00/);
@@ -494,7 +494,9 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(vendor("MiniMax"), /已经超出包月/);
   assert.match(vendor("claude"), /<b>claude-big<\/b><b>\$3\.45<\/b>[\s\S]*调用 12 次 · 未成功 1 · 输入 9,000 token · 输出 700 token/);
   assert.match(vendor("Supabase"), /免费版没有月费/);
-  assert.match(vendor("Fly.io"), /<a href="\/system">主机现在的状态/);
+  assert.match(vendor("Fly.io"), /href="https:\/\/fly\.io\/dashboard\/personal\/billing" target="_blank" rel="noreferrer">去 Fly\.io 看账单/);
+  assert.match(vendor("MiniMax"), /去 MiniMax 看账单 ↗/);
+  assert.match(vendor("Fly.io"), /<a href="\/system">主机状态/);
   assert.match(vendor("Fly.io"), /估算不出:后台还没有 Fly 只读令牌/, "the running month guesses Fly's bill from the servers");
   assert.match(page.body, /<title>2026-11-23\n合计:\$3\.45\nMiniMax:&lt; \$0\.01\nclaude:\$3\.45<\/title>/, "a day's hover text");
   assert.match(page.body, /<td>2026-11-23<\/td><td class="num">\$3\.45<\/td><td class="num">12<\/td>/);
@@ -502,7 +504,8 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td class="num">12</td><td class="num">\\$3\\.45<`));
   assert.match(page.body, /href="\/costs\/export\.xlsx\?month=2026-11">导出 xlsx/);
   assert.ok(!page.body.includes("<script>alert"));
-  assert.ok(!page.body.includes('method="post"'), "the costs page only shows; changes are on the settings page");
+  assert.deepEqual([...page.body.matchAll(/method="post" action="([^"]+)"/g)].map(m => m[1]), ["/costs/cap"],
+    "the costs page changes only the cap; bills and prices are on the settings page");
   const settings = await send("/costs/settings");
   assert.deepEqual(calls.at(-1), ["costs", "2026-11-01"]);
   assert.match(settings.body, /<td>Fly 服务器<\/td><td>Fly\.io<\/td><td class="num">\$30\.00<\/td>/);
@@ -591,8 +594,9 @@ it("shows a year as a ledger, and exports a month or a year as an Excel file", a
 it("shows how much the App is used, and the database and the servers", async () => {
   const day = (d: string, n: number) => ({ day: d, newOwners: n, chatters: n + 1, ownerMessages: 10 * n, replies: 9 * n, failed: n, voiceIn: n, voiceOut: 2 * n,
     posts: n, aiPosts: 1, comments: 3, creditsSpent: 100 * n, creditsBought: 0 });
+  const unused = (d: string) => ({ ...day(d, 0), chatters: 0, aiPosts: 0, comments: 0 });
   const activity: Activity = { month: "2026-11", from: "2026-11-01", to: "2026-11-30", owners: 25, companions: 31, chatters: 12,
-    days: [day("2026-11-22", 1), day("2026-11-23", 2)] };
+    days: [unused("2026-11-21"), day("2026-11-22", 1), day("2026-11-23", 2)] };
   const { send, calls } = await start({ activity });
   const stats = await send("/stats");
   assert.deepEqual(calls, [["activity", "2026-11-01"]]);
@@ -601,9 +605,9 @@ it("shows how much the App is used, and the database and the servers", async () 
   assert.match(stats.body, /今天聊天的人<\/div><div class="big">3<\/div><div class="muted">主人发 20 条 · 家机回 18 条/);
   assert.match(stats.body, /消息<\/div><div class="big">57<\/div><div class="muted">主人发 30 · 家机回 27 · 失败 3/);
   assert.match(stats.body, /<title>2026-11-23\n聊天的人:3\n新注册:2<\/title>/);
-  assert.match(stats.body, /<meta http-equiv="refresh" content="30;url=\/stats\?month=2026-11">/);
-  const past = await (await start({ activity: { ...activity, month: "2026-10", days: [] } })).send("/stats?month=2026-10&auto=off");
-  assert.ok(!past.body.includes("http-equiv") && !past.body.includes("今天聊天的人") && past.body.includes("还没有数据"));
+  assert.ok(!stats.body.includes("2026-11-21"), "the days before anyone used the App are left out");
+  const past = await (await start({ activity: { ...activity, month: "2026-10", days: [unused("2026-10-01")] } })).send("/stats?month=2026-10");
+  assert.ok(!past.body.includes("今天聊天的人") && past.body.includes("这个月还没有任何使用"));
 
   const system: SystemInfo = { databaseBytes: 400 * 1024 * 1024, connections: 12, maxConnections: 60, startedAt: AT, version: "17.4",
     tables: [{ name: "companion_private.chat_messages", bytes: 1024 * 1024, rows: 5000 }, { name: "public.owners", bytes: 8192, rows: null }] };
