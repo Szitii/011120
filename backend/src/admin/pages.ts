@@ -4,6 +4,7 @@
  */
 
 import { flyMonthCents, machineCents, volumeCents, type Hosts } from "./fly.ts";
+import type { Balance, VendorStatus } from "./vendors.ts";
 
 // ---------- what the console functions return (schema companion_admin) ----------
 
@@ -338,7 +339,7 @@ export function switchTargets(catalog: readonly CatalogEntry[]): { value: string
 }
 
 export function modelsPage(zone: string, now: Date, models: Models, catalog: readonly CatalogEntry[], features: readonly Feature[],
-  done: boolean): string {
+  done: boolean, vendors: readonly VendorStatus[] = []): string {
   const q = models.quota, w = models.wallet, back = "/models";
   const offModels = catalog.filter(m => switchState(models, m) !== "开").length;
   const onOff = html`<select name="enabled" required><option value="">开还是关…</option><option value="off">关掉</option><option value="on">打开</option></select>`;
@@ -351,6 +352,13 @@ export function modelsPage(zone: string, now: Date, models: Models, catalog: rea
 <div class="card ${w.welcomeCredits > 0 ? "" : "warn"}"><div class="muted">新人送积分</div><div class="big">${w.welcomeCredits > 0 ? "开" : "关"}</div>
 <div class="muted">${w.welcomeCredits > 0 ? `每个新主人 ${count(w.welcomeCredits)} 积分${w.enabled ? "" : "(钱包关着,暂时不送)"}` : "新主人不送积分"}</div></div>
 </div>
+${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>模型</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
+${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td><td>${catalog.filter(m => m.provider === v.key).map(m => m.name).join("、")}</td>
+<td>${v.serverKey === null ? html`<span class="tag bad">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
+    ? html`<span class="muted">看不到:${v.serverKey.why}</span>` : html`<span class="tag">已设置</span> <span class="muted">更新于 ${time(zone, v.serverKey.at)}</span>`}</td>
+<td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
+<p class="muted">Key 只放在服务器的密钥里,后台看得到有没有、什么时候换过,看不到 Key 本身,也改不了:这样即使有人进了后台,也换不掉线上用的 Key。
+要加一家或换 Key,找 Claude 弹出输入框,Key 直接存进服务器,不经过聊天。余额每次打开这页时从厂商那里读。</p>`)}
 ${panel("模型开关", html`<div class="scroll"><table><tr><th>模型</th><th>厂商 / 模型名</th><th>现在</th></tr>${catalog.map(m => {
     const state = switchState(models, m);
     return html`<tr><td>${m.name}</td><td>${m.provider}/${m.model}</td><td><span class="tag ${state === "开" ? "" : "bad"}">${state}</span></td></tr>`;
@@ -470,6 +478,14 @@ const BILLING: Readonly<Record<string, string>> = {
 };
 const billingLink = (key: string) => BILLING[key] === undefined ? ""
   : html`<a href="${BILLING[key]}" target="_blank" rel="noreferrer">去 ${vendorName(key)} 看账单 ↗</a>`;
+const CURRENCY_SIGN: Readonly<Record<string, string>> = { CNY: "¥", USD: "$" };
+/** What a company says is left: each currency, and whether it is enough to keep calling. */
+function balanceText(b: Balance): Safe {
+  if (!b.ok) return html`<span class="err">读不到余额:${b.why}</span>`;
+  const left = b.money.map(m => `${CURRENCY_SIGN[m.currency] ?? `${m.currency} `}${m.total.toFixed(2)}`).join(" + ") || "0";
+  return html`<b>${left}</b>${b.enough ? "" : html` <span class="tag bad">余额不够,调用会失败</span>`}${b.money.some(m => m.granted > 0)
+    ? html` <span class="muted">(其中赠送 ${b.money.map(m => `${CURRENCY_SIGN[m.currency] ?? ""}${m.granted.toFixed(2)}`).join(" + ")})</span>` : ""}`;
+}
 /** Each vendor's colour, the same on every chart. */
 const VENDOR_COLORS: Readonly<Record<string, string>> = {
   anthropic: SLOTS[0], minimax: SLOTS[1], deepseek: SLOTS[2], openai: SLOTS[3], qwen: SLOTS[4], moonshot: SLOTS[5], zhipu: SLOTS[6], openrouter: SLOTS[7],
@@ -545,7 +561,7 @@ function flyEstimate(h: Hosts): Safe {
 <div class="muted">${FLY_ESTIMATE_NOTE}不计入上面的总花费。</div></div>` : html`<div class="sub muted">估算不出:${h.why}</div>`;
 }
 
-function vendorCard(v: Vendor, total: number, c: Costs, days: readonly string[], fly: Hosts | null): Safe {
+function vendorCard(v: Vendor, total: number, c: Costs, days: readonly string[], fly: Hosts | null, status: VendorStatus | undefined): Safe {
   const p = c.prices, used = p.planPoints > 0 ? c.totals.speakPoints / p.planPoints : 0;
   return html`<div class="card vendor"><div class="vhead"><span><i style="background:${vendorColor(v.key)}"></i><b>${v.name}</b></span>
 <span class="muted">占 ${percent(v.cents, total)}</span></div><div class="big">${usd(v.cents)}</div>
@@ -557,6 +573,7 @@ ${v.key === "minimax" ? html`<div class="sub"><div>语音包月点数:已用 ${c
 ${v.models.map(m => html`<div class="sub model"><div class="mhead"><b>${m.model}</b><b>${m.currency === "USD" ? usd(m.costMinor) : money(m.costMinor, m.currency)}</b></div>
 ${spark(days.map(d => m.perDay.get(d) ?? 0), vendorColor(v.key))}
 <div class="muted">调用 ${count(m.calls)} 次${m.failed > 0 ? ` · 未成功 ${count(m.failed)}` : ""} · 输入 ${compact(m.inputTokens)} token · 输出 ${compact(m.outputTokens)} token</div></div>`)}
+${status?.balance ? html`<div class="sub">${v.name} 账户余额(实时):${balanceText(status.balance)}</div>` : ""}
 ${v.key === "fly" && fly !== null ? flyEstimate(fly) : ""}
 <p class="muted links">${billingLink(v.key)}${v.key === "supabase" || v.key === "fly" ? html`<a href="/system">${v.key === "supabase" ? "数据库" : "主机"}状态 →</a>` : ""}</p></div>`;
 }
@@ -564,9 +581,11 @@ ${v.key === "fly" && fly !== null ? flyEstimate(fly) : ""}
 /**
  * Everything the platform paid for in one month: the total and today first, then a chart, then each company.
  * `cap` is today's platform spend and its ceiling, shown (and changed) only for the running month.
- * `fly` is the servers as they are now, for an estimate under Fly's card (running month only).
+ * `fly` is the servers as they are now, for an estimate under Fly's card; `statuses`, what each model company says is left
+ * (both for the running month only).
  */
-export function costsPage(zone: string, now: Date, c: Costs, cap: Models["cap"] | null, done: boolean, fly: Hosts | null = null): string {
+export function costsPage(zone: string, now: Date, c: Costs, cap: Models["cap"] | null, done: boolean, fly: Hosts | null = null,
+  statuses: readonly VendorStatus[] = []): string {
   const t = c.totals, self = `/costs?month=${c.month}`;
   const used = new Set([...c.days.map(d => d.day), ...c.models.byDay.map(d => d.day)]);
   const vendors = vendorsOf(c), days = fromFirst(daysOf(c.from, c.to, now), d => used.has(d));
@@ -593,7 +612,7 @@ ${edit(cap.enabled ? "改上限" : "设上限", act("/costs/cap", "保存", self
 ${panel("每天按用量的花费", html`${series.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : lineChart(days, series, usd, d => d.slice(5))}
 <p class="muted">鼠标停在某一天上,能看到那天每家花了多少。固定月费和语音包月不按天算,不在图里。</p>`)}
 <h2>按厂商</h2>
-<div class="vendors">${vendors.map(v => vendorCard(v, total, c, days, fly))}</div>
+<div class="vendors">${vendors.map(v => vendorCard(v, total, c, days, fly, statuses.find(s => s.key === v.key)))}</div>
 ${panel("每天明细", c.days.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : html`<details class="edit"><summary>展开每天的表</summary><div class="scroll"><table>
 <tr><th>日期</th><th class="num">AI 模型</th><th class="num">模型调用</th><th class="num">语音转文字</th><th class="num">识别时长</th>
 <th class="num">文字转语音(点数)</th><th class="num">当天合计</th></tr>${c.days.map(d => html`

@@ -80,11 +80,11 @@ const servers: ReturnType<typeof createAdminServer>[] = [];
 after(() => { for (const server of servers) server.close(); });
 
 interface Sent { method?: string; cookie?: string | null; host?: string; origin?: string; form?: Record<string, string>; body?: string; type?: string }
-async function start(returns: Returned = {}, failure?: unknown, fly?: FlyAccess) {
+async function start(returns: Returned = {}, failure?: unknown, fly?: FlyAccess, more: Partial<Parameters<typeof createAdminServer>[0]> = {}) {
   const { db, calls } = fakeDb(returns, failure);
   const errors: unknown[] = [];
   const server = createAdminServer({ db, token: TOKEN, catalog, timeZone: "UTC", now: () => new Date("2026-11-23T12:00:00Z"), onError: e => errors.push(e),
-    ...(fly === undefined ? {} : { fly }) });
+    ...(fly === undefined ? {} : { fly }), ...more } as Parameters<typeof createAdminServer>[0]);
   servers.push(server);
   const port = await new Promise<number>(resolve => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
   const send = (path: string, sent: Sent = {}) => new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string; raw: Buffer }>((resolve, reject) => {
@@ -325,6 +325,31 @@ it("shows a private chat only after a reason is given", async () => {
   assert.match(earlier.body, /已经是最早的消息[\s\S]*没有消息/);
   assert.match((await (await start({ chat_read: { ...fixtures.chat_read, chat: { ...fixtures.chat_read.chat, direct: false } } }))
     .send(`/chats/${CHAT}`, { form: { reason: "why" } })).body, /私聊:群聊/);
+});
+
+it("shows each model company: whether the API server has its key, and its balance", async () => {
+  const asked: [string, string][] = [];
+  const get = (async (url: string, init: RequestInit) => {
+    asked.push([url, (init.headers as Record<string, string>).Authorization!]);
+    if (url.endsWith("/secrets")) return Response.json({ secrets: [{ name: "CLAUDE_KEY", digest: "x", created_at: AT, updated_at: "2026-11-25T08:00:00Z" }] });
+    return Response.json({ is_available: false, balance_infos: [{ currency: "CNY", total_balance: "110.00", granted_balance: "10.00", topped_up_balance: "100.00" }] });
+  }) as typeof fetch;
+  const fly: FlyAccess = { token: "fly-ro", apps: ["the-api", "the-admin"], fetch: get };
+  const vendors = [{ key: "claude", keyEnv: "CLAUDE_KEY", apiKey: undefined }, { key: "other", keyEnv: "OTHER_KEY", apiKey: undefined },
+    { key: "deepseek", keyEnv: "DEEPSEEK_API_KEY", apiKey: "sk-console" }];
+  const page = (await (await start({}, undefined, fly, { vendors, fetch: get })).send("/models")).body;
+  assert.deepEqual(asked, [["https://api.machines.dev/v1/apps/the-api/secrets", "Bearer fly-ro"], ["https://api.deepseek.com/user/balance", "Bearer sk-console"]],
+    "only names of the API server's secrets; the balance with the console's own copy of the key");
+  assert.match(page, /<td>claude<\/td><td>Big、Small<\/td>\s*<td><span class="tag">已设置<\/span> <span class="muted">更新于 2026\/11\/25 08:00:00/);
+  assert.match(page, /<td><span class="tag bad">没有<\/span> <span class="muted">OTHER_KEY<\/span><\/td>/);
+  assert.match(page, /这家没有查余额的接口,去它的控制台看。/);
+  assert.match(page, /<b>¥110\.00<\/b> <span class="tag bad">余额不够,调用会失败<\/span> <span class="muted">\(其中赠送 ¥10\.00\)/);
+  const blind = (await (await start({}, undefined, undefined, { vendors })).send("/models")).body;
+  assert.match(blind, /看不到:后台没有 Fly 只读令牌/);
+  const noCopy = (await (await start({}, undefined, fly, { vendors: [{ ...vendors[2]!, apiKey: undefined }], fetch: get })).send("/models")).body;
+  assert.match(noCopy, /后台没有这家的 Key\(DEEPSEEK_API_KEY\),查不了余额。/);
+  const broken = (await (await start({}, undefined, fly, { vendors, fetch: (async () => new Response("no", { status: 401 })) as typeof fetch })).send("/models")).body;
+  assert.match(broken, /读不到余额:DeepSeek 回答 401/);
 });
 
 it("shows model switches and the quota, and changes only what the catalog names", async () => {
