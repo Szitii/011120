@@ -386,6 +386,8 @@ it("shows model switches and the quota, and changes only what the catalog names"
     ["/models/wallet", change({ enabled: "on", welcome: "x", rate: "10", floor: "200" })],
     ["/models/credit", change({ owner: "nobody", credits: "100" })], ["/models/credit", change({ owner: OWNER_ID, credits: "0" })],
     ["/models/credit", change({ owner: OWNER_ID, credits: "1.5" })],
+    ["/models/welcome", change({ welcome: "1000" })], ["/models/welcome", change({ enabled: "on", welcome: "0" })],
+    ["/models/welcome", change({ enabled: "on" })],
   ] as const) assert.equal((await send(path, { form })).status, 409, `${path} ${JSON.stringify(form)}`);
   assert.deepEqual(calls, []);
   await send("/costs/cap", { form: change({ enabled: "off", dollars: "25" }) });
@@ -393,6 +395,15 @@ it("shows model switches and the quota, and changes only what the catalog names"
   await send("/models/credit", { form: change({ owner: OWNER_ID, credits: "-50" }) });
   assert.deepEqual(calls, [["spend_cap_set", false, 2500, "because"], ["wallet_policy_set", true, 500, 10, 0, "because"],
     ["wallet_adjust", OWNER_ID, -50, "because"]]);
+  calls.length = 0;
+  // The gift alone: the wallet's other rules are read and kept.
+  await send("/models/welcome", { form: change({ enabled: "off", welcome: "1000" }) });
+  await send("/models/welcome", { form: change({ enabled: "on", welcome: "300" }) });
+  assert.deepEqual(calls, [["models"], ["wallet_policy_set", false, 0, 10, 200, "because"], ["models"], ["wallet_policy_set", false, 300, 10, 200, "because"]]);
+  assert.match(page.body, /新人送积分<\/div><div class="big">开<\/div>\s*<div class="muted">每个新主人 1,000 积分\(钱包关着,暂时不送\)/);
+  const noGift = await (await start({ models: { ...fixtures.models, wallet: { ...fixtures.models.wallet, welcomeCredits: 0 } } })).send("/models");
+  assert.match(noGift.body, /现在:关,新主人不送积分。/);
+  assert.match(noGift.body, /<summary>打开<\/summary>[\s\S]*name="welcome" type="number" min="1" max="100000000" value="1000"/);
 });
 
 it("pages through the log, for everyone or one Owner", async () => {

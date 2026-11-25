@@ -222,6 +222,13 @@ export function createAdminServer(options: AdminServerOptions): Server {
       if ((form.enabled !== "on" && form.enabled !== "off") || !/^\d{1,8}$/.test(form.welcome ?? "")
         || !/^[1-9]\d{0,5}$/.test(form.rate ?? "") || !/^\d{1,8}$/.test(form.floor ?? "")) throw new AdminRefusal("请选择开关,数量要填整数(每分积分至少 1)。");
       await db.call("wallet_policy_set", form.enabled === "on", Number(form.welcome), Number(form.rate), Number(form.floor), reason);
+    } else if (path === "/models/welcome") {
+      // The gift on or off: off is a gift of 0; the other wallet rules stay as they are.
+      if ((form.enabled !== "on" && form.enabled !== "off") || (form.enabled === "on" && !/^[1-9]\d{0,7}$/.test(form.welcome ?? ""))) {
+        throw new AdminRefusal("请选择开还是关;打开时要填送多少积分(正整数)。");
+      }
+      const w = (await db.call<Models>("models")).wallet;
+      await db.call("wallet_policy_set", w.enabled, form.enabled === "on" ? Number(form.welcome) : 0, w.creditsPerCent, w.backgroundFloor, reason);
     } else if (path === "/models/credit") {
       if (!ROUTES.uuid.test(form.owner ?? "") || !/^-?[1-9]\d{0,7}$/.test(form.credits ?? "")) throw new AdminRefusal("请填主人编号和不为 0 的整数积分。");
       await db.call("wallet_adjust", form.owner, Number(form.credits), reason);
