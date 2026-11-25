@@ -24,6 +24,7 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET|PUT /v0/companions/{id}/persona                who it is and how it talks, as the Owner wrote it
  *   GET    /v0/features                                what the app may offer (group chats, connections)
  *   GET    /v0/wallet                                  the Owner's credits for platform models
  *   GET|POST /v0/companions/{id}/agent-keys             keys for the Owner's own agent to check in (agent/heartbeat.ts)
@@ -36,7 +37,7 @@
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
-import { hasCredential } from "../companion-import/policy.ts";
+import { hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
@@ -44,7 +45,8 @@ import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
-import type { ConnectionInput, ConnectionSaveResult, CompanionConnection } from "../../../contracts/chat.ts";
+import type { CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal } from "../../../contracts/chat.ts";
+import { PERSONA_CHARS, PERSONA_KEYS, personaTexts, type PersonaKey } from "./prompt.ts";
 import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 import { RECORDING_TYPES, type Heard, type RecordingType, type Voices } from "./voices.ts";
@@ -74,6 +76,35 @@ function body(request: MvpHttpRequest, allowed: readonly string[]): Record<strin
     || !value || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value).some(key => !allowed.includes(key))) return invalid();
   return value as Record<string, unknown>;
+}
+
+/** The stored persona as the Owner reads and edits it: each field one text, as the models are told it. */
+function personaView(stored: unknown): CompanionPersona {
+  const { companionId, displayName, version, document, updatedAt } = stored as Omit<CompanionPersona, PersonaKey> & { document: unknown };
+  return { companionId, displayName, version, updatedAt, ...personaTexts(document) };
+}
+
+/**
+ * Why a persona text cannot be kept, or null. The same scan an imported card gets: the text goes to
+ * the model with every reply, and the Owner may copy it to the public profile.
+ */
+function personaRefusal(text: string): PersonaRefusal["reason"] | null {
+  return hasCredential(text) ? "CREDENTIAL" : hasPromptInjection(text) ? "INSTRUCTION" : hasActiveContent(text) ? "LINK"
+    : hasPii(text) ? "PRIVATE_DATA" : null;
+}
+
+/** PUT persona: the version the Owner was looking at, and at least one field (a text of up to 600 characters, "" takes it out). */
+function personaInput(request: MvpHttpRequest): { version: number; fields: Partial<Record<PersonaKey, string>> } {
+  const input = body(request, ["version", ...PERSONA_KEYS]);
+  const fields: Partial<Record<PersonaKey, string>> = {};
+  for (const key of PERSONA_KEYS) {
+    const value = input[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || Array.from(value.trim()).length > PERSONA_CHARS) return invalid();
+    fields[key] = value.trim();
+  }
+  if (!Number.isSafeInteger(input.version) || (input.version as number) < 1 || Object.keys(fields).length === 0) return invalid();
+  return { version: input.version as number, fields };
 }
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
@@ -233,6 +264,7 @@ export async function handleChatRequest(
   const featuresRoute = path[1] === "features" && path.length === 2;
   const walletRoute = path[1] === "wallet" && path.length === 2;
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
+  const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
   const agentKeysRoute = path[1] === "companions" && path[3] === "agent-keys" && (path.length === 4 || path.length === 5);
@@ -240,7 +272,7 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, memoriesRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
+    badgesRoute, featuresRoute, walletRoute, memoriesRoute, personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
@@ -357,6 +389,17 @@ export async function handleChatRequest(
     const memory = text(body(request, ["body"]).body, 500);
     if (hasCredential(memory)) return invalid();
     return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
+  }
+  if (personaRoute) {
+    const companionId = id(path[2]);
+    if (method === "GET") return response(200, personaView(await port.persona(companionId)));
+    if (method !== "PUT") return notFound();
+    const { version, fields } = personaInput(request);
+    for (const key of PERSONA_KEYS) {
+      const reason = personaRefusal(fields[key] ?? "");
+      if (reason !== null) return response(422, { code: "PERSONA_REFUSED", field: key, reason } satisfies PersonaRefusal);
+    }
+    return response(200, personaView(await port.savePersona(companionId, version, fields)));
   }
   if (diaryRoute) {
     const companionId = id(path[2]);

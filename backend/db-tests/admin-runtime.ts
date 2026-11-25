@@ -466,6 +466,42 @@ try {
   assert.ok((await web(`/log?owner=${target.owner}`)).body.includes("Console suspension"));
   passed("the console pages work end to end as an operator: reports, Owners, Companions, content, chats, models, costs and the log");
 
+  // ---- 家机说明: an operator rewords a block of what the models are told; the API server reads it ----
+  const server = new PostgresChatAdapter(viewer);
+  assert.deepEqual(await server.promptTexts(), {});
+  assert.deepEqual(await admin(one, "prompts"), {});
+  assert.ok((await web("/prompts")).body.includes("现在有 0 / 7 段改过"));
+  assert.equal((await web("/prompts/set", why("Console wording", { key: "CHAT_VOICE", body: "- 没有标记。" }))).status, 409, "a wording without its mark is not saved");
+  assert.equal((await web("/prompts/set", why("Console wording", { key: "CHAT_TIME", body: "- 留意现在几点。\r\n" }))).status, 303);
+  assert.deepEqual(await server.promptTexts(), { CHAT_TIME: "- 留意现在几点。" }, "the API server reads it from the next call on");
+  assert.ok((await web("/prompts")).body.includes("现在有 1 / 7 段改过"));
+  await admin(two, "prompt_set", "CHAT_TIME", "- 第二版。", "Second wording");
+  assert.equal((await admin(one, "prompts")).CHAT_TIME.body, "- 第二版。");
+  await assert.rejects(admin(two, "prompt_set", "CHAT_TIME", "- x", " "), code("22023"));
+  await assert.rejects(admin(two, "prompt_set", "chat_time", "- x", "Not a key"), code("23514"));
+  await assert.rejects(admin(two, "prompt_set", "CHAT_TIME", "字".repeat(1001), "Too long"), code("23514"));
+  assert.deepEqual(await server.promptTexts(), { CHAT_TIME: "- 第二版。" }, "a refused change leaves the wording as it was");
+  assert.equal((await web("/prompts/set", why("Console wording back", { key: "CHAT_TIME", restore: "yes" }))).status, 303);
+  assert.deepEqual(await server.promptTexts(), {});
+  assert.equal((await web("/prompts/set", why("Console wording back", { key: "CHAT_TIME", restore: "yes" }))).status, 409, "nothing to go back from");
+  assert.deepEqual((await pool.query("select operator, reason, detail from companion_private.admin_log where action = 'PROMPT_SET' order by id desc limit 3")).rows.reverse(), [
+    { operator: "admin_test_one", reason: "Console wording", detail: { before: null, body: "- 留意现在几点。" } },
+    { operator: "admin_test_two", reason: "Second wording", detail: { before: "- 留意现在几点。", body: "- 第二版。" } },
+    { operator: "admin_test_one", reason: "Console wording back", detail: { before: "- 第二版。", body: null } },
+  ], "every change is logged with the wording before and after");
+  assert.ok((await web("/log")).body.includes("修改家机说明"));
+  // An app user reaches neither the wording nor the way to change it.
+  const user = await pool.connect();
+  try {
+    await user.query("begin"); await user.query("set local role authenticated");
+    for (const sql of ["select public.prompt_texts()", "select * from companion_private.prompt_texts", "select companion_admin.prompt_set('CHAT_TIME', 'x', 'self-service')"]) {
+      await user.query("savepoint s");
+      await assert.rejects(user.query(sql), code("42501"), sql);
+      await user.query("rollback to savepoint s");
+    }
+  } finally { await user.query("rollback"); user.release(); }
+  passed("an operator rewords what the models are told, with a reason and a before-and-after in the log; the API server reads it, app users cannot");
+
   // Leave the shared database as other suites expect it.
   await pool.query("update public.community_posts set deleted_at = coalesce(deleted_at, now()) where id = any($1)", [[first, second]]);
   console.log(`Admin PostgreSQL integration passed: ${groups} scenario groups.`);
@@ -474,6 +510,7 @@ try {
   await new Promise<void>(resolve => consoleServer ? consoleServer.close(() => resolve()) : resolve());
   await consolePool.end().catch(() => undefined);
   await pool.query("delete from companion_private.chats where id = any($1)", [[chatId, consoleChat]]).catch(() => undefined);
+  await pool.query("delete from companion_private.prompt_texts").catch(() => undefined);
   await pool.query("update public.social_twins set status = 'ACTIVE' where id = $1", [twinB]).catch(() => undefined);
   await pool.query("update companion_private.chat_quota set daily_calls = $1, daily_cost_minor = $2", [quotaBefore.dailyCalls, quotaBefore.dailyCostMinor]).catch(() => undefined);
   await Promise.all(operators.map(client => client.end().catch(() => undefined)));

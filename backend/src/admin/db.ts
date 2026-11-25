@@ -8,7 +8,7 @@ import type pg from "pg";
 export type AdminFunction = "reports" | "report_resolve" | "owners" | "owner_detail" | "owner_suspend" | "twin_suspend"
   | "content_remove" | "content_restore" | "chats" | "chat_read" | "models" | "model_switch_set" | "chat_quota_set"
   | "spend" | "log" | "features" | "feature_set" | "spend_cap_set" | "wallet_policy_set" | "wallet_adjust"
-  | "costs" | "fixed_cost_set" | "voice_prices_set" | "activity" | "system";
+  | "costs" | "fixed_cost_set" | "voice_prices_set" | "activity" | "system" | "prompts" | "prompt_set";
 
 export interface AdminDb {
   /** Calls one console function and returns its JSON (undefined for the ones that return nothing). */
@@ -36,6 +36,7 @@ const KNOWN: readonly (readonly [RegExp, string])[] = [
   [/^unknown feature$/, "没有这个功能开关。"],
   [/^fixed cost not found$/, "没有这个固定月费项目。"],
   [/^credits must be a non-zero whole number$/, "积分要填不为 0 的整数。"],
+  [/^already the built-in wording$/, "这一段现在用的已经是内置文字。"],
   [/^permission denied/, "这个数据库账号没有管理权限(需要属于 companion_admin)。"],
 ];
 // SQLSTATEs that mean "refused, nothing happened": what the console functions raise on purpose

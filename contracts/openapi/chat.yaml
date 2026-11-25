@@ -769,6 +769,71 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /companions/{companionId}/persona:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: getPersona
+      summary: Who the Companion is and how it talks, as its Owner wrote it
+      description: |
+        The persona is sent to the model with every reply, diary entry and post, above the
+        platform's own rules. Each field is one text ("" when the Companion has none), no longer
+        than the 600 characters the models are told.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The persona
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionPersona'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    put:
+      operationId: savePersona
+      summary: Rewrite persona fields; used from the next reply on
+      description: |
+        Only the fields sent are changed; "" takes a field out. The name is not changed here.
+        Every change is a new version; `version` must be the current one (409 otherwise: read
+        again). 409 too after 30 changes in an hour. The texts are scanned like an imported card:
+        422 names the field and why, and nothing is saved.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              additionalProperties: false
+              minProperties: 2
+              properties:
+                version: {type: integer, minimum: 1}
+                identitySummary: {type: string, maxLength: 600}
+                personaTraits: {type: string, maxLength: 600}
+                speakingStyle: {type: string, maxLength: 600}
+                values: {type: string, maxLength: 600}
+                boundaries: {type: string, maxLength: 600}
+                aspirations: {type: string, maxLength: 600}
+      responses:
+        '200':
+          description: The persona as saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionPersona'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: A field holds something that may not be kept; nothing was saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PersonaRefusal'}
   /companions/{companionId}/memories/{memoryId}:
     parameters:
     - name: companionId
@@ -1214,6 +1279,30 @@ components:
           enum: [IMPORT, OWNER, AUTO]
           description: 'IMPORT: approved from a card. OWNER: added by hand. AUTO: noted down by the Companion itself (autoMemory).'
         createdAt: {type: string, format: date-time}
+    CompanionPersona:
+      type: object
+      required: [companionId, displayName, version, updatedAt, identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations]
+      properties:
+        companionId: {type: string, format: uuid}
+        displayName: {type: string}
+        version: {type: integer, description: Goes up by one with every change; send it back on PUT}
+        updatedAt: {type: string, format: date-time}
+        identitySummary: {type: string, description: 简介}
+        personaTraits: {type: string, description: 性格}
+        speakingStyle: {type: string, description: 说话风格}
+        values: {type: string, description: 在意的事}
+        boundaries: {type: string, description: 边界}
+        aspirations: {type: string, description: 向往}
+    PersonaRefusal:
+      type: object
+      required: [code, field, reason]
+      properties:
+        code: {type: string, enum: [PERSONA_REFUSED]}
+        field: {type: string, enum: [identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations]}
+        reason:
+          type: string
+          enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]
+          description: 'CREDENTIAL: a key or password. PRIVATE_DATA: an e-mail address or phone number (a long run of digits too). INSTRUCTION: reads as an order to ignore the rules. LINK: a web address or page code.'
     CompanionConnection:
       type: object
       required: [kind, provider, baseUrl, model, name, keyHint, connectedAt]

@@ -119,24 +119,24 @@ it("tells the model what time it is, how long the talk paused and what to call t
     said("在吗", "2026-11-26T02:50:00Z"), said("怎么不理我", "2026-11-26T02:52:00Z"),
   ] });
   const now = new Date("2026-11-26T02:52:30Z");
-  const { system, user } = replyPrompt(night, [], now);
+  const { system, user } = replyPrompt(night, [], {}, now);
   assert.match(user, /^现在你在和主人一对一私聊。\n现在是 2026年11月26日 周四 10:52。\n\n聊天记录/);
   assert.match(user, /—— 11月25日 周三 23:40 ——\n【主人】我去睡了\n【小光】晚安\n—— 11月26日 周四 10:50，隔了 11 小时 ——\n【主人】在吗\n【主人】怎么不理我\n\n/);
   assert.match(system, /- 你叫主人「阿澈」。\n/);
   assert.match(system, /「—— ——」中间的是时间/);
   assert.doesNotMatch(replyPrompt(turn()).system, /你叫主人/, "no name known: nothing is said about it");
   // The turn is written long after the last message (a retry, say): the model is told.
-  assert.match(replyPrompt(night, [], new Date("2026-11-26T04:22:00Z")).user, /现在是 2026年11月26日 周四 12:22。最后一条消息是 2 小时前的。\n/);
+  assert.match(replyPrompt(night, [], {}, new Date("2026-11-26T04:22:00Z")).user, /现在是 2026年11月26日 周四 12:22。最后一条消息是 2 小时前的。\n/);
   // Minutes, hours and days; a new day gets a time line even without a pause; the Owner's own zone.
   const days = turn({ timeZone: "America/New_York", history: [
     said("a", "2026-11-20T04:50:00Z"), said("b", "2026-11-20T05:05:00Z"), said("c", "2026-11-20T05:50:00Z"), said("d", "2026-11-23T05:50:00Z"),
   ] });
-  assert.match(replyPrompt(days, [], now).user,
+  assert.match(replyPrompt(days, [], {}, now).user,
     /—— 11月19日 周四 23:50 ——\n【主人】a\n—— 11月20日 周五 00:05 ——\n【主人】b\n—— 11月20日 周五 00:50，隔了 45 分钟 ——\n【主人】c\n—— 11月23日 周一 00:50，隔了 3 天 ——\n【主人】d/);
-  assert.match(replyPrompt({ ...night, timeZone: "Mars/Olympus" }, [], now).user, /现在是 2026年11月26日 周四 10:52。/, "an unknown zone reads as Asia/Shanghai");
+  assert.match(replyPrompt({ ...night, timeZone: "Mars/Olympus" }, [], {}, now).user, /现在是 2026年11月26日 周四 10:52。/, "an unknown zone reads as Asia/Shanghai");
   assert.match(decisionPrompt(night).user, /—— 11月26日 周四 10:50，隔了 11 小时 ——/);
   // An Owner's own agent gets the time in its rules and before the message that came after a pause.
-  const agent = agentMessages(night, now);
+  const agent = agentMessages(night, {}, now);
   assert.match(agent[0]!.content, /现在是 2026年11月26日 周四 10:52。别人的消息开头方括号里的是那条消息的时间。\n主人希望你叫 TA「阿澈」。/);
   assert.deepEqual(agent.slice(1).map(m => m.content), ["[11月25日 周三 23:40] 我去睡了", "晚安", "[11月26日 周四 10:50，隔了 11 小时] 在吗", "怎么不理我"]);
   assert.deepEqual(parseReply("—— 11月26日 周四 10:52 ——\n[11月26日 周四 10:52，隔了 9 小时] 小光：早呀\n——好吧——", "小光"),
@@ -163,7 +163,7 @@ it("asks for what is worth remembering and reads the notes back", () => {
   const { system, user } = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai",
     memories: ["主人喜欢乌龙茶\napi_key: sk-abcdefghijklmnopqrstu"],
     messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T02:00:00Z" },
-      { companionId: me, body: "记下啦", action: null, sentAt: "2026-11-25T02:00:05Z" }] }, new Date("2026-11-25T03:00:00Z"));
+      { companionId: me, body: "记下啦", action: null, sentAt: "2026-11-25T02:00:05Z" }] }, {}, new Date("2026-11-25T03:00:00Z"));
   assert.match(system, /你在帮「小光」（主人的 AI 伴侣）整理长期记忆/);
   assert.match(system, new RegExp(`只输出 \\${PASS.slice(0, -1)}`));
   assert.match(user, /^现在是 2026年11月25日 周三 11:00。\n\n已经记过的：\n- 主人喜欢乌龙茶 \[REDACTED_CREDENTIAL\]\n\n聊天记录/);
