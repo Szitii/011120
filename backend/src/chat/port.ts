@@ -137,6 +137,10 @@ export interface ChatPort {
   settings(companionId: string): Promise<unknown>;
   /** Every memory of the Companion, newest first ({ items }). */
   memories(companionId: string): Promise<unknown>;
+  /** The Companion's persona as stored: {companionId, displayName, version, document, updatedAt}. */
+  persona(companionId: string): Promise<unknown>;
+  /** Server only (the texts are scanned first): a new persona version with these fields replaced ("" takes one out). */
+  savePersona(companionId: string, version: number, fields: Readonly<Record<string, string>>): Promise<unknown>;
   addMemory(companionId: string, body: string, keyHash: string): Promise<unknown>;
   deleteMemory(companionId: string, memoryId: string): Promise<unknown>;
   /** How the Companion speaks, without the secret. */
@@ -180,6 +184,8 @@ export interface ChatPort {
   settle(transactionId: string, inputTokens: number, outputTokens: number, costMinor: number, ok: boolean): Promise<void>;
   /** Whether each provider/model is switched on, in order. */
   modelsEnabled(models: readonly { provider: string; model: string }[]): Promise<boolean[]>;
+  /** Server only: the operators' own wording of the rules a model is told, as {key: text} (prompt-texts.ts). */
+  promptTexts(): Promise<unknown>;
   /** A page of the Companion's diary, newest first. */
   diary(companionId: string, beforeAt: string | null, beforeId: string | null): Promise<unknown>;
   deleteDiary(companionId: string, entryId: string): Promise<unknown>;

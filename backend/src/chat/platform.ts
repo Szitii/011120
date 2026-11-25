@@ -12,6 +12,7 @@ import type { CatalogModel, ChatCatalog } from "./models.ts";
 import { PRICING_VERSION } from "./models.ts";
 import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob, ReservationDecision } from "./port.ts";
 import { decisionPrompt, diaryPrompt, memoryPrompt, parseDecision, parseMemories, parsePost, parseReply, postPrompt, replyPrompt } from "./prompt.ts";
+import { usablePromptTexts, type PromptTexts } from "./prompt-texts.ts";
 import type { CallModel, ModelResult } from "./providers.ts";
 import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer } from "./replies.ts";
 
@@ -35,6 +36,19 @@ export async function memoriesOf(port: ChatPort, companionId: string): Promise<s
   return (list.items ?? []).flatMap(memory => (typeof memory.body === "string" ? [memory.body] : []));
 }
 
+/**
+ * The operators' own wording of the rules (admin console, 家机说明). When it cannot be read (a
+ * database not yet migrated, a failed query) the built-in wording is used: a reply is worth more
+ * than the rewording.
+ */
+export async function textsOf(port: ChatPort): Promise<PromptTexts> {
+  try {
+    return usablePromptTexts(await port.promptTexts());
+  } catch {
+    return {};
+  }
+}
+
 export class PlatformChatModel implements ChatModel {
   readonly #catalog: ChatCatalog;
   readonly #call: CallModel;
@@ -56,7 +70,7 @@ export class PlatformChatModel implements ChatModel {
       const quiet = "failed" in decided ? decided.failed !== "DISABLED" : decided.refused || !parseDecision(decided.text);
       if (quiet) return { pass: true };
     }
-    const prompt = replyPrompt(turn, await memoriesOf(port, turn.companion.companionId));
+    const prompt = replyPrompt(turn, await memoriesOf(port, turn.companion.companionId), await textsOf(port));
     const result = await this.#withFallback(model, m => this.#run(port, book("REPLY"), m, prompt, REPLY_TOKENS, signal));
     if ("failed" in result) return result;
     if (result.refused) return { refused: true };
@@ -64,7 +78,7 @@ export class PlatformChatModel implements ChatModel {
   }
 
   async diary(job: DiaryJob, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer> {
-    const prompt = diaryPrompt(job, await memoriesOf(port, job.companion.companionId));
+    const prompt = diaryPrompt(job, await memoriesOf(port, job.companion.companionId), await textsOf(port));
     const result = await this.#write(job.companion.settings.model, port, booking => port.diaryReserve(job.entryId, job.claimId, booking),
       prompt, DIARY_TOKENS, signal);
     if ("failed" in result) return result;
@@ -73,7 +87,7 @@ export class PlatformChatModel implements ChatModel {
 
   async post(job: PostJob, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer> {
     const result = await this.#write(job.companion.settings.model, port, booking => port.postReserve(job.runId, job.claimId, booking),
-      postPrompt(job), POST_TOKENS, signal);
+      postPrompt(job, await textsOf(port)), POST_TOKENS, signal);
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : parsePost(result.text);
   }
@@ -83,8 +97,8 @@ export class PlatformChatModel implements ChatModel {
     const model = this.#catalog.decisionModel() ?? this.#catalog.defaultModel();
     if (model === undefined) return { failed: "UNAVAILABLE" };
     const book: Book = booking => port.memoryReserve(job.companion.companionId, job.claimId, booking);
-    const result = await this.#withFallback(model,
-      m => this.#run(port, book, m, memoryPrompt(job), MEMORY_TOKENS, signal, MEMORY_INPUT_TOKENS));
+    const prompt = memoryPrompt(job, await textsOf(port));
+    const result = await this.#withFallback(model, m => this.#run(port, book, m, prompt, MEMORY_TOKENS, signal, MEMORY_INPUT_TOKENS));
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : { memories: parseMemories(result.text) };
   }

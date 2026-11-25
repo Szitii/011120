@@ -21,10 +21,11 @@ import { timingSafeEqual } from "node:crypto";
 import { AdminRefusal, type AdminDb } from "./db.ts";
 import { hosts, type FlyAccess } from "./fly.ts";
 import { vendorStatus, type VendorKey } from "./vendors.ts";
+import { promptBlock, promptTextRefusal, tidyPromptText } from "../chat/prompt-texts.ts";
 import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
-import { chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
-  type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue,
+import { chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
+  type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue, type SavedPrompts,
   type Feature } from "./pages.ts";
 
 /** On the tailnet: the console's machine name, and each allowed Tailscale login with their own database login. */
@@ -191,6 +192,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
         ? await Promise.all([db.call<Models>("models").then(m => m.cap), hosts(options.fly ?? null), vendorsNow()]) : [null, null, []];
       return costsPage(zone, now(), costs, cap, done, fly, vendors);
     }
+    if (path === "/prompts") return promptsPage(zone, now(), await db.call<SavedPrompts>("prompts"), done);
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
       const owner = ROUTES.uuid.test(query.get("owner") ?? "") ? query.get("owner") : null;
@@ -251,6 +253,14 @@ export function createAdminServer(options: AdminServerOptions): Server {
         throw new AdminRefusal("点数要填整数,单价填美元(最多四位小数)。");
       }
       await db.call("voice_prices_set", Number(form.points), cents(form.speak!), cents(form.hear!), reason);
+    } else if (path === "/prompts/set") {
+      // The same check the API server makes before using a wording: nothing is saved that it would ignore.
+      const block = promptBlock(form.key ?? "");
+      if (block === undefined) throw new AdminRefusal("没有这一段说明。");
+      const body = form.restore === "yes" ? null : tidyPromptText(form.body ?? "");
+      const refused = body === null ? null : promptTextRefusal(block, body);
+      if (refused !== null) throw new AdminRefusal(refused);
+      await db.call("prompt_set", block.key, body, reason);
     } else if (path === "/models/quota") {
       if (!/^\d{1,6}$/.test(form.calls ?? "") || !/^\d{1,9}$/.test(form.cents ?? "")) throw new AdminRefusal("次数和金额要填整数。");
       await db.call("chat_quota_set", Number(form.calls), Number(form.cents), reason);

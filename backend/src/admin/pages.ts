@@ -3,6 +3,9 @@
  * database goes through `html`, which escapes it; only values built by `html` itself are trusted.
  */
 
+import type { ChatClaim } from "../chat/port.ts";
+import { agentMessages, decisionPrompt, diaryPrompt, memoryPrompt, postPrompt, replyPrompt } from "../chat/prompt.ts";
+import { PROMPT_BLOCKS, PROMPT_TEXT_MAX, promptTextRefusal, usablePromptTexts, type PromptBlock, type PromptTexts } from "../chat/prompt-texts.ts";
 import { flyMonthCents, machineCents, volumeCents, type Hosts } from "./fly.ts";
 import type { Balance, VendorStatus } from "./vendors.ts";
 
@@ -114,12 +117,13 @@ const SOURCES: Readonly<Record<string, string>> = {
 const TARGETS: Readonly<Record<string, string>> = {
   ACTOR: "账号", POST: "帖子", COMMENT: "评论", OWNER: "主人", SOCIAL_TWIN: "家机", REPORT: "举报", CHAT: "会话",
   CHAT_QUOTA: "每日额度", ALL: "全部模型", PROVIDER: "厂商", MODEL: "模型", FIXED_COST: "固定月费", VOICE_PRICES: "语音单价",
+  PROMPT: "家机说明",
 };
 const ACTIONS: Readonly<Record<string, string>> = {
   REMOVE_POST: "移除帖子", REMOVE_COMMENT: "移除评论", RESTORE_POST: "恢复帖子", RESTORE_COMMENT: "恢复评论",
   SUSPEND_TWIN: "停用家机", RESTORE_TWIN: "恢复家机", SUSPEND_OWNER: "封禁主人", RESTORE_OWNER: "解封主人",
   RESOLVE_REPORT: "处理举报", MODEL_SWITCH: "模型开关", CHAT_QUOTA: "每日额度", READ_CHAT: "查看私聊",
-  FIXED_COST: "固定月费", VOICE_PRICES: "语音单价",
+  FIXED_COST: "固定月费", VOICE_PRICES: "语音单价", PROMPT_SET: "修改家机说明",
 };
 const MESSAGE_STATUS: Readonly<Record<string, string>> = {
   PENDING: "(正在回复)", FAILED: "(回复失败)", BLOCKED: "(被安全扫描拦下)", PASSED: "(选择不说话)",
@@ -164,6 +168,9 @@ form.sw{display:inline-flex;align-items:center;gap:8px;margin:0;vertical-align:m
 button.switch,button.switch:hover{position:relative;width:46px;height:28px;padding:0;border:0;border-radius:14px;background:#d1d5db;flex:none;transition:background .2s}
 button.switch::after{content:"";position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:left .2s}
 button.switch.on,button.switch.on:hover{background:#34c759}button.switch.on::after{left:20px}button.switch:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+textarea{font:inherit;line-height:1.6;width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;resize:vertical}
+pre.fixed{color:#6b7280}.own{border:1px solid #f5c26b;background:#fffbeb;border-radius:8px;padding:8px 12px;margin:8px 0}.own.off{border-color:#f1b0b0;background:#fef2f2}
+.own>b{margin-right:8px}
 details.edit{margin-top:12px;padding-top:8px;border-top:1px dashed #e5e7eb}details.edit>summary{cursor:pointer;color:#2563eb;width:max-content}
 .muted{color:#6b7280}.tag{display:inline-block;padding:0 8px;border-radius:999px;background:#eef0f3;font-size:13px}
 .bad{background:#fde8e8;color:#b42318}.ok{background:#e6f4ea;border:1px solid #b7dfc3;padding:8px 12px;border-radius:8px}
@@ -188,7 +195,7 @@ table.lines td:first-child{white-space:normal;word-break:break-word}table.lines 
 .sub{margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}svg.spark{width:100%;height:36px;display:block;margin:4px 0}`;
 
 const NAV: readonly (readonly [string, string])[] = [["/reports", "举报"], ["/owners", "用户与聊天"], ["/stats", "运营数据"], ["/costs", "花费"],
-  ["/system", "系统"], ["/models", "模型与额度"], ["/log", "操作日志"]];
+  ["/system", "系统"], ["/models", "模型与额度"], ["/prompts", "家机说明"], ["/log", "操作日志"]];
 
 /** `tools` goes to the right of the title. */
 function page(title: string, at: string, body: Safe, done = false, tools: Safe | "" = ""): string {
@@ -788,6 +795,99 @@ ${panel(html`数据库(Supabase 免费版) <span class="muted links">${billingLi
 <p class="muted">免费版的限制:数据库 500 MB(满了只能读不能写)、每月流出流量 5 GB、文件存储 1 GB;
 连续 7 天没有任何请求,项目会被暂停。流量和文件存储只能在 <a href="https://supabase.com/dashboard">Supabase 控制台</a> 的 Usage 里看。</p>`)}`,
   false, fresh(zone, now, self));
+}
+
+// ---------- 家机说明: what a model is told, and the blocks the operators can reword ----------
+
+/** The saved wording of each reworded block, as companion_admin.prompts() returns it. */
+export type SavedPrompts = Readonly<Record<string, { body: string; updatedAt: string }>>;
+
+/** One model call as the console shows it: its rules, what goes with them, and which blocks are in the rules (in order). */
+interface PromptView {
+  readonly title: string; readonly when: string; readonly system: string; readonly user: string | null;
+  readonly blocks: readonly string[]; readonly editable: boolean;
+}
+
+/**
+ * Every prompt, written by the same code the API server runs, for a made-up Companion: one with a
+ * voice that may act, so every block is there. What an Owner fills in is marked (示例).
+ */
+function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] {
+  const at = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * 60_000).toISOString();
+  const companion: ChatClaim["companion"] = {
+    companionId: "sample", displayName: "小满",
+    identity: { identitySummary: "(示例)主人写的简介", personaTraits: "(示例)主人写的性格", speakingStyle: "(示例)主人写的说话风格" },
+    settings: { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: "sample", revision: 1 },
+  };
+  const said = (companionId: string | null, body: string, minutesAgo: number) =>
+    ({ companionId, body, action: null, mentions: [], sentAt: at(minutesAgo) });
+  const history = [said(null, "(示例)主人昨晚说的话", 600), said("sample", "(示例)小满的回答", 599), said(null, "(示例)主人刚发的消息", 1)];
+  const turn: ChatClaim = { chatId: "sample", replyId: "sample", claimId: "sample", replyTo: "OWNER", optional: false, direct: true, canAct: true,
+    companion, members: [{ companionId: "sample", displayName: "小满" }], history, timeZone: zone, ownerName: "(示例)称呼" };
+  const memories = ["(示例)主人记下的、或自动记忆记下的一件事"];
+  const group = { ...turn, direct: false, optional: true, canAct: false, members: [...turn.members, { companionId: "other", displayName: "(示例)另一位家机" }] };
+  return [
+    { title: "聊天回复", when: "主人发来消息、家机要回复的时候。平台的模型和主人自带 Key 的模型都用这一份。", editable: true,
+      blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now) },
+    { title: "写日记", when: "家机写日记的时候。", editable: true, blocks: ["DIARY_STYLE"],
+      ...diaryPrompt({ status: "WRITE", entryId: "sample", claimId: "sample", companion, messages: history, timeZone: zone, ownerName: turn.ownerName,
+        posts: [{ kind: "POST", body: "(示例)小满这几天发过的动态", at: at(300) }] }, memories, texts, now) },
+    { title: "发社区动态", when: "家机自己发动态的时候(主人打开了自动发帖)。这里不带记忆和私聊,因为写出来的东西是公开的。", editable: true, blocks: ["POST_STYLE"],
+      ...postPrompt({ status: "WRITE", runId: "sample", claimId: "sample", companion, localTime: "(示例)主人当地的时间",
+        own: [{ body: "(示例)小满最近发过的动态", at: at(300) }], others: [{ author: "(示例)别人", body: "(示例)社区里别人的动态", at: at(60) }] }, texts) },
+    { title: "自动记忆", when: "主人打开自动记忆以后,每聊够 10 条或 30 条消息,从私聊里挑出值得长期记住的事。", editable: true, blocks: ["MEMORY_WHAT"],
+      ...memoryPrompt({ status: "WRITE", claimId: "sample", companion, timeZone: zone, memories: ["(示例)已经记住的一件事"],
+        messages: [{ companionId: null, body: "(示例)主人说的话", action: null, sentAt: at(5) }] }, texts, now) },
+    { title: "主人自己接的 agent(自建家机)", editable: false, blocks: ["CHAT_VOICE", "CHAT_ACTION"], user: null,
+      when: "主人接了自己的 agent 的时候。它有自己的人设和记忆,我们只给它这几条规则。语音和动作两段和“聊天回复”是同一份,在上面改。",
+      system: agentMessages(turn, texts, now)[0]!.content },
+    { title: "群聊里要不要开口", when: "群聊里先让便宜的模型判断这位家机要不要说话,它只回答“是”或“否”。", editable: false, blocks: [], ...decisionPrompt(group) },
+  ];
+}
+
+/** A prompt's rules cut into what is fixed and the blocks that can be reworded, in the order they are written. */
+function cutPrompt(system: string, keys: readonly string[], texts: PromptTexts): (string | PromptBlock)[] {
+  const parts: (string | PromptBlock)[] = [];
+  let from = 0;
+  for (const block of PROMPT_BLOCKS.filter(b => keys.includes(b.key))) {
+    const text = texts[block.key] ?? block.text, found = system.indexOf(text, from);
+    if (found < 0) continue;
+    parts.push(system.slice(from, found), block);
+    from = found + text.length;
+  }
+  parts.push(system.slice(from));
+  // The line breaks around a block belong to the page's boxes, not to the text.
+  return parts.map(part => typeof part === "string" ? part.replace(/^\n|\n$/g, "") : part).filter(part => part !== "");
+}
+
+/** One block: what the models are told now, and (where it is edited) the forms to reword it or go back. */
+function promptBox(zone: string, block: PromptBlock, saved: SavedPrompts[string] | undefined, forms: boolean): Safe {
+  const refused = saved === undefined ? null : promptTextRefusal(block, saved.body);
+  const key = html`<input type="hidden" name="key" value="${block.key}">`;
+  return html`<div class="own ${refused === null ? "" : "off"}"><b>可以改:${block.title}</b>${saved === undefined ? html`<span class="tag">内置文字</span>`
+    : refused === null ? html`<span class="tag">已修改 · ${time(zone, saved.updatedAt)}</span>` : html`<span class="tag bad">改过的文字用不了,现在用的是内置文字</span>`}
+<pre>${saved !== undefined && refused === null ? saved.body : block.text}</pre>${!forms ? "" : html`
+${refused === null ? "" : html`<p class="err">${refused}</p>`}
+<p class="muted">用在:${block.where}。${block.marks.length === 0 ? "" : `必须保留「${block.marks.join("」和「")}」。`}${block.hint ?? ""}</p>
+${edit("修改这一段", act("/prompts/set", "保存", "/prompts", html`${key}
+<textarea name="body" required maxlength="${PROMPT_TEXT_MAX}" rows="${block.text.split("\n").length + 3}">${saved?.body ?? block.text}</textarea>`))}
+${saved === undefined ? "" : edit("恢复内置文字", html`<p class="muted">内置文字是:</p><pre>${block.text}</pre>
+${act("/prompts/set", "恢复内置文字", "/prompts", html`${key}<input type="hidden" name="restore" value="yes">`)}`)}`}</div>`;
+}
+
+export function promptsPage(zone: string, now: Date, saved: SavedPrompts, done: boolean): string {
+  const texts = usablePromptTexts(Object.fromEntries(Object.entries(saved).map(([key, row]) => [key, row.body])));
+  const changed = PROMPT_BLOCKS.filter(block => saved[block.key] !== undefined).length;
+  return page("家机说明", "/prompts", html`
+<p>这里是服务器每次请模型开口时写给它的说明,和线上用的是同一份代码生成的。<b>黄色框</b>里的段落可以改,保存后从下一条回复起生效;
+<span class="muted">灰色的部分是固定的</span>:回答的格式(服务器要照着读)、防止别人的话被当成指令、隐私和“不让主人离不开”的底线,这些要改得改代码。</p>
+<p class="muted">示例里的家机、人设、记忆和聊天是编的,只为了让你看到完整的样子;真实调用时,标着(示例)的位置填的是主人自己写的人设、称呼、记忆和真实的聊天记录。
+每次修改都记在<a href="/log">操作日志</a>里,带修改前和修改后的文字,想找回以前的版本去那里看。现在有 ${changed} / ${PROMPT_BLOCKS.length} 段改过。</p>
+${promptViews(zone, now, texts).map(view => panel(view.title, html`<p class="muted">${view.when}</p>
+${cutPrompt(view.system, view.blocks, texts).map(part => typeof part === "string" ? html`<pre class="fixed">${part}</pre>`
+    : promptBox(zone, part, saved[part.key], view.editable))}
+${view.user === null ? "" : html`<details class="edit"><summary>和这段说明一起发给模型的材料(示例)</summary><pre class="fixed">${view.user}</pre></details>`}`))}`,
+  done, fresh(zone, now, "/prompts"));
 }
 
 export function logPage(zone: string, log: LogPage, owner: string | null): string {

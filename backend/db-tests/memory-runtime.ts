@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool } from "../src/persistence/postgres/index.ts";
-import type { CompanionMemory, MemoryList } from "../../contracts/chat.ts";
+import type { CompanionMemory, CompanionPersona, MemoryList, PersonaRefusal } from "../../contracts/chat.ts";
 
 // Long-term memories (migration 0047): added by hand or approved one by one from an imported card.
 const connectionString = process.env.DATABASE_URL;
@@ -67,6 +67,51 @@ try {
     on i.id = c.current_identity_version_id where c.id = $1`, [remi]);
   assert.deepEqual(Object.keys(doc.rows[0]!.d).sort(), ["displayName", "identitySummary"], "memories stay out of the identity");
   passed("imported card: each memory approved on its own, blocked ones refused, kept out of the identity");
+
+  // ---- 家机说明: the Owner reads and rewrites the persona of the Companion just imported ----
+  const persona = `companions/${remi}/persona`;
+  const current = () => pool.query(`select i.identity_document d, i.created_by, i.version, i.display_name, i.source_manifest m, i.supersedes_identity_id s
+    from public.companions c join public.companion_identities i on i.id = c.current_identity_version_id where c.id = $1`, [remi]).then(r => r.rows[0]!);
+  const first = (await call<CompanionPersona>(0, persona)).data;
+  assert.deepEqual([first.version, first.displayName, first.identitySummary, first.speakingStyle, first.personaTraits], [1, "Remi", "Remembers small things.", "", ""]);
+  assert.equal((await call(1, persona)).status, 404, "another Owner's Companion");
+  assert.equal((await call(1, persona, "PUT", { version: 1, speakingStyle: "偷偷改" })).status, 404);
+  const edited = await call<CompanionPersona>(0, persona, "PUT", { version: 1, speakingStyle: " 短句，爱用语气词 ", personaTraits: "嘴硬心软\n记得小事" });
+  assert.deepEqual([edited.status, edited.data.version, edited.data.speakingStyle, edited.data.personaTraits, edited.data.identitySummary],
+    [200, 2, "短句，爱用语气词", "嘴硬心软\n记得小事", "Remembers small things."]);
+  const second = await current();
+  assert.deepEqual(second.d, { displayName: "Remi", identitySummary: "Remembers small things.", speakingStyle: "短句，爱用语气词", personaTraits: ["嘴硬心软\n记得小事"] },
+    "stored in the shapes an import gives; what was not sent stays");
+  assert.deepEqual([second.created_by, second.version, second.display_name, second.s !== null, second.m], ["OWNER", 2, "Remi", true,
+    { editedBy: "OWNER", basedOnVersion: 1, fields: ["personaTraits", "speakingStyle"] }]);
+  assert.equal((await call(0, persona, "PUT", { version: 1, values: "猫" })).status, 409, "a stale version: another device saved first");
+  assert.equal((await call<CompanionPersona>(0, persona, "PUT", { version: 2, speakingStyle: "短句，爱用语气词" })).data.version, 2, "nothing changed: no new version");
+  const cleared = await call<CompanionPersona>(0, persona, "PUT", { version: 2, personaTraits: "" });
+  assert.deepEqual([cleared.data.version, cleared.data.personaTraits, Object.keys((await current()).d).sort()], [3, "", ["displayName", "identitySummary", "speakingStyle"]]);
+  const refused = await call<PersonaRefusal>(0, persona, "PUT", { version: 3, values: "password: hunter2hunter2" });
+  assert.deepEqual([refused.status, refused.data], [422, { code: "PERSONA_REFUSED", field: "values", reason: "CREDENTIAL" }]);
+  assert.equal((await call(0, persona, "PUT", { version: 3, displayName: "Renamed" })).status, 400, "the name is not changed here");
+  assert.equal((await call<CompanionPersona>(0, persona)).data.version, 3, "a refused change saves nothing");
+  const roster = (await call<{ items: { companionId: string; identityVersion: number; approvedFields: string[] }[] }>(0, "companions")).data.items.find(c => c.companionId === remi)!;
+  assert.deepEqual([roster.identityVersion, roster.approvedFields], [3, ["displayName", "identitySummary", "speakingStyle"]], "the Companion list shows the new version");
+  assert.equal((await pool.query("select count(*)::int n from public.companion_identities where companion_id = $1", [remi])).rows[0]!.n, 3, "earlier versions stay");
+  assert.equal((await pool.query("select count(*)::int n from public.audit_events where companion_id = $1 and action = 'COMPANION_PERSONA_EDITED'", [remi])).rows[0]!.n, 2);
+  // At most 30 versions an hour: this Companion has 3, so 27 more go through.
+  for (let version = 3; version < 30; version += 1) {
+    assert.equal((await call(0, persona, "PUT", { version, values: `第 ${version} 版` })).status, 200, `version ${version}`);
+  }
+  assert.equal((await call(0, persona, "PUT", { version: 30, values: "再改一次" })).status, 409, "too many changes in an hour");
+  const forged = await pool.connect();
+  try {
+    await forged.query("begin");
+    await forged.query("set local role authenticated");
+    await forged.query(`select set_config('request.jwt.claim.sub', $1, true)`, [A.subject]);
+    await assert.rejects(forged.query("select public.persona_save($1, 30, '{\"values\":\"no scan\"}')", [remi]), /permission denied/);
+  } finally {
+    await forged.query("rollback");
+    forged.release();
+  }
+  passed("the Owner reads and rewrites a persona: a new version each time, scanned first, the name and other Owners' Companions untouched");
 
   // ---- delete and the limit ----
   assert.deepEqual((await call(0, `${path}/${added.data.id}`, "DELETE")).data, { deleted: true });

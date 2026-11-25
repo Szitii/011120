@@ -282,6 +282,54 @@ export interface CompanionMemory {
   createdAt: string;
 }
 
+/**
+ * 家机说明 (人设): who a Companion is and how it talks, as its Owner wrote it. Sent to the model with
+ * every reply, diary entry and post, above the platform's own rules. GET and PUT
+ * /v0/companions/{id}/persona. Each field is one text of up to 600 characters ("" when the
+ * Companion has none); a field from an imported card that was longer is shown cut to what the
+ * models are told. The name is not changed here.
+ */
+export interface CompanionPersona {
+  companionId: string;
+  displayName: string;
+  /** Goes up by one with every change; send it back on PUT. */
+  version: number;
+  /** When this version was saved. */
+  updatedAt: string;
+  /** 简介 */
+  identitySummary: string;
+  /** 性格 */
+  personaTraits: string;
+  /** 说话风格 */
+  speakingStyle: string;
+  /** 在意的事 */
+  values: string;
+  /** 边界 */
+  boundaries: string;
+  /** 向往 */
+  aspirations: string;
+}
+
+/**
+ * PUT /v0/companions/{id}/persona. `version` is the one from the last GET (409 when another device
+ * saved first: read again). Only the fields sent are changed; "" takes a field out. Answers the new
+ * CompanionPersona. 409 too when changed more than 30 times in an hour.
+ */
+export type PersonaInput = { version: number } & Partial<Pick<CompanionPersona,
+  "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations">>;
+
+/**
+ * 422 from PUT persona: one field holds something that may not be kept, and nothing was saved.
+ * CREDENTIAL: a key or password. PRIVATE_DATA: an e-mail address or a phone number (a long run of
+ * digits, a date written like 2026-12-03 too). INSTRUCTION: text that reads as an order to the
+ * model to ignore its rules. LINK: a web address or page code.
+ */
+export interface PersonaRefusal {
+  code: "PERSONA_REFUSED";
+  field: "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations";
+  reason: "CREDENTIAL" | "PRIVATE_DATA" | "INSTRUCTION" | "LINK";
+}
+
 /** GET /v0/companions/{id}/memories: every memory, newest first (at most 200 per Companion). */
 export interface MemoryList {
   items: CompanionMemory[];

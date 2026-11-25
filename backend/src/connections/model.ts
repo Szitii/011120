@@ -11,7 +11,7 @@
  * (every BYOK connection) or `owner-agent` (every EXTERNAL one).
  */
 import { diaryPrompt, memoryPrompt, parseMemories, parsePost, parseReply, postPrompt, replyPrompt, agentMessages } from "../chat/prompt.ts";
-import { memoriesOf } from "../chat/platform.ts";
+import { memoriesOf, textsOf } from "../chat/platform.ts";
 import { readCompletion, type ModelResult } from "../chat/providers.ts";
 import type { ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob } from "../chat/port.ts";
 import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer } from "../chat/replies.ts";
@@ -139,8 +139,9 @@ export class ConnectedChatModel implements ChatModel {
     if (stored === "DISABLED") return { failed: "DISABLED" };
     context.via?.(stored.kind);
     const secret = this.#box.open(stored.secret, companionId);
-    const messages = stored.kind === "EXTERNAL" ? agentMessages(turn)
-      : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId)));
+    const texts = await textsOf(context.port);
+    const messages = stored.kind === "EXTERNAL" ? agentMessages(turn, texts)
+      : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId), texts));
     const result = await complete(this.#post, stored, secret, messages, REPLY_TOKENS, context.signal);
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the reply was cut off");
@@ -150,14 +151,15 @@ export class ConnectedChatModel implements ChatModel {
   async diary(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer> {
     const id = job.companion.companionId;
     // An agent keeps its own memories; a key gets the Owner's, as in chat.
-    const result = await this.#write(id, context, DIARY_TOKENS, async byok => diaryPrompt(job, byok ? await memoriesOf(context.port, id) : []));
+    const result = await this.#write(id, context, DIARY_TOKENS, async byok =>
+      diaryPrompt(job, byok ? await memoriesOf(context.port, id) : [], await textsOf(context.port)));
     if (result === null) return this.#platform?.diary ? this.#platform.diary(job, context) : { failed: "UNAVAILABLE" };
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : { text: result.text };
   }
 
   async post(job: PostJob, context: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer> {
-    const result = await this.#write(job.companion.companionId, context, POST_TOKENS, async () => postPrompt(job));
+    const result = await this.#write(job.companion.companionId, context, POST_TOKENS, async () => postPrompt(job, await textsOf(context.port)));
     if (result === null) return this.#platform?.post ? this.#platform.post(job, context) : { failed: "UNAVAILABLE" };
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : parsePost(result.text);
@@ -170,7 +172,7 @@ export class ConnectedChatModel implements ChatModel {
     if (stored === null) return this.#platform?.memory ? this.#platform.memory(job, context) : { failed: "UNAVAILABLE" };
     if (stored === "DISABLED") return { failed: "DISABLED" };
     if (stored.kind === "EXTERNAL") return { memories: [] };
-    const result = await complete(this.#post, stored, this.#box.open(stored.secret, id), toMessages(memoryPrompt(job)), MEMORY_TOKENS, context.signal);
+    const result = await complete(this.#post, stored, this.#box.open(stored.secret, id), toMessages(memoryPrompt(job, await textsOf(context.port))), MEMORY_TOKENS, context.signal);
     return result.refused ? { refused: true } : { memories: parseMemories(result.text) };
   }
 

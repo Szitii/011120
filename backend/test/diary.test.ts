@@ -160,7 +160,7 @@ it("builds the diary prompt from the persona, the masked chat and own posts", ()
   const dated = diaryPrompt(job({ ownerName: "阿澈", timeZone: "Asia/Shanghai", messages: [
     { companionId: null, body: "晚安", action: null, sentAt: "2026-11-25T15:40:00Z" },
     { companionId: null, body: "早", action: null, sentAt: "2026-11-26T00:10:00Z" },
-  ] }), [], new Date("2026-11-26T13:00:00Z"));
+  ] }), [], {}, new Date("2026-11-26T13:00:00Z"));
   assert.match(dated.system, /- 写到主人时用「阿澈」这个称呼。/);
   assert.match(dated.user, /^现在是 2026年11月26日 周四 21:00。\n\n上一篇日记之后/);
   assert.match(dated.user, /—— 11月25日 周三 23:40 ——\n【主人】晚安\n—— 11月26日 周四 08:10，隔了 9 小时 ——\n【主人】早/);

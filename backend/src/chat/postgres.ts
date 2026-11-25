@@ -77,6 +77,14 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.memory_list($1) as payload", [companionId]);
   }
 
+  persona(companionId: string): Promise<unknown> {
+    return this.#object("select public.persona_get($1) as payload", [companionId]);
+  }
+
+  savePersona(companionId: string, version: number, fields: Readonly<Record<string, string>>): Promise<unknown> {
+    return this.#object("select public.persona_save($1,$2,$3::jsonb) as payload", [companionId, version, JSON.stringify(fields)]);
+  }
+
   addMemory(companionId: string, body: string, keyHash: string): Promise<unknown> {
     return this.#object("select public.memory_add($1,$2,$3) as payload", [companionId, body, keyHash]);
   }
@@ -181,6 +189,10 @@ export class PostgresChatAdapter implements ChatPort {
       throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid chat response.");
     }
     return payload as boolean[];
+  }
+
+  promptTexts(): Promise<unknown> {
+    return this.#object("select public.prompt_texts() as payload", []);
   }
 
   diary(companionId: string, beforeAt: string | null, beforeId: string | null): Promise<unknown> {
