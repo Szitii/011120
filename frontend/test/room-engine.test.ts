@@ -184,25 +184,57 @@ test("straight floor retargets keep their travel direction and avoid an initial 
   assert.equal(findSafePath({ nx: .60, ny: .46 }, { nx: .60, ny: .61 }, true), null);
 });
 
-test("actors fade into their furniture anchors together without sliding in a seated or sleeping pose", () => {
-  for (const kind of ["bed", "sofa"] as const) {
-    const engine = new RoomEngine();
-    const placed = kind === "bed" ? "SLEEP" : "SIT";
-    let sawPlacement = false;
-    engine.furniture(kind);
-    for (let frame = 0; frame < 360; frame++) {
-      const before = engine.snapshot().actors;
-      engine.tick(16);
-      const after = engine.snapshot().actors;
-      assert.equal(after.user.phase === placed, after.companion.phase === placed);
-      if (after.user.phase !== placed || before.user.phase === placed) continue;
-      sawPlacement = true;
-      for (const id of ["companion", "user"] as const) {
-        assert.ok((after[id].opacity ?? 1) <= .2);
-        assert.deepEqual(after[id].point, FURNITURE[kind][id].anchor);
-      }
+test("actors settle onto the sofa together in one fade, without sliding in a seated pose", () => {
+  const engine = new RoomEngine();
+  let sawPlacement = false;
+  engine.furniture("sofa");
+  for (let frame = 0; frame < 360; frame++) {
+    const before = engine.snapshot().actors;
+    engine.tick(16);
+    const after = engine.snapshot().actors;
+    assert.equal(after.user.phase === "SIT", after.companion.phase === "SIT");
+    if (after.user.phase !== "SIT" || before.user.phase === "SIT") continue;
+    sawPlacement = true;
+    for (const id of ["companion", "user"] as const) {
+      assert.ok((after[id].opacity ?? 1) <= .2);
+      assert.deepEqual(after[id].point, FURNITURE.sofa[id].anchor);
     }
-    assert.equal(sawPlacement, true);
+  }
+  assert.equal(sawPlacement, true);
+});
+
+test("going to bed crossfades to sitting under the quilt, pauses, then lies down", () => {
+  const engine = new RoomEngine();
+  const seen = { crossfade: 0, sitting: 0 };
+  engine.furniture("bed");
+  for (let frame = 0; frame < 360; frame++) {
+    engine.tick(16);
+    const actors = engine.snapshot().actors;
+    // Once both have walked up, they settle in step.
+    if (actors.user.phase !== "WALK" && actors.companion.phase !== "WALK") assert.equal(actors.user.phase, actors.companion.phase);
+    for (const id of ["companion", "user"] as const) {
+      const actor = actors[id];
+      const pillow = FURNITURE.bed[id].anchor;
+      if (actor.incoming) {
+        seen.crossfade++;
+        assert.deepEqual(actor.point, FURNITURE.bed[id].approach);
+        assert.equal(actor.incoming.phase, "SIT");
+        assert.equal(actor.incoming.furniture, "bed");
+        assert.ok(Math.abs((actor.opacity ?? 1) + (actor.incoming.opacity ?? 1) - 1) < 1e-9);
+      }
+      if (actor.furniture !== "bed") continue;
+      assert.notEqual(actor.phase, "WALK");
+      assert.equal(actor.point.nx, pillow.nx);
+      assert.ok(actor.point.ny <= pillow.ny && actor.point.ny > pillow.ny - .03);
+      if (actor.phase === "SIT") seen.sitting++;
+      else assert.deepEqual(actor.point, pillow);
+    }
+  }
+  assert.ok(seen.crossfade >= 2 * 15, "the move onto the bed is a crossfade, not a jump");
+  assert.ok(seen.sitting >= 2 * 20, "both sit for a beat before lying down");
+  for (const id of ["companion", "user"] as const) {
+    assert.equal(engine.snapshot().actors[id].phase, "SLEEP");
+    assert.deepEqual(engine.snapshot().actors[id].point, FURNITURE.bed[id].anchor);
   }
 });
 

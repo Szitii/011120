@@ -124,8 +124,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
   const renderActor = (id: ActorId, actor: ActorFrame = frame.actors[id], incoming = false) => {
     const action = spriteFor(actor);
     const sprites = (id === "user") !== isCompanionView ? GIRL_SPRITES : BOY_SPRITES;
-    const seated = actor.phase === "SIT";
-    const mirrored = seated ? id === "user" : actor.phase === "WALK" && (
+    const mirrored = actor.phase === "WALK" && (
       actor.facingDir === "side" && actor.facingLeft
       || actor.facingDir === "front" && actor.step === 3 && sprites === GIRL_SPRITES
     );

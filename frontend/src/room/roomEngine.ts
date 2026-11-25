@@ -54,6 +54,12 @@ function faceDir(from: RoomPoint, to: RoomPoint, previous: FacingDir = "side"): 
   return "side";
 }
 
+// Where an actor sits up in bed: a little above the pillow, still under the quilt.
+const sitUpPoint = (actor: ActorId): RoomPoint => {
+  const pillow = FURNITURE.bed[actor].anchor;
+  return { nx: pillow.nx, ny: pillow.ny - SIT_UP_RISE };
+};
+
 const makeTrack = (point: RoomPoint): Track => ({
   frame: { point, phase: "IDLE", step: 0, facingLeft: false, facingDir: "front" },
   steps: [],
@@ -119,8 +125,9 @@ export class RoomEngine {
     const user = this.plan("user", FURNITURE[furniture].user.anchor, furniture);
     if (!companion || !user) return;
     const plans = [companion, user];
-    const approaches = plans.map(plan => ({ ...plan, steps: plan.steps.slice(0, -1) }));
-    const placements = plans.map(plan => ({ ...plan, steps: plan.steps.slice(-1) }));
+    // Both walk up first, then settle together; the settling steps are the ones on the furniture.
+    const approaches = plans.map(plan => ({ ...plan, steps: plan.steps.filter(step => !step.furniture) }));
+    const placements = plans.map(plan => ({ ...plan, steps: plan.steps.filter(step => step.furniture) }));
     this.begin(approaches, undefined, [placements]);
   }
 
@@ -129,18 +136,14 @@ export class RoomEngine {
     if (this.locked || !this.sleeping) return;
     // Sit up under the quilt, pause, then dissolve to standing on the floor.
     // Sliding the seated sprite to the floor instead would pass under the quilt.
-    this.begin(ACTORS.map(actor => {
-      const pillow = FURNITURE.bed[actor].anchor;
-      const upright = { nx: pillow.nx, ny: pillow.ny - SIT_UP_RISE };
-      return {
-        actor,
-        steps: [
-          { point: upright, furniture: "bed", transition: "SIT", pose: "SIT" },
-          { point: upright, furniture: "bed", pose: "SIT", wait: SIT_UP_MS },
-          { point: WAKE_POINTS[actor], pose: "IDLE", place: true, crossfade: true },
-        ],
-      };
-    }));
+    this.begin(ACTORS.map(actor => ({
+      actor,
+      steps: [
+        { point: sitUpPoint(actor), furniture: "bed", transition: "SIT", pose: "SIT" },
+        { point: sitUpPoint(actor), furniture: "bed", pose: "SIT", wait: SIT_UP_MS },
+        { point: WAKE_POINTS[actor], pose: "IDLE", place: true, crossfade: true },
+      ],
+    })));
   }
 
   action(action: CompanionAction, initiator: ActionInitiator = "OWNER") {
@@ -167,13 +170,15 @@ export class RoomEngine {
     const steps: Step[] = [];
     if (exit) steps.push({ point: exit.approach, place: true });
     steps.push(...path.map(point => ({ point })));
-    if (dock) {
-      steps.push({
-        point: dock.anchor,
-        furniture,
-        pose: furniture === "bed" ? "SLEEP" : "SIT",
-        place: true,
-      });
+    if (furniture === "bed") {
+      // Waking in reverse: dissolve to sitting under the quilt, pause, then lie down.
+      steps.push(
+        { point: sitUpPoint(actor), furniture, pose: "SIT", place: true, crossfade: true },
+        { point: sitUpPoint(actor), furniture, pose: "SIT", wait: SIT_UP_MS },
+        { point: FURNITURE.bed[actor].anchor, furniture, transition: "SIT", pose: "SLEEP" },
+      );
+    } else if (dock) {
+      steps.push({ point: dock.anchor, furniture, pose: "SIT", place: true });
     }
     return { actor, steps };
   }
