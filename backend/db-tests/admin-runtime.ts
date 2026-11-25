@@ -443,7 +443,9 @@ try {
 
   assert.equal((await web("/models")).status, 200);
   const costs = await web("/costs");
-  assert.ok(costs.status === 200 && costs.body.includes("admin-test-provider/m-spend") && costs.body.includes("总花费"), "what was spent is on the costs page");
+  // The company's card, with the model under it.
+  assert.ok(costs.status === 200 && costs.body.includes("<b>admin-test-provider</b>") && costs.body.includes("<b>m-spend</b>") && costs.body.includes("总花费"),
+    "what was spent is on the costs page");
   const today = new Date().toISOString().slice(0, 10);
   const activity = (await consolePool.query("select companion_admin.activity($1::date) as a", [today])).rows[0].a;
   const todayRow = activity.days.find((d: { day: string }) => d.day === today);
