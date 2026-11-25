@@ -160,7 +160,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
     if ((m = ROUTES.chat.exec(path))) return chatGatePage(m[1]!);
     if (path === "/models") {
       const [models, features, vendors] = await Promise.all([db.call<Models>("models"), db.call<Feature[]>("features"), vendorsNow()]);
-      return modelsPage(zone, now(), models, catalog, features, done, vendors);
+      return modelsPage(zone, models, catalog, features, done, vendors);
     }
     if (path === "/costs/settings") return costSettingsPage(zone, await db.call<Costs>("costs", `${now().toISOString().slice(0, 7)}-01`), done);
     if (path === "/costs/export.xlsx") {
@@ -173,15 +173,15 @@ export function createAdminServer(options: AdminServerOptions): Server {
     if (path === "/costs" && query.has("year")) {
       const year = yearOf(query.get("year")), costs: Costs[] = [];
       for (const month of yearMonths(year)) costs.push(await db.call<Costs>("costs", month));
-      return costsYearPage(zone, now(), year, costs);
+      return costsYearPage(now(), year, costs);
     }
     if (path === "/stats") {
       const month = dayOr(`${query.get("month")}-01`, `${now().toISOString().slice(0, 7)}-01`);
-      return statsPage(zone, now(), await db.call<Activity>("activity", month));
+      return statsPage(now(), await db.call<Activity>("activity", month));
     }
     if (path === "/system") {
       const [system, machines] = await Promise.all([db.call<SystemInfo>("system"), hosts(options.fly ?? null)]);
-      return systemPage(zone, now(), system, machines);
+      return systemPage(zone, system, machines);
     }
     if (path === "/costs") {
       const thisMonth = `${now().toISOString().slice(0, 7)}-01`, month = dayOr(`${query.get("month")}-01`, thisMonth);
@@ -190,7 +190,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
       // So does the Fly estimate, from the servers as they are now.
       const [cap, fly, vendors] = month === thisMonth
         ? await Promise.all([db.call<Models>("models").then(m => m.cap), hosts(options.fly ?? null), vendorsNow()]) : [null, null, []];
-      return costsPage(zone, now(), costs, cap, done, fly, vendors);
+      return costsPage(now(), costs, cap, done, fly, vendors);
     }
     if (path === "/prompts") return promptsPage(zone, now(), await db.call<SavedPrompts>("prompts"), done);
     if (path === "/log") {

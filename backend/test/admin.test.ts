@@ -375,7 +375,8 @@ it("shows model switches and the quota, and changes only what the catalog names"
   assert.ok(!page.body.includes("<select"), "no drop-downs left on the page");
   assert.match(page.body, /每天 200 次调用、1\.00 USD/);
   assert.ok(!page.body.includes("花费上限</h2>"), "the spend cap lives on the costs page");
-  assert.match(page.body, /aria-label="主人积分钱包" title="点一下打开"><\/button>关\(只按每个家机每天的免费额度限制\)<\/form><\/div>\s*<p>新主人送 1000 积分/);
+  assert.match(page.body, /aria-label="主人积分钱包" title="点一下打开"><\/button>关\(只按每个家机每天的免费额度限制\)<\/form><\/div>\s*<p>模型花费每 1 分/);
+  assert.ok(!page.body.includes("新人赠送") && !page.body.includes("开关的历史"), "the gift is changed in one place; switch history is in the log");
   assert.match(page.body, /<a href="\/costs" class=""[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
   assert.ok(!page.body.includes("<script>alert"));
 
@@ -434,7 +435,7 @@ it("shows model switches and the quota, and changes only what the catalog names"
   await send("/models/welcome", { form: change({ enabled: "off", welcome: "1000" }) });
   await send("/models/welcome", { form: change({ enabled: "on", welcome: "300" }) });
   assert.deepEqual(calls, [["models"], ["wallet_policy_set", false, 0, 10, 200, "because"], ["models"], ["wallet_policy_set", false, 300, 10, 200, "because"]]);
-  assert.match(page.body, /新人送积分<\/div><div class="big">开<\/div>\s*<div class="muted">每个新主人 1,000 积分\(钱包关着,暂时不送\)/);
+  assert.match(page.body, /开:每个新主人第一次用钱包时送 1,000 积分\(只送一次\)<\/form> <span class="muted">积分钱包关着时,不管这里开不开都不送。/);
   const noGift = await (await start({ models: { ...fixtures.models, wallet: { ...fixtures.models.wallet, welcomeCredits: 0 } } })).send("/models");
   assert.match(noGift.body, /title="点一下打开"><\/button>关:新主人不送积分<\/form>/);
   assert.match(noGift.body, /action="\/models\/welcome"><input type="hidden" name="back" value="\/models"><input type="hidden" name="welcome" value="1000">\s*<input type="hidden" name="enabled" value="on">/);
@@ -520,8 +521,8 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   const page = await send("/costs");
   assert.equal(page.status, 200);
   assert.deepEqual(calls, [["costs", "2026-11-01"], ["models"]], "this month (UTC) by default, with today's cap");
-  assert.ok(!page.body.includes("http-equiv") && !page.body.includes("自动刷新"), "the page is read again only on 刷新");
-  assert.match(page.body, /数据时间 2026\/11\/23 12:00:00<\/span><a class="btn" href="\/costs\?month=2026-11">刷新<\/a>/);
+  assert.ok(!page.body.includes("http-equiv") && !page.body.includes("自动刷新"), "the page is read again when the browser reloads it");
+  assert.ok(!page.body.includes(">刷新<") && !page.body.includes("每天明细"), "no second refresh button, no daily table (it is in the export)");
   assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">3\.45 USD<\/div>/);
   assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
   assert.match(page.body, /<summary>改金额<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
@@ -545,8 +546,6 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(vendor("Fly.io"), /<a href="\/system">主机状态/);
   assert.match(vendor("Fly.io"), /估算不出:后台还没有 Fly 只读令牌/, "the running month guesses Fly's bill from the servers");
   assert.match(page.body, /<title>2026-11-23\n合计:\$3\.45\nMiniMax:&lt; \$0\.01\nclaude:\$3\.45<\/title>/, "a day's hover text");
-  assert.match(page.body, /<td>2026-11-23<\/td><td class="num">\$3\.45<\/td><td class="num">12<\/td>/);
-  assert.match(page.body, /38 秒 \/ 4 条/);
   assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td class="num">12</td><td class="num">\\$3\\.45<`));
   assert.match(page.body, /href="\/costs\/export\.xlsx\?month=2026-11">导出 xlsx/);
   assert.ok(!page.body.includes("<script>alert"));
@@ -681,7 +680,7 @@ it("shows how much the App is used, and the database and the servers", async () 
   assert.match(page.body, /<td>api<\/td><td>api-1 <span class="muted">m1<\/span><\/td>\s*<td><span class="tag ">运行中<\/span><\/td><td>nrt<\/td>\s*<td>1 核 · 512 MB 内存<\/td>\s*<td class="num">\$4\.83<\/td><td>deployment-7<\/td>/);
   // shared-cpu-1x with 512 MB in Tokyo: ($0.69 + $3.00) × 1.308; the 1 GB disk $0.15; stopped machines nothing.
   assert.match(page.body, /<td class="num">1 GB<\/td><td class="num">\$0\.15<\/td>/);
-  assert.match(page.body, /Fly 一整月约 <span class="tag">估算<\/span><\/div><div class="big">\$4\.98<\/div>/);
+  assert.ok(!page.body.includes("Fly 一整月约"), "the month's estimate is on the costs page");
   assert.match(page.body, /停止时只收磁盘/);
   assert.match(page.body, /2025\/11\/24 16:00:00 · 退出码 137 <span class="tag bad">内存不够被杀掉<\/span>/, "the latest exit");
   assert.match(page.body, /<td><span class="tag bad">已停止<\/span><\/td>/);
