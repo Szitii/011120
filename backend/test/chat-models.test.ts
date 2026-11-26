@@ -8,7 +8,7 @@ import { handleChatRequest } from "../src/chat/http.ts";
 import { ChatCatalog, PRICING_VERSION, type CatalogFile } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import type { ChatClaim, ChatPort, ChatReservation, ReservationDecision } from "../src/chat/port.ts";
-import { PASS, decisionPrompt, parseDecision, parseReply, replyPrompt } from "../src/chat/prompt.ts";
+import { PASS, agentMessages, decisionPrompt, memoryPrompt, parseDecision, parseMemories, parseReply, replyPrompt, splitAction } from "../src/chat/prompt.ts";
 import { createModelCaller, type CallModel, type ClaudeClient, type ModelRequest } from "../src/chat/providers.ts";
 import { ChatReplies } from "../src/chat/replies.ts";
 import { chatFromEnvironment } from "../src/chat/setup.ts";
@@ -110,6 +110,72 @@ it("builds prompts with the persona, the setting and a masked, bounded transcrip
   const decide = decisionPrompt(turn());
   assert.match(decide.system, /只回答一个字：是 或 否/);
   assert.match(decide.user, /最后的消息需要「小光」回应吗？$/);
+});
+
+it("tells the model what time it is, how long the talk paused and what to call the Owner", () => {
+  const said = (body: string, sentAt: string, companionId: string | null = null) => ({ companionId, body, action: null, mentions: [], sentAt });
+  const night = turn({ direct: true, timeZone: "Asia/Shanghai", ownerName: " 阿澈【】\n ", history: [
+    said("我去睡了", "2026-11-25T15:40:00Z"), said("晚安", "2026-11-25T15:41:00Z", me),
+    said("在吗", "2026-11-26T02:50:00Z"), said("怎么不理我", "2026-11-26T02:52:00Z"),
+  ] });
+  const now = new Date("2026-11-26T02:52:30Z");
+  const { system, user } = replyPrompt(night, [], {}, now);
+  assert.match(user, /^现在你在和主人一对一私聊。\n现在是 2026年11月26日 周四 10:52。\n\n聊天记录/);
+  assert.match(user, /—— 11月25日 周三 23:40 ——\n【主人】我去睡了\n【小光】晚安\n—— 11月26日 周四 10:50，隔了 11 小时 ——\n【主人】在吗\n【主人】怎么不理我\n\n/);
+  assert.match(system, /- 你叫主人「阿澈」。\n/);
+  assert.match(system, /「—— ——」中间的是时间/);
+  assert.doesNotMatch(replyPrompt(turn()).system, /你叫主人/, "no name known: nothing is said about it");
+  // The turn is written long after the last message (a retry, say): the model is told.
+  assert.match(replyPrompt(night, [], {}, new Date("2026-11-26T04:22:00Z")).user, /现在是 2026年11月26日 周四 12:22。最后一条消息是 2 小时前的。\n/);
+  // Minutes, hours and days; a new day gets a time line even without a pause; the Owner's own zone.
+  const days = turn({ timeZone: "America/New_York", history: [
+    said("a", "2026-11-20T04:50:00Z"), said("b", "2026-11-20T05:05:00Z"), said("c", "2026-11-20T05:50:00Z"), said("d", "2026-11-23T05:50:00Z"),
+  ] });
+  assert.match(replyPrompt(days, [], {}, now).user,
+    /—— 11月19日 周四 23:50 ——\n【主人】a\n—— 11月20日 周五 00:05 ——\n【主人】b\n—— 11月20日 周五 00:50，隔了 45 分钟 ——\n【主人】c\n—— 11月23日 周一 00:50，隔了 3 天 ——\n【主人】d/);
+  assert.match(replyPrompt({ ...night, timeZone: "Mars/Olympus" }, [], {}, now).user, /现在是 2026年11月26日 周四 10:52。/, "an unknown zone reads as Asia/Shanghai");
+  assert.match(decisionPrompt(night).user, /—— 11月26日 周四 10:50，隔了 11 小时 ——/);
+  // An Owner's own agent gets the time in its rules and before the message that came after a pause.
+  const agent = agentMessages(night, {}, now);
+  assert.match(agent[0]!.content, /现在是 2026年11月26日 周四 10:52。别人的消息开头方括号里的是那条消息的时间。\n主人希望你叫 TA「阿澈」。/);
+  assert.deepEqual(agent.slice(1).map(m => m.content), ["[11月25日 周三 23:40] 我去睡了", "晚安", "[11月26日 周四 10:50，隔了 11 小时] 在吗", "怎么不理我"]);
+  assert.deepEqual(parseReply("—— 11月26日 周四 10:52 ——\n[11月26日 周四 10:52，隔了 9 小时] 小光：早呀\n——好吧——", "小光"),
+    { messages: ["早呀", "——好吧——"] }, "a copied time line or time prefix is not part of a message; dashes of its own are");
+});
+
+it("lets a Companion do a home-room action of its own where the turn allows one", () => {
+  const said = (companionId: string | null, action: "HUG" | "WAVE") => ({ companionId, body: null, action, mentions: [], sentAt: "t" });
+  const home = turn({ direct: true, canAct: true, history: [said(null, "WAVE"), said(me, "HUG"), said(friend, "WAVE")] });
+  assert.match(replyPrompt(home).system, /单独一行写 \[动作:抱抱\]（可选：挥手、摸头、抱抱、贴贴）/);
+  assert.match(replyPrompt(home).user, /【主人】（在小家里向你挥了挥手）\n【小光】（抱了抱主人）\n【阿默】（向主人挥了挥手）/);
+  assert.doesNotMatch(replyPrompt(turn({ direct: true })).system, /动作/, "not switched on: the model is not told about it");
+  const agent = agentMessages(home);
+  assert.match(agent[0]!.content, /\[动作:抱抱\]/);
+  assert.deepEqual(agent.slice(1).map(m => [m.role, m.content]),
+    [["user", "（在小家里向你挥了挥手）"], ["assistant", "[动作:抱抱]"], ["user", "【阿默】（向主人挥了挥手）"]]);
+  assert.deepEqual(splitAction(["好[动作]呀", "[动作: 贴贴 ]"]), { messages: ["好呀", ""], action: "CUDDLE" });
+  assert.deepEqual([splitAction(["【动作：摸摸头】乖"]), splitAction(["[动作:拥抱]"]), splitAction(["[动作:constructor]"])],
+    [{ messages: ["乖"], action: "PAT_HEAD" }, { messages: [""], action: "HUG" }, { messages: [""], action: null }],
+    "another way to say one of ours is that action; anything else is none");
+});
+
+it("asks for what is worth remembering and reads the notes back", () => {
+  const { system, user } = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai",
+    memories: ["主人喜欢乌龙茶\napi_key: sk-abcdefghijklmnopqrstu"],
+    messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T02:00:00Z" },
+      { companionId: me, body: "记下啦", action: null, sentAt: "2026-11-25T02:00:05Z" }] }, {}, new Date("2026-11-25T03:00:00Z"));
+  assert.match(system, /你在帮「小光」（主人的 AI 伴侣）整理长期记忆/);
+  assert.match(system, new RegExp(`只输出 \\${PASS.slice(0, -1)}`));
+  assert.match(user, /^现在是 2026年11月25日 周三 11:00。\n\n已经记过的：\n- 主人喜欢乌龙茶 \[REDACTED_CREDENTIAL\]\n\n聊天记录/);
+  assert.match(user, /—— 11月25日 周三 10:00 ——\n【主人】我下周三生日\n【小光】记下啦\n/);
+  const empty = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, memories: [], messages: [] });
+  assert.match(empty.user, /已经记过的：\n（还没有）/);
+  assert.match(system, /写成「2026年12月3日」这样的具体日期/, "a date the safety scan does not take for a phone number");
+  assert.deepEqual(parseMemories("要记下的：\n- 主人 12 月 2 日生日\n2. 主人养了一只叫团子的猫\n\n没有别的了"), ["主人 12 月 2 日生日", "主人养了一只叫团子的猫"],
+    "list marks go; a line that does not say 主人 is talk around the notes");
+  assert.deepEqual(parseMemories("2026.12.3 是主人生日"), ["2026.12.3 是主人生日"], "a date is not a list number");
+  assert.deepEqual(parseMemories(`${PASS}\n主人喜欢茶`), [], "the marker anywhere: nothing to remember");
+  assert.deepEqual(parseMemories(`主人${"长".repeat(200)}\n主人怕黑`), ["主人怕黑"], "an over-long line is not a memory");
 });
 
 it("tells the model about home-room actions and lets it stay quiet", () => {
@@ -304,6 +370,21 @@ it("lists models with availability and checks the Owner's choice", async () => {
   const put = { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: "cheap", revision: 1 };
   assert.equal((await get(`/v0/companions/${me}/chat-settings`, "PUT", put))!.status, 200);
   assert.deepEqual(saved, [{ ...put, voice: "kept" }], "any catalog model may be chosen, even one not usable right now");
+  // What the Companion calls the Owner: trimmed, at most 20 characters on one line; empty or null clears it;
+  // left out (as above) it is not sent, and the database keeps what it has.
+  const titled = async (preferredUserTitle: unknown) => {
+    await get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, voice: null, preferredUserTitle });
+    return (saved.at(-1) as unknown as { preferredUserTitle: unknown }).preferredUserTitle;
+  };
+  assert.deepEqual([await titled(" 小澈 "), await titled("  "), await titled(null), await titled("字".repeat(20))],
+    ["小澈", null, null, "字".repeat(20)]);
+  for (const bad of ["字".repeat(21), "小\n澈", 7]) await assert.rejects(titled(bad), { code: "INVALID_INPUT" });
+  // 自动记忆: one of three, kept by the database when left out (sent as nothing).
+  await get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, autoMemory: "SOMETIMES" });
+  assert.equal((saved.at(-1) as unknown as { autoMemory?: string }).autoMemory, "SOMETIMES");
+  await get(`/v0/companions/${me}/chat-settings`, "PUT", put);
+  assert.equal("autoMemory" in (saved.at(-1) as unknown as object), false);
+  await assert.rejects(get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, autoMemory: "ALWAYS" }), { code: "INVALID_INPUT" });
   await assert.rejects(get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, model: "ghost" }), { code: "INVALID_INPUT" });
 });
 

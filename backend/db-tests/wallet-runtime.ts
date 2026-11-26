@@ -126,6 +126,30 @@ try {
   await finish(t);
   passed("the platform cap counts reserved and settled cost over every Owner, and can be turned off");
 
+  // ---- the wallet on: the free daily budget no longer stops the Companion ----
+  const today = async () => (await pool.query(`select max_model_calls::int as calls, (reserved_calls + settled_calls)::int as used
+    from public.compute_budgets where owner_id = $1 and companion_id = $2 and period_start <= now() and now() < period_end`, [A.owner, A.companion])).rows[0]!;
+  const quotaBefore = (await pool.query("select daily_calls from companion_private.chat_quota")).rows[0]!.daily_calls;
+  assert.equal((await today()).calls, 1000000, "today's budget, made under the free limits while the wallet was off, was raised");
+  await setCredits(1000, 0);
+  await pool.query("update companion_private.chat_quota set daily_calls = 1");
+  await pool.query("update public.compute_budgets set max_model_calls = 1 where owner_id = $1 and companion_id = $2 and period_start <= now() and now() < period_end", [A.owner, A.companion]);
+  t = await turn();
+  const past = await book(t, 1);
+  assert.equal(past.decision, "RESERVED", "past the free calls for today, the wallet pays");
+  if (past.decision === "RESERVED") await port.settle(past.transactionId, 100, 100, 1, true);
+  await finish(t);
+  assert.ok((await today()).used > 1);
+  await pool.query("update companion_private.wallet_policy set enabled = false");
+  await pool.query("update public.compute_budgets set max_model_calls = 1 where owner_id = $1 and companion_id = $2 and period_start <= now() and now() < period_end", [A.owner, A.companion]);
+  t = await turn();
+  assert.deepEqual(await book(t, 1), { decision: "QUOTA", reason: "BUDGET_EXHAUSTED" }, "with the wallet off, the free daily budget stops it again");
+  await finish(t);
+  await pool.query("update companion_private.chat_quota set daily_calls = $1", [quotaBefore]);
+  await pool.query("update public.compute_budgets set max_model_calls = 1000000 where owner_id = $1 and companion_id = $2 and period_start <= now() and now() < period_end", [A.owner, A.companion]);
+  await pool.query("update companion_private.wallet_policy set enabled = true");
+  passed("while the wallet is on, the free daily budget does not stop a Companion; off, it does again");
+
   // ---- operators: cap, policy and credits, each logged ----
   const logged = async (action: string) => (await pool.query(
     "select detail from companion_private.admin_log where action = $1 order by id desc limit 1", [action])).rows[0]?.detail;

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool } from "../src/persistence/postgres/index.ts";
+import type { PoolClient } from "pg";
 import type { ActorContext, CommunityProfile, CommunityPost, CommunityComment, CommunityPage, CommunityNotification, CommunityDetail, CommunityLike, HumanProfileSettings } from "../../contracts/community.ts";
 
 const connectionString = process.env.DATABASE_URL;
@@ -321,6 +322,86 @@ try {
   for (const id of [onlyMe.data.id,forFollowers.data.id,quiet.data.id]) assert.equal((await call(0,humanA,`posts/${id}`,"DELETE")).status,200);
   await pool.query("update companion_private.feature_switches set enabled=false where key='COMMUNITY_NEW_NOTICES'");
   passed("mentions tell each named identity that can see the post; a like tells the author once");
+
+  // ---- images on posts (migration 0061). The Storage service is not here: a row in storage.objects stands for an
+  // uploaded file, written and read as the signed-in user, which is exactly what Storage does under the policies. ----
+  await pool.query("update public.community_posts set created_at = created_at - interval '2 hours' where actor_id = $1", [ha.id]); // room under the hourly cap
+  const asUser = async <T>(subject: string, run: (c: PoolClient) => Promise<T>): Promise<T> => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin"); await c.query("set local role authenticated");
+      await c.query("select set_config('request.jwt.claim.sub',$1,true)", [subject]);
+      const result = await run(c);
+      await c.query("commit");
+      return result;
+    } catch (error) { await c.query("rollback"); throw error; } finally { c.release(); }
+  };
+  const file = (identity: string, type = "jpg") => `${identity}/${randomUUID()}.${type}`;
+  const upload = (subject: string, name: string) => asUser(subject, c =>
+    c.query(`insert into storage.objects(bucket_id, name, metadata) values ('media', $1, '{"mimetype":"image/jpeg","size":1000}')`, [name]));
+  const canRead = (subject: string, name: string) => asUser(subject, async c =>
+    (await c.query("select 1 from storage.objects where bucket_id = 'media' and name = $1", [name])).rowCount === 1);
+  const remove = (subject: string, name: string) => asUser(subject, async c =>
+    (await c.query("delete from storage.objects where bucket_id = 'media' and name = $1", [name])).rowCount);
+  const refused = (e: unknown) => (e as { code?: string }).code === "42501";
+  // A file's folder is the community identity that will post it, never the account.
+  const [one, two, mine, asAi] = [file(ha.id), file(ha.id, "webp"), file(hb.id), file(ca.id)];
+  await upload(A.subject, one); await upload(A.subject, two); await upload(B.subject, mine); await upload(A.subject, asAi);
+  await assert.rejects(upload(A.subject, file(hb.id)), refused, "not into someone else's folder");
+  await assert.rejects(upload(A.subject, file(A.subject)), refused, "not a folder named after the account");
+  await assert.rejects(upload(A.subject, file(ha.id, "gif")), refused, "only the three image types");
+  await assert.rejects(upload(A.subject, `${ha.id}/holiday.jpg`), refused, "only a uuid name");
+  await assert.rejects(asUser(A.subject, c => c.query("insert into storage.objects(bucket_id, name) values ('companion-import-quarantine', $1)", [file(ha.id)])), refused);
+  assert.deepEqual([await canRead(A.subject, one), await canRead(B.subject, one)], [true, false], "an upload is its owner's alone until it is posted");
+  const postsBefore = (await pool.query("select count(*)::int n from public.community_posts")).rows[0].n;
+  for (const media of [[{ path: mine }], [{ path: file(ha.id) }], [{ path: asAi }], [{ path: one }, { path: two }, { path: mine }]]) {
+    assert.equal((await call(0, humanA, "posts", "POST", { body: "不该发出去", media })).status, 400, "someone else's file, another identity's, or one never uploaded");
+  }
+  assert.equal((await pool.query("select count(*)::int n from public.community_posts")).rows[0].n, postsBefore, "and nothing was published");
+  const imageKey = randomUUID();
+  const pictured = await call<CommunityPost>(0, humanA, "posts", "POST", { body: "带图", media: [{ path: one, width: 1080, height: 1440, alt: "晚霞" }, { path: two }] }, imageKey);
+  assert.equal(pictured.status, 201, JSON.stringify(pictured.data));
+  const expectedMedia = [{ kind: "IMAGE", path: one, width: 1080, height: 1440, alt: "晚霞" }, { kind: "IMAGE", path: two, width: null, height: null, alt: null }];
+  assert.deepEqual(pictured.data.media, expectedMedia);
+  assert.deepEqual((await call<CommunityDetail>(1, humanB, `posts/${pictured.data.id}`)).data.post.media, expectedMedia, "another viewer gets the same images");
+  assert.deepEqual([await canRead(B.subject, one), await canRead(B.subject, two)], [true, true], "whoever may see the post may fetch its images");
+  assert.equal((await call<CommunityPost>(0, humanA, "posts", "POST", { body: "带图", media: [{ path: one, width: 1080, height: 1440, alt: "晚霞" }, { path: two }] }, imageKey)).data.id,
+    pictured.data.id, "a retry is the same post");
+  assert.equal((await call(0, humanA, "posts", "POST", { body: "带图", media: [{ path: two }, { path: one }] }, imageKey)).status, 409, "the same key with other images");
+  assert.equal((await call(0, humanA, "posts", "POST", { body: "再发一次", media: [{ path: one }] })).status, 400, "a file is on one post only");
+  assert.deepEqual((await call<CommunityPost>(0, humanA, "posts", "POST", { body: "没有图" })).data.media, []);
+  // Private post: its image is the author's alone. One image taken down: gone for others, the rest stay.
+  const secret = file(ha.id, "png");
+  await upload(A.subject, secret);
+  const hidden = await call<CommunityPost>(0, humanA, "posts", "POST", { body: "只有自己看", visibility: "PRIVATE", media: [{ path: secret }] });
+  assert.equal(hidden.status, 201);
+  assert.deepEqual([await canRead(A.subject, secret), await canRead(B.subject, secret)], [true, false]);
+  await pool.query("update companion_private.post_media set review_status = 'REMOVED' where object_name = $1", [one]);
+  assert.deepEqual((await call<CommunityDetail>(1, humanB, `posts/${pictured.data.id}`)).data.post.media, expectedMedia.slice(1));
+  assert.deepEqual([await canRead(B.subject, one), await canRead(A.subject, one), await canRead(B.subject, two)], [false, true, true]);
+  // Deleting: a file on a live post stays; after the post is deleted nobody else reads it and its owner may delete it.
+  assert.equal(await remove(A.subject, two), 0, "not while it is on a post");
+  assert.equal(await remove(B.subject, two), 0);
+  assert.equal((await call(0, humanA, `posts/${pictured.data.id}`, "DELETE")).status, 200);
+  assert.equal(await canRead(B.subject, two), false);
+  assert.equal(await remove(A.subject, two), 1);
+  await assert.rejects(upload(A.subject, two), refused, "a name that was on a post is never used again");
+  assert.equal(await remove(B.subject, mine), 1, "an upload that was never posted");
+  // A post the operators removed may be put back: its files stay.
+  const reported = file(ca.id);
+  await upload(A.subject, reported);
+  const flagged = await call<CommunityPost>(0, aiA, "posts", "POST", { body: "会被下架", media: [{ path: reported }] });
+  assert.equal(flagged.status, 201, JSON.stringify(flagged.data));
+  await pool.query("update public.community_posts set deleted_at = now(), body = companion_private.admin_removed_text() where id = $1", [flagged.data.id]);
+  assert.deepEqual([await remove(A.subject, reported), await canRead(B.subject, reported), await canRead(A.subject, reported)], [0, false, true]);
+  // At most 40 uploads waiting for a post, counted over all of the Owner's identities.
+  await pool.query(`insert into storage.objects(bucket_id, name) select 'media', $1 || '/' || gen_random_uuid() || '.jpg' from generate_series(1, 39)`, [cb.id]);
+  await upload(B.subject, file(hb.id));
+  await assert.rejects(upload(B.subject, file(hb.id)), refused);
+  await pool.query("delete from storage.objects where bucket_id = 'media' and (name like $1 or name like $2)", [`${hb.id}/%`, `${cb.id}/%`]);
+  await upload(B.subject, file(cb.id));
+  await pool.query("delete from storage.objects where bucket_id = 'media' and name like $1", [`${cb.id}/%`]);
+  passed("images on posts: own uploads only, seen with the post, taken down one by one, deletable once off a live post");
 
   await pool.query("delete from companion_private.agent_settings"); // later suites start from the defaults
   passed("AI text tools publish, read, comment and see notifications under the same rules, blocks included");

@@ -8,7 +8,7 @@ import type { Activity, ChatList, ChatPage, Costs, LogPage, SystemInfo, Models, 
 import type { FlyAccess } from "../src/admin/fly.ts";
 import { createAdminServer } from "../src/admin/server.ts";
 
-const TOKEN = "t".repeat(64);
+const HOST = "companion-admin", LOGIN = "op@x.test";
 const id = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const OWNER = id(1), TWIN = id(2), REPORT = id(3), POST = id(4), COMMENT = id(5), CHAT = id(6), COMPANION = id(7);
 const AT = "2026-11-23T08:00:00.123456+00:00";
@@ -63,15 +63,17 @@ type Returned = Partial<Record<AdminFunction, unknown>>;
 
 /** A console database that returns the fixtures (or what the test put in `returns`) and remembers every call. */
 function fakeDb(returns: Returned = {}, failure?: unknown) {
-  const calls: [AdminFunction, ...unknown[]][] = [];
+  const calls: [AdminFunction, ...unknown[]][] = [], badges: string[] = [];
   const db: AdminDb = {
     async call<T>(fn: AdminFunction, ...args: unknown[]): Promise<T> {
+      // The sidebar's count of waiting reports, read with every page: kept out of `calls` (asserted on its own).
+      if (fn === "reports" && args.length === 0) { badges.push(fn); return (returns.reports ?? fixtures.reports) as T; }
       calls.push([fn, ...args]);
       if (failure !== undefined) throw failure;
       return (fn in returns ? returns[fn] : (fixtures as Returned)[fn]) as T;
     },
   };
-  return { db, calls };
+  return { db, calls, badges };
 }
 
 const catalog = [{ name: "Big", provider: "claude", model: "claude-big" }, { name: "Small", provider: "claude", model: "claude-small" },
@@ -79,20 +81,20 @@ const catalog = [{ name: "Big", provider: "claude", model: "claude-big" }, { nam
 const servers: ReturnType<typeof createAdminServer>[] = [];
 after(() => { for (const server of servers) server.close(); });
 
-interface Sent { method?: string; cookie?: string | null; host?: string; origin?: string; form?: Record<string, string>; body?: string; type?: string }
+interface Sent { method?: string; login?: string | null; host?: string; origin?: string; form?: Record<string, string>; body?: string; type?: string }
 async function start(returns: Returned = {}, failure?: unknown, fly?: FlyAccess, more: Partial<Parameters<typeof createAdminServer>[0]> = {}) {
   const { db, calls } = fakeDb(returns, failure);
   const errors: unknown[] = [];
-  const server = createAdminServer({ db, token: TOKEN, catalog, timeZone: "UTC", now: () => new Date("2026-11-23T12:00:00Z"), onError: e => errors.push(e),
+  const server = createAdminServer({ tailnet: { hostname: HOST, operators: new Map([[LOGIN, db]]) }, catalog, timeZone: "UTC", now: () => new Date("2026-11-23T12:00:00Z"), onError: e => errors.push(e),
     ...(fly === undefined ? {} : { fly }), ...more } as Parameters<typeof createAdminServer>[0]);
   servers.push(server);
   const port = await new Promise<number>(resolve => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
   const send = (path: string, sent: Sent = {}) => new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string; raw: Buffer }>((resolve, reject) => {
     const body = sent.body ?? (sent.form === undefined ? undefined : new URLSearchParams(sent.form).toString());
     const req = httpRequest({ host: "127.0.0.1", port, path, method: sent.method ?? (body === undefined ? "GET" : "POST"), headers: {
-      Host: sent.host ?? `127.0.0.1:${port}`,
-      ...(sent.cookie === null ? {} : { Cookie: sent.cookie ?? `other=1; admin_console=${TOKEN}` }),
-      ...(body === undefined && sent.origin === undefined || sent.origin === "" ? {} : { Origin: sent.origin ?? `http://127.0.0.1:${port}` }),
+      Host: sent.host ?? HOST,
+      ...(sent.login === null ? {} : { "Tailscale-User-Login": sent.login ?? LOGIN }),
+      ...(body === undefined && sent.origin === undefined || sent.origin === "" ? {} : { Origin: sent.origin ?? `http://${HOST}` }),
       ...(body === undefined ? {} : { "Content-Type": sent.type ?? "application/x-www-form-urlencoded" }),
     } }, response => {
       const chunks: Buffer[] = [];
@@ -106,25 +108,15 @@ async function start(returns: Returned = {}, failure?: unknown, fly?: FlyAccess,
 }
 const change = (fields: Record<string, string> = {}) => ({ reason: " because ", confirm: "yes", ...fields });
 
-it("lets in only this machine, the start-up token and the console's own forms", async () => {
+it("lets in only a listed login at the tailnet name, and only the console's own forms", async () => {
   const { send, calls, errors, port } = await start();
-  assert.throws(() => createAdminServer({ db: fakeDb().db, token: "short", catalog }));
-  for (const host of ["evil.example", `evil.example:${port}`, `127.0.0.1:${port + 1}`]) {
+  for (const host of ["evil.example", `127.0.0.1:${port}`, `localhost:${port}`]) {
     assert.deepEqual([(await send("/reports", { host })).status, (await send("/reports", { host })).body], [403, "Forbidden"]);
   }
-  for (const cookie of [null, "admin_console=", `admin_console=${"x".repeat(64)}`, `admin_console=${TOKEN}x`, `admin_console=${"é".repeat(64)}`]) {
-    const refused = await send("/reports", { cookie });
-    assert.equal(refused.status, 403);
-    assert.match(refused.body, /请用后台启动时终端里打印的链接打开/);
-  }
-  assert.equal((await send(`/?token=${"x".repeat(64)}`, { cookie: null })).status, 403);
-  assert.equal((await send(`/reports?token=${TOKEN}`, { cookie: null })).status, 403, "the token is taken only at the start page");
-  const entered = await send(`/?token=${TOKEN}`, { cookie: null });
-  assert.deepEqual([entered.status, entered.headers.location, entered.headers["set-cookie"]],
-    [303, "/reports", [`admin_console=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`]]);
-  assert.equal(calls.length, 0, "nothing is read before the token is shown");
+  for (const login of [null, "", "mallory@x.test"]) assert.equal((await send("/reports", { login })).status, 403);
+  assert.equal(calls.length, 0, "nothing is read for someone not let in");
 
-  const opened = await send("/reports", { host: `localhost:${port}` });
+  const opened = await send("/reports", { host: `${HOST}.tail1234.ts.net` });
   assert.equal(opened.status, 200);
   assert.match(String(opened.headers["content-security-policy"]), /default-src 'none'/);
   // Not no-referrer: a browser posts forms from a no-referrer page with "Origin: null", which the console refuses.
@@ -133,14 +125,14 @@ it("lets in only this machine, the start-up token and the console's own forms", 
   assert.equal((await send("/nowhere")).status, 404);
   assert.equal((await send("/owners/not-an-id")).status, 404);
   assert.equal((await send("/reports", { method: "PUT" })).status, 405);
-  assert.deepEqual([(await send("//[", { cookie: null })).status, (await send("//[")).status, errors], [400, 400, []], "an address that is not one is refused quietly");
+  assert.deepEqual([(await send("//[", { login: null })).status, (await send("//[")).status, errors], [400, 400, []], "an address that is not one is refused quietly");
 
   const before = calls.length;
-  for (const origin of ["https://evil.example", `http://127.0.0.1:${port + 1}`, "null", ""]) {
+  for (const origin of ["https://evil.example", `http://127.0.0.1:${port}`, `http://${HOST}.tail1234.ts.net`, "null", ""]) {
     assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change(), origin })).status, 403);
   }
   assert.equal(calls.length, before, "a form from another page changes nothing");
-  assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change(), origin: `http://localhost:${port}` })).status, 303);
+  assert.equal((await send(`/owners/${OWNER}/suspend`, { form: change() })).status, 303);
   assert.equal((await send("/elsewhere", { form: change() })).status, 404);
   assert.equal((await send(`/owners/${OWNER}/suspend`, { body: "{}", type: "application/json" })).status, 409);
   for (const length of [20_000, 300_000]) {
@@ -254,17 +246,20 @@ it("lists and searches Owners, and opens one with what can be done about them", 
   assert.deepEqual(calls, [["owner_detail", OWNER], ["chats", OWNER], ["log", null, OWNER]]);
   assert.ok(!detail.body.includes("<script>alert"));
   const actions = [...detail.body.matchAll(/<form class="act" method="post" action="([^"]+)">/g)].map(m => m[1]);
-  assert.deepEqual(actions, [`/owners/${OWNER}/suspend`, `/twins/${TWIN}/suspend`, `/twins/${id(21)}/restore`,
+  assert.deepEqual(actions, [`/owners/${OWNER}/suspend`, "/models/credit", `/twins/${TWIN}/suspend`, `/twins/${id(21)}/restore`,
     `/content/post/${POST}/remove`, `/content/post/${id(41)}/restore`, `/content/comment/${COMMENT}/remove`]);
+  assert.match(detail.body, /<input type="hidden" name="owner" value="00000000-0000-0000-0000-000000000001">/, "credits for this Owner, no id to type");
+  assert.match(detail.body, /<form class="act read" method="post" action="\/chats\/[0-9a-f-]+">[\s\S]*?name="reason" required[\s\S]*?<button>查看<\/button>/, "a chat is read from its row");
+  assert.match(detail.body, /举报<span class="badge" aria-label="3 条待处理">3<\/span>/, "the sidebar shows the waiting reports");
   assert.match(detail.body, /作者已删除/);
   assert.match(detail.body, /本人发的[\s\S]*主人代发/);
   assert.match(detail.body, /<b>Mochi<\/b> <span class="muted">正常<\/span>[\s\S]*<span class="muted">草稿<\/span>/);
   assert.match(detail.body, /社区身份:还没有/);
-  assert.match(detail.body, new RegExp(`<a href="/chats/${CHAT}">一对一</a>`));
-  assert.match(detail.body, /<a href="\/chats\/[0-9a-f-]+">群聊<\/a>/);
+  assert.match(detail.body, new RegExp(`<tr><td>一对一</td>[\\s\\S]*?action="/chats/${CHAT}"`));
+  assert.match(detail.body, /<tr><td>群聊<\/td>/);
   assert.match(detail.body, new RegExp(`<a href="/log\\?owner=${OWNER}&before=8">更早的记录</a>`));
   assert.match(detail.body, /操作已完成/);
-  assert.ok((detail.body.match(new RegExp(`name="back" value="/owners/${OWNER}"`, "g")) ?? []).length === 6);
+  assert.ok((detail.body.match(new RegExp(`name="back" value="/owners/${OWNER}"`, "g")) ?? []).length === 7, "six changes and the credits");
 
   const gone = await start({ owner_detail: null });
   assert.equal((await gone.send(`/owners/${OWNER}`)).status, 404);
@@ -308,7 +303,7 @@ it("shows a private chat only after a reason is given", async () => {
   assert.equal(shown.status, 200);
   assert.deepEqual(calls, [["chat_read", CHAT, "Checking a report", null, null]]);
   assert.ok(!shown.body.includes("<script>alert"));
-  const speakers = [...shown.body.matchAll(/<div class="msg"><b>([^<]+)<\/b>/g)].map(m => m[1]);
+  const speakers = [...shown.body.matchAll(/<div class="msg(?: me)?"><b>([^<]+)<\/b>/g)].map(m => m[1]);
   assert.deepEqual(speakers, ["Mochi", "主人", "主人", "Mochi", "(已离开的家机)"], "oldest first");
   assert.match(shown.body, /\(正在回复\)/);
   assert.match(shown.body, /\(小家动作:抱抱\)/);
@@ -360,14 +355,24 @@ it("shows model switches and the quota, and changes only what the catalog names"
   assert.deepEqual(states, [["", "开"]]);
   assert.match(page.body, /claude\/claude-small<\/td><td><span class="tag bad">关\(模型关闭\)/);
   assert.match(page.body, /other\/other-chat<\/td><td><span class="tag bad">关\(厂商关闭\)/);
-  assert.deepEqual([...page.body.matchAll(/<option value="((?:ALL|PROVIDER|MODEL):[^"]+)"/g)].map(m => m[1]),
-    ["ALL:*", "PROVIDER:claude", "PROVIDER:other", "MODEL:claude/claude-big", "MODEL:claude/claude-small", "MODEL:other/other-chat"]);
-  assert.match(page.body, /<td>新建群聊<\/td><td><span class="tag bad">关<\/span>/);
-  assert.match(page.body, /<td>在已有群聊里发消息<\/td><td><span class="tag ">开<\/span>/);
-  assert.match(page.body, /每天 200 次调用、1\.00 USD/);
+  // Each switch is one click: a form that posts the other way, with the reason filled in.
+  const switches = (path: string, field: string) => [...page.body.matchAll(new RegExp(`action="${path}">[^]*?name="${field}" value="([^"]+)">\\s*`
+    + `<input type="hidden" name="enabled" value="(on|off)"><input type="hidden" name="reason" value="([^"]+)">\\s*`
+    + `<input type="hidden" name="confirm" value="yes"><button class="switch ([a-z]*)" role="switch" aria-checked="(true|false)"`, "g"))].map(m => m.slice(1));
+  assert.deepEqual(switches("/models/switch", "target"), [
+    ["ALL:*", "off", "点开关:关掉全部平台模型", "on", "true"], ["PROVIDER:claude", "off", "点开关:关掉厂商 claude", "on", "true"],
+    ["PROVIDER:other", "on", "点开关:打开厂商 other", "", "false"],
+    ["MODEL:claude/claude-big", "off", "点开关:关掉模型 Big(claude/claude-big)", "on", "true"],
+    ["MODEL:claude/claude-small", "on", "点开关:打开模型 Small(claude/claude-small)", "", "false"],
+    ["MODEL:other/other-chat", "off", "点开关:关掉模型 Cheap(other/other-chat)", "on", "true"]]);
+  assert.deepEqual(switches("/models/feature", "key"), [["GROUP_CHAT_CREATE", "on", "点开关:打开新建群聊", "", "false"],
+    ["GROUP_CHAT_SEND", "off", "点开关:关掉在已有群聊里发消息", "on", "true"]]);
+  assert.ok(!page.body.includes("<select"), "no drop-downs left on the page");
+  assert.match(page.body, /每天 200 次调用、\$1\.00/);
   assert.ok(!page.body.includes("花费上限</h2>"), "the spend cap lives on the costs page");
-  assert.match(page.body, /现在:关\(只按每个家机每天的免费额度限制\)。新主人送 1000 积分/);
-  assert.match(page.body, /<a href="\/costs" class="">花费<\/a>/);
+  assert.match(page.body, /aria-label="主人积分钱包" title="点一下打开"><\/button>关\(只按每个家机每天的免费额度限制\)<\/form><\/div>\s*<p>模型花费每 1 分/);
+  assert.ok(!page.body.includes("新人赠送") && !page.body.includes("开关的历史"), "the gift is changed in one place; switch history is in the log");
+  assert.match(page.body, /<a href="\/costs" class=""[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
   assert.ok(!page.body.includes("<script>alert"));
 
   const allOff = await start({ models: { ...fixtures.models, switches: [{ scope: "ALL", key: "*", enabled: false, note: "stop", updatedAt: AT }] } });
@@ -382,6 +387,12 @@ it("shows model switches and the quota, and changes only what the catalog names"
   const switched = await send("/models/switch", { form: change({ target: "MODEL:claude/claude-big", enabled: "off", back }) });
   assert.deepEqual([switched.status, switched.headers.location], [303, "/models?ok=1"]);
   await send("/models/switch", { form: change({ target: "ALL:*", enabled: "on" }) });
+  const single = [{ name: "Big", provider: "claude", model: "claude-big" }, { name: "Small", provider: "claude", model: "claude-small" }];
+  const one = await (await start({ models: { ...fixtures.models, switches: [] } }, undefined, undefined, { catalog: single })).send("/models");
+  assert.ok(!one.body.includes("厂商 claude"), "one company: its switch would do what the switch for everything does");
+  const oneOff = await (await start({ models: { ...fixtures.models, switches: [{ scope: "PROVIDER", key: "claude", enabled: false, note: null, updatedAt: AT }] } },
+    undefined, undefined, { catalog: single })).send("/models");
+  assert.match(oneOff.body, /aria-label="厂商 claude"/, "…unless it was turned off: then it can be turned on again");
   await send("/models/switch", { form: change({ target: "PROVIDER:other", enabled: "off" }) });
   assert.deepEqual(calls, [["model_switch_set", "MODEL", "claude/claude-big", false, "because"], ["model_switch_set", "ALL", "*", true, "because"],
     ["model_switch_set", "PROVIDER", "other", false, "because"]]);
@@ -390,11 +401,11 @@ it("shows model switches and the quota, and changes only what the catalog names"
     change({ target: "ALL:*" }), change({ target: "ALL:*", enabled: "maybe" }), change({ enabled: "off" })]) {
     assert.equal((await send("/models/switch", { form })).status, 409);
   }
-  for (const form of [change({ calls: "150" }), change({ calls: "-1", cents: "80" }), change({ calls: "1.5", cents: "80" }), change({ calls: "150", cents: "lots" })]) {
+  for (const form of [change({ calls: "150" }), change({ calls: "-1", dollars: "0.80" }), change({ calls: "1.5", dollars: "0.80" }), change({ calls: "150", dollars: "lots" }), change({ calls: "150", cents: "80" })]) {
     assert.equal((await send("/models/quota", { form })).status, 409);
   }
   assert.deepEqual(calls, []);
-  assert.equal((await send("/models/quota", { form: change({ calls: "150", cents: "80" }) })).status, 303);
+  assert.equal((await send("/models/quota", { form: change({ calls: "150", dollars: "0.8" }) })).status, 303);
   assert.deepEqual(calls, [["chat_quota_set", 150, 80, "because"]]);
   calls.length = 0;
   for (const form of [change({ key: "GROUP_CHAT_SEND" }), change({ key: "NOPE", enabled: "on" }), change({ enabled: "on" })]) {
@@ -425,10 +436,11 @@ it("shows model switches and the quota, and changes only what the catalog names"
   await send("/models/welcome", { form: change({ enabled: "off", welcome: "1000" }) });
   await send("/models/welcome", { form: change({ enabled: "on", welcome: "300" }) });
   assert.deepEqual(calls, [["models"], ["wallet_policy_set", false, 0, 10, 200, "because"], ["models"], ["wallet_policy_set", false, 300, 10, 200, "because"]]);
-  assert.match(page.body, /新人送积分<\/div><div class="big">开<\/div>\s*<div class="muted">每个新主人 1,000 积分\(钱包关着,暂时不送\)/);
+  assert.match(page.body, /开:每个新主人第一次用钱包时送 1,000 积分\(只送一次\)<\/form> <span class="muted">积分钱包关着时,不管这里开不开都不送。/);
   const noGift = await (await start({ models: { ...fixtures.models, wallet: { ...fixtures.models.wallet, welcomeCredits: 0 } } })).send("/models");
-  assert.match(noGift.body, /现在:关,新主人不送积分。/);
-  assert.match(noGift.body, /<summary>打开<\/summary>[\s\S]*name="welcome" type="number" min="1" max="100000000" value="1000"/);
+  assert.match(noGift.body, /title="点一下打开"><\/button>关:新主人不送积分<\/form>/);
+  assert.match(noGift.body, /action="\/models\/welcome"><input type="hidden" name="back" value="\/models"><input type="hidden" name="welcome" value="1000">\s*<input type="hidden" name="enabled" value="on">/);
+  assert.ok(!noGift.body.includes("改送多少"), "the amount is changed once the gift is on");
 });
 
 it("pages through the log, for everyone or one Owner", async () => {
@@ -439,6 +451,7 @@ it("pages through the log, for everyone or one Owner", async () => {
   assert.match(all.body, /<td>admin_bob<\/td><td>模型开关<\/td>\s*<td>全部模型 \*<\/td>/);
   assert.match(all.body, new RegExp(`<a href="/owners/${OWNER}">帖子</a>`));
   assert.match(all.body, /<a href="\/log\?before=8">更早的记录<\/a>/);
+  assert.match(all.body, /<dl class="detail"><dt>内容<\/dt><dd><pre>&lt;script&gt;/, "the detail is labelled, its text kept as text");
   assert.ok(!all.body.includes("<script>alert"));
   calls.length = 0;
   const one = await send(`/log?before=8&owner=${OWNER}`);
@@ -482,7 +495,6 @@ it("on the tailnet, lets in only its own name, people on the list (as their own 
     const refused = await send("/reports", headers);
     assert.deepEqual([refused.status, /不在管理员名单里/.test(refused.body)], [403, true]);
   }
-  assert.equal((await send(`/?token=${TOKEN}`, { Host: "companion-admin", Cookie: `admin_console=${TOKEN}` })).status, 403, "no token way in on the tailnet");
   assert.equal(alice.calls.length + bob.calls.length, 0, "nothing is read for someone not on the list");
 
   assert.equal((await send("/reports", as("Alice@X.test"))).status, 200, "the login is matched without case");
@@ -510,13 +522,13 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   const page = await send("/costs");
   assert.equal(page.status, 200);
   assert.deepEqual(calls, [["costs", "2026-11-01"], ["models"]], "this month (UTC) by default, with today's cap");
-  assert.ok(!page.body.includes("http-equiv") && !page.body.includes("自动刷新"), "the page is read again only on 刷新");
-  assert.match(page.body, /数据时间 2026\/11\/23 12:00:00<\/span><a class="btn" href="\/costs\?month=2026-11">刷新<\/a>/);
-  assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">3\.45 USD<\/div>/);
-  assert.match(page.body, /每天上限 20\.00 USD · 用了 17%/);
-  assert.match(page.body, /<summary>改上限<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
+  assert.ok(!page.body.includes("http-equiv") && !page.body.includes("自动刷新"), "the page is read again when the browser reloads it");
+  assert.ok(!page.body.includes(">刷新<") && !page.body.includes("每天明细"), "no second refresh button, no daily table (it is in the export)");
+  assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">\$3\.45<\/div>/);
+  assert.match(page.body, /每天上限 \$20\.00 · 用了 17%/);
+  assert.match(page.body, /<summary>改金额<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
   assert.match(page.body, /name="dollars" required inputmode="decimal" size="6" value="20">/);
-  assert.match(page.body, /<a href="\/costs" class="on">花费<\/a>/);
+  assert.match(page.body, /<a href="\/costs" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
   assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
   assert.match(page.body, /按用量的 \$5\.45 \+ 固定月费 \$35\.00/);
   const vendor = (name: string) => page.body.split('<div class="card vendor">').find(card => card.includes(`<b>${name}</b>`)) ?? "";
@@ -535,12 +547,10 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(vendor("Fly.io"), /<a href="\/system">主机状态/);
   assert.match(vendor("Fly.io"), /估算不出:后台还没有 Fly 只读令牌/, "the running month guesses Fly's bill from the servers");
   assert.match(page.body, /<title>2026-11-23\n合计:\$3\.45\nMiniMax:&lt; \$0\.01\nclaude:\$3\.45<\/title>/, "a day's hover text");
-  assert.match(page.body, /<td>2026-11-23<\/td><td class="num">\$3\.45<\/td><td class="num">12<\/td>/);
-  assert.match(page.body, /38 秒 \/ 4 条/);
   assert.match(page.body, new RegExp(`<a href="/owners/${OWNER}">Mochi</a></td><td class="num">12</td><td class="num">\\$3\\.45<`));
   assert.match(page.body, /href="\/costs\/export\.xlsx\?month=2026-11">导出 xlsx/);
   assert.ok(!page.body.includes("<script>alert"));
-  assert.deepEqual([...page.body.matchAll(/method="post" action="([^"]+)"/g)].map(m => m[1]), ["/costs/cap"],
+  assert.deepEqual([...page.body.matchAll(/method="post" action="([^"]+)"/g)].map(m => m[1]), ["/costs/cap", "/costs/cap"],
     "the costs page changes only the cap; bills and prices are on the settings page");
   const settings = await send("/costs/settings");
   assert.deepEqual(calls.at(-1), ["costs", "2026-11-01"]);
@@ -549,15 +559,19 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.match(settings.body, /size="8" value="100">/, "the price per million characters in dollars");
   assert.match(settings.body, /size="8" value="0\.38">/);
   assert.match(settings.body, /name="back" value="\/costs\/settings"/);
-  assert.match(settings.body, /<a href="\/costs" class="on">花费<\/a>/);
+  assert.match(settings.body, /<a href="\/costs" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
 
   const quiet = await start({ costs: { ...costs, month: "2026-10", days: [], fixed: [], models: { ...fixtures.spend, byDay: [], byCompanion: [] },
     totals: { modelCents: 0, hearCents: 0, speakPoints: 10, speakOverCents: 0, fixedCents: 0 } } });
   const october = await quiet.send("/costs?month=2026-10&ok=1");
   assert.deepEqual(quiet.calls, [["costs", "2026-10-01"]], "a past month: no cap, no reloading");
   assert.ok(!october.body.includes("http-equiv") && !october.body.includes("自动刷新"));
-  assert.match(october.body, /这个月总花费<\/div><div class="big">\$0\.00/);
-  assert.match(october.body, /这个月还没有按用量的花费/);
+  assert.match(october.body, /2026-10 还没有任何用量,也不算固定月费/, "a month before the App started costs nothing");
+  assert.match(october.body, /操作已完成/);
+  assert.match(october.body, /<input type="month" name="month" value="2026-10" max="2026-11" required>/, "no month after this one to pick");
+  await quiet.send("/costs?month=2027-03");
+  await quiet.send("/stats?month=2027-03");
+  assert.deepEqual(quiet.calls.slice(-3), [["costs", "2026-11-01"], ["models"], ["activity", "2026-11-01"]], "a month to come is read as this month");
   assert.ok(!october.body.includes("估算"), "a past month has no estimate: the servers then are not known");
   assert.ok(!october.body.includes("card vendor\"><div class=\"vhead\"><span><i style=\"background:#2a78d6"), "no model company without calls");
   assert.match((await quiet.send("/costs/settings")).body, /还没有填/);
@@ -603,6 +617,9 @@ it("shows a year as a ledger, and exports a month or a year as an Excel file", a
   assert.match(year.body, /<th class="num">MiniMax<\/th><th class="num">claude<\/th><th class="num">合计<\/th>/);
   assert.match(year.body, /<td><b>全年<\/b><\/td><td class="num"><b>\$55\.00<\/b><\/td><td class="num"><b>\$37\.95<\/b><\/td>/);
   assert.match(year.body, /href="\/costs\/export\.xlsx\?year=2026"/);
+  assert.match(year.body, /href="\/costs\?year=2025">← 2025/, "used since January: the year before may have been used too");
+  const lateStart = await start({ costs: { ...month, days: [], models: { ...month.models, byDay: [], byCompanion: [] } } });
+  assert.ok(!(await lateStart.send("/costs?year=2026")).body.includes("← 2025"), "nothing used this year: nothing to look for before it");
   assert.ok(!year.body.includes("http-equiv") && !year.body.includes("2027 →"));
   for (const [asked, months] of [["2025", 12], ["1999", 11], ["2099", 11], ["x", 11]] as const) {
     const other = await start({ costs: month });
@@ -636,7 +653,7 @@ it("shows how much the App is used, and the database and the servers", async () 
   const { send, calls } = await start({ activity });
   const stats = await send("/stats");
   assert.deepEqual(calls, [["activity", "2026-11-01"]]);
-  assert.match(stats.body, /<a href="\/stats" class="on">运营数据<\/a>/);
+  assert.match(stats.body, /<a href="\/stats" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>运营数据<\/a>/);
   assert.match(stats.body, /本月聊天的人<\/div><div class="big">12<\/div><div class="muted">新注册 3 人/);
   assert.match(stats.body, /今天聊天的人<\/div><div class="big">3<\/div><div class="muted">主人发 20 条 · 家机回 18 条/);
   assert.match(stats.body, /消息<\/div><div class="big">57<\/div><div class="muted">主人发 30 · 家机回 27 · 失败 3/);
@@ -671,7 +688,7 @@ it("shows how much the App is used, and the database and the servers", async () 
   assert.match(page.body, /<td>api<\/td><td>api-1 <span class="muted">m1<\/span><\/td>\s*<td><span class="tag ">运行中<\/span><\/td><td>nrt<\/td>\s*<td>1 核 · 512 MB 内存<\/td>\s*<td class="num">\$4\.83<\/td><td>deployment-7<\/td>/);
   // shared-cpu-1x with 512 MB in Tokyo: ($0.69 + $3.00) × 1.308; the 1 GB disk $0.15; stopped machines nothing.
   assert.match(page.body, /<td class="num">1 GB<\/td><td class="num">\$0\.15<\/td>/);
-  assert.match(page.body, /Fly 一整月约 <span class="tag">估算<\/span><\/div><div class="big">\$4\.98<\/div>/);
+  assert.ok(!page.body.includes("Fly 一整月约"), "the month's estimate is on the costs page");
   assert.match(page.body, /停止时只收磁盘/);
   assert.match(page.body, /2025\/11\/24 16:00:00 · 退出码 137 <span class="tag bad">内存不够被杀掉<\/span>/, "the latest exit");
   assert.match(page.body, /<td><span class="tag bad">已停止<\/span><\/td>/);
@@ -681,4 +698,49 @@ it("shows how much the App is used, and the database and the servers", async () 
   const broken = await (await start({ system }, undefined, { token: "x", apps: ["api"], fetch: (async () => { throw "offline"; }) as typeof fetch })).send("/system?auto=off");
   assert.match(broken.body, /读不到 Fly 的主机状态:offline/);
   assert.ok(!broken.body.includes("http-equiv"));
+});
+
+it("shows what the models are told, and rewords a block only when the wording can be used", async () => {
+  const { send, calls } = await start({ prompts: {} });
+  const page = await send("/prompts");
+  assert.deepEqual(calls, [["prompts"]]);
+  assert.match(page.body, /<a href="\/prompts" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>家机说明<\/a>/);
+  assert.match(page.body, /现在有 0 \/ 7 段改过/);
+  // Each prompt whole: the fixed lines, and every block in its place with a form.
+  for (const title of ["聊天回复", "写日记", "发社区动态", "自动记忆", "主人自己接的 agent(自建家机)", "群聊里要不要开口"]) assert.ok(page.body.includes(`<h2>${title}</h2>`), title);
+  assert.match(page.body, /<details class="fixed"><summary>固定的部分\(\d+ 字\)<\/summary><pre class="fixed">你是「小满」，主人的 AI 伴侣。[\s\S]*说话方式：<\/pre><\/details>\s*<div class="own "><b>可以改:说话方式<\/b><span class="tag">内置文字<\/span>\s*<pre>- 像用微信聊天/);
+  assert.match(page.body, /<pre class="fixed">- 一次可以发 1 到 3 条消息，每条单独一行；通常 1 条就够。\n- 只写你自己要说的话/);
+  assert.match(page.body, /必须保留「\[语音\]」。/);
+  assert.match(page.body, /<pre class="fixed">- 写到主人时用「\(示例\)称呼」这个称呼。\n- 语气真诚温和/);
+  assert.match(page.body, /现在是 2026年11月23日 周一 12:00。/, "the material is written for now, on the console's clock");
+  assert.equal(page.body.split('action="/prompts/set"').length - 1, 7, "one form per block, none to go back to wording that was never changed");
+  assert.equal(page.body.split('<b>可以改:什么时候发语音</b>').length - 1, 2, "the voice rules are shown again where an Owner's own agent gets them");
+  assert.match(page.body, /<textarea name="body" required maxlength="1000" rows="4">- 聊天记录里「—— ——」中间的是时间/);
+
+  // A reworded block reads as reworded everywhere; one that lost its mark is shown as not in use.
+  const saved = { CHAT_TIME: { body: `- 看看几点了。${NASTY}`, updatedAt: AT }, CHAT_VOICE: { body: "- 多发语音。", updatedAt: AT }, OLD_KEY: { body: "x", updatedAt: AT } };
+  const edited = (await (await start({ prompts: saved })).send("/prompts?ok=1")).body;
+  assert.match(edited, /操作已完成/);
+  assert.match(edited, /现在有 2 \/ 7 段改过/);
+  assert.match(edited, /<b>可以改:怎么看待时间<\/b><span class="tag">已修改 · 2026\/11\/23 08:00:00<\/span>\s*<pre>- 看看几点了。&lt;script&gt;/);
+  assert.ok(!edited.includes("<script>alert"));
+  assert.match(edited, /<div class="own off"><b>可以改:什么时候发语音<\/b><span class="tag bad">改过的文字用不了,现在用的是内置文字<\/span>\s*<pre>- 你也可以发语音/);
+  assert.match(edited, /<p class="err">内容里必须保留 \[语音\]/);
+  assert.match(edited, /<textarea name="body" required maxlength="1000" rows="6">- 多发语音。<\/textarea>/, "the saved wording is there to be fixed");
+  assert.equal(edited.split('name="restore" value="yes"').length - 1, 2);
+  assert.match(edited, /<p class="muted">内置文字是:<\/p><pre>- 聊天记录里「—— ——」中间的是时间/);
+
+  for (const form of [change({ key: "NOPE", body: "- x" }), change({ body: "- x" }), change({ key: "CHAT_STYLE", body: " \n " }), change({ key: "CHAT_STYLE" }),
+    change({ key: "CHAT_VOICE", body: "- 多发语音。" }), change({ key: "CHAT_STYLE", body: "字".repeat(1001) })]) {
+    assert.equal((await send("/prompts/set", { form })).status, 409);
+  }
+  assert.match((await send("/prompts/set", { form: change({ key: "CHAT_ACTION", body: "- 多抱抱。" }) })).body, /内容里必须保留 \[动作:/);
+  assert.equal((await send("/prompts/set", { form: { key: "CHAT_STYLE", body: "- x", reason: "r" } })).status, 409, "no tick, no change");
+  calls.length = 0;
+  const done = await send("/prompts/set", { form: change({ key: "CHAT_VOICE", body: "- 想说就写 [语音]。  \r\n\r\n- 第二条。\n", back: "/prompts" }) });
+  assert.deepEqual([done.status, done.headers.location], [303, "/prompts?ok=1"]);
+  assert.equal((await send("/prompts/set", { form: change({ key: "CHAT_TIME", restore: "yes", body: "ignored" }) })).status, 303);
+  assert.deepEqual(calls, [["prompt_set", "CHAT_VOICE", "- 想说就写 [语音]。\n- 第二条。", "because"], ["prompt_set", "CHAT_TIME", null, "because"]]);
+  const builtIn = await (await start({}, explain({ code: "55000", message: "already the built-in wording" }))).send("/prompts/set", { form: change({ key: "CHAT_TIME", restore: "yes" }) });
+  assert.match(builtIn.body, /这一段现在用的已经是内置文字。/);
 });

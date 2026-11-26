@@ -10,11 +10,11 @@
  * The operators' kill switches stop these too: "all models off", or the provider `owner-key`
  * (every BYOK connection) or `owner-agent` (every EXTERNAL one).
  */
-import { diaryPrompt, parsePost, parseReply, postPrompt, replyPrompt, agentMessages } from "../chat/prompt.ts";
-import { memoriesOf } from "../chat/platform.ts";
+import { diaryPrompt, memoryPrompt, parseMemories, parsePost, parseReply, postPrompt, replyPrompt, agentMessages } from "../chat/prompt.ts";
+import { memoriesOf, textsOf } from "../chat/platform.ts";
 import { readCompletion, type ModelResult } from "../chat/providers.ts";
-import type { ChatClaim, ChatPort, DiaryJob, PostJob } from "../chat/port.ts";
-import type { Answer, ChatModel, DiaryAnswer, PostAnswer } from "../chat/replies.ts";
+import type { ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob } from "../chat/port.ts";
+import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer } from "../chat/replies.ts";
 import type { ConnectionInput, ConnectionTest } from "../../../contracts/chat.ts";
 import { BlockedAddressError, checkUrl, createPostJson, type PostJson } from "./guard.ts";
 import type { SecretBox } from "./secret-box.ts";
@@ -45,6 +45,7 @@ export interface Connection {
 const REPLY_TOKENS = 2_000;
 const DIARY_TOKENS = 2_000;
 const POST_TOKENS = 1_000;
+const MEMORY_TOKENS = 300;
 const TEST_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 90_000;
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
@@ -138,8 +139,9 @@ export class ConnectedChatModel implements ChatModel {
     if (stored === "DISABLED") return { failed: "DISABLED" };
     context.via?.(stored.kind);
     const secret = this.#box.open(stored.secret, companionId);
-    const messages = stored.kind === "EXTERNAL" ? agentMessages(turn)
-      : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId)));
+    const texts = await textsOf(context.port);
+    const messages = stored.kind === "EXTERNAL" ? agentMessages(turn, texts)
+      : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId), texts));
     const result = await complete(this.#post, stored, secret, messages, REPLY_TOKENS, context.signal);
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the reply was cut off");
@@ -149,17 +151,29 @@ export class ConnectedChatModel implements ChatModel {
   async diary(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer> {
     const id = job.companion.companionId;
     // An agent keeps its own memories; a key gets the Owner's, as in chat.
-    const result = await this.#write(id, context, DIARY_TOKENS, async byok => diaryPrompt(job, byok ? await memoriesOf(context.port, id) : []));
+    const result = await this.#write(id, context, DIARY_TOKENS, async byok =>
+      diaryPrompt(job, byok ? await memoriesOf(context.port, id) : [], await textsOf(context.port)));
     if (result === null) return this.#platform?.diary ? this.#platform.diary(job, context) : { failed: "UNAVAILABLE" };
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : { text: result.text };
   }
 
   async post(job: PostJob, context: { port: ChatPort; signal: AbortSignal }): Promise<PostAnswer> {
-    const result = await this.#write(job.companion.companionId, context, POST_TOKENS, async () => postPrompt(job));
+    const result = await this.#write(job.companion.companionId, context, POST_TOKENS, async () => postPrompt(job, await textsOf(context.port)));
     if (result === null) return this.#platform?.post ? this.#platform.post(job, context) : { failed: "UNAVAILABLE" };
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : parsePost(result.text);
+  }
+
+  /** Through the Owner's key. An agent keeps its own memories, so nothing is noted down for one. */
+  async memory(job: MemoryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<MemoryAnswer> {
+    const id = job.companion.companionId;
+    const stored = await connectionOf(context.port, id);
+    if (stored === null) return this.#platform?.memory ? this.#platform.memory(job, context) : { failed: "UNAVAILABLE" };
+    if (stored === "DISABLED") return { failed: "DISABLED" };
+    if (stored.kind === "EXTERNAL") return { memories: [] };
+    const result = await complete(this.#post, stored, this.#box.open(stored.secret, id), toMessages(memoryPrompt(job, await textsOf(context.port))), MEMORY_TOKENS, context.signal);
+    return result.refused ? { refused: true } : { memories: parseMemories(result.text) };
   }
 
   /** One call for a diary entry or a post through the Owner's key or agent; null without a connection. */

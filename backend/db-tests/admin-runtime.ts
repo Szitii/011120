@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import pg from "pg";
 import { PgAdminDb } from "../src/admin/db.ts";
@@ -375,21 +375,24 @@ try {
   passed("the log cannot be changed, names who did what and why, and pages without gaps");
 
   // ---- the console itself, connected as an operator, against the real database ----
-  const TOKEN = "c".repeat(64);
-  consoleServer = createAdminServer({ db: new PgAdminDb(consolePool), token: TOKEN, timeZone: "UTC",
+  consoleServer = createAdminServer({ tailnet: { hostname: "companion-admin", operators: new Map([["op@x.test", new PgAdminDb(consolePool)]]) }, timeZone: "UTC",
     catalog: [{ name: "Spend fixture", provider: "admin-test-provider", model: "m-spend" }] });
-  const base = await new Promise<string>(resolve => consoleServer!.listen(0, "127.0.0.1", () =>
-    resolve(`http://127.0.0.1:${(consoleServer!.address() as AddressInfo).port}`)));
-  const web = async (path: string, form?: Record<string, string>) => {
-    const response = await fetch(`${base}${path}`, { method: form ? "POST" : "GET", redirect: "manual",
-      headers: { Cookie: `admin_console=${TOKEN}`, ...(form ? { "Content-Type": "application/x-www-form-urlencoded", Origin: base } : {}) },
-      ...(form ? { body: new URLSearchParams(form).toString() } : {}) });
-    return { status: response.status, location: response.headers.get("location"), body: await response.text() };
-  };
+  const port = await new Promise<number>(resolve => consoleServer!.listen(0, "127.0.0.1", () => resolve((consoleServer!.address() as AddressInfo).port)));
+  // As Tailscale hands it on: the tailnet name and the login (fetch would not send this Host).
+  const web = (path: string, form?: Record<string, string>, login = "op@x.test") =>
+    new Promise<{ status: number; location: string | null; body: string }>((resolve, reject) => {
+      const body = form ? new URLSearchParams(form).toString() : undefined;
+      const sent = httpRequest({ host: "127.0.0.1", port, path, method: form ? "POST" : "GET", headers: { Host: "companion-admin", "Tailscale-User-Login": login,
+        ...(form ? { "Content-Type": "application/x-www-form-urlencoded", Origin: "http://companion-admin" } : {}) } }, response => {
+        const chunks: Buffer[] = [];
+        response.on("data", chunk => chunks.push(chunk as Buffer));
+        response.on("end", () => resolve({ status: response.statusCode!, location: response.headers.location ?? null, body: Buffer.concat(chunks).toString("utf8") }));
+      });
+      sent.on("error", reject);
+      sent.end(body);
+    });
   const why = (reason: string, more: Record<string, string> = {}) => ({ reason, confirm: "yes", ...more });
-  assert.equal((await fetch(`${base}/reports`)).status, 403, "no token, no console");
-  const entered = await fetch(`${base}/?token=${TOKEN}`, { redirect: "manual" });
-  assert.deepEqual([entered.status, entered.headers.get("location")], [303, "/reports"]);
+  assert.equal((await web("/reports", undefined, "mallory@x.test")).status, 403, "not on the list, no console");
 
   const third = await person("Third");
   const fresh = await report(third.actor, target.actor, "POST", first, "Admin fixture post one");
@@ -431,7 +434,7 @@ try {
   await pool.query("insert into companion_private.chat_members(chat_id, companion_id, position) values ($1, $2, 1)", [consoleChat, A.companion]);
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
     values ($1, 'console private line', 'SENT', repeat('e', 64), now())`, [consoleChat]);
-  assert.ok((await web(`/owners/${A.owner}`)).body.includes(`<a href="/chats/${consoleChat}">Console fixture chat</a>`));
+  assert.ok((await web(`/owners/${A.owner}`)).body.includes(`<tr><td>Console fixture chat</td>`));
   const gate = await web(`/chats/${consoleChat}`);
   assert.ok(gate.status === 200 && !gate.body.includes("console private line"));
   assert.equal((await web(`/chats/${consoleChat}`, { reason: " " })).status, 409);
@@ -443,7 +446,9 @@ try {
 
   assert.equal((await web("/models")).status, 200);
   const costs = await web("/costs");
-  assert.ok(costs.status === 200 && costs.body.includes("admin-test-provider/m-spend") && costs.body.includes("总花费"), "what was spent is on the costs page");
+  // The company's card, with the model under it.
+  assert.ok(costs.status === 200 && costs.body.includes("<b>admin-test-provider</b>") && costs.body.includes("<b>m-spend</b>") && costs.body.includes("总花费"),
+    "what was spent is on the costs page");
   const today = new Date().toISOString().slice(0, 10);
   const activity = (await consolePool.query("select companion_admin.activity($1::date) as a", [today])).rows[0].a;
   const todayRow = activity.days.find((d: { day: string }) => d.day === today);
@@ -460,11 +465,47 @@ try {
   assert.ok((await web("/models")).body.includes("关(模型关闭)"));
   assert.equal((await web("/models/switch", why("Console switch on", { target: "MODEL:admin-test-provider/m-spend", enabled: "on" }))).status, 303);
   assert.ok(!(await web("/models")).body.includes("关(模型关闭)"));
-  assert.equal((await web("/models/quota", why("Console quota", { calls: String(quotaBefore.dailyCalls), cents: String(quotaBefore.dailyCostMinor) }))).status, 303);
+  assert.equal((await web("/models/quota", why("Console quota", { calls: String(quotaBefore.dailyCalls), dollars: (quotaBefore.dailyCostMinor / 100).toString() }))).status, 303);
   const logged = await web("/log");
   assert.ok(logged.status === 200 && ["Console quota", "Console switch on", "Console check", "查看私聊", "每日额度"].every(text => logged.body.includes(text)));
   assert.ok((await web(`/log?owner=${target.owner}`)).body.includes("Console suspension"));
   passed("the console pages work end to end as an operator: reports, Owners, Companions, content, chats, models, costs and the log");
+
+  // ---- 家机说明: an operator rewords a block of what the models are told; the API server reads it ----
+  const server = new PostgresChatAdapter(viewer);
+  assert.deepEqual(await server.promptTexts(), {});
+  assert.deepEqual(await admin(one, "prompts"), {});
+  assert.ok((await web("/prompts")).body.includes("现在有 0 / 7 段改过"));
+  assert.equal((await web("/prompts/set", why("Console wording", { key: "CHAT_VOICE", body: "- 没有标记。" }))).status, 409, "a wording without its mark is not saved");
+  assert.equal((await web("/prompts/set", why("Console wording", { key: "CHAT_TIME", body: "- 留意现在几点。\r\n" }))).status, 303);
+  assert.deepEqual(await server.promptTexts(), { CHAT_TIME: "- 留意现在几点。" }, "the API server reads it from the next call on");
+  assert.ok((await web("/prompts")).body.includes("现在有 1 / 7 段改过"));
+  await admin(two, "prompt_set", "CHAT_TIME", "- 第二版。", "Second wording");
+  assert.equal((await admin(one, "prompts")).CHAT_TIME.body, "- 第二版。");
+  await assert.rejects(admin(two, "prompt_set", "CHAT_TIME", "- x", " "), code("22023"));
+  await assert.rejects(admin(two, "prompt_set", "chat_time", "- x", "Not a key"), code("23514"));
+  await assert.rejects(admin(two, "prompt_set", "CHAT_TIME", "字".repeat(1001), "Too long"), code("23514"));
+  assert.deepEqual(await server.promptTexts(), { CHAT_TIME: "- 第二版。" }, "a refused change leaves the wording as it was");
+  assert.equal((await web("/prompts/set", why("Console wording back", { key: "CHAT_TIME", restore: "yes" }))).status, 303);
+  assert.deepEqual(await server.promptTexts(), {});
+  assert.equal((await web("/prompts/set", why("Console wording back", { key: "CHAT_TIME", restore: "yes" }))).status, 409, "nothing to go back from");
+  assert.deepEqual((await pool.query("select operator, reason, detail from companion_private.admin_log where action = 'PROMPT_SET' order by id desc limit 3")).rows.reverse(), [
+    { operator: "admin_test_one", reason: "Console wording", detail: { before: null, body: "- 留意现在几点。" } },
+    { operator: "admin_test_two", reason: "Second wording", detail: { before: "- 留意现在几点。", body: "- 第二版。" } },
+    { operator: "admin_test_one", reason: "Console wording back", detail: { before: "- 第二版。", body: null } },
+  ], "every change is logged with the wording before and after");
+  assert.ok((await web("/log")).body.includes("修改家机说明"));
+  // An app user reaches neither the wording nor the way to change it.
+  const user = await pool.connect();
+  try {
+    await user.query("begin"); await user.query("set local role authenticated");
+    for (const sql of ["select public.prompt_texts()", "select * from companion_private.prompt_texts", "select companion_admin.prompt_set('CHAT_TIME', 'x', 'self-service')"]) {
+      await user.query("savepoint s");
+      await assert.rejects(user.query(sql), code("42501"), sql);
+      await user.query("rollback to savepoint s");
+    }
+  } finally { await user.query("rollback"); user.release(); }
+  passed("an operator rewords what the models are told, with a reason and a before-and-after in the log; the API server reads it, app users cannot");
 
   // Leave the shared database as other suites expect it.
   await pool.query("update public.community_posts set deleted_at = coalesce(deleted_at, now()) where id = any($1)", [[first, second]]);
@@ -474,6 +515,7 @@ try {
   await new Promise<void>(resolve => consoleServer ? consoleServer.close(() => resolve()) : resolve());
   await consolePool.end().catch(() => undefined);
   await pool.query("delete from companion_private.chats where id = any($1)", [[chatId, consoleChat]]).catch(() => undefined);
+  await pool.query("delete from companion_private.prompt_texts").catch(() => undefined);
   await pool.query("update public.social_twins set status = 'ACTIVE' where id = $1", [twinB]).catch(() => undefined);
   await pool.query("update companion_private.chat_quota set daily_calls = $1, daily_cost_minor = $2", [quotaBefore.dailyCalls, quotaBefore.dailyCostMinor]).catch(() => undefined);
   await Promise.all(operators.map(client => client.end().catch(() => undefined)));

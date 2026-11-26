@@ -8,7 +8,7 @@ import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import { BackgroundScheduler } from "../src/chat/background-scheduler.ts";
-import type { ChatClaim, DiaryJob } from "../src/chat/port.ts";
+import type { ChatClaim, DiaryJob, MemoryJob } from "../src/chat/port.ts";
 import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, DiaryPage, DiarySettings, DiaryWriteResult, VoiceList }
   from "../../contracts/chat.ts";
 
@@ -113,7 +113,7 @@ try {
 
   // ---- group chats are paused at launch (feature switches, migration 0050) ----
   const setFeature = (key: string, on: boolean) => pool.query("update companion_private.feature_switches set enabled = $2 where key = $1", [key, on]);
-  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: false, groupChatSend: false, connections: false });
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: false, groupChatSend: false, voiceInput: true, connections: false });
   assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-paused-001")).status, 409);
   assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion] })).status, 200, "one-to-one chats are not paused");
   await setFeature("GROUP_CHAT_CREATE", true);
@@ -126,7 +126,7 @@ try {
   assert.equal((await call(0, `chats/${paused.id}/messages`, "POST", { body: "有人吗" })).status, 201);
   await settle(paused.id);
   assert.equal((await call(0, `chats/${paused.id}`, "DELETE")).status, 200);
-  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, connections: false });
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, voiceInput: true, connections: false });
   passed("group chats paused by switch: no new group, no sending in an old one; one-to-one chats unaffected");
 
   const group = await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001");
@@ -147,10 +147,10 @@ try {
   assert.match(page.items[0]!.body!, /SecondCompanion接着SampleCompanion的话说一句/);
   passed("a group: both answer the Owner, then they talk to each other within their interaction limit");
 
-  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, revision: 1 });
+  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", revision: 1 });
   assert.equal((await call(1, `companions/${second}/chat-settings`)).status, 404);
   const quiet = await putSettings(second, { groupActivity: "QUIET", companionInteraction: "NONE" });
-  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, revision: 2 });
+  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", revision: 2 });
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: null, revision: 1 })).status, 409);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "LOUD", companionInteraction: "NONE", model: null, revision: 2 })).status, 400);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: "not-in-catalog", revision: 2 })).status, 400);
@@ -231,12 +231,21 @@ try {
     ["BLOCKED", null, false, "说个秘密"]);
   passed("a failed reply can be retried; no model means UNAVAILABLE; the safety scan blocks the whole reply");
 
+  // What the Companion calls the Owner: saved trimmed, kept by an app that does not send it, cleared by an empty one.
+  assert.equal((await putSettings(second, { preferredUserTitle: "字".repeat(21) })).status, 400);
+  assert.equal((await putSettings(second, { preferredUserTitle: "" })).data.preferredUserTitle, null);
+  assert.equal((await putSettings(second, { preferredUserTitle: " 阿澈 " })).data.preferredUserTitle, "阿澈");
+  const { preferredUserTitle: _title, ...withoutTitle } = (await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data;
+  assert.equal((await call<ChatSettings>(0, `companions/${second}/chat-settings`, "PUT", withoutTitle)).data.preferredUserTitle, "阿澈", "an app that does not send it keeps it");
+  assert.equal((await putSettings(second, { preferredUserTitle: null })).data.preferredUserTitle, null);
+  assert.equal((await putSettings(second, { preferredUserTitle: "阿澈" })).data.preferredUserTitle, "阿澈");
   await sendTo("抢一下");
   const claim = await portA.claim(fresh.id);
   assert.ok(claim);
+  assert.deepEqual([claim.timeZone, claim.ownerName], ["Asia/Shanghai", "阿澈"], "no community settings: the default zone; the chosen title");
   assert.deepEqual([claim.companion.displayName, claim.optional, claim.direct, claim.replyTo], ["SecondCompanion", false, false, "OWNER"]);
   assert.deepEqual(claim.companion.identity, { persona: "calm" });
-  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, revision: 0 });
+  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: "阿澈", autoMemory: "SOMETIMES", revision: 0 });
   assert.equal(claim.history.at(-1)!.body, "抢一下");
   assert.equal(await portA.claim(fresh.id), null);
   assert.equal(await portA.finish(claim.replyId, randomUUID(), "SENT", ["冒名"]), false);
@@ -385,6 +394,45 @@ try {
   await portA.finish(tapped.replyId, tapped.claimId, "PASSED", null);
   passed("home-room actions: kept in the one-to-one chat, seen by the Companion, one reply per burst");
 
+  // A Companion's own action (TA 抱了抱你): only once switched on, only in a one-to-one chat.
+  const queueTurn = async (chat: string) => {
+    await pool.query(`insert into companion_private.chat_messages(chat_id, companion_id, status, reply_to, optional)
+      values ($1, $2, 'PENDING', 'OWNER', true)`, [chat, second]);
+    return (await portA.claim(chat))!;
+  };
+  const shown = async () => (await settle(secondChat.id)).items.slice(0, 2).map(m => [m.companionId, m.action ?? null, m.body]);
+  const before = await queueTurn(secondChat.id);
+  assert.equal(before.canAct, false, "switched off: the Companion is not told it may act");
+  await portA.finish(before.replyId, before.claimId, "PASSED", null);
+  await setFeature("COMPANION_ACTIONS", true);
+  const hugging = await queueTurn(secondChat.id);
+  assert.equal(hugging.canAct, true);
+  assert.equal(await portA.finish(hugging.replyId, hugging.claimId, "SENT", ["抱一下"], undefined, "HUG"), true);
+  assert.deepEqual(await shown(), [[second, null, "抱一下"], [second, "HUG", null]], "the action first, then what it says");
+  const waving = await queueTurn(secondChat.id);
+  assert.equal(await portA.finish(waving.replyId, waving.claimId, "SENT", [], undefined, "WAVE"), true);
+  assert.deepEqual((await shown())[0], [second, "WAVE", null], "an action with nothing said");
+  await assert.rejects(portA.finish((await queueTurn(secondChat.id)).replyId, randomUUID(), "SENT", [], undefined, "KISS" as never));
+  await assert.rejects(portA.finish(waving.replyId, waving.claimId, "PASSED", null, undefined, "HUG"), "an action is something sent");
+  const leftover = (await pool.query<{ id: string; claim_id: string }>(
+    "select id, claim_id from companion_private.chat_messages where chat_id = $1 and status = 'PENDING'", [secondChat.id])).rows[0]!;
+  await portA.finish(leftover.id, leftover.claim_id, "PASSED", null);
+  // The Owner hugs back: the Companion's own action a moment ago does not use up the Owner's turn.
+  await pool.query("update companion_private.chat_messages set created_at = created_at - interval '4 minutes' where chat_id = $1 and companion_id is null", [secondChat.id]);
+  assert.equal((await call<CompanionActionResult>(0, `companions/${second}/actions`, "POST", { action: "HUG" })).data.replying, true);
+  await settle(secondChat.id);
+  const after = await queueTurn(secondChat.id);
+  assert.deepEqual(after.history.slice(-5).map(h => [h.companionId === null ? "O" : "S", h.action ?? h.body]),
+    [["S", "HUG"], ["S", "抱一下"], ["S", "WAVE"], ["O", "HUG"], ["S", "（开发环境假回复）SecondCompanion知道你在小家里抱了抱你"]],
+    "a Companion's own actions are all kept in what it reads");
+  await portA.finish(after.replyId, after.claimId, "PASSED", null);
+  const inGroup = await queueTurn(fresh.id);
+  assert.equal(inGroup.canAct, false, "not in a group chat");
+  await assert.rejects(portA.finish(inGroup.replyId, inGroup.claimId, "SENT", ["嗨"], undefined, "HUG"));
+  await portA.finish(inGroup.replyId, inGroup.claimId, "PASSED", null);
+  await setFeature("COMPANION_ACTIONS", false);
+  passed("a Companion's own home-room action: behind its switch, one-to-one only, shown before its words");
+
   const pageChat = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-0000000003")).data;
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
     select $1, 'message ' || n, 'SENT', encode(sha256(convert_to('k' || n,'UTF8')), 'hex'), now() - (40 - n) * interval '1 second'
@@ -425,9 +473,24 @@ try {
   const diaryPosts = (await pool.query<{ id: string }>(`insert into public.community_posts(actor_id, body, source, deleted_at)
     values ($1, '日记测试：我的帖子', 'OWNER_PROXY', null), ($1, '日记测试：删掉的帖子', 'OWNER_PROXY', now()), ($2, '日记测试：别人的帖子', 'OWNER_PROXY', null)
     returning id`, [actorA, actorB])).rows.map(r => r.id);
+  // The Owner's time zone comes from the Companion's community settings, the name from the community profile
+  // (no title chosen for this Companion). Other suites share these rows, so they are put back afterwards.
+  const zoneBefore = (await pool.query<{ time_zone: string }>("select time_zone from companion_private.agent_settings where actor_id = $1", [actorA])).rows[0];
+  await pool.query(`insert into companion_private.agent_settings(actor_id, time_zone) values ($1, 'Europe/Paris')
+    on conflict (actor_id) do update set time_zone = excluded.time_zone`, [actorA]);
+  const nameBefore = (await pool.query<{ display_name: string | null }>("select display_name from public.owners where id = $1", [A.owner])).rows[0]!.display_name;
+  const humanBefore = (await pool.query<{ human_display_name: string | null }>(
+    "select human_display_name from public.community_actors where owner_id = $1 and kind = 'HUMAN'", [A.owner])).rows[0];
+  await pool.query("update public.owners set display_name = '小田' where id = $1", [A.owner]);
+  await pool.query("update public.community_actors set human_display_name = null where owner_id = $1 and kind = 'HUMAN'", [A.owner]);
   let seen: DiaryJob | undefined;
   const capturing = new ChatReplies({ reply: async () => ({ pass: true }), diary: async job => { seen = job; return { text: " 今天主人抱了抱我。 " }; } });
   const firstEntry = await capturing.writeDiary(A.companion, portA);
+  assert.deepEqual([seen!.timeZone, seen!.ownerName], ["Europe/Paris", "小田"]);
+  if (zoneBefore) await pool.query("update companion_private.agent_settings set time_zone = $2 where actor_id = $1", [actorA, zoneBefore.time_zone]);
+  else await pool.query("delete from companion_private.agent_settings where actor_id = $1", [actorA]);
+  await pool.query("update public.owners set display_name = $2 where id = $1", [A.owner, nameBefore]);
+  if (humanBefore) await pool.query("update public.community_actors set human_display_name = $2 where owner_id = $1 and kind = 'HUMAN'", [A.owner, humanBefore.human_display_name]);
   assert.deepEqual([firstEntry.status, firstEntry.entry?.body, firstEntry.entry?.companionId], ["WRITTEN", "今天主人抱了抱我。", A.companion]);
   assert.equal(seen!.companion.displayName, "SampleCompanion");
   assert.ok(seen!.messages.some(m => m.companionId === null && m.body === "你好呀"), "the one-to-one chat");
@@ -489,6 +552,97 @@ try {
     outputTokens: 1, costMinor: 1 }), { decision: "STALE" }, "a finished entry cannot book again");
   passed("diary model calls are booked as DIARY_ENTRY and settled");
 
+  // ---- memories a Companion notes down by itself (自动记忆) ----
+  const memories = async () => (await call<{ items: { body: string; source: string }[] }>(0, `companions/${second}/memories`)).data.items;
+  const ownerSays = (n: number) => pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
+    select $1, '记忆测试 ' || g, 'SENT', encode(sha256(convert_to(gen_random_uuid()::text,'UTF8')), 'hex'), clock_timestamp() from generate_series(1, $2::int) g`,
+    [secondChat.id, n]);
+  const fake = new ChatReplies(devChatModel);
+  // On unless the Owner turns it off, at the slow pace: every 50 messages of the Owner; everything said so far counts the first time.
+  assert.equal((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data.autoMemory, "SOMETIMES");
+  const soFar = (await pool.query(`select count(*)::int as n from companion_private.chat_messages
+    where chat_id = $1 and companion_id is null and body is not null and status = 'SENT' and shown_at is not null`, [secondChat.id])).rows[0].n as number;
+  assert.ok(soFar < 49, `the fixture chat is short (${soFar})`);
+  await ownerSays(49 - soFar);
+  assert.equal((await portA.memoryBegin(second)).status, "NOT_DUE", "49 are not 50");
+  await ownerSays(1);
+  const fiftieth = await portA.memoryBegin(second);
+  assert.equal(fiftieth.status, "WRITE");
+  assert.equal(await portA.memoryFinish(second, (fiftieth as MemoryJob).claimId, []), true);
+  await putSettings(second, { autoMemory: "OFF" });
+  assert.equal(await fake.remember(second, portA), "OFF");
+  assert.equal((await putSettings(second, { autoMemory: "LOUD" as never })).status, 400);
+  assert.equal((await putSettings(second, { autoMemory: "OFTEN" })).data.autoMemory, "OFTEN");
+  const { autoMemory: _auto, ...withoutAuto } = (await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data;
+  assert.equal((await call<ChatSettings>(0, `companions/${second}/chat-settings`, "PUT", withoutAuto)).data.autoMemory, "OFTEN", "an app that does not send it keeps it");
+  // Everything said so far counts the first time; from then on, every 10 messages of the Owner.
+  await ownerSays(10);
+  assert.equal(await fake.remember(second, portA), "DONE");
+  assert.deepEqual((await memories()).map(m => [m.body, m.source]), [["（开发环境假记忆）主人说过：「记忆测试 10」", "AUTO"]]);
+  assert.equal(await fake.remember(second, portA), "NOT_DUE", "nothing new since");
+  await ownerSays(9);
+  assert.equal(await fake.remember(second, portA), "NOT_DUE", "nine are not ten");
+  await ownerSays(1);
+  let noted: MemoryJob | undefined;
+  const watching = new ChatReplies({ reply: async () => ({ pass: true }), memory: async job => { noted = job; return { memories: ["主人周三生日", "主人怕黑", "第三条"] }; } });
+  assert.equal(await watching.remember(second, portA), "DONE");
+  assert.deepEqual([noted!.messages.length, noted!.messages.at(-1)!.body, noted!.memories[0], noted!.companion.displayName, noted!.timeZone],
+    [10, "记忆测试 1", "（开发环境假记忆）主人说过：「记忆测试 10」", "SecondCompanion", "Asia/Shanghai"], "only what was said since, and what it already remembers");
+  assert.deepEqual((await memories()).map(m => `${m.source} ${m.body}`).sort(),
+    ["AUTO 主人周三生日", "AUTO 主人怕黑", "AUTO （开发环境假记忆）主人说过：「记忆测试 10」"], "two at most");
+  // The same sentence again is not kept twice; a failed attempt waits ten minutes and keeps the messages for the next one.
+  await ownerSays(10);
+  const before3 = (await memories()).length;
+  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: ["主人怕黑"] }) }).remember(second, portA), "DONE");
+  assert.equal((await memories()).length, before3);
+  await ownerSays(10);
+  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }) }).remember(second, portA), "FAILED", "no model that takes notes");
+  assert.equal(await fake.remember(second, portA), "NOT_DUE", "ten minutes after a failed attempt");
+  await pool.query("update companion_private.memory_notes set failed_at = now() - interval '11 minutes' where companion_id = $1", [second]);
+  // Booked as MEMORY_CONSOLIDATION on the cheap model, and settled.
+  const noteEngine = new PlatformChatModel(catalog, async () => ({ text: "主人养了一只猫", inputTokens: 300, outputTokens: 10, refused: false, cutOff: false }));
+  assert.equal(await new ChatReplies(noteEngine).remember(second, portA), "DONE");
+  const noteLedger = await pool.query(`select x.reason_code, x.trigger_event_type, string_agg(e.status, '>' order by e.sequence) as s
+    from public.compute_transactions x join public.compute_ledger_entries e on e.transaction_id = x.id
+    where x.companion_id = $1 and x.trigger_event_type = 'CHAT_MEMORY' group by 1, 2`, [second]);
+  assert.deepEqual(noteLedger.rows, [{ reason_code: "MEMORY_CONSOLIDATION", trigger_event_type: "CHAT_MEMORY", s: "RESERVED>STARTED>SUCCEEDED" }]);
+  // An attempt left hanging is closed after 3 minutes, and then counts as a failed one.
+  await ownerSays(10);
+  const hangingJob = await portA.memoryBegin(second);
+  assert.equal(hangingJob.status, "WRITE");
+  assert.equal((await portA.memoryBegin(second)).status, "WRITING");
+  await pool.query("update companion_private.memory_notes set claimed_at = now() - interval '4 minutes' where companion_id = $1", [second]);
+  assert.equal((await portA.memoryBegin(second)).status, "NOT_DUE");
+  assert.equal(await portA.memoryFinish(second, (hangingJob as MemoryJob).claimId, ["太晚了"]), false, "the abandoned attempt cannot hand anything in");
+  // Turned off while an attempt hangs: the next reply still closes it.
+  await pool.query("update companion_private.memory_notes set failed_at = null where companion_id = $1", [second]);
+  assert.equal((await portA.memoryBegin(second)).status, "WRITE");
+  await putSettings(second, { autoMemory: "OFF" });
+  await pool.query("update companion_private.memory_notes set claimed_at = now() - interval '4 minutes' where companion_id = $1", [second]);
+  assert.equal((await portA.memoryBegin(second)).status, "OFF");
+  assert.equal((await pool.query("select claim_id from companion_private.memory_notes where companion_id = $1", [second])).rows[0].claim_id, null);
+  await putSettings(second, { autoMemory: "OFTEN" });
+  await assert.rejects(portA.memoryFinish(second, randomUUID(), ["一", "二", "三"]));
+  // At 200 memories the oldest one it noted itself makes room; the Owner's own are never removed.
+  await pool.query("update companion_private.memory_notes set failed_at = null where companion_id = $1", [second]);
+  const notedBefore = (await memories()).filter(m => m.source === "AUTO").length;
+  await pool.query(`insert into companion_private.companion_memories(companion_id, body, source, key_hash)
+    select $1, '主人写的 ' || g, 'OWNER', encode(sha256(convert_to('fill' || g,'UTF8')), 'hex') from generate_series(1, $2::int) g`,
+    [second, 200 - (await memories()).length]);
+  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: ["新的一条"] }) }).remember(second, portA), "DONE");
+  const full = await memories();
+  assert.deepEqual([full.length, full.filter(m => m.source === "AUTO").length, full.some(m => m.body === "新的一条"),
+    full.some(m => m.body.startsWith("（开发环境假记忆）"))], [200, notedBefore, true, false], "the oldest AUTO memory made room");
+  await pool.query("update companion_private.companion_memories set source = 'OWNER', key_hash = encode(sha256(convert_to(id::text,'UTF8')), 'hex') where companion_id = $1 and source = 'AUTO'", [second]);
+  await ownerSays(10);
+  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: ["放不下的一条"] }) }).remember(second, portA), "DONE");
+  assert.equal((await memories()).some(m => m.body === "放不下的一条"), false, "full of the Owner's own: nothing is removed, nothing added");
+  assert.equal((await call(1, `companions/${second}/memories`)).status, 404);
+  await assert.rejects(new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).memoryBegin(second), { code: "NOT_FOUND" });
+  await pool.query("delete from companion_private.companion_memories where companion_id = $1", [second]);
+  await putSettings(second, { autoMemory: "OFF" });
+  passed("memories it notes down by itself: on by default every 50 messages, every 10 when asked, two at most, booked, 200 kept with the Owner's own never removed");
+
   // ---- background diaries (autoWrite, migration 0052) ----
   const background = (platform: boolean, written: string[]) => new BackgroundScheduler({
     server: new PgOwnerExecutor(pool, null), portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
@@ -530,6 +684,11 @@ try {
   await pool.query("delete from public.community_posts where id = any($1::uuid[])", [diaryPosts]);
 
   // Voice messages. Without a speech key the dev host speaks silence (a WAV), so the whole path runs here.
+  // The Owner's own voice messages wait behind the operators' switch (the dev seed turns it on).
+  await setFeature("VOICE_INPUT", false);
+  assert.deepEqual([(await call<VoiceList>(0, "voices")).data.input, (await call<{ voiceInput: boolean }>(0, "features")).data.voiceInput], [false, false]);
+  await setFeature("VOICE_INPUT", true);
+  assert.deepEqual([(await call<VoiceList>(0, "voices")).data.input, (await call<{ voiceInput: boolean }>(0, "features")).data.voiceInput], [true, true]);
   const voiceList = (await call<VoiceList>(0, "voices")).data;
   assert.equal(voiceList.available, true);
   const voiceId = voiceList.items[0]!.id;

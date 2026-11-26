@@ -226,7 +226,8 @@ paths:
       description: |
         groupChatCreate false: POST /chats with 2 or more Companions answers 409. groupChatSend false:
         existing group chats can be read and deleted, but sending and retrying in them answer 409.
-        connections false: PUT .../connection answers 501.
+        connections false: PUT .../connection answers 501. voiceInput false: POST /chats/{id}/voice
+        answers 503 (the same as `input` in GET /voices).
       x-capability-status: implemented
       responses:
         '200':
@@ -240,6 +241,7 @@ paths:
                   groupChatCreate: {type: boolean}
                   groupChatSend: {type: boolean}
                   connections: {type: boolean}
+                  voiceInput: {type: boolean}
         '401': *problem
         '403': *problem
   /companions/{companionId}/anniversary:
@@ -767,6 +769,71 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+  /companions/{companionId}/persona:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: getPersona
+      summary: Who the Companion is and how it talks, as its Owner wrote it
+      description: |
+        The persona is sent to the model with every reply, diary entry and post, above the
+        platform's own rules. Each field is one text ("" when the Companion has none), no longer
+        than the 600 characters the models are told.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The persona
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionPersona'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    put:
+      operationId: savePersona
+      summary: Rewrite persona fields; used from the next reply on
+      description: |
+        Only the fields sent are changed; "" takes a field out. The name is not changed here.
+        Every change is a new version; `version` must be the current one (409 otherwise: read
+        again). 409 too after 30 changes in an hour. The texts are scanned like an imported card:
+        422 names the field and why, and nothing is saved.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              additionalProperties: false
+              minProperties: 2
+              properties:
+                version: {type: integer, minimum: 1}
+                identitySummary: {type: string, maxLength: 600}
+                personaTraits: {type: string, maxLength: 600}
+                speakingStyle: {type: string, maxLength: 600}
+                values: {type: string, maxLength: 600}
+                boundaries: {type: string, maxLength: 600}
+                aspirations: {type: string, maxLength: 600}
+      responses:
+        '200':
+          description: The persona as saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionPersona'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: A field holds something that may not be kept; nothing was saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PersonaRefusal'}
   /companions/{companionId}/memories/{memoryId}:
     parameters:
     - name: companionId
@@ -892,6 +959,9 @@ paths:
         characters). result says how the test went; the connection changes only when it is CONNECTED.
         501 when the server has no CONNECTION_SECRET_KEY (connections are off). 429 after 10 tests in
         10 minutes.
+        With `copyFrom` instead: take over the connection another Companion of the same Owner already
+        has, so the key is not typed twice. The server copies and tests it; afterwards the two are
+        separate. 404 when `copyFrom` is not the Owner's Companion, 409 when it has no connection.
       x-capability-status: implemented
       requestBody:
         required: true
@@ -918,6 +988,12 @@ paths:
                   endpoint: {type: string, description: 'The full https URL that answers in the OpenAI /chat/completions format.'}
                   bearerToken: {type: string, maxLength: 512, description: Empty for none.}
                   model: {type: [string, 'null'], maxLength: 120}
+                  consent: {const: true}
+              - type: object
+                required: [copyFrom, consent]
+                additionalProperties: false
+                properties:
+                  copyFrom: {type: string, format: uuid, description: Another Companion of the same Owner that has a connection of its own.}
                   consent: {const: true}
       responses:
         '200':
@@ -1133,7 +1209,10 @@ components:
           oneOf:
           - $ref: '#/components/schemas/CompanionAction'
           - type: 'null'
-          description: Set when the Owner did a home-room action (show it as a grey line); then body is null.
+          description: |
+            A home-room action (show it as a grey line); then body is null. companionId null - the Owner
+            did it; otherwise that Companion did it to the Owner, by its own choice while replying in a
+            one-to-one chat (at most one per reply).
         mentions: {type: array, items: {type: string, format: uuid}}
         status: {type: string, enum: [SENT, FAILED, BLOCKED]}
         failure:
@@ -1204,8 +1283,35 @@ components:
       properties:
         id: {type: string, format: uuid}
         body: {type: string}
-        source: {type: string, enum: [IMPORT, OWNER], description: 'IMPORT: approved from a card. OWNER: added by hand.'}
+        source:
+          type: string
+          enum: [IMPORT, OWNER, AUTO]
+          description: 'IMPORT: approved from a card. OWNER: added by hand. AUTO: noted down by the Companion itself (autoMemory).'
         createdAt: {type: string, format: date-time}
+    CompanionPersona:
+      type: object
+      required: [companionId, displayName, version, updatedAt, identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations]
+      properties:
+        companionId: {type: string, format: uuid}
+        displayName: {type: string}
+        version: {type: integer, description: Goes up by one with every change; send it back on PUT}
+        updatedAt: {type: string, format: date-time}
+        identitySummary: {type: string, description: 简介}
+        personaTraits: {type: string, description: 性格}
+        speakingStyle: {type: string, description: 说话风格}
+        values: {type: string, description: 在意的事}
+        boundaries: {type: string, description: 边界}
+        aspirations: {type: string, description: 向往}
+    PersonaRefusal:
+      type: object
+      required: [code, field, reason]
+      properties:
+        code: {type: string, enum: [PERSONA_REFUSED]}
+        field: {type: string, enum: [identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations]}
+        reason:
+          type: string
+          enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]
+          description: 'CREDENTIAL: a key or password. PRIVATE_DATA: an e-mail address or phone number (a long run of digits too). INSTRUCTION: reads as an order to ignore the rules. LINK: a web address or page code.'
     CompanionConnection:
       type: object
       required: [kind, provider, baseUrl, model, name, keyHint, connectedAt]
@@ -1250,6 +1356,20 @@ components:
           description: |
             An id from GET /voices - the Companion sometimes answers with a voice message in this voice.
             null - text only (default). Always sent; on PUT, leaving it out keeps the current voice.
+        preferredUserTitle:
+          type: [string, 'null']
+          maxLength: 20
+          description: |
+            What the Companion calls the Owner, 1 to 20 characters on one line. null (default) - the
+            Owner's community display name, or no name when there is none. Always sent; on PUT,
+            leaving it out keeps the current one and an empty string clears it.
+        autoMemory:
+          type: string
+          enum: ['OFF', SOMETIMES, OFTEN]
+          description: |
+            自动记忆 - the Companion notes down by itself what is worth remembering from the one-to-one chat
+            (memories with source AUTO). SOMETIMES (default) - after every 50 messages of the Owner.
+            OFTEN - after every 10. OFF - the Owner turned it off. Always sent; on PUT, leaving it out keeps the current one.
         revision: {type: integer, minimum: 1}
     VoiceInfo:
       type: object

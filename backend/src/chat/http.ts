@@ -24,11 +24,13 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET|PUT /v0/companions/{id}/persona                who it is and how it talks, as the Owner wrote it
  *   GET    /v0/features                                what the app may offer (group chats, connections)
  *   GET    /v0/wallet                                  the Owner's credits for platform models
  *   GET|POST /v0/companions/{id}/agent-keys             keys for the Owner's own agent to check in (agent/heartbeat.ts)
  *   DELETE /v0/companions/{id}/agent-keys/{keyId}      revoke one
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
+ *                                                      (PUT { copyFrom } takes over another of the Owner's Companions' connection)
  *   DELETE /v0/companions/{id}                         delete the Companion and what was private to it
  *   PUT    /v0/owner/avatar, /v0/companions/{id}/avatar { avatar }  a built-in avatar ("preset:<id>") or null
  *
@@ -36,7 +38,7 @@
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
-import { hasCredential } from "../companion-import/policy.ts";
+import { hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
@@ -44,7 +46,8 @@ import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
-import type { ConnectionInput, ConnectionSaveResult, CompanionConnection } from "../../../contracts/chat.ts";
+import type { CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal } from "../../../contracts/chat.ts";
+import { PERSONA_CHARS, PERSONA_KEYS, personaTexts, type PersonaKey } from "./prompt.ts";
 import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 import { RECORDING_TYPES, type Heard, type RecordingType, type Voices } from "./voices.ts";
@@ -76,6 +79,35 @@ function body(request: MvpHttpRequest, allowed: readonly string[]): Record<strin
   return value as Record<string, unknown>;
 }
 
+/** The stored persona as the Owner reads and edits it: each field one text, as the models are told it. */
+function personaView(stored: unknown): CompanionPersona {
+  const { companionId, displayName, version, document, updatedAt } = stored as Omit<CompanionPersona, PersonaKey> & { document: unknown };
+  return { companionId, displayName, version, updatedAt, ...personaTexts(document) };
+}
+
+/**
+ * Why a persona text cannot be kept, or null. The same scan an imported card gets: the text goes to
+ * the model with every reply, and the Owner may copy it to the public profile.
+ */
+function personaRefusal(text: string): PersonaRefusal["reason"] | null {
+  return hasCredential(text) ? "CREDENTIAL" : hasPromptInjection(text) ? "INSTRUCTION" : hasActiveContent(text) ? "LINK"
+    : hasPii(text) ? "PRIVATE_DATA" : null;
+}
+
+/** PUT persona: the version the Owner was looking at, and at least one field (a text of up to 600 characters, "" takes it out). */
+function personaInput(request: MvpHttpRequest): { version: number; fields: Partial<Record<PersonaKey, string>> } {
+  const input = body(request, ["version", ...PERSONA_KEYS]);
+  const fields: Partial<Record<PersonaKey, string>> = {};
+  for (const key of PERSONA_KEYS) {
+    const value = input[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || Array.from(value.trim()).length > PERSONA_CHARS) return invalid();
+    fields[key] = value.trim();
+  }
+  if (!Number.isSafeInteger(input.version) || (input.version as number) < 1 || Object.keys(fields).length === 0) return invalid();
+  return { version: input.version as number, fields };
+}
+
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
 function retryKey(request: MvpHttpRequest, ownerId: string): string {
   const key = header(request, "idempotency-key");
@@ -91,18 +123,27 @@ function text(value: unknown, max: number): string {
 }
 
 /**
- * Every setting is required but `voice`; `model` is null (platform default) or an id from the
- * catalog; `voice` is null (text only) or an id from the voice catalog, and left out keeps the current one.
+ * Every setting is required but `voice`, `preferredUserTitle` and `autoMemory`, which keep their
+ * current value when left out. `model` is null (platform default) or an id from the catalog;
+ * `voice` is null (text only) or an id from the voice catalog; `preferredUserTitle` is null or
+ * empty (the default) or 1 to 20 characters on one line.
  */
 function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined, voices: Voices | undefined): ChatSettings {
-  const { groupActivity, companionInteraction, model, voice, revision } =
-    body(request, ["groupActivity", "companionInteraction", "model", "voice", "revision"]);
+  const { groupActivity, companionInteraction, model, voice, preferredUserTitle: title, autoMemory, revision } =
+    body(request, ["groupActivity", "companionInteraction", "model", "voice", "preferredUserTitle", "autoMemory", "revision"]);
   if (!["QUIET", "NORMAL", "ACTIVE"].includes(groupActivity as string)
     || !["NONE", "RARE", "NORMAL", "LIVELY"].includes(companionInteraction as string)
     || !(model === null || (typeof model === "string" && catalog?.has(model)))
     || !(voice === undefined || voice === null || (typeof voice === "string" && voices?.catalog.find(voice) !== undefined))
+    || !(title === undefined || title === null || (typeof title === "string" && Array.from(title.trim()).length <= 20
+      && !/[\p{Cc}\u2028\u2029]/u.test(title.trim())))
+    || !(autoMemory === undefined || ["OFF", "SOMETIMES", "OFTEN"].includes(autoMemory as string))
     || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
-  return { groupActivity, companionInteraction, model, ...(voice === undefined ? {} : { voice }), revision } as ChatSettings;
+  return {
+    groupActivity, companionInteraction, model, ...(voice === undefined ? {} : { voice }),
+    ...(title === undefined ? {} : { preferredUserTitle: (title as string | null)?.trim() || null }),
+    ...(autoMemory === undefined ? {} : { autoMemory }), revision,
+  } as ChatSettings;
 }
 
 /** Audio bytes, or the part a Range header asks for (players seek and stream with it). */
@@ -124,11 +165,16 @@ function audio(request: MvpHttpRequest, clip: { mime: string; bytes: Uint8Array 
   };
 }
 
-function voiceList(voices: Voices | undefined): VoiceList {
+/** Whether the Owner can send voice messages now: speech recognition is configured and the operators' switch is on. */
+async function hears(voices: Voices | undefined, port: ChatPort): Promise<boolean> {
+  return voices?.listening === true && (await port.features() as { voiceInput?: unknown }).voiceInput === true;
+}
+
+async function voiceList(voices: Voices | undefined, port: ChatPort): Promise<VoiceList> {
   return {
     items: (voices?.catalog.voices ?? []).map(v => ({ id: v.id, name: v.name, gender: v.gender, description: v.description })),
     available: voices?.available === true,
-    input: voices?.listening === true,
+    input: await hears(voices, port),
   };
 }
 
@@ -219,6 +265,7 @@ export async function handleChatRequest(
   const featuresRoute = path[1] === "features" && path.length === 2;
   const walletRoute = path[1] === "wallet" && path.length === 2;
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
+  const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
   const agentKeysRoute = path[1] === "companions" && path[3] === "agent-keys" && (path.length === 4 || path.length === 5);
@@ -226,7 +273,7 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, memoriesRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
+    badgesRoute, featuresRoute, walletRoute, memoriesRoute, personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
@@ -247,11 +294,12 @@ export async function handleChatRequest(
   if (featuresRoute) {
     if (method !== "GET") return notFound();
     const switches = await port.features() as Omit<PlatformFeatures, "connections">;
-    return response(200, { ...switches, connections: connections !== undefined } satisfies PlatformFeatures);
+    return response(200, { ...switches, voiceInput: switches.voiceInput === true && replies.voices?.listening === true,
+      connections: connections !== undefined } satisfies PlatformFeatures);
   }
   if (voicesRoute) {
     if (method !== "GET") return notFound();
-    if (path.length === 2) return response(200, voiceList(replies.voices));
+    if (path.length === 2) return response(200, await voiceList(replies.voices, port));
     const voice = replies.voices?.available ? replies.voices.catalog.find(path[2]!) : undefined;
     if (voice === undefined) return notFound();
     // A sample made now (not one kept from before) used MiniMax points: book them like a voice message.
@@ -299,10 +347,22 @@ export async function handleChatRequest(
     if (method === "GET") return response(200, await port.connectionView(companionId));
     if (method === "DELETE") return response(200, await port.removeConnection(companionId));
     if (method !== "PUT") return notFound();
-    const input = connectionInput(request);
+    // Either a new connection, or the one another Companion of this Owner already has ({ copyFrom, consent }).
+    const copyFrom = (request.body as { copyFrom?: unknown } | undefined)?.copyFrom;
+    const input = copyFrom === undefined ? connectionInput(request) : body(request, ["copyFrom", "consent"]);
+    if (copyFrom !== undefined && (input.consent !== true || id(copyFrom) === companionId)) return invalid();
     if (connections === undefined) return response(501, { code: "CONNECTIONS_UNAVAILABLE" });
     const current = await port.connectionView(companionId) as CompanionConnection; // 404 unless it is the Owner's
-    const checked = checkConnection(input);
+    let checked: ReturnType<typeof checkConnection>;
+    if (copyFrom === undefined) {
+      checked = checkConnection(input as ConnectionInput);
+    } else {
+      // 404 unless the other Companion is the Owner's too. Its key is opened here and sealed again
+      // for this Companion below: it never leaves the server and the Owner does not type it twice.
+      const source = await port.connection(copyFrom as string);
+      if (source === null) throw new PostgresPersistenceError("INVALID_STATE", "The other Companion has no connection of its own.");
+      checked = { ...source, secret: connections.box.open(source.secret, copyFrom as string) };
+    }
     if (checked === "INVALID_INPUT" || checked === "INVALID_URL") return invalid();
     if (checked === "BLOCKED_ADDRESS") return response(200, { result: "BLOCKED_ADDRESS", connection: current } satisfies ConnectionSaveResult);
     if (!connections.allow(session.ownerId)) return response(429, { code: "TOO_MANY_TESTS" });
@@ -343,6 +403,17 @@ export async function handleChatRequest(
     if (hasCredential(memory)) return invalid();
     return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
   }
+  if (personaRoute) {
+    const companionId = id(path[2]);
+    if (method === "GET") return response(200, personaView(await port.persona(companionId)));
+    if (method !== "PUT") return notFound();
+    const { version, fields } = personaInput(request);
+    for (const key of PERSONA_KEYS) {
+      const reason = personaRefusal(fields[key] ?? "");
+      if (reason !== null) return response(422, { code: "PERSONA_REFUSED", field: key, reason } satisfies PersonaRefusal);
+    }
+    return response(200, personaView(await port.savePersona(companionId, version, fields)));
+  }
   if (diaryRoute) {
     const companionId = id(path[2]);
     if (path.length === 5) return method === "DELETE" ? response(200, await port.deleteDiary(companionId, id(path[4]))) : notFound();
@@ -377,7 +448,7 @@ export async function handleChatRequest(
     const said = recording(request);
     const key = retryKey(request, session.ownerId);
     const voices = replies.voices;
-    if (voices === undefined || !voices.listening) return response(503, { code: "VOICE_UNAVAILABLE" });
+    if (voices === undefined || !await hears(voices, port)) return response(503, { code: "VOICE_UNAVAILABLE" });
     // Checked before paying for recognition; the database checks again when it stores the message.
     if ((await port.voiceLeft()).owner <= 0) return response(429, { code: "VOICE_LIMIT" });
     let heard: Heard;

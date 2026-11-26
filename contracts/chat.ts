@@ -21,7 +21,9 @@ export interface ChatMessage {
   /** null when the reply failed or was blocked, and for an action. */
   body: string | null;
   /**
-   * Set when the Owner did a home-room action (show it as a grey line, e.g. "你摸了摸 TA 的头"); then body is null.
+   * A home-room action; then body is null. Show it as a grey line by who did it: companionId null is
+   * the Owner ("你摸了摸 TA 的头"), otherwise that Companion did it to the Owner ("TA 摸了摸你的头").
+   * A Companion decides by itself to do one while it replies in a one-to-one chat, at most one per reply.
    * The server always sends it (null for ordinary messages); optional here so app code written before it still compiles.
    */
   action?: CompanionAction | null;
@@ -76,6 +78,8 @@ export interface PlatformFeatures {
   groupChatSend: boolean;
   /** Connecting the Owner's own key or agent (PUT .../connection). Off: 501. */
   connections: boolean;
+  /** The Owner's voice messages (POST /v0/chats/{id}/voice); the same as `input` in GET /v0/voices. Off: 503. */
+  voiceInput?: boolean;
 }
 
 /** GET /v0/badges: every unread count for the tab badges. */
@@ -153,6 +157,18 @@ export interface ChatSettings {
    * Always sent; on PUT, leaving it out keeps the current voice.
    */
   voice?: string | null;
+  /**
+   * What the Companion calls the Owner (TA 怎么称呼你), 1 to 20 characters. null (default): the
+   * Owner's community display name, or no name when there is none.
+   * Always sent; on PUT, leaving it out keeps the current one.
+   */
+  preferredUserTitle?: string | null;
+  /**
+   * 自动记忆: the Companion notes down by itself what is worth remembering from the one-to-one chat,
+   * as memories with source AUTO. SOMETIMES (default): after every 50 messages of the Owner;
+   * OFTEN: after every 10; OFF: the Owner turned it off. Always sent; on PUT, leaving it out keeps the current one.
+   */
+  autoMemory?: "OFF" | "SOMETIMES" | "OFTEN";
   revision: number;
 }
 
@@ -256,13 +272,62 @@ export interface DiaryWriteResult {
 /**
  * 长期记忆: one thing a Companion remembers, used when it chats and writes its diary. Only the Owner
  * adds memories (by hand, or by approving them one by one when importing a card), and sees and
- * deletes all of them. IMPORT: came from an approved card. OWNER: added by hand.
+ * deletes all of them. IMPORT: came from an approved card. OWNER: added by hand. AUTO: the Companion
+ * noted it down itself (ChatSettings.autoMemory). More sources may come: show an unknown one plainly.
  */
 export interface CompanionMemory {
   id: string;
   body: string;
-  source: "IMPORT" | "OWNER";
+  source: "IMPORT" | "OWNER" | "AUTO";
   createdAt: string;
+}
+
+/**
+ * 家机说明 (人设): who a Companion is and how it talks, as its Owner wrote it. Sent to the model with
+ * every reply, diary entry and post, above the platform's own rules. GET and PUT
+ * /v0/companions/{id}/persona. Each field is one text of up to 600 characters ("" when the
+ * Companion has none); a field from an imported card that was longer is shown cut to what the
+ * models are told. The name is not changed here.
+ */
+export interface CompanionPersona {
+  companionId: string;
+  displayName: string;
+  /** Goes up by one with every change; send it back on PUT. */
+  version: number;
+  /** When this version was saved. */
+  updatedAt: string;
+  /** 简介 */
+  identitySummary: string;
+  /** 性格 */
+  personaTraits: string;
+  /** 说话风格 */
+  speakingStyle: string;
+  /** 在意的事 */
+  values: string;
+  /** 边界 */
+  boundaries: string;
+  /** 向往 */
+  aspirations: string;
+}
+
+/**
+ * PUT /v0/companions/{id}/persona. `version` is the one from the last GET (409 when another device
+ * saved first: read again). Only the fields sent are changed; "" takes a field out. Answers the new
+ * CompanionPersona. 409 too when changed more than 30 times in an hour.
+ */
+export type PersonaInput = { version: number } & Partial<Pick<CompanionPersona,
+  "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations">>;
+
+/**
+ * 422 from PUT persona: one field holds something that may not be kept, and nothing was saved.
+ * CREDENTIAL: a key or password. PRIVATE_DATA: an e-mail address or a phone number (a long run of
+ * digits, a date written like 2026-12-03 too). INSTRUCTION: text that reads as an order to the
+ * model to ignore its rules. LINK: a web address or page code.
+ */
+export interface PersonaRefusal {
+  code: "PERSONA_REFUSED";
+  field: "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations";
+  reason: "CREDENTIAL" | "PRIVATE_DATA" | "INSTRUCTION" | "LINK";
 }
 
 /** GET /v0/companions/{id}/memories: every memory, newest first (at most 200 per Companion). */
@@ -293,6 +358,15 @@ export interface CompanionConnection {
 export type ConnectionInput =
   | { kind: "BYOK"; provider: string; baseUrl?: string; model: string; apiKey: string; consent: boolean }
   | { kind: "EXTERNAL"; name: string; endpoint: string; bearerToken: string; model?: string | null; consent: boolean };
+
+/**
+ * PUT /v0/companions/{id}/connection, the other way: use the connection another Companion of the
+ * same Owner already has (沿用), so the key is not typed twice. The server copies it (provider,
+ * address, model, key), tests it like a new one and answers a ConnectionSaveResult. Afterwards the
+ * two connections are separate: changing or removing one leaves the other. 404: `copyFrom` is not
+ * the Owner's Companion. 409: that Companion has no connection of its own (it uses the platform).
+ */
+export interface ConnectionCopyInput { copyFrom: string; consent: boolean }
 
 /**
  * The server tries one tiny call before saving. CONNECTED: saved. AUTH_FAILED: the key or token was

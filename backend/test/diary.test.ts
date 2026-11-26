@@ -7,7 +7,7 @@ import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { diaryPrompt } from "../src/chat/prompt.ts";
 import type { CallModel } from "../src/chat/providers.ts";
 import { ChatReplies, devChatModel, type ChatModel, type DiaryAnswer } from "../src/chat/replies.ts";
-import type { Booking, ChatPort, DiaryJob, DiaryStart, ReservationDecision } from "../src/chat/port.ts";
+import type { Booking, ChatPort, DiaryJob, DiaryStart, MemoryJob, ReservationDecision } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
 import type { PostgresPersistenceError, SqlExecutor } from "../src/persistence/postgres/types.ts";
 import type { DiaryEntry, DiaryWriteResult } from "../../contracts/chat.ts";
@@ -155,6 +155,15 @@ it("builds the diary prompt from the persona, the masked chat and own posts", ()
   assert.match(user, /【主人】（在小家里抱了抱你）/);
   assert.match(user, /- 【帖子】雨天 适合发呆/);
   assert.match(user, new RegExp(`- 【评论】${"好".repeat(200)}……`));
+  assert.match(system, /- 写到主人时用「你」，不写「主人」这两个字。/);
+  // With a name, a time zone and real times: the name, today's date and a time line per day.
+  const dated = diaryPrompt(job({ ownerName: "阿澈", timeZone: "Asia/Shanghai", messages: [
+    { companionId: null, body: "晚安", action: null, sentAt: "2026-11-25T15:40:00Z" },
+    { companionId: null, body: "早", action: null, sentAt: "2026-11-26T00:10:00Z" },
+  ] }), [], {}, new Date("2026-11-26T13:00:00Z"));
+  assert.match(dated.system, /- 写到主人时用「阿澈」这个称呼。/);
+  assert.match(dated.user, /^现在是 2026年11月26日 周四 21:00。\n\n上一篇日记之后/);
+  assert.match(dated.user, /—— 11月25日 周三 23:40 ——\n【主人】晚安\n—— 11月26日 周四 08:10，隔了 9 小时 ——\n【主人】早/);
   const bare = diaryPrompt(job({ messages: [], posts: [], companion: { ...job().companion, identity: null } }));
   assert.doesNotMatch(bare.system, /确认过的你的人设/);
   assert.doesNotMatch(bare.user, /社区/);
@@ -188,6 +197,23 @@ it("writes a diary through a platform model: booked as a diary entry, with the d
   assert.deepEqual(await new PlatformChatModel(catalog, refusing).diary(job(), { port: diaryPort().port, signal }), { refused: true });
   assert.deepEqual(await new PlatformChatModel(new ChatCatalog(file, {}), call).diary(job(), { port: diaryPort().port, signal }),
     { failed: "UNAVAILABLE" });
+
+  // Memories it notes down: always on the cheap model, booked within the ledger's 8000 input tokens for this reason.
+  const noted: Booking[] = [];
+  const notesPort = (decision: ReservationDecision = { decision: "RESERVED", transactionId: "tx" }) => ({ ...diaryPort().port,
+    memoryReserve: async (_companion: string, _claim: string, booking: Booking) => { noted.push(booking); return decision; } }) as ChatPort;
+  const long = Array.from({ length: 80 }, (_, i) => ({ companionId: null, body: `${i}`.padEnd(200, "字"), action: null, sentAt: "2026-11-25T02:00:00Z" }));
+  const notes: MemoryJob = { status: "WRITE", claimId: "c", companion: job().companion, messages: long, memories: Array.from({ length: 60 }, () => "记".repeat(400)) };
+  const lines: CallModel = async model => { called.push(model.model); return { text: "- 主人怕黑\n- 主人周三生日", inputTokens: 500, outputTokens: 20, refused: false, cutOff: false }; };
+  called.length = 0;
+  assert.deepEqual(await new PlatformChatModel(catalog, lines).memory(notes, { port: notesPort(), signal }), { memories: ["主人怕黑", "主人周三生日"] });
+  assert.deepEqual([called, noted.map(b => [b.model, b.outputTokens, b.inputTokens < 8000])], [["claude-small"], [["claude-small", 300, true]]]);
+  assert.deepEqual(await new PlatformChatModel(catalog, lines).memory(notes, { port: notesPort({ decision: "QUOTA" }), signal }), { failed: "QUOTA" });
+  assert.deepEqual(await new PlatformChatModel(catalog, refusing).memory(notes, { port: notesPort(), signal }), { refused: true });
+  assert.deepEqual(await new PlatformChatModel(new ChatCatalog(file, {}), lines).memory(notes, { port: notesPort(), signal }), { failed: "UNAVAILABLE" });
+  called.length = 0;
+  await new PlatformChatModel(new ChatCatalog({ ...file, decisionModel: null }, { CLAUDE_KEY: "k" }), lines).memory(notes, { port: notesPort(), signal });
+  assert.deepEqual(called, ["claude-big"], "no cheap model: the default");
 });
 
 it("maps diary payloads in the Postgres adapter", async () => {

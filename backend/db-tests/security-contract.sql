@@ -27,9 +27,17 @@ select public.test_assert(
     from pg_policies
     where schemaname = 'storage'
       and tablename = 'objects'
-      and (roles @> array['anon']::name[] or roles @> array['authenticated']::name[])
+      and (roles @> array['anon']::name[]
+        or (roles @> array['authenticated']::name[] and policyname not in ('media_upload', 'media_read', 'media_delete')))
   ),
-  'quarantine Storage objects must expose no anon or authenticated policy'
+  'Storage objects must expose no anon policy, and to signed-in users only the three media policies'
+);
+select public.test_assert(
+  (select count(*) = 3 and bool_and(qual like '%bucket_id = ''media''%' or with_check like '%bucket_id = ''media''%')
+    from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'media_%')
+  and exists(select 1 from storage.buckets where id = 'media' and not public and file_size_limit = 1048576
+    and allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp']::text[]),
+  'the media bucket must be private and bounded, with upload, read and delete policies limited to it'
 );
 select public.test_assert(
   exists (
@@ -1878,9 +1886,9 @@ select public.test_assert(
 );
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_claim(uuid)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
@@ -2019,8 +2027,8 @@ select public.test_assert(
   'an avatar is one of the app''s built-in ones, set only by a signed-in Owner'
 );
 select public.test_assert(
-  has_function_privilege('authenticated', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('anon', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text)'::regprocedure, 'EXECUTE')
+  has_function_privilege('authenticated', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text,jsonb)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.community_publish(text,uuid,uuid,text,text,uuid[],text,text,jsonb)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'companion_private.community_post_visible(uuid,uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'companion_private.community_mentions_json(uuid[],uuid)'::regprocedure, 'EXECUTE')
   and exists(select 1 from pg_trigger where tgrelid = 'public.community_comments'::regclass and tgname = 'community_comments_visible_guard')

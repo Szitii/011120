@@ -2,7 +2,9 @@ import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "..
 import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
-import type { AgentScope, Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, PostOutcome, PostStart, ReservationDecision } from "./port.ts";
+import type {
+  AgentScope, Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, MemoryStart, PostOutcome, PostStart, ReservationDecision,
+} from "./port.ts";
 import type { Clip } from "./voices.ts";
 
 /** Uses the same authenticated transaction executor as the rest of the Owner API. */
@@ -75,6 +77,14 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.memory_list($1) as payload", [companionId]);
   }
 
+  persona(companionId: string): Promise<unknown> {
+    return this.#object("select public.persona_get($1) as payload", [companionId]);
+  }
+
+  savePersona(companionId: string, version: number, fields: Readonly<Record<string, string>>): Promise<unknown> {
+    return this.#object("select public.persona_save($1,$2,$3::jsonb) as payload", [companionId, version, JSON.stringify(fields)]);
+  }
+
   addMemory(companionId: string, body: string, keyHash: string): Promise<unknown> {
     return this.#object("select public.memory_add($1,$2,$3) as payload", [companionId, body, keyHash]);
   }
@@ -118,8 +128,9 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown> {
-    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6) as payload",
-      [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.voice ?? null, settings.revision]);
+    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8) as payload",
+      [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.voice ?? null,
+        settings.revision, settings.preferredUserTitle === undefined ? null : settings.preferredUserTitle ?? "", settings.autoMemory ?? null]);
   }
 
   async claim(chatId: string): Promise<ChatClaim | null> {
@@ -128,11 +139,11 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   async finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null,
-    clips?: readonly (Clip | null)[]): Promise<boolean> {
+    clips?: readonly (Clip | null)[], action?: CompanionAction): Promise<boolean> {
     const audio = clips === undefined || clips.every(clip => clip === null) ? null : JSON.stringify(clips.map(clip => clip === null ? null
       : { mime: clip.mime, durationMs: clip.durationMs, characters: clip.characters, data: Buffer.from(clip.bytes).toString("base64") }));
-    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb) as payload",
-      [replyId, claimId, outcome, bodies, audio]);
+    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb,$6) as payload",
+      [replyId, claimId, outcome, bodies, audio, action ?? null]);
     return (payload as { accepted?: unknown }).accepted === true;
   }
 
@@ -180,6 +191,10 @@ export class PostgresChatAdapter implements ChatPort {
     return payload as boolean[];
   }
 
+  promptTexts(): Promise<unknown> {
+    return this.#object("select public.prompt_texts() as payload", []);
+  }
+
   diary(companionId: string, beforeAt: string | null, beforeId: string | null): Promise<unknown> {
     return this.#object("select public.diary_list($1,$2,$3) as payload", [companionId, beforeAt, beforeId]);
   }
@@ -225,6 +240,21 @@ export class PostgresChatAdapter implements ChatPort {
   async postFinish(runId: string, claimId: string, body: string | null, nothing: boolean): Promise<PostOutcome | null> {
     const payload = await this.#object("select public.agent_auto_finish($1,$2,$3,$4) as payload", [runId, claimId, body, nothing]);
     return (payload as { status?: PostOutcome }).status ?? null;
+  }
+
+  async memoryBegin(companionId: string): Promise<MemoryStart> {
+    return await this.#object("select public.memory_auto_begin($1) as payload", [companionId]) as MemoryStart;
+  }
+
+  async memoryReserve(companionId: string, claimId: string, b: Booking): Promise<ReservationDecision> {
+    return await this.#object("select public.memory_auto_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9) as payload", [
+      companionId, claimId, b.provider, b.model, b.pricingVersion, b.inputTokens, b.outputTokens, b.costMinor, claimId,
+    ]) as ReservationDecision;
+  }
+
+  async memoryFinish(companionId: string, claimId: string, bodies: string[] | null): Promise<boolean> {
+    const payload = await this.#object("select public.memory_auto_finish($1,$2,$3::text[]) as payload", [companionId, claimId, bodies]);
+    return (payload as { accepted?: unknown }).accepted === true;
   }
 
   async #object(sql: string, values: readonly unknown[]): Promise<unknown> {
