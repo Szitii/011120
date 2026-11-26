@@ -28,6 +28,9 @@ async function main() {
     DIARY_SCHEDULER_MINUTES: diaryMinutes = "5",
     // How often Companions that post on their own are checked; 0 turns that off.
     AUTO_POST_SCHEDULER_MINUTES: postMinutes = "5",
+    // How often reminders and Companions that write first are checked; 0 turns both off.
+    // Every minute, so a reminder is at most a minute late.
+    REACH_SCHEDULER_MINUTES: reachMinutes = "1",
   } = process.env;
   if (!connectionString || !supabaseUrl || !publishableKey) {
     throw new Error("Set DATABASE_URL, SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.");
@@ -40,7 +43,7 @@ async function main() {
   const chat = chatFromEnvironment("supabase-auth");
   const server = createSupabaseMobileHttpServer({ pool, supabaseUrl, publishableKey, chat });
   // Diaries and community posts written in the background, each on its own timer.
-  const background = (due: "diary_due" | "agent_auto_due", what: string, minutes: string,
+  const background = (due: "diary_due" | "agent_auto_due" | "chat_reach_due", what: string, minutes: string,
     write: (companionId: string, port: ChatPort) => Promise<unknown>) => {
     const every = Number(minutes);
     if (chat.background === undefined || !Number.isFinite(every) || every <= 0) return () => undefined;
@@ -51,7 +54,8 @@ async function main() {
   };
   const stopDiaries = background("diary_due", "diary", diaryMinutes, (id, port) => chat.replies.writeDiary(id, port));
   const stopPosts = background("agent_auto_due", "community post", postMinutes, (id, port) => chat.replies.writePost(id, port));
-  const shutdown = () => { stopDiaries(); stopPosts(); server.close(() => { void pool.end(); }); };
+  const stopReach = background("chat_reach_due", "message of its own", reachMinutes, (id, port) => chat.replies.reachOut(id, port));
+  const shutdown = () => { stopDiaries(); stopPosts(); stopReach(); server.close(() => { void pool.end(); }); };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
   await new Promise<void>((resolve, reject) => {

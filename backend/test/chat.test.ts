@@ -3,7 +3,8 @@ import { it } from "node:test";
 import { handleChatRequest } from "../src/chat/http.ts";
 import { sha256 } from "../src/companion-import/canonical.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
-import { ChatReplies, devChatModel, type ChatModel } from "../src/chat/replies.ts";
+import { localStamp, splitReminders } from "../src/chat/prompt.ts";
+import { ChatReplies, devChatModel, type ChatModel, type ReplyTrace } from "../src/chat/replies.ts";
 import type { ChatClaim, ChatOutcome, ChatPort, MemoryJob, MemoryNote, MemoryStart } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
@@ -32,6 +33,8 @@ const storedPersona = { companionId: companion, displayName: "小光", version: 
 /** A port that records calls; claim() hands out the queued turns. */
 function fakePort(turns: ChatClaim[] = [], replying = false) {
   const calls: unknown[][] = []; const finished: [string, ChatOutcome, string[] | null][] = [];
+  /** What each finished turn set and cancelled about reminders (undefined: nothing was handed in). */
+  const reminded: unknown[] = [];
   const port: ChatPort = {
     open: async (...args) => { calls.push(["open", ...args]); return { id: chatId, typing: [] }; },
     list: async () => { calls.push(["list"]); return { items: [] }; },
@@ -67,7 +70,12 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     connection: async () => null,
     saveSettings: async (...args) => { calls.push(["saveSettings", ...args]); return {}; },
     claim: async () => turns.shift() ?? null,
-    finish: async (replyId, _claim, outcome, bodies) => { finished.push([replyId, outcome, bodies]); return true; },
+    finish: async (replyId, _claim, outcome, bodies, _clips, _action, reminders) => {
+      finished.push([replyId, outcome, bodies]); reminded.push(reminders); return true;
+    },
+    reachBegin: async (...args) => { calls.push(["reachBegin", ...args]); return { status: "NOT_DUE" }; },
+    reminders: async (...args) => { calls.push(["reminders", ...args]); return { items: [] }; },
+    cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },
     reserve: async () => ({ decision: "RESERVED", transactionId: "tx" }),
     settle: async () => undefined,
     modelsEnabled: async models => models.map(() => true),
@@ -90,7 +98,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
     audio: async (...args) => { calls.push(["audio", ...args]); return { mime: "audio/mpeg", bytes: new Uint8Array([1, 2, 3, 4, 5]) }; },
   };
-  return { port, calls, finished };
+  return { port, calls, finished, reminded };
 }
 
 const kicks: string[] = [];
@@ -300,6 +308,20 @@ it("routes memories and refuses ones with credentials", async () => {
   assert.equal(calls.length, 0);
 });
 
+it("routes reminders: the Owner sees the waiting ones and cancels one", async () => {
+  const { port, calls } = fakePort();
+  const reminderId = "00000000-0000-0000-0000-00000000f002";
+  assert.equal(await status(port, request(`companions/${companion}/reminders`)), 200);
+  assert.equal(await status(port, request(`companions/${companion}/reminders/${reminderId}`, "DELETE")), 200);
+  assert.deepEqual(calls, [["reminders", companion], ["cancelReminder", companion, reminderId]]);
+  calls.length = 0;
+  assert.equal(await refusal(port, request(`companions/${companion}/reminders/not-a-uuid`, "DELETE")), "INVALID_INPUT");
+  for (const req of [request(`companions/${companion}/reminders`, "POST", { note: "x" }), request(`companions/${companion}/reminders/${reminderId}`)]) {
+    assert.equal(await refusal(port, req), "NOT_FOUND", "reminders are set by the Companion in the chat, not by a request");
+  }
+  assert.equal(calls.length, 0);
+});
+
 it("records home-room actions and starts the reply only when one may come", async () => {
   kicks.length = 0;
   await status(fakePort().port, request(`companions/${companion}/actions`, "POST", { action: "WAVE" }));
@@ -501,6 +523,81 @@ it("writes queued replies through the model and the safety scan", async () => {
   assert.match(finished[0]![2]![1]!, /「很长很长.*……」$/);
 });
 
+it("sets, cancels and delivers reminders, and writes first without ever leaving an error behind", async () => {
+  // The marks, as the server reads them.
+  const waiting = [{ id: "r1" }, { id: "r2" }];
+  assert.deepEqual(splitReminders(["好，明早叫你", "[提醒:2026-11-27 8:00 叫主人起床]"], waiting),
+    { messages: ["好，明早叫你", ""], reminders: { set: { at: "2026-11-27 08:00", note: "叫主人起床" } } });
+  assert.deepEqual(splitReminders(["那就不叫了 [取消提醒:2]【取消提醒：2】[取消提醒:9]"], waiting), { messages: ["那就不叫了"], reminders: { cancel: ["r2"] } },
+    "by its number in the list it was shown; a number that is not there cancels nothing");
+  assert.deepEqual(splitReminders(["【提醒：2026/1/5 07：30 吃药】再设一个 [提醒:2026-01-06 07:30 第二个不算]"]),
+    { messages: ["再设一个"], reminders: { set: { at: "2026-01-05 07:30", note: "吃药" } } }, "the first one; other brackets and separators");
+  assert.deepEqual(splitReminders(["[提醒:明天早上 叫我]嗯", "[提醒:2026-11-27 08:00]", "普通的话"]), { messages: ["嗯", "", "普通的话"], reminders: undefined },
+    "a mark without a readable time or without a note is taken out and sets nothing");
+  assert.equal(Array.from(splitReminders([`[提醒:2026-11-27 08:00 ${"长".repeat(150)}]`]).reminders!.set!.note).length, 100);
+  assert.equal(localStamp(new Date("2026-11-26T16:30:00Z"), "Asia/Shanghai"), "2026-11-27 00:30");
+  assert.equal(localStamp(new Date("2026-11-26T16:30:00Z"), "Not/AZone"), "2026-11-27 00:30", "an unknown zone reads as Asia/Shanghai");
+  assert.equal(localStamp(new Date("2026-11-26T16:30:00Z")), "2026-11-27 00:30");
+
+  const says = (...lines: string[]): ChatModel => ({ reply: async () => ({ messages: lines }) });
+  const model = (answer: Awaited<ReturnType<ChatModel["reply"]>> | Error): ChatModel =>
+    ({ reply: async () => { if (answer instanceof Error) throw answer; return answer; } });
+  const run = async (chosen: ChatModel | undefined, claim: ChatClaim) => {
+    const { port, finished, reminded } = fakePort([claim]);
+    const traces: unknown[] = [];
+    await new ChatReplies(chosen, undefined, undefined, undefined, trace => traces.push(trace)).drain(chatId, port);
+    return { outcome: finished[0]![1], bodies: finished[0]![2], reminders: reminded[0], trace: traces[0] as ReplyTrace };
+  };
+  const direct = (overrides: Partial<ChatClaim> = {}) =>
+    turn({ direct: true, canRemind: true, reminders: [{ id: "r1", dueAt: "2026-11-27T00:00:00Z", note: "叫主人起床" }], ...overrides });
+
+  // Answering the Owner: what it sets and cancels goes to the database with the reply; the marks never reach the Owner.
+  assert.deepEqual(await run(says("好，明早叫你", "[提醒:2026-11-28 08:00 叫主人起床][取消提醒:1]"), direct()).then(r => [r.outcome, r.bodies, r.reminders]),
+    ["SENT", ["好，明早叫你"], { set: { at: "2026-11-28 08:00", note: "叫主人起床" }, cancel: ["r1"] }]);
+  assert.deepEqual(await run(says("好 [提醒:2026-11-28 08:00 叫主人起床]"), direct({ canRemind: false })).then(r => [r.bodies, r.reminders]), [["好"], undefined],
+    "where it may not, the mark is removed and nothing is set");
+  assert.deepEqual((await run(says("记下了 [提醒:2026-11-28 08:00 密码是 password: hunter2hunter2]", "[取消提醒:1]"), direct())).reminders, { cancel: ["r1"] },
+    "a note the safety scan would stop is not kept; the rest is");
+  assert.equal((await run(says("记下了 [提醒:2026-11-28 08:00 打给 13800138000]"), direct())).reminders, undefined, "nor one it would change");
+  assert.equal((await run(says("[提醒:2026-11-28 08:00 叫主人起床]"), direct())).outcome, "ERROR", "a reply that is only a mark says nothing");
+
+  // Delivering a reminder: the model's words, or plain ones when it has none. Never nothing, never an error.
+  const due = direct({ replyTo: "REMINDER", optional: true, reach: { kind: "REMINDER", note: "交报告", dueAt: "2026-11-26T01:00:00Z" } });
+  assert.deepEqual(await run(says("该交报告啦"), due).then(r => [r.outcome, r.bodies, r.trace.replyTo]), ["SENT", ["该交报告啦"], "REMINDER"]);
+  for (const broken of [undefined, says(), model(new Error("down")), model({ failed: "QUOTA" }), model({ refused: true }), model({ pass: true })]) {
+    assert.deepEqual(await run(broken, due).then(r => [r.outcome, r.bodies]), ["SENT", ["提醒你：交报告"]]);
+  }
+  assert.deepEqual(await run(says("好的 [提醒:2026-11-28 08:00 再提醒一次]"), due).then(r => [r.bodies, r.reminders]), [["好的"], undefined],
+    "it sets nothing while it delivers one");
+
+  // Writing first: it may say something or nothing; whatever goes wrong, nothing is shown.
+  const away = direct({ replyTo: "SELF", optional: true, reach: { kind: "GREETING" } });
+  assert.deepEqual(await run(says("在忙吗"), away).then(r => [r.outcome, r.bodies, r.trace.replyTo]), ["SENT", ["在忙吗"], "SELF"]);
+  for (const quiet of [undefined, model({ pass: true }), model(new Error("down")), model({ failed: "DISABLED" }), model({ refused: true }),
+    says("我的密码是 password: hunter2hunter2")]) {
+    assert.deepEqual(await run(quiet, away).then(r => [r.outcome, r.bodies]), ["PASSED", null]);
+  }
+
+  // The dev host's fake model, so the app can be built: 提醒 in a message sets one, 取消提醒 cancels the first.
+  assert.deepEqual((await run(devChatModel, due)).bodies, ["（开发环境假回复）到时间啦：交报告"]);
+  assert.deepEqual((await run(devChatModel, away)).bodies, ["（开发环境假回复）小光主动来找你了"]);
+  const ownerSays = (body: string) => [{ companionId: null, body, action: null, mentions: [], sentAt: "2026-11-23T10:00:00Z" }];
+  const asked = await run(devChatModel, direct({ timeZone: "Asia/Shanghai", history: ownerSays("过会儿提醒我") }));
+  assert.match((asked.reminders as { set: { at: string; note: string } }).set.at, /^\d{4}-\d\d-\d\d \d\d:\d\d$/);
+  assert.equal(asked.bodies!.length, 2, "the mark is not a message");
+  assert.deepEqual((await run(devChatModel, direct({ history: ownerSays("取消提醒吧") }))).reminders, { cancel: ["r1"] });
+  assert.equal((await run(devChatModel, direct({ canRemind: false, history: ownerSays("提醒我") }))).reminders, undefined);
+
+  // The scheduler's entry: the database says whether a turn was queued; only then is the chat written.
+  const idle = fakePort([away]);
+  assert.equal(await new ChatReplies(devChatModel).reachOut(companion, idle.port), "NOT_DUE");
+  assert.deepEqual([idle.calls, idle.finished], [[["reachBegin", companion]], []]);
+  const queued = fakePort([away]);
+  queued.port.reachBegin = async () => ({ status: "QUEUED", chatId, kind: "GREETING" });
+  assert.equal(await new ChatReplies(devChatModel).reachOut(companion, queued.port), "QUEUED");
+  assert.deepEqual(queued.finished, [[messageId, "SENT", ["（开发环境假回复）小光主动来找你了"]]]);
+});
+
 it("runs one background writer per chat and never throws from kick", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -538,12 +635,13 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(seen.at(-1)![1], [companion, null]);
   await adapter.settings(companion);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: "m", revision: 1 });
-  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1, null, null]);
+  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1, null, null, null]);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: null, voice: "warm",
-    preferredUserTitle: "阿澈", autoMemory: "OFTEN", revision: 2 });
-  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", null, "warm", 2, "阿澈", "OFTEN"]);
+    preferredUserTitle: "阿澈", autoMemory: "OFTEN", proactive: "SOMETIMES", revision: 2 });
+  assert.deepEqual(seen.at(-1), ["select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8,$9) as payload",
+    [companion, "ACTIVE", "LIVELY", null, "warm", 2, "阿澈", "OFTEN", "SOMETIMES"]]);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: null, preferredUserTitle: null, revision: 3 });
-  assert.deepEqual(seen.at(-1)![1].slice(5), [3, "", null], "a title left out is null (keep); one cleared is the empty string");
+  assert.deepEqual(seen.at(-1)![1].slice(5), [3, "", null, null], "a title left out is null (keep); one cleared is the empty string");
   rows = [{ payload: { decision: "QUOTA" } }];
   assert.deepEqual(await adapter.reserve({ replyId: messageId, claimId: "c", purpose: "REPLY", provider: "p", model: "m",
     pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3, traceId: "t" }), { decision: "QUOTA" });
@@ -568,9 +666,21 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(await adapter.claim(chatId), { ok: true });
   rows = [{ payload: { accepted: true } }];
   assert.equal(await adapter.finish(messageId, "c", "SENT", ["hi"]), true);
-  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "SENT", ["hi"], null, null]);
+  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "SENT", ["hi"], null, null, null]);
   await adapter.finish(messageId, "c", "SENT", [], undefined, "HUG");
-  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "SENT", [], null, "HUG"], "an action of the Companion's own, with nothing said");
+  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "SENT", [], null, "HUG", null], "an action of the Companion's own, with nothing said");
+  await adapter.finish(messageId, "c", "SENT", ["好"], undefined, undefined, { set: { at: "2026-11-27 08:00", note: "叫主人起床" }, cancel: [messageId] });
+  assert.deepEqual(seen.at(-1), ["select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb,$6,$7::jsonb) as payload",
+    [messageId, "c", "SENT", ["好"], null, null, `{"set":{"at":"2026-11-27 08:00","note":"叫主人起床"},"cancel":["${messageId}"]}`]]);
+  rows = [{ payload: { status: "QUEUED", chatId, kind: "REMINDER" } }];
+  assert.deepEqual(await adapter.reachBegin(companion), { status: "QUEUED", chatId, kind: "REMINDER" });
+  assert.deepEqual(seen.at(-1), ["select public.chat_reach_begin($1) as payload", [companion]]);
+  rows = [{ payload: { items: [] } }];
+  await adapter.reminders(companion);
+  assert.deepEqual(seen.at(-1), ["select public.chat_reminder_list($1) as payload", [companion]]);
+  await adapter.cancelReminder(companion, messageId);
+  assert.deepEqual(seen.at(-1), ["select public.chat_reminder_cancel($1,$2) as payload", [companion, messageId]]);
+  rows = [{ payload: { accepted: true } }];
   rows = [{ payload: { status: "NOT_DUE" } }];
   assert.deepEqual(await adapter.memoryBegin(companion), { status: "NOT_DUE" });
   rows = [{ payload: { decision: "RESERVED", transactionId: "tx" } }];

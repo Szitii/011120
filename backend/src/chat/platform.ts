@@ -64,7 +64,8 @@ export class PlatformChatModel implements ChatModel {
     if (model === undefined) return { failed: "UNAVAILABLE" };
     const book = (purpose: "REPLY" | "DECIDE"): Book => booking =>
       port.reserve({ ...booking, replyId: turn.replyId, claimId: turn.claimId, purpose, traceId: turn.replyId });
-    const judge = turn.optional ? this.#catalog.decisionModel() : undefined;
+    // A turn that answers nobody has nothing to be judged against: the reply model itself decides whether to write.
+    const judge = turn.optional && !turn.reach ? this.#catalog.decisionModel() : undefined;
     if (judge !== undefined) {
       const decided = await this.#run(port, book("DECIDE"), judge, decisionPrompt(turn), DECIDE_TOKENS, signal);
       // A judge switched off by the platform counts as no judge: the reply model decides itself.

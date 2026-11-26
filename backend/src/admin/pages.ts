@@ -57,6 +57,7 @@ export const FEATURES: Readonly<Record<string, string>> = {
   COMMUNITY_NEW_NOTICES: "社区的点赞通知和 @提及通知（新版 App 上线后再开）",
   COMPANION_ACTIONS: "家机在私聊里主动做小家动作，比如抱抱主人（新版 App 上线后再开）",
   VOICE_INPUT: "主人发语音（语音转文字的账户充值后再开；关着时 App 不显示按住说话）",
+  COMPANION_REACH: "家机主动找主人：主人打开了“主动找你”的家机会自己发消息，主人让它到点提醒的会按时提醒（关掉后两样都停，已设的提醒留着）",
 };
 export interface Spend {
   from: string; to: string;
@@ -942,10 +943,13 @@ ${panel(html`数据库(Supabase 免费版) <span class="muted links">${billingLi
 /** The saved wording of each reworded block, as companion_admin.prompts() returns it. */
 export type SavedPrompts = Readonly<Record<string, { body: string; updatedAt: string }>>;
 
-/** One model call as the console shows it: its rules, what goes with them, and which blocks are in the rules (in order). */
+/**
+ * One model call as the console shows it: its rules, what goes with them, and which blocks are in the rules (in order).
+ * `editable`: its blocks are reworded here; with `forms`, only those (the others are reworded where they are first shown).
+ */
 interface PromptView {
   readonly title: string; readonly when: string; readonly system: string; readonly user: string | null;
-  readonly blocks: readonly string[]; readonly editable: boolean;
+  readonly blocks: readonly string[]; readonly editable: boolean; readonly forms?: readonly string[];
 }
 
 /**
@@ -963,13 +967,27 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
     ({ companionId, body, action: null, mentions: [], sentAt: at(minutesAgo) });
   const history = [said(null, "(示例)主人昨晚说的话", 600), said("sample", "(示例)小满的回答", 599), said(null, "(示例)主人刚发的消息", 1)];
   const turn: ChatClaim = { chatId: "sample", replyId: "sample", claimId: "sample", replyTo: "OWNER", optional: false, direct: true, canAct: true,
-    companion, members: [{ companionId: "sample", displayName: "小满" }], history, timeZone: zone, ownerName: "(示例)称呼" };
+    companion, members: [{ companionId: "sample", displayName: "小满" }], history, timeZone: zone, ownerName: "(示例)称呼",
+    canRemind: true, reminders: [{ id: "sample", dueAt: at(-600), note: "(示例)家机答应过的提醒" }] };
+  // The same chat a day later, with nobody to answer: the Companion writes first, or delivers a reminder.
+  const quiet = history.slice(0, 2);
+  const greeting: ChatClaim = { ...turn, replyTo: "SELF", optional: true, history: quiet, reminders: [], reach: { kind: "GREETING" } };
+  const reminder: ChatClaim = { ...greeting, replyTo: "REMINDER", reach: { kind: "REMINDER", note: "(示例)主人让它提醒的事", dueAt: at(0) } };
   const memories = [{ body: "(示例)主人记下的、或自动记忆记下的一件事", createdAt: at(40 * 24 * 60) }];
   const group = { ...turn, direct: false, optional: true, canAct: false, members: [...turn.members, { companionId: "other", displayName: "(示例)另一位家机" }] };
   return [
     { title: "聊天回复", when: "主人发来消息、家机要回复的时候。平台的模型和主人自带 Key 的模型都用这一份。" +
       "记忆多到放不下(约 3000 字)时,更早的记忆里和眼下聊的事有关的几条,会另外附在聊天记录前面。", editable: true,
-      blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now) },
+      blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REMIND", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now) },
+    { title: "主动找主人", editable: true, forms: ["CHAT_REACH"], blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REACH", "CHAT_TIME"],
+      when: "主人给这位家机打开了“主动找你”,并且有一阵没来聊天的时候(偶尔:8 小时以上,一天最多 1 次;经常:3 小时以上,一天最多 2 次)。" +
+        "主人当地 23 点到 8 点不找;上一次主动说的话主人还没回,就不再找;主人超过 7 天没来也不再找。家机可以决定不说。" +
+        "这里只改“主动找主人时说什么”这一段,其余几段和“聊天回复”是同一份,在上面改。",
+      ...replyPrompt(greeting, memories, texts, now) },
+    { title: "到点提醒", editable: false, blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_TIME"],
+      when: "主人在私聊里让家机到某个时间提醒自己(家机当时照“什么时候设提醒”那一段写下了提醒),到了时间。这几段和“聊天回复”是同一份,在上面改。" +
+        "模型用不了的时候(没额度、被关掉、出错),服务器会用一句固定的话把提醒发出去。",
+      ...replyPrompt(reminder, memories, texts, now) },
     { title: "写日记", when: "家机写日记的时候。", editable: true, blocks: ["DIARY_STYLE"],
       ...diaryPrompt({ status: "WRITE", entryId: "sample", claimId: "sample", companion, messages: history, timeZone: zone, ownerName: turn.ownerName,
         posts: [{ kind: "POST", body: "(示例)小满这几天发过的动态", at: at(300) }] }, memories, texts, now) },
@@ -981,8 +999,8 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
         known: [{ id: "sample-auto", source: "AUTO", body: "(示例)以前自动记下的一件事", createdAt: at(40 * 24 * 60) },
           { id: "sample-owner", source: "OWNER", body: "(示例)主人亲手写的一件事", createdAt: at(90 * 24 * 60) }],
         messages: [{ companionId: null, body: "(示例)主人说的话", action: null, sentAt: at(5) }] }, texts, now) },
-    { title: "主人自己接的 agent(自建家机)", editable: false, blocks: ["CHAT_VOICE", "CHAT_ACTION"], user: null,
-      when: "主人接了自己的 agent 的时候。它有自己的人设和记忆,我们只给它这几条规则。语音和动作两段和“聊天回复”是同一份,在上面改。",
+    { title: "主人自己接的 agent(自建家机)", editable: false, blocks: ["CHAT_VOICE", "CHAT_ACTION", "CHAT_REMIND"], user: null,
+      when: "主人接了自己的 agent 的时候。它有自己的人设和记忆,我们只给它这几条规则。语音、动作和提醒三段和“聊天回复”是同一份,在上面改。",
       system: agentMessages(turn, texts, now)[0]!.content },
     { title: "群聊里要不要开口", when: "群聊里先让便宜的模型判断这位家机要不要说话,它只回答“是”或“否”。", editable: false, blocks: [], ...decisionPrompt(group) },
   ];
@@ -1029,7 +1047,7 @@ export function promptsPage(zone: string, now: Date, saved: SavedPrompts, done: 
 ${promptViews(zone, now, texts).map(view => panel(view.title, html`<p class="muted">${view.when}</p>
 ${cutPrompt(view.system, view.blocks, texts).map(part => typeof part === "string"
     ? html`<details class="fixed"><summary>固定的部分(${part.length} 字)</summary><pre class="fixed">${part}</pre></details>`
-    : promptBox(zone, part, saved[part.key], view.editable))}
+    : promptBox(zone, part, saved[part.key], view.editable && (view.forms?.includes(part.key) ?? true)))}
 ${view.user === null ? "" : html`<details class="edit"><summary>和这段说明一起发给模型的材料(示例)</summary><pre class="fixed">${view.user}</pre></details>`}`))}`,
   done);
 }

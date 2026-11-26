@@ -11,12 +11,18 @@
  * After the replies of a one-to-one chat the Companion may note down what is worth remembering
  * (remember); the database decides whether the Owner asked for it and enough was said. A note
  * may take the place of an older memory of its own that no longer holds.
+ *
+ * A Companion also writes without being written to (reachOut): when the Owner has been away and
+ * asked for that, and to deliver a reminder it promised. The scheduler asks every minute and the
+ * database decides; such a turn is written like any other.
  */
-import { ACTION_TEXT, MAX_NOTES, answersAction, splitAction, splitVoice } from "./prompt.ts";
+import { ACTION_TEXT, MAX_NOTES, answersAction, localStamp, splitAction, splitReminders, splitVoice } from "./prompt.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { DiaryWriteResult } from "../../../contracts/chat.ts";
-import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, PostJob, PostOutcome, PostStart } from "./port.ts";
+import type {
+  ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, PostJob, PostOutcome, PostStart, ReachStart, ReminderChange,
+} from "./port.ts";
 import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
@@ -51,16 +57,19 @@ export type VoiceResult = "SPOKEN" | "NO_VOICE" | "VOICE_UNAVAILABLE" | "NO_MARK
   | "OVER_LIMIT" | "LIMIT_UNKNOWN" | "SPEECH_TIMEOUT" | `SPEECH_FAILED${string}`;
 
 /**
- * One line per turn, so "why did this reply come as text?" can be answered afterwards: ids, the
- * channel, how long the model and the speech took, how the turn ended, and why each message is or
- * is not a voice message. Never what was said, a memory, a key, audio or a provider's own words.
- * `stored` false with a SPOKEN message: the clip was made but the reply was not saved.
+ * One line per turn, so "why did this reply come as text?" and "why did it write to me at nine?"
+ * can be answered afterwards: ids, what the turn answers (SELF: it wrote on its own; REMINDER: a
+ * reminder), the channel, how long the model and the speech took, how the turn ended, and why
+ * each message is or is not a voice message. Never what was said, a memory, a key, audio or a
+ * provider's own words. `stored` false with a SPOKEN message: the clip was made but the reply was
+ * not saved.
  */
 export interface ReplyTrace {
   event: "chat_reply";
   chatId: string;
   replyId: string;
   companionId: string;
+  replyTo: ChatClaim["replyTo"];
   channel: "PLATFORM" | "BYOK" | "EXTERNAL";
   outcome: ChatOutcome;
   modelMs: number;
@@ -122,6 +131,8 @@ const preview = (text: string): string => {
 export const devChatModel: ChatModel = {
   async reply(turn) {
     const name = turn.companion.displayName;
+    if (turn.reach?.kind === "REMINDER") return { messages: [`（开发环境假回复）到时间啦：${turn.reach.note}`] };
+    if (turn.reach) return { messages: [`（开发环境假回复）${name}主动来找你了`] };
     if (answersAction(turn)) {
       const action = [...turn.history].reverse().find(message => message.action !== null && message.companionId === null)?.action;
       return { messages: [`（开发环境假回复）${name}知道你${action ? ACTION_TEXT[action] : "来过"}`] };
@@ -129,8 +140,12 @@ export const devChatModel: ChatModel = {
     if (turn.replyTo === "OWNER") {
       const said = [...turn.history].reverse().find(message => message.companionId === null)?.body ?? "";
       if (turn.optional && ![name, "大家", "你们"].some(word => said.includes(word))) return { pass: true };
+      // A message that says 提醒 sets a reminder for the minute after next (so it is at least a minute
+      // away), and 取消提醒 cancels the first waiting one: the app's reminder line and the reminder itself can be built.
+      const remind = !turn.canRemind ? [] : said.includes("取消提醒") ? ["[取消提醒:1]"]
+        : said.includes("提醒") ? [`[提醒:${localStamp(new Date(Date.now() + 120_000), turn.timeZone)} 开发环境的假提醒]`] : [];
       // With a voice chosen, the first message is a voice message, so the app's voice bubble can be built.
-      return { messages: [`${turn.companion.settings.voice ? "[语音:开心]" : ""}（开发环境假回复）我是${name}`, `收到：「${preview(said)}」`] };
+      return { messages: [`${turn.companion.settings.voice ? "[语音:开心]" : ""}（开发环境假回复）我是${name}`, `收到：「${preview(said)}」`, ...remind] };
     }
     const last = turn.history.at(-1);
     const speaker = turn.members.find(member => member.companionId === last?.companionId)?.displayName ?? "大家";
@@ -157,7 +172,11 @@ export const devChatModel: ChatModel = {
   },
 };
 
-type Answered = [outcome: ChatOutcome, bodies: string[] | null, clips?: (Clip | null)[] | undefined, action?: CompanionAction | undefined];
+type Answered = [outcome: ChatOutcome, bodies: string[] | null, clips?: (Clip | null)[] | undefined, action?: CompanionAction | undefined,
+  reminders?: ReminderChange | undefined];
+
+/** What a reminder says when the model has no words of its own for it: the reminder is delivered all the same. */
+const plainReminder = (note: string): string => `提醒你：${note}`;
 
 /** The turn as the model should see it: without a voice when voice messages cannot be made now. */
 const speakable = (turn: ChatClaim, voices: Voices | undefined): ChatClaim =>
@@ -207,17 +226,19 @@ export class ChatReplies {
     for (let claim = await port.claim(chatId); claim !== null; claim = await port.claim(chatId)) {
       const turn = speakable(claim, this.#voices);
       const trace: ReplyTrace = {
-        event: "chat_reply", chatId: turn.chatId, replyId: turn.replyId, companionId: turn.companion.companionId,
+        event: "chat_reply", chatId: turn.chatId, replyId: turn.replyId, companionId: turn.companion.companionId, replyTo: turn.replyTo,
         channel: "PLATFORM", outcome: "ERROR", modelMs: 0, speechMs: 0, voice: [], stored: false,
       };
       const silent = turn.companion.settings.voice ? null : claim.companion.settings.voice ? "VOICE_UNAVAILABLE" : "NO_VOICE";
-      const [outcome, bodies, clips, action] = await this.#answer(turn, port, trace, silent);
+      const [outcome, bodies, clips, action, reminders] = await this.#answer(turn, port, trace, silent);
       // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
-      const final = outcome === "ERROR" && answersAction(turn) ? "PASSED" : outcome;
+      // Nobody waits for a message it writes on its own: whatever went wrong with one, nothing is shown.
+      const final = (outcome === "ERROR" && answersAction(turn)) || (outcome !== "SENT" && turn.reach) ? "PASSED" : outcome;
       trace.outcome = final;
       try {
-        // Text-only replies call finish as before; clips and an action go along only when there are some.
-        trace.stored = await (action !== undefined ? port.finish(turn.replyId, turn.claimId, final, bodies, clips, action)
+        // Text-only replies call finish as before; clips, an action and reminders go along only when there are some.
+        trace.stored = await (reminders !== undefined ? port.finish(turn.replyId, turn.claimId, final, bodies, clips, action, reminders)
+          : action !== undefined ? port.finish(turn.replyId, turn.claimId, final, bodies, clips, action)
           : clips === undefined ? port.finish(turn.replyId, turn.claimId, final, bodies)
           : port.finish(turn.replyId, turn.claimId, final, bodies, clips));
       } finally {
@@ -230,6 +251,17 @@ export class ChatReplies {
     this.#running.delete(chatId);
     if (remember) await this.remember(remember, port);
     return written;
+  }
+
+  /**
+   * Queues a turn of the Companion's own if one is due (a reminder to deliver, or writing first
+   * after the Owner was away: the database decides) and writes it. Returns whether one was queued,
+   * or why not.
+   */
+  async reachOut(companionId: string, port: ChatPort): Promise<ReachStart["status"]> {
+    const begun = await port.reachBegin(companionId);
+    if (begun.status === "QUEUED") await this.drain(begun.chatId, port);
+    return begun.status;
   }
 
   /**
@@ -384,6 +416,13 @@ export class ChatReplies {
 
   /** `silent`: why this Companion has no voice messages now, or null when it has a voice. */
   async #answer(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
+    const answered = await this.#write(turn, port, trace, silent);
+    // A reminder is delivered whatever happened to the model (none, switched off, out of budget, a
+    // refusal, an answer that could not be used): in plain words. Its note passed the scan when it was set.
+    return answered[0] !== "SENT" && turn.reach?.kind === "REMINDER" ? ["SENT", [plainReminder(turn.reach.note)]] : answered;
+  }
+
+  async #write(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
     const model = this.#model;
     if (model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
     try {
@@ -397,7 +436,14 @@ export class ChatReplies {
       // An action of its own, where it may do one; its mark is removed from the text either way.
       const acted = splitAction(result.messages);
       const action = turn.canAct && acted.action !== null ? acted.action : undefined;
-      const marked = acted.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
+      // The same for reminders: set and cancelled only while it answers the Owner where it may, and
+      // a note the safety scan would stop or change is not kept as a reminder.
+      const reminded = splitReminders(acted.messages, turn.reminders);
+      const asked = turn.canRemind && turn.replyTo === "OWNER" ? reminded.reminders : undefined;
+      const { set, ...other } = asked ?? {};
+      const reminders = asked === undefined || set === undefined || this.#safety.scanOutput(set.note).decision === "ALLOW" ? asked
+        : other.cancel === undefined ? undefined : other;
+      const marked = reminded.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
       const parts = marked.map(part => part.text);
       const messages = parts.length <= MAX_MESSAGES ? parts
         : [...parts.slice(0, MAX_MESSAGES - 1), parts.slice(MAX_MESSAGES - 1).join("\n")];
@@ -418,7 +464,7 @@ export class ChatReplies {
           : Array.from(text).length > MAX_VOICE_CHARS ? "TOO_LONG" : null));
       const clips = await this.#speak(turn, port, safe, marked.map(part => part.voice || null), results, trace);
       trace.voice = results.map(result => result ?? "VOICE_UNAVAILABLE");
-      return ["SENT", safe, clips, action];
+      return ["SENT", safe, clips, action, reminders];
     } catch {
       return ["ERROR", null]; // the model failed, timed out, or answered in the wrong shape
     }

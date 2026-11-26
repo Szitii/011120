@@ -1886,9 +1886,9 @@ select public.test_assert(
 );
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_claim(uuid)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text,jsonb)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text,jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
@@ -1899,6 +1899,23 @@ select public.test_assert(
   and has_function_privilege('authenticated', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_audio_get(uuid,uuid)'::regprocedure, 'EXECUTE'),
   'Companion chat replies and their voice can only be written by the API server'
+);
+-- A Companion writing first and its reminders: queued and delivered by the API server alone; the Owner reads and cancels.
+select public.test_assert(
+  not has_function_privilege('authenticated', 'public.chat_reach_due(integer,boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_reach_begin(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_reach_due(integer,boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_reach_begin(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_reminder_list(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_reminder_cancel(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_reminder_list(uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_reminder_cancel(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.chat_reminders', 'SELECT')
+      or has_table_privilege(r.role, 'companion_private.chat_reminders', 'INSERT')
+      or has_table_privilege(r.role, 'companion_private.chat_reminders', 'UPDATE')
+      or has_table_privilege(r.role, 'companion_private.chat_reminders', 'DELETE')),
+  'a Companion''s own turns are queued by the API server alone, and reminders are reachable only through functions'
 );
 select public.test_assert(
   not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.admin_log'),

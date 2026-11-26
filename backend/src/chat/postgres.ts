@@ -3,7 +3,8 @@ import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type {
-  AgentScope, Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, MemoryNote, MemoryStart, PostOutcome, PostStart, ReservationDecision,
+  AgentScope, Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, MemoryNote, MemoryStart, PostOutcome, PostStart,
+  ReachStart, ReminderChange, ReservationDecision,
 } from "./port.ts";
 import type { Clip } from "./voices.ts";
 
@@ -144,9 +145,10 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown> {
-    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8) as payload",
+    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8,$9) as payload",
       [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.voice ?? null,
-        settings.revision, settings.preferredUserTitle === undefined ? null : settings.preferredUserTitle ?? "", settings.autoMemory ?? null]);
+        settings.revision, settings.preferredUserTitle === undefined ? null : settings.preferredUserTitle ?? "", settings.autoMemory ?? null,
+        settings.proactive ?? null]);
   }
 
   async claim(chatId: string): Promise<ChatClaim | null> {
@@ -155,12 +157,24 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   async finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null,
-    clips?: readonly (Clip | null)[], action?: CompanionAction): Promise<boolean> {
+    clips?: readonly (Clip | null)[], action?: CompanionAction, reminders?: ReminderChange): Promise<boolean> {
     const audio = clips === undefined || clips.every(clip => clip === null) ? null : JSON.stringify(clips.map(clip => clip === null ? null
       : { mime: clip.mime, durationMs: clip.durationMs, characters: clip.characters, data: Buffer.from(clip.bytes).toString("base64") }));
-    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb,$6) as payload",
-      [replyId, claimId, outcome, bodies, audio, action ?? null]);
+    const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb,$6,$7::jsonb) as payload",
+      [replyId, claimId, outcome, bodies, audio, action ?? null, reminders === undefined ? null : JSON.stringify(reminders)]);
     return (payload as { accepted?: unknown }).accepted === true;
+  }
+
+  async reachBegin(companionId: string): Promise<ReachStart> {
+    return await this.#object("select public.chat_reach_begin($1) as payload", [companionId]) as ReachStart;
+  }
+
+  reminders(companionId: string): Promise<unknown> {
+    return this.#object("select public.chat_reminder_list($1) as payload", [companionId]);
+  }
+
+  cancelReminder(companionId: string, reminderId: string): Promise<unknown> {
+    return this.#object("select public.chat_reminder_cancel($1,$2) as payload", [companionId, reminderId]);
   }
 
   async voiceLeft(): Promise<{ companion: number; owner: number }> {

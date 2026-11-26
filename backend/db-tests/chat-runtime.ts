@@ -113,7 +113,7 @@ try {
 
   // ---- group chats are paused at launch (feature switches, migration 0050) ----
   const setFeature = (key: string, on: boolean) => pool.query("update companion_private.feature_switches set enabled = $2 where key = $1", [key, on]);
-  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: false, groupChatSend: false, voiceInput: true, connections: false });
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: false, groupChatSend: false, voiceInput: true, companionReach: true, connections: false });
   assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-paused-001")).status, 409);
   assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion] })).status, 200, "one-to-one chats are not paused");
   await setFeature("GROUP_CHAT_CREATE", true);
@@ -126,7 +126,7 @@ try {
   assert.equal((await call(0, `chats/${paused.id}/messages`, "POST", { body: "有人吗" })).status, 201);
   await settle(paused.id);
   assert.equal((await call(0, `chats/${paused.id}`, "DELETE")).status, 200);
-  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, voiceInput: true, connections: false });
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, voiceInput: true, companionReach: true, connections: false });
   passed("group chats paused by switch: no new group, no sending in an old one; one-to-one chats unaffected");
 
   const group = await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001");
@@ -147,10 +147,10 @@ try {
   assert.match(page.items[0]!.body!, /SecondCompanion接着SampleCompanion的话说一句/);
   passed("a group: both answer the Owner, then they talk to each other within their interaction limit");
 
-  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", revision: 1 });
+  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", proactive: "OFF", revision: 1 });
   assert.equal((await call(1, `companions/${second}/chat-settings`)).status, 404);
   const quiet = await putSettings(second, { groupActivity: "QUIET", companionInteraction: "NONE" });
-  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", revision: 2 });
+  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", proactive: "OFF", revision: 2 });
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: null, revision: 1 })).status, 409);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "LOUD", companionInteraction: "NONE", model: null, revision: 2 })).status, 400);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: "not-in-catalog", revision: 2 })).status, 400);
@@ -245,7 +245,7 @@ try {
   assert.deepEqual([claim.timeZone, claim.ownerName], ["Asia/Shanghai", "阿澈"], "no community settings: the default zone; the chosen title");
   assert.deepEqual([claim.companion.displayName, claim.optional, claim.direct, claim.replyTo], ["SecondCompanion", false, false, "OWNER"]);
   assert.deepEqual(claim.companion.identity, { persona: "calm" });
-  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: "阿澈", autoMemory: "SOMETIMES", revision: 0 });
+  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: "阿澈", autoMemory: "SOMETIMES", proactive: "OFF", revision: 0 });
   assert.equal(claim.history.at(-1)!.body, "抢一下");
   assert.equal(await portA.claim(fresh.id), null);
   assert.equal(await portA.finish(claim.replyId, randomUUID(), "SENT", ["冒名"]), false);

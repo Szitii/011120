@@ -475,11 +475,11 @@ try {
   const server = new PostgresChatAdapter(viewer);
   assert.deepEqual(await server.promptTexts(), {});
   assert.deepEqual(await admin(one, "prompts"), {});
-  assert.ok((await web("/prompts")).body.includes("现在有 0 / 7 段改过"));
+  assert.ok((await web("/prompts")).body.includes("现在有 0 / 9 段改过"));
   assert.equal((await web("/prompts/set", why("Console wording", { key: "CHAT_VOICE", body: "- 没有标记。" }))).status, 409, "a wording without its mark is not saved");
   assert.equal((await web("/prompts/set", why("Console wording", { key: "CHAT_TIME", body: "- 留意现在几点。\r\n" }))).status, 303);
   assert.deepEqual(await server.promptTexts(), { CHAT_TIME: "- 留意现在几点。" }, "the API server reads it from the next call on");
-  assert.ok((await web("/prompts")).body.includes("现在有 1 / 7 段改过"));
+  assert.ok((await web("/prompts")).body.includes("现在有 1 / 9 段改过"));
   await admin(two, "prompt_set", "CHAT_TIME", "- 第二版。", "Second wording");
   assert.equal((await admin(one, "prompts")).CHAT_TIME.body, "- 第二版。");
   await assert.rejects(admin(two, "prompt_set", "CHAT_TIME", "- x", " "), code("22023"));

@@ -339,7 +339,8 @@ paths:
         groupChatCreate false: POST /chats with 2 or more Companions answers 409. groupChatSend false:
         existing group chats can be read and deleted, but sending and retrying in them answer 409.
         connections false: PUT .../connection answers 501. voiceInput false: POST /chats/{id}/voice
-        answers 503 (the same as `input` in GET /voices).
+        answers 503 (the same as `input` in GET /voices). companionReach false: no Companion writes
+        first and no reminder is set or delivered, whatever `proactive` says - hide that setting.
       x-capability-status: implemented
       responses:
         '200':
@@ -354,6 +355,7 @@ paths:
                   groupChatSend: {type: boolean}
                   connections: {type: boolean}
                   voiceInput: {type: boolean}
+                  companionReach: {type: boolean}
         '401': *problem
         '403': *problem
   /companions/{companionId}/anniversary:
@@ -973,6 +975,60 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /companions/{companionId}/reminders:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: listReminders
+      summary: The reminders the Companion still has to deliver, soonest first (at most 20)
+      description: |
+        A reminder is set by the Companion while it answers in the one-to-one chat, when the Owner asks
+        ("明天 8 点叫我"): the reply that set it carries it as `reminder`. At its time the Companion
+        writes in that chat (a message with `reach: REMINDER`). There is no request to set one.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Waiting reminders
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/ChatReminder'}}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/reminders/{reminderId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: reminderId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    delete:
+      operationId: cancelReminder
+      summary: Cancel a waiting reminder; 404 once it is sent, cancelled or missed
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {const: true}
+        '401': *problem
+        '403': *problem
+        '404': *problem
   /owner/avatar:
     put:
       operationId: setOwnerAvatar
@@ -1312,10 +1368,23 @@ components:
         avatar: {type: [string, 'null'], pattern: '^preset:[a-z0-9][a-z0-9_-]{0,39}$'}
     ChatMessage:
       type: object
-      required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt, audio]
+      required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt, audio, reminder, reach]
       properties:
         id: {type: string, format: uuid}
         companionId: {type: [string, 'null'], format: uuid, description: null when the Owner wrote it.}
+        reminder:
+          oneOf:
+          - $ref: '#/components/schemas/ChatReminder'
+          - type: 'null'
+          description: |
+            A reminder the Companion set in this reply - show a small line under the message. null for
+            every other message. What the Companion says is not proof that a reminder exists; this is.
+        reach:
+          type: [string, 'null']
+          enum: [GREETING, REMINDER, null]
+          description: |
+            Why the Companion wrote without being written to. GREETING - on its own (the setting
+            `proactive`). REMINDER - it is delivering a reminder. null - an ordinary reply.
         body: {type: [string, 'null'], description: 'null when the reply failed or was blocked, and for an action.'}
         action:
           oneOf:
@@ -1410,6 +1479,19 @@ components:
               author: {type: string, enum: [OWNER, TEAM]}
               body: {type: string}
               createdAt: {type: string, format: date-time}
+    ChatReminder:
+      type: object
+      required: [id, dueAt, note, status]
+      properties:
+        id: {type: string, format: uuid}
+        dueAt: {type: string, format: date-time, description: "When it is due, an instant - show it in the device's time zone."}
+        note: {type: string, maxLength: 100, description: "What to remind of, in the Companion's words."}
+        status:
+          type: string
+          enum: [WAITING, SENT, CANCELLED, MISSED]
+          description: |
+            WAITING until its time, then SENT (the Companion wrote in the chat). CANCELLED - by the Owner,
+            or by the Companion when the Owner said so. MISSED - it could not be delivered within a day.
     CompanionMemory:
       type: object
       required: [id, body, source, createdAt]
@@ -1503,6 +1585,16 @@ components:
             自动记忆 - the Companion notes down by itself what is worth remembering from the one-to-one chat
             (memories with source AUTO). SOMETIMES (default) - after every 50 messages of the Owner.
             OFTEN - after every 10. OFF - the Owner turned it off. Always sent; on PUT, leaving it out keeps the current one.
+        proactive:
+          type: string
+          enum: ['OFF', SOMETIMES, OFTEN]
+          description: |
+            主动找你 - the Companion sometimes writes first in the one-to-one chat when the Owner has been
+            away. OFF (default). SOMETIMES - after 8 hours or more of silence, at most once a day.
+            OFTEN - after 3 hours or more, at most twice a day. Never between 23:00 and 8:00 for the
+            Owner, never a second time before the Owner has answered the first, and not after 7 days
+            of silence. Reminders the Owner asks for do not depend on it.
+            Always sent; on PUT, leaving it out keeps the current one.
         revision: {type: integer, minimum: 1}
     VoiceInfo:
       type: object

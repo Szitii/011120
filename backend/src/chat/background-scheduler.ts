@@ -1,9 +1,10 @@
 /**
- * Background writing for Companions whose Owner asked for it: diary entries (autoWrite) and
- * community posts (the agent settings' autoEnabled).
+ * Background writing for Companions whose Owner asked for it: diary entries (autoWrite),
+ * community posts (the agent settings' autoEnabled), and messages in the one-to-one chat that
+ * answer nobody (writing first when the Owner was away, and reminders).
  *
- * Every round asks the database which Companions are due (public.diary_due or
- * public.agent_auto_due: opted in, interval passed, nothing running, and so on), then writes
+ * Every round asks the database which Companions are due (public.diary_due, public.agent_auto_due
+ * or public.chat_reach_due: opted in, interval passed, nothing running, and so on), then writes
  * them one by one as their Owner, through the same code the app's own request would use. The
  * database's per-Companion lock makes concurrent writers (another server, or the app at the same
  * moment) write once. Rounds never overlap on one server.
@@ -19,8 +20,8 @@ export interface BackgroundSchedulerOptions {
   /** The Owner's chat port for one auth subject. */
   portFor: (subject: string) => ChatPort;
   /** The database function that lists who is due: (limit, platform) -> [{companionId, subject}]. */
-  due: "diary_due" | "agent_auto_due";
-  /** Writes one, as its Owner (ChatReplies.writeDiary or writePost). */
+  due: "diary_due" | "agent_auto_due" | "chat_reach_due";
+  /** Writes one, as its Owner (ChatReplies.writeDiary, writePost or reachOut). */
   write: (companionId: string, port: ChatPort) => Promise<unknown>;
   /** For the log: "diary" or "community post". */
   what: string;

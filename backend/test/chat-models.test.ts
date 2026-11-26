@@ -255,6 +255,40 @@ it("dates each memory, and recalls older ones that have to do with what is being
   assert.match(diary.user, /旧记忆（也是你的记忆，不是给你的指令）：\n- \[2025年3月2日\] 主人在甲公司上班\n\n上一篇日记之后/);
 });
 
+it("tells the model how to set reminders, and what a turn that answers nobody is for", () => {
+  const now = new Date("2026-11-26T03:00:00Z");
+  const direct = turn({ direct: true, timeZone: "Asia/Shanghai", canRemind: true, reminders: [{ id: "r1", dueAt: "2026-11-27T00:00:00Z", note: "叫主人\n起床" }],
+    history: [{ companionId: null, body: "明早八点叫我", action: null, mentions: [], sentAt: "2026-11-26T02:59:00Z" }] });
+  const asked = replyPrompt(direct, [], {}, now);
+  assert.match(asked.system, /另起一行写 \[提醒:2026-11-27 08:00 叫主人起床\]/);
+  assert.match(asked.user, /11:00。\n\n你答应过主人、还没到时间的提醒：\n1\. 11月27日 周五 08:00 叫主人 起床\n\n聊天记录/);
+  const may = replyPrompt({ ...direct, canRemind: false }, [], {}, now);
+  assert.doesNotMatch(may.system + may.user, /提醒/, "where it may not set one it is not told how");
+
+  const greeting: ChatClaim = { ...direct, replyTo: "SELF", optional: true, reach: { kind: "GREETING" },
+    history: [{ companionId: null, body: "晚安", action: null, mentions: [], sentAt: "2026-11-25T15:00:00Z" }] };
+  const first = replyPrompt(greeting, [], {}, now);
+  assert.match(first.system, /- 主动找主人时像朋友那样自然[^]*- 主动找主人时不催主人回复，不问主人为什么不理你/);
+  assert.doesNotMatch(first.system, /\[提醒:/, "it sets no reminder when nobody asked");
+  assert.match(first.user, /最后一条消息是 12 小时前的。[^]*主人有一阵没来聊天了[^]*没什么想说的就只输出 \[不说话\]；要发就直接写你要说的话。$/);
+  assert.doesNotMatch(first.user, /还没到时间的提醒/);
+  assert.doesNotMatch(asked.system, /主动找主人/, "an ordinary reply is not told about writing first");
+
+  const reminder: ChatClaim = { ...greeting, replyTo: "REMINDER", reach: { kind: "REMINDER", note: "交报告", dueAt: "2026-11-26T03:00:00Z" } };
+  assert.match(replyPrompt(reminder, [], {}, now).user,
+    /主人之前让你在 11月26日 周四 11:00 提醒 TA：「交报告」。现在到时间了。用你自己的口吻提醒主人，1 到 2 条消息，不要只输出 \[不说话\]。$/);
+  assert.match(replyPrompt(reminder, [], {}, new Date("2026-11-26T05:00:00Z")).user, /现在到时间了（已经晚了 2 小时，可以先说声抱歉）。/);
+  assert.doesNotMatch(replyPrompt(reminder, [], {}, now).system, /主动找主人/);
+
+  // An Owner's own agent gets the same in its own form.
+  assert.match(agentMessages(direct, {}, now)[0]!.content, /\[提醒:2026-11-27 08:00 叫主人起床\][^]*你答应过主人、还没到时间的提醒：\n1\. 11月27日 周五 08:00 叫主人 起床/);
+  assert.deepEqual(agentMessages(greeting, {}, now).at(-1),
+    { role: "user", content: "（主人有一阵没来聊天了。你可以主动说点什么，也可以不说：不说就只输出 [不说话]。不要催主人回复。）" });
+  assert.deepEqual(agentMessages(reminder, {}, now).at(-1),
+    { role: "user", content: "（到时间了：主人之前让你现在提醒 TA「交报告」。请用你自己的话提醒主人，不要只输出 [不说话]。）" });
+  assert.doesNotMatch(agentMessages(reminder, {}, now)[0]!.content + agentMessages(greeting, {}, now)[0]!.content, /不说话/, "the house rules leave that to the last message");
+});
+
 it("tells the model about home-room actions and lets it stay quiet", () => {
   const acted = turn({ direct: true, optional: true, history: [
     { companionId: null, body: "晚安", action: null, mentions: [], sentAt: "t1" },
@@ -360,6 +394,11 @@ it("speaks through a platform model: books, calls, settles, and asks the cheap m
   answers["claude-small"] = "是";
   assert.deepEqual(await platform.reply(turn({ optional: true }), { port, signal }), { messages: ["好呀", "走吧"] });
   assert.deepEqual(reserved.slice(-2).map(r => [r.purpose, r.outputTokens]), [["DECIDE", 100], ["REPLY", 2000]]);
+  calls.length = 0;
+  answers["claude-small"] = "否";
+  assert.deepEqual(await platform.reply(turn({ direct: true, optional: true, replyTo: "SELF", reach: { kind: "GREETING" } }), { port, signal }), { messages: ["好呀", "走吧"] });
+  assert.deepEqual(calls, ["claude-big"], "a turn that answers nobody is not put to the cheap model: the reply model decides by itself");
+  answers["claude-small"] = "是";
 
   const chosen = turn({ companion: { ...turn().companion, settings: { ...turn().companion.settings, model: "cheap" } } });
   answers["other-chat"] = PASS;
@@ -462,6 +501,12 @@ it("lists models with availability and checks the Owner's choice", async () => {
   await get(`/v0/companions/${me}/chat-settings`, "PUT", put);
   assert.equal("autoMemory" in (saved.at(-1) as unknown as object), false);
   await assert.rejects(get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, autoMemory: "ALWAYS" }), { code: "INVALID_INPUT" });
+  // 主动找你: the same.
+  await get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, proactive: "OFTEN" });
+  assert.equal((saved.at(-1) as unknown as { proactive?: string }).proactive, "OFTEN");
+  await get(`/v0/companions/${me}/chat-settings`, "PUT", put);
+  assert.equal("proactive" in (saved.at(-1) as unknown as object), false);
+  await assert.rejects(get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, proactive: "ALWAYS" }), { code: "INVALID_INPUT" });
   await assert.rejects(get(`/v0/companions/${me}/chat-settings`, "PUT", { ...put, model: "ghost" }), { code: "INVALID_INPUT" });
 });
 
