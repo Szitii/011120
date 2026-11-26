@@ -74,7 +74,8 @@ drop function public.memory_auto_finish(uuid, uuid, text[]);
 --
 -- A replaced memory is deleted and the sentence stored in its place, if it is this Companion's and
 -- one it noted down itself (AUTO); any other id is ignored and the sentence is kept as a new
--- memory. A sentence it already remembers word for word is not stored again. At 200 memories the
+-- memory. A sentence it already remembers word for word is not stored again (so "replacing" a
+-- memory with its own words changes nothing, not even its date). At 200 memories the
 -- oldest AUTO one from an earlier attempt makes room; when there is none to remove, nothing more
 -- is added.
 -- Returns {"accepted", "added", "replaced"}; accepted false when the attempt was already given up.
@@ -105,7 +106,7 @@ begin
     took := false;
     if p_replaces[i] is not null then
       delete from companion_private.companion_memories
-        where id = p_replaces[i] and companion_id = p_companion and source = 'AUTO';
+        where id = p_replaces[i] and companion_id = p_companion and source = 'AUTO' and body <> v_body;
       took := found;
     end if;
     if exists(select 1 from companion_private.companion_memories where companion_id = p_companion and body = v_body) then

@@ -2,13 +2,14 @@
  * Which of a Companion's memories have to do with what is being talked about, found by shared
  * words. No model call and no index: a Companion has at most 200 memories.
  *
- * The text is cut into dictionary words. A word of two or more characters counts as its pairs of
- * neighbouring characters, so 下雨天 and 下雨 share one. One-character words in a row are a word the
- * dictionary does not know, mostly a name (团|子), and count as pairs too; one standing alone counts
- * as itself (猫, 茶). A run of letters and digits is a word.
+ * A word is two neighbouring Chinese characters, wherever a dictionary would cut the text: a name
+ * like 团子 counts whole whatever stands next to it (a dictionary reads 带团子 as 带团|子). A Chinese
+ * word of one character standing alone counts as itself (猫 in 的猫). A run of letters and digits
+ * with a letter in it is a word; a bare number is not (12 is in every date).
  *
- * A word many memories share says little (喜欢 is in a lot of them), so a shared word counts for
- * 1 / (the number of memories that have it): one memory alone having it counts as 1.
+ * A word many memories share says little (喜欢 is in a lot of them). A shared word counts for 1
+ * when one memory has it, for 0 when all of them do, and in between by how rare it is among them:
+ * 1 - log(memories with the word) / log(all memories).
  */
 
 /** Characters that carry grammar, not content: a pair with one of them is no word. */
@@ -24,7 +25,7 @@ const COMMON_SINGLES = new Set("要会去来说想好人个有不没就都还又
   "只号开从条次天年月日点些种位件张本块向往自而若但并或及其之将才刚先后前");
 
 const CHINESE_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu;
-const LATIN_WORD = /[a-z0-9]{2,}/g;
+const LATIN_WORD = /[a-z0-9]*[a-z][a-z0-9]*/g;
 const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
 /** Only the end of a long text is read: that is where the talk is now. */
 const ABOUT_CHARS = 4000;
@@ -32,39 +33,32 @@ const ABOUT_CHARS = 4000;
 /** The words of a text (see the top), lower case, each once. */
 export function words(text: string): Set<string> {
   const lower = text.toLowerCase();
-  const found = new Set<string>(lower.match(LATIN_WORD) ?? []);
-  const pairs = (chars: readonly string[]): void => {
-    for (let i = 0; i + 1 < chars.length; i += 1) {
-      const pair = chars[i]! + chars[i + 1]!;
-      if (!GRAMMAR.has(chars[i]!) && !GRAMMAR.has(chars[i + 1]!) && !COMMON_PAIRS.has(pair)) found.add(pair);
-    }
-  };
+  const found = new Set<string>((lower.match(LATIN_WORD) ?? []).filter(word => word.length > 1));
   for (const run of lower.match(CHINESE_RUN) ?? []) {
-    // One-character words in a row that say something, waiting to be read as one unknown word.
-    let lone: string[] = [];
-    const flush = (): void => {
-      if (lone.length === 1) found.add(lone[0]!);
-      pairs(lone);
-      lone = [];
-    };
-    for (const { segment } of segmenter.segment(run)) {
-      const chars = Array.from(segment);
-      if (chars.length > 1) {
-        flush();
-        pairs(chars);
-      } else if (GRAMMAR.has(segment) || COMMON_SINGLES.has(segment)) {
-        flush();
-      } else {
-        lone.push(segment);
-      }
+    const chars = Array.from(run);
+    // Characters that say nothing here: grammar, and both characters of an everyday pair.
+    const empty = chars.map(char => GRAMMAR.has(char));
+    for (let i = 0; i + 1 < chars.length; i += 1) {
+      if (COMMON_PAIRS.has(chars[i]! + chars[i + 1]!)) empty[i] = empty[i + 1] = true;
     }
-    flush();
+    for (let i = 0; i + 1 < chars.length; i += 1) {
+      if (!empty[i] && !empty[i + 1]) found.add(chars[i]! + chars[i + 1]!);
+    }
+    // One-character words, by the dictionary. Two of them side by side are the pieces of a word it
+    // does not know (团|子), which the pairs above already hold whole.
+    const parts = Array.from(segmenter.segment(run), part => part.segment);
+    const single = (part: string | undefined): boolean =>
+      part !== undefined && Array.from(part).length === 1 && !GRAMMAR.has(part) && !COMMON_SINGLES.has(part);
+    parts.forEach((part, i) => { if (single(part) && !single(parts[i - 1]) && !single(parts[i + 1])) found.add(part); });
   }
   return found;
 }
 
-/** A memory counts as related from here: it shares a word that at most five memories have, or several commoner ones. */
-const RELATED = 0.2;
+/**
+ * A memory counts as related from here: it shares a word that few of the memories have (of 150,
+ * at most 20), or several commoner ones.
+ */
+const RELATED = 0.4;
 
 /**
  * The memories that share words with `about`, the most related first (of two equally related, the
@@ -77,7 +71,9 @@ export function related<T extends { body: string }>(memories: readonly T[], abou
   const shared = memories.map(memory => [...words(memory.body)].filter(word => asked.has(word)));
   const having = new Map<string, number>();
   for (const list of shared) for (const word of list) having.set(word, (having.get(word) ?? 0) + 1);
-  return memories.map((memory, i) => ({ memory, i, score: shared[i]!.reduce((sum, word) => sum + 1 / having.get(word)!, 0) }))
+  const all = Math.log(Math.max(memories.length, 2));
+  const weight = (word: string): number => 1 - Math.log(having.get(word)!) / all;
+  return memories.map((memory, i) => ({ memory, i, score: shared[i]!.reduce((sum, word) => sum + weight(word), 0) }))
     .filter(scored => scored.score >= RELATED)
     .sort((a, b) => b.score - a.score || a.i - b.i)
     .map(scored => scored.memory);

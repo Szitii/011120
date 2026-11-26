@@ -617,6 +617,11 @@ try {
   const uneven = await portA.memoryBegin(second) as MemoryJob;
   await assert.rejects(pool.query("select public.memory_auto_finish($1,$2,$3::text[],$4::uuid[])", [second, uneven.claimId, ["一句"], [null, null]]), "one id per sentence");
   assert.deepEqual(await portA.memoryFinish(second, uneven.claimId, newNotes("主人周三生日")), { accepted: true, added: 1, replaced: 0 });
+  await ownerSays(10);
+  const same = await portA.memoryBegin(second) as MemoryJob;
+  const unchanged = (await memories()).find(m => m.body === "主人周三生日")!.id;
+  assert.deepEqual(await portA.memoryFinish(second, same.claimId, [{ body: "主人周三生日", replaces: unchanged }]), { accepted: true, added: 0, replaced: 0 });
+  assert.equal(await idOf("主人周三生日"), unchanged, "replacing a memory with its own words changes nothing, not even its date");
   // The same sentence again is not kept twice; a failed attempt waits ten minutes and keeps the messages for the next one.
   await ownerSays(10);
   const before3 = (await memories()).length;

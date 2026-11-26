@@ -197,18 +197,24 @@ it("shows the notes what the Companion remembers, and lets them replace what it 
   assert.deepEqual(numbered, ["job", "new"], "only what it noted down itself has a number");
   assert.doesNotMatch(user, /不该被用到/);
   assert.ok(user.split("聊天记录")[0]!.length < 1700, "bounded");
-  assert.match(system, /带编号的几条，如果情况变了[^]*写「改3：」再接新的一句话。没有编号的不能改。/);
+  assert.match(system, /带编号的几条，如果情况变了[^]*写「改」加那条的编号和冒号，再接新的一句话，比如「改2：主人搬到了上海」。没有编号的不能改。/);
+  assert.match(memoryPrompt({ ...job, known: job.known.slice(0, 1) }).system, /比如「改1：/, "the example names a number that is shown");
   assert.deepEqual(parseMemories("改1：主人从甲公司辞职，去了乙公司上班\n主人带着团子搬了家", numbered),
     [{ body: "主人从甲公司辞职，去了乙公司上班", replaces: "job" }, { body: "主人带着团子搬了家", replaces: null }]);
   assert.deepEqual(parseMemories("- 改第 2 条: 主人学会了做红烧肉\n改9：主人怕黑\n改1：没说是谁", numbered),
     [{ body: "主人学会了做红烧肉", replaces: "new" }, { body: "主人怕黑", replaces: null }],
     "other ways to write it; a number that was not shown replaces nothing; the sentence must still be about 主人");
   assert.deepEqual(parseMemories("改1：主人搬家了"), [{ body: "主人搬家了", replaces: null }], "no numbers were shown");
+  assert.deepEqual(parseMemories("**改２、**主人学会了做鱼\n改第一条，[2025年3月2日] 主人去了乙公司\n- [11月24日] 主人怕黑", numbered),
+    [{ body: "主人学会了做鱼", replaces: "new" }, { body: "主人去了乙公司", replaces: "job" }, { body: "主人怕黑", replaces: null }],
+    "full-width and Chinese numbers, other separators, bold marks; a date copied from the list is not part of the memory");
+  assert.deepEqual(parseMemories("改天主人要去体检：记得提醒", numbered), [{ body: "改天主人要去体检：记得提醒", replaces: null }], "an ordinary sentence that starts with 改");
 });
 
 it("finds the words of a text and the memories that share them", () => {
-  assert.deepEqual([...words("主人养了两只叫团子的猫, loves Python3 和下雨天")].sort(), ["loves", "python3", "团子", "猫", "下雨", "雨天"].sort(),
-    "the pairs inside a word, a name the dictionary does not know, a word of one character, letters and digits; nothing everyday");
+  assert.deepEqual([...words("主人养了两只叫团子的猫, loves Python3 和下雨天，2026年12月3日 x")].sort(), ["loves", "python3", "两只", "只叫", "叫团", "团子", "猫", "下雨", "雨天"].sort(),
+    "pairs of neighbouring characters, a word of one character, letters with digits; no grammar, nothing everyday, no bare number");
+  assert.ok(words("主人带团子去医院").has("团子") && words("抱团子").has("团子"), "a name counts whole whatever stands next to it");
   assert.deepEqual([...words("今天我们没有什么事情，哈哈")], [], "nothing but everyday words");
   const memories = [
     { body: "主人喜欢下雨天" }, { body: "主人养了一只叫团子的猫" }, { body: "主人在成都出差过" }, { body: "主人喜欢喝乌龙茶" },
@@ -218,6 +224,12 @@ it("finds the words of a text and the memories that share them", () => {
   assert.deepEqual(related(memories, "我的猫不吃饭").map(m => m.body), ["主人养了一只叫团子的猫"], "a one-character word counts");
   assert.deepEqual(related(memories, "下周又要去成都，想喝乌龙茶").map(m => m.body), ["主人喜欢喝乌龙茶", "主人在成都出差过"], "the most shared first");
   assert.deepEqual(related(memories, "我喜欢你"), [], "a word most memories have says nothing");
+  assert.deepEqual(related([{ body: "主人的生日是2026年12月3日" }, { body: "主人怕黑" }], "我昨晚12点才睡"), [], "a number is no word");
+  // A name in 8 of 150 memories still brings them back; in all of them it says nothing.
+  const many = Array.from({ length: 150 }, (_, i) => ({ body: i < 8 ? `主人带团子去了第 ${i} 家医院` : `主人第 ${i} 天的心情不错` }));
+  assert.equal(related(many, "团子最近好吗").length, 8);
+  assert.deepEqual(related(many.slice(0, 8), "团子最近好吗"), []);
+  assert.deepEqual(related([{ body: "主人养了团子" }], "团子").map(m => m.body), ["主人养了团子"], "a single memory");
   assert.deepEqual(related(memories, ""), []);
   assert.deepEqual(related(memories, `成都${"。".repeat(5000)}`), [], "only the end of a long text is read");
 });
