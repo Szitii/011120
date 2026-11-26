@@ -14,7 +14,7 @@
     {
       "id": "deepseek-flash", "name": "DeepSeek Flash", "provider": "deepseek", "model": "deepseek-flash",
       "tier": "ECONOMY", "inputPerMTok": 0.3, "outputPerMTok": 1.2, "enabled": true,
-      "options": { "thinking": "disabled" }
+      "options": { "thinking": "disabled", "webTools": "deepseek" }
     },
     {
       "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "provider": "deepseek", "model": "deepseek-v4-pro",

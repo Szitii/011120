@@ -37,6 +37,8 @@ export interface ChatClaim {
   canRemind?: boolean;
   /** The reminders it still has to deliver, soonest first (at most 20). */
   reminders?: { id: string; dueAt: string; note: string }[];
+  /** true: the operators let Companions search the web and this turn answers the Owner. Whether this reply can depends on the model that writes it. */
+  canBrowse?: boolean;
 }
 
 /** GREETING: the Owner has been away and it may write first. REMINDER: it promised to say `note` at `dueAt`. */

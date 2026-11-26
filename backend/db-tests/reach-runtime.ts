@@ -272,9 +272,12 @@ try {
   page = await answer("记着呢", `[提醒:${inHours(3)} 同一分钟再说一次]`);
   assert.deepEqual([(await waiting()).map(r => r.note), page.items[0]!.reminder], [["第一次"], null], "it already has one for that minute");
   // A claim handed in by hand: an id that is not one and a time that is not one are skipped, the reply is kept.
+  await pool.query("update companion_private.feature_switches set enabled = true where key = 'COMPANION_WEB'");
   await portA.send(chat.id, "随便", [], keyHash());
   const claim = (await portA.claim(chat.id))!;
-  assert.deepEqual([claim.canRemind, claim.reminders!.map(r => r.note), claim.reach], [true, ["第一次"], null]);
+  assert.deepEqual([claim.canRemind, claim.reminders!.map(r => r.note), claim.reach, claim.canBrowse], [true, ["第一次"], null, true],
+    "and with the operators' switch for it on, the turn says the web may be searched");
+  await pool.query("update companion_private.feature_switches set enabled = false where key = 'COMPANION_WEB'");
   assert.equal(await portA.finish(claim.replyId, claim.claimId, "SENT", ["好"], undefined, undefined,
     { set: { at: "明天早上", note: "不是时间" }, cancel: ["not-a-uuid", randomUUID()] }), true);
   assert.deepEqual((await waiting()).map(r => r.note), ["第一次"]);
@@ -308,8 +311,12 @@ try {
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [page.items[0]!.reminder!.id]);
   assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id });
   assert.deepEqual(await dueList(false, true), [{ companionId: A.companion, subject: A.subject }], "still due: nobody is writing it");
+  await pool.query("update companion_private.feature_switches set enabled = true where key = 'COMPANION_WEB'");
   const stuck = (await portA.claim(chat.id))!;
-  assert.deepEqual([stuck.replyTo, stuck.reach], ["REMINDER", { kind: "REMINDER", note: "服务器停过一下", dueAt: (await waiting())[0]!.dueAt }]);
+  await pool.query("update companion_private.feature_switches set enabled = false where key = 'COMPANION_WEB'");
+  assert.deepEqual([stuck.replyTo, stuck.reach, stuck.canBrowse, stuck.canRemind],
+    ["REMINDER", { kind: "REMINDER", note: "服务器停过一下", dueAt: (await waiting())[0]!.dueAt }, false, false],
+    "a turn that answers nobody neither searches the web nor sets reminders, whatever the switches say");
   assert.deepEqual(await dueList(false, true), [], "someone is writing it now");
   await pool.query("update companion_private.chat_messages set claimed_at = now() - interval '3 minutes' where id = $1", [stuck.replyId]);
   assert.equal(await reminderScheduler.round(), 1);
@@ -372,6 +379,7 @@ try {
   await pool.query("delete from companion_private.chats where owner_id = $1", [A.owner]);
   await pool.query("delete from companion_private.chat_settings");
   await pool.query("update companion_private.feature_switches set enabled = true where key = 'COMPANION_REACH'");
+  await pool.query("update companion_private.feature_switches set enabled = false where key = 'COMPANION_WEB'");
   if (zoneBefore === undefined) await pool.query(`delete from companion_private.agent_settings where actor_id = ${actor}`);
   else await pool.query(`update companion_private.agent_settings set time_zone = $1 where actor_id = ${actor}`, [zoneBefore]);
   await pool.query("do $$ begin execute format('alter database %I reset companion.chat_pace', current_database()); end $$");

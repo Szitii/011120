@@ -59,7 +59,7 @@ export class PlatformChatModel implements ChatModel {
     this.#call = call;
   }
 
-  async reply(turn: ChatClaim, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<Answer> {
+  async reply(turn: ChatClaim, { port, signal, searched }: Parameters<ChatModel["reply"]>[1]): Promise<Answer> {
     const model = this.#catalog.pick(turn.companion.settings.model);
     if (model === undefined) return { failed: "UNAVAILABLE" };
     const book = (purpose: "REPLY" | "DECIDE"): Book => booking =>
@@ -72,9 +72,16 @@ export class PlatformChatModel implements ChatModel {
       const quiet = "failed" in decided ? decided.failed !== "DISABLED" : decided.refused || !parseDecision(decided.text);
       if (quiet) return { pass: true };
     }
-    const prompt = replyPrompt(turn, await memoriesOf(port, turn.companion.companionId), await textsOf(port));
-    const result = await this.#withFallback(model, m => this.#run(port, book("REPLY"), m, prompt, REPLY_TOKENS, signal));
+    const memories = await memoriesOf(port, turn.companion.companionId);
+    const texts = await textsOf(port);
+    // The web: where the turn allows it (the operators' switch, and it answers the Owner), on a model
+    // that can search. The prompt says so only then, so it is written for the model that actually answers.
+    const browses = (m: CatalogModel): boolean => turn.canBrowse === true && m.options?.webTools !== undefined;
+    const result = await this.#withFallback(model, m => this.#run(port, book("REPLY"), m,
+      replyPrompt(turn, memories, texts, undefined, browses(m)), REPLY_TOKENS, signal, MAX_INPUT_TOKENS,
+      browses(m) ? replyPrompt(turn, memories, texts) : undefined));
     if ("failed" in result) return result;
+    if (result.web !== undefined) searched?.(result.web, result.inputTokens);
     if (result.refused) return { refused: true };
     return parseReply(result.text, turn.companion.displayName);
   }
@@ -125,11 +132,18 @@ export class PlatformChatModel implements ChatModel {
    * Book, call, settle. The reservation is rounded up to whole cents and the settlement to the
    * nearest cent, so cheap calls do not each eat a cent of the daily budget. A failed call, or one
    * whose provider reported no usage, is charged its whole reservation.
+   *
+   * `plain`: the model may search the web for this answer, and this is the prompt without the lines
+   * that say so (for a provider that will not take the tool). What a search reads comes back as
+   * input tokens nobody can count beforehand, and the provider takes no limit on it. So the whole
+   * input allowance is booked (the most the ledger books for one answer), and the settlement is the
+   * real usage, also when that is more: the day's budget then shrinks by what was really used, a
+   * wallet is charged no more than was held for it, and the trace carries the number (`webTokens`).
    */
-  async #run(port: ChatPort, book: Book, model: CatalogModel,
-    prompt: { system: string; user: string }, maxTokens: number, signal: AbortSignal, maxInput = MAX_INPUT_TOKENS): Promise<ModelResult | Failed> {
+  async #run(port: ChatPort, book: Book, model: CatalogModel, prompt: { system: string; user: string }, maxTokens: number,
+    signal: AbortSignal, maxInput = MAX_INPUT_TOKENS, plain?: { system: string; user: string }): Promise<ModelResult | Failed> {
     // About one token per character for Chinese, fewer for other text: a safe upper estimate.
-    const inputTokens = Math.min(maxInput, prompt.system.length + prompt.user.length);
+    const inputTokens = plain ? maxInput : Math.min(maxInput, prompt.system.length + prompt.user.length);
     const costMinor = Math.ceil(this.#catalog.cost(model, inputTokens, maxTokens));
     const booked = await book({
       provider: model.provider, model: model.model, pricingVersion: PRICING_VERSION, inputTokens, outputTokens: maxTokens, costMinor,
@@ -138,7 +152,7 @@ export class PlatformChatModel implements ChatModel {
     if (booked.decision !== "RESERVED") return { failed: booked.decision };
     let result: ModelResult;
     try {
-      result = await this.#call(model, { ...prompt, maxTokens, signal });
+      result = await this.#call(model, { ...prompt, maxTokens, signal, ...(plain ? { web: { without: plain } } : {}) });
     } catch (error) {
       await port.settle(booked.transactionId, inputTokens, maxTokens, costMinor, false);
       throw error;

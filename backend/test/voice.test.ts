@@ -175,7 +175,7 @@ it("says the marked messages in the Companion's voice and keeps the rest as text
   assert.equal(await replies.drain(chatId, port), 1);
   const [{ modelMs, speechMs, ...traced }] = traces as [ReplyTrace];
   assert.deepEqual(traced, { event: "chat_reply", chatId, replyId: messageId, companionId: companion, replyTo: "OWNER", channel: "PLATFORM",
-    outcome: "SENT", voice: ["SPOKEN", "NO_MARK", "SPOKEN"], stored: true }, "one line per turn, without what was said");
+    outcome: "SENT", voice: ["SPOKEN", "NO_MARK", "SPOKEN"], stored: true, web: "OFF" }, "one line per turn, without what was said");
   assert.ok(modelMs >= 0 && speechMs >= 0);
   assert.deepEqual(said, [["你回来啦", "warm", "happy"], ["抱抱", "warm", null]]);
   assert.deepEqual(used, [["SPEAK", 2], ["SPEAK", 2]], "each clip is booked with the characters billed");
