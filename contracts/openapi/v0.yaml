@@ -74,6 +74,12 @@ paths:
     $ref: ./chat.yaml#/paths/~1voices~1{voiceId}~1sample
   /wallet:
     $ref: ./chat.yaml#/paths/~1wallet
+  /feedback:
+    $ref: ./chat.yaml#/paths/~1feedback
+  /feedback/{feedbackId}/messages:
+    $ref: ./chat.yaml#/paths/~1feedback~1{feedbackId}~1messages
+  /feedback/{feedbackId}/read:
+    $ref: ./chat.yaml#/paths/~1feedback~1{feedbackId}~1read
   /companions/{companionId}/agent-keys:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1agent-keys
   /companions/{companionId}/agent-keys/{keyId}:

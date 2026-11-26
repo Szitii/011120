@@ -130,6 +130,14 @@ export interface ChatPort {
   features(): Promise<unknown>;
   /** The Owner's wallet (GET /v0/wallet). */
   wallet(): Promise<unknown>;
+  /** The Owner's feedback threads (意见反馈), most recently active first ({ items }). */
+  feedback(): Promise<unknown>;
+  /** A new feedback thread; the same key returns the first one. */
+  sendFeedback(body: string, appVersion: string | null, platform: string | null, keyHash: string): Promise<unknown>;
+  /** A follow-up in one of the Owner's threads (opens a closed one again). */
+  addFeedback(feedbackId: string, body: string, keyHash: string): Promise<unknown>;
+  /** The Owner opened a thread: the team's answers so far are read. */
+  readFeedback(feedbackId: string): Promise<unknown>;
   /** Every unread count for the tab badges. */
   badges(): Promise<unknown>;
   anniversary(companionId: string): Promise<unknown>;

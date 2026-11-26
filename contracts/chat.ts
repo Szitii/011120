@@ -110,6 +110,29 @@ export interface Badges {
   ownerInbox: number;
   /** Unread community notifications for each identity the Owner can act as (the Owner first). */
   community: { actorKind: "OWNER" | "COMPANION"; actorId: string; unread: number }[];
+  /** Feedback threads with an answer from the team the Owner has not read. */
+  feedback: number;
+}
+
+/**
+ * 意见反馈: one thread, GET|POST /v0/feedback, POST /v0/feedback/{id}/messages, PUT /v0/feedback/{id}/read.
+ * The first message is the Owner's; TEAM messages are the team's answers. CLOSED: the team handled it
+ * (a follow-up opens it again). unread: the team wrote since the Owner last opened it.
+ */
+export interface Feedback {
+  id: string;
+  status: "OPEN" | "CLOSED";
+  unread: boolean;
+  createdAt: string;
+  /** When the last message was written. */
+  updatedAt: string;
+  messages: { id: string; author: "OWNER" | "TEAM"; body: string; createdAt: string }[];
+}
+/** POST /v0/feedback (with an Idempotency-Key). body: 1-2000 characters; at most 20 messages a day. */
+export interface FeedbackInput {
+  body: string;
+  appVersion?: string | null;
+  platform?: "IOS" | "ANDROID" | "WEB" | null;
 }
 
 /**

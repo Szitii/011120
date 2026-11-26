@@ -18,7 +18,7 @@ import { vendorStatus, type VendorKey } from "./vendors.ts";
 import { promptBlock, promptTextRefusal, tidyPromptText } from "../chat/prompt-texts.ts";
 import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
-import { withPending, chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
+import { withPending, feedbackPage, type FeedbackQueue, chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
   type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue, type SavedPrompts,
   type Feature } from "./pages.ts";
 
@@ -51,6 +51,7 @@ const ROUTES = {
   ownerStatus: new RegExp(`^/owners/(${UUID})/(suspend|restore)$`),
   twinStatus: new RegExp(`^/twins/(${UUID})/(suspend|restore)$`),
   content: new RegExp(`^/content/(post|comment)/(${UUID})/(remove|restore)$`),
+  feedback: new RegExp(`^/feedback/(${UUID})/(reply|close|reopen)$`),
   uuid: new RegExp(`^${UUID}$`),
 };
 const HEADERS = {
@@ -136,6 +137,10 @@ export function createAdminServer(options: AdminServerOptions): Server {
       const state = query.get("status") === "REVIEWED" ? "REVIEWED" : "SUBMITTED";
       return reportsPage(zone, await db.call<ReportQueue>("reports", state), state, done);
     }
+    if (path === "/feedback") {
+      const state = query.get("status") === "CLOSED" ? "CLOSED" : "OPEN";
+      return feedbackPage(zone, await db.call<FeedbackQueue>("feedback", state), state, done);
+    }
     if (path === "/owners") {
       const search = (query.get("q") ?? "").trim();
       return ownersPage(zone, await db.call<OwnerList>("owners", search === "" ? null : search), search);
@@ -205,6 +210,14 @@ export function createAdminServer(options: AdminServerOptions): Server {
       await db.call("owner_suspend", m[1], m[2] === "suspend", reason);
     } else if ((m = ROUTES.twinStatus.exec(path))) {
       await db.call("twin_suspend", m[1], m[2] === "suspend", reason);
+    } else if ((m = ROUTES.feedback.exec(path))) {
+      if (m[2] === "reply") {
+        const body = (form.body ?? "").trim();
+        if (body === "" || Array.from(body).length > 2000) throw new AdminRefusal("回复不能是空的,最多 2000 个字。");
+        await db.call("feedback_reply", m[1], body, form.close === "yes", reason);
+      } else {
+        await db.call("feedback_close", m[1], m[2] === "close", reason);
+      }
     } else if ((m = ROUTES.content.exec(path))) {
       await db.call(m[3] === "remove" ? "content_remove" : "content_restore", m[1]!.toUpperCase(), m[2], reason);
     } else if (path === "/models/switch") {
@@ -271,6 +284,12 @@ export function createAdminServer(options: AdminServerOptions): Server {
     return { db, host };
   }
 
+  /** For the sidebar: reports waiting, feedback threads waiting for an answer. */
+  const pending = async (db: AdminDb): Promise<[number, number]> => {
+    const [reports, feedback] = await Promise.all([db.call<ReportQueue>("reports"), db.call<FeedbackQueue>("feedback")]);
+    return [reports.pending, feedback.waiting];
+  };
+
   async function answer(request: IncomingMessage): Promise<Answer> {
     const url = URL.parse(request.url ?? "/", "http://console");
     if (url === null) return { status: 400, body: "Bad request" };
@@ -282,9 +301,9 @@ export function createAdminServer(options: AdminServerOptions): Server {
     try {
       if (method === "GET") {
         if (url.pathname === "/") return { location: "/reports" };
-        // Every page shows, next to 举报, how many reports wait (reports() reads SUBMITTED by default).
-        const [body, waiting] = await Promise.all([get(db, url), db.call<ReportQueue>("reports")]);
-        return { status: 200, body: typeof body === "string" ? withPending(body, waiting.pending) : body };
+        // Every page shows how many reports and feedback threads wait (both read the open ones by default).
+        const [body, waiting] = await Promise.all([get(db, url), pending(db)]);
+        return { status: 200, body: typeof body === "string" ? withPending(body, ...waiting) : body };
       }
       if (method !== "POST") return { status: 405, body: errorPage("不支持", "不支持这种请求。", back) };
       // A form must come from the console's own pages: any other origin (another site, another port
@@ -296,7 +315,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
       back = backPath(form);
       const shown = await post(db, url.pathname, form);
       return shown === null ? { location: `${back}${back.includes("?") ? "&" : "?"}ok=1` }
-        : { status: 200, body: withPending(shown, (await db.call<ReportQueue>("reports")).pending) };
+        : { status: 200, body: withPending(shown, ...await pending(db)) };
     } catch (error) {
       if (error instanceof NotFound) return { status: 404, body: errorPage("没有这个页面", "没有找到这个页面或对象。", "/reports") };
       if (error instanceof AdminRefusal) return { status: 409, body: errorPage("没有执行", error.message, back) };

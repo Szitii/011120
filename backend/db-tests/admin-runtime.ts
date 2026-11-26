@@ -507,6 +507,60 @@ try {
   } finally { await user.query("rollback"); user.release(); }
   passed("an operator rewords what the models are told, with a reason and a before-and-after in the log; the API server reads it, app users cannot");
 
+  {
+  // ---- 反馈: an Owner writes, an operator answers in the console, the Owner reads it ----
+  const writer = await person("Feedback");
+  const app = new PostgresChatAdapter(new PgOwnerExecutor(pool, writer.subject));
+  const keyOf = (n: number) => createHash("sha256").update(`feedback-${writer.owner}-${n}`).digest("hex");
+  const thread = await app.sendFeedback("语音有时发不出去", "1.2.0", "IOS", keyOf(1)) as Json;
+  assert.deepEqual([thread.status, thread.unread, thread.messages.map((m: Json) => [m.author, m.body])], ["OPEN", false, [["OWNER", "语音有时发不出去"]]]);
+  assert.equal((await app.sendFeedback("语音有时发不出去", null, null, keyOf(1)) as Json).id, thread.id, "a retried send opens no second thread");
+  await assert.rejects(app.sendFeedback("别的话", null, null, keyOf(1)), code("CONFLICT"));
+  await assert.rejects(app.sendFeedback("x", null, "MAC", keyOf(2)), code("INVALID_INPUT"));
+  const inbox = await admin(one, "feedback") as Json;
+  const listed = inbox.items.find((f: Json) => f.id === thread.id);
+  assert.ok(inbox.waiting >= 1 && listed.waiting === true && listed.owner.email === writer.email && listed.appVersion === "1.2.0" && listed.platform === "IOS");
+  assert.ok((await web("/feedback")).body.includes("语音有时发不出去"), "the console lists it");
+  assert.equal((await web(`/feedback/${thread.id}/reply`, why("回复反馈", { body: "谢谢,下个版本修好", close: "yes", back: "/feedback" }))).status, 303);
+  const answered = (await app.feedback() as Json).items[0];
+  assert.deepEqual([answered.status, answered.unread, answered.messages.map((m: Json) => m.author)], ["CLOSED", true, ["OWNER", "TEAM"]]);
+  assert.ok(!("operator" in answered.messages[1]), "the Owner does not see who answered");
+  assert.equal((await app.badges() as Json).feedback, 1, "the home badges count the unread answer");
+  assert.equal((await app.readFeedback(thread.id) as Json).unread, false);
+  assert.equal((await app.badges() as Json).feedback, 0);
+  const again = await app.addFeedback(thread.id, "还是不行", keyOf(3)) as Json;
+  assert.deepEqual([again.status, again.messages.length], ["OPEN", 3], "a follow-up opens a closed thread again");
+  assert.equal((await app.addFeedback(thread.id, "还是不行", keyOf(3)) as Json).messages.length, 3, "a retried follow-up is added once");
+  await admin(two, "feedback_close", thread.id, true, "关闭反馈");
+  await assert.rejects(admin(two, "feedback_close", thread.id, true, "关闭反馈"), code("55000"));
+  await admin(two, "feedback_close", thread.id, false, "重新打开反馈");
+  await assert.rejects(admin(two, "feedback_reply", thread.id, " ", false, "回复反馈"), code("22023"));
+  assert.deepEqual((await pool.query("select operator, action, detail from companion_private.admin_log where target_type = 'FEEDBACK' and target_id = $1 order by id",
+    [thread.id])).rows, [
+    { operator: "admin_test_one", action: "FEEDBACK_REPLY", detail: { body: "谢谢,下个版本修好", closed: true } },
+    { operator: "admin_test_two", action: "FEEDBACK_CLOSE", detail: {} },
+    { operator: "admin_test_two", action: "FEEDBACK_REOPEN", detail: {} },
+  ], "every answer and close is logged, with the text sent");
+  // Someone else's thread is not there for them.
+  const stranger = new PostgresChatAdapter(new PgOwnerExecutor(pool, (await person("Stranger")).subject));
+  await assert.rejects(stranger.addFeedback(thread.id, "hi", keyOf(4)), code("NOT_FOUND"));
+  await assert.rejects(stranger.readFeedback(thread.id), code("NOT_FOUND"));
+  assert.deepEqual((await stranger.feedback() as Json).items, []);
+  // At most 20 messages a day from one Owner.
+  for (let n = 10; n < 28; n += 1) await app.sendFeedback(`第 ${n} 条`, null, null, keyOf(n));
+  await assert.rejects(app.sendFeedback("太多了", null, null, keyOf(99)), code("INVALID_STATE"));
+  const userDb = await pool.connect();
+  try {
+    await userDb.query("begin"); await userDb.query("set local role authenticated");
+    for (const sql of ["select * from companion_private.feedback", "select companion_admin.feedback('OPEN')"]) {
+      await userDb.query("savepoint s");
+      await assert.rejects(userDb.query(sql), code("42501"), sql);
+      await userDb.query("rollback to savepoint s");
+    }
+  } finally { await userDb.query("rollback"); userDb.release(); }
+  passed("an Owner sends feedback and follow-ups, an operator answers and closes in the console (logged), the Owner sees the answer and its badge");
+  }
+
   // Leave the shared database as other suites expect it.
   await pool.query("update public.community_posts set deleted_at = coalesce(deleted_at, now()) where id = any($1)", [[first, second]]);
   console.log(`Admin PostgreSQL integration passed: ${groups} scenario groups.`);

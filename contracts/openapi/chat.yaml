@@ -219,6 +219,118 @@ paths:
                   version: {type: integer, minimum: 1}
         '401': *problem
         '403': *problem
+  /feedback:
+    get:
+      operationId: listFeedback
+      summary: The Owner's feedback threads (意见反馈), most recently active first (at most 50)
+      description: |
+        Each thread is the Owner's first message, then the team's answers (author TEAM) and the Owner's
+        follow-ups, oldest first. `unread` is true when the team wrote since the Owner last opened the
+        thread (PUT .../read); GET /v0/badges counts such threads as `feedback`. CLOSED means the team
+        handled it; a follow-up opens it again.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Threads
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Feedback'}}
+        '401': *problem
+        '403': *problem
+    post:
+      operationId: sendFeedback
+      summary: Open a feedback thread (1-2000 characters); 409 INVALID_STATE past 20 messages a day
+      description: |
+        The same Idempotency-Key returns the first thread; with other text it is a 409. `appVersion`
+        and `platform` are optional and only help the team tell which build a problem is in.
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              additionalProperties: false
+              properties:
+                body: {type: string, minLength: 1, maxLength: 2000}
+                appVersion: {type: [string, 'null'], maxLength: 40}
+                platform: {type: [string, 'null'], enum: [IOS, ANDROID, WEB, null]}
+      responses:
+        '201':
+          description: The new thread
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Feedback'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '409': *problem
+  /feedback/{feedbackId}/messages:
+    parameters:
+    - name: feedbackId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      operationId: addFeedbackMessage
+      summary: A follow-up in one of the Owner's threads (opens a closed one again; counts as read)
+      x-capability-status: implemented
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              additionalProperties: false
+              properties:
+                body: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '201':
+          description: The thread
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Feedback'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+  /feedback/{feedbackId}/read:
+    parameters:
+    - name: feedbackId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    put:
+      operationId: readFeedback
+      summary: The Owner opened the thread; the team's answers so far are read
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The thread
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Feedback'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
   /features:
     get:
       operationId: getFeatures
@@ -1254,9 +1366,10 @@ components:
         activeAt: {type: string, format: date-time}
     Badges:
       type: object
-      required: [chats, ownerInbox, community]
+      required: [chats, ownerInbox, community, feedback]
       properties:
         chats: {type: integer, minimum: 0, description: Unread Companion messages over every chat.}
+        feedback: {type: integer, minimum: 0, description: Feedback threads with an answer from the team the Owner has not read.}
         ownerInbox: {type: integer, minimum: 0, description: Unread items of GET /v0/life-event-inbox.}
         community:
           type: array
@@ -1277,6 +1390,26 @@ components:
         timeZone: {type: string}
         revision: {type: integer, minimum: 1}
         updatedAt: {type: string, format: date-time}
+    Feedback:
+      type: object
+      required: [id, status, unread, createdAt, updatedAt, messages]
+      properties:
+        id: {type: string, format: uuid}
+        status: {type: string, enum: [OPEN, CLOSED]}
+        unread: {type: boolean, description: The team wrote since the Owner last opened the thread.}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time, description: When the last message was written.}
+        messages:
+          type: array
+          description: Oldest first; the first is the Owner's.
+          items:
+            type: object
+            required: [id, author, body, createdAt]
+            properties:
+              id: {type: string, format: uuid}
+              author: {type: string, enum: [OWNER, TEAM]}
+              body: {type: string}
+              createdAt: {type: string, format: date-time}
     CompanionMemory:
       type: object
       required: [id, body, source, createdAt]
