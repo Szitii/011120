@@ -222,7 +222,11 @@ begin
     from unnest(memories) with ordinality t(m,i);
   end if;
 
-  -- The approved world book entries, in card order, after the ones the Companion already has.
+  -- The approved world book entries, in card order, after the ones the Companion already has. An
+  -- entry it already has word for word (the same card approved into it again) is not added twice.
+  select coalesce(jsonb_agg(w order by i),'[]') into world from jsonb_array_elements(world) with ordinality t(w,i)
+    where not exists(select 1 from companion_private.world_entries e where e.companion_id=new_companion_id
+      and e.body=w->>'body' and e.keys=array(select jsonb_array_elements_text(w->'keys')));
   if jsonb_array_length(world)>0 then
     if (select count(*) from companion_private.world_entries where companion_id=new_companion_id)+jsonb_array_length(world)>100 then
       raise exception using errcode='55000',message='world entry limit reached';
@@ -352,8 +356,25 @@ end $$;
 -- ---------- 3. rules over what it says ----------
 
 alter table companion_private.chat_settings
-  add column reply_rules jsonb not null default '[]'
-    check (jsonb_typeof(reply_rules) = 'array' and jsonb_array_length(reply_rules) <= 10);
+  add column reply_rules jsonb not null default '[]';
+
+-- The shape of the list, whoever stores it (chat_update_settings can be called without the API
+-- server): up to 10 rules, each exactly {pattern, flags, replacement, enabled} of the right kinds
+-- and lengths. Whether a pattern compiles is the API server's to say, when it saves a list and again
+-- before it runs one.
+create function companion_private.reply_rules_ok(p jsonb)
+returns boolean language sql immutable as $$
+  select case when jsonb_typeof(p) is distinct from 'array' or jsonb_array_length(p) > 10 then false
+    else not exists(select 1 from jsonb_array_elements(p) r where case when jsonb_typeof(r) <> 'object' then true else
+      r - array['pattern', 'flags', 'replacement', 'enabled'] <> '{}'::jsonb
+      or jsonb_typeof(r->'pattern') is distinct from 'string' or char_length(r->>'pattern') not between 1 and 200
+      or jsonb_typeof(r->'flags') is distinct from 'string' or r->>'flags' !~ '^[gimsu]{0,5}$'
+      or jsonb_typeof(r->'replacement') is distinct from 'string' or char_length(r->>'replacement') > 200
+      or jsonb_typeof(r->'enabled') is distinct from 'boolean' end) end
+$$;
+revoke all on function companion_private.reply_rules_ok(jsonb) from public, anon, authenticated;
+alter table companion_private.chat_settings
+  add constraint chat_settings_reply_rules_check check (companion_private.reply_rules_ok(reply_rules));
 
 -- As in 0070, plus replyRules.
 create or replace function companion_private.chat_settings_json(s companion_private.chat_settings)

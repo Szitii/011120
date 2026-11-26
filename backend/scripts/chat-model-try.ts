@@ -10,6 +10,7 @@
  * way to see what a searched reply costs before the switch is turned on for everyone.
  */
 import { ChatCatalog } from "../src/chat/models.ts";
+import type { ChatClaim } from "../src/chat/port.ts";
 import { parseReply, replyPrompt } from "../src/chat/prompt.ts";
 import { createModelCaller } from "../src/chat/providers.ts";
 
@@ -24,13 +25,17 @@ if (!model || words.length === 0) {
 if (!catalog.usable(model)) throw new Error(`${id} is disabled in the catalog or its key (${catalog.provider(model).apiKeyEnv}) is not set.`);
 const companion = { companionId: "sample", displayName: "小光", settings: { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: model.id, revision: 1 } as const,
   identity: { identitySummary: "温柔、有点爱逗人的陪伴者", personaTraits: ["细心", "幽默"], speakingStyle: { 语气: "轻松" } } };
-const { system, user } = replyPrompt({
+const turn: ChatClaim = {
   chatId: "sample", replyId: "sample", claimId: "sample", replyTo: "OWNER", optional: false, direct: true, companion,
   members: [{ companionId: "sample", displayName: "小光" }],
   history: [{ companionId: null, body: words.join(" "), action: null, mentions: [], sentAt: new Date().toISOString() }],
-}, [], {}, new Date(), web && model.options?.webTools !== undefined);
+};
+const now = new Date();
+const searches = web && model.options?.webTools !== undefined;
+const { system, user } = replyPrompt(turn, [], {}, now, { web: searches });
 const started = Date.now();
-const result = await createModelCaller(catalog)(model, { system, user, maxTokens: 2000, signal: AbortSignal.timeout(90_000), web });
+const result = await createModelCaller(catalog)(model, { system, user, maxTokens: 2000, signal: AbortSignal.timeout(90_000),
+  ...(searches ? { web: { without: replyPrompt(turn, [], {}, now) } } : {}) });
 console.log(parseReply(result.text, "小光"));
 console.log({ refused: result.refused, cutOff: result.cutOff, web: result.web ?? "not offered", inputTokens: result.inputTokens, outputTokens: result.outputTokens,
   costCents: catalog.cost(model, result.inputTokens, result.outputTokens), seconds: (Date.now() - started) / 1000 });

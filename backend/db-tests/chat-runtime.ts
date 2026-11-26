@@ -816,7 +816,26 @@ try {
   assert.equal((await putSettings(A.companion, { replyRules: [{ pattern: "(" }] })).status, 400, "a pattern that does not compile");
   assert.equal((await putSettings(A.companion, { replyRules: Array.from({ length: 11 }, () => ({ pattern: "a" })) })).status, 400, "ten at most");
   await assert.rejects(pool.query("update companion_private.chat_settings set reply_rules = $1 where companion_id = $2",
-    [JSON.stringify(Array.from({ length: 11 }, () => ({ pattern: "a" }))), A.companion]), /check constraint/, "the database holds the limit too");
+    [JSON.stringify(Array.from({ length: 11 }, () => ({ pattern: "a", flags: "g", replacement: "", enabled: true }))), A.companion]), /check constraint/, "the database holds the limit too");
+  // And the shape, for a list that does not come through the API server (the function is the app user's to call).
+  const appUser = await pool.connect();
+  try {
+    await appUser.query("begin");
+    await appUser.query("set local role authenticated");
+    await appUser.query("select set_config('request.jwt.claim.sub', $1, true)", [A.subject]);
+    const revision = (await call<ChatSettings>(0, `companions/${A.companion}/chat-settings`)).data.revision;
+    const whole = { pattern: "a", flags: "g", replacement: "", enabled: true };
+    for (const bad of [[null], [5], [[]], [{ pattern: "a" }], [{ ...whole, pattern: 5 }], [{ ...whole, pattern: "" }], [{ ...whole, pattern: "a".repeat(201) }], [{ ...whole, flags: "y" }],
+      [{ ...whole, replacement: "b".repeat(201) }], [{ ...whole, enabled: "yes" }], [{ ...whole, code: "x" }], { pattern: "a" }, "x"]) {
+      await appUser.query("savepoint s");
+      await assert.rejects(appUser.query("select public.chat_update_settings($1, 'NORMAL', 'NORMAL', null, null, $2, null, null, null, $3)", [A.companion, revision, JSON.stringify(bad)]),
+        /check constraint/, JSON.stringify(bad).slice(0, 50));
+      await appUser.query("rollback to savepoint s");
+    }
+  } finally {
+    await appUser.query("rollback");
+    appUser.release();
+  }
   assert.deepEqual((await putSettings(A.companion, { replyRules: [] })).data.replyRules, []);
   assert.equal((await voiceReply("规则去掉了")).at(0)!.body, "（开发环境假回复）我是SampleCompanion");
   passed("reply rules: kept with the settings, run in order over each message, refused when they cannot be used");

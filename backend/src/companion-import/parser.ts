@@ -96,16 +96,19 @@ function requirePlainObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/** `text` cut to `max` characters, never inside a character. */
-const cutTo = (text: string, max: number): string => Array.from(text).slice(0, max).join("").trim();
+/** `text` cut to `max` characters, never inside a character (a character is at most two units, so only that much is looked at). */
+const cutTo = (text: string, max: number): string => Array.from(text.slice(0, 2 * max)).slice(0, max).join("").trim();
 
 /**
  * A card's example dialogue as we keep it: the `<START>` lines that separate examples are blank
  * lines, and the placeholders for the character and the user are the Companion's name and 主人.
+ * The name is put in as it is written: a `$` in it means nothing, and it is no longer than a name
+ * may be, so the text grows by no more than that for each placeholder.
  */
 function exampleDialogue(text: string, name: string): string {
+  const shown = cutTo(name, MAX_DISPLAY_NAME_LENGTH);
   return text.replace(/\r\n?/g, "\n").replace(/^[ \t]*<START>[ \t]*$/gim, "")
-    .replace(/\{\{char\}\}|<BOT>/gi, name).replace(/\{\{user\}\}|<USER>/gi, "主人")
+    .replace(/\{\{char\}\}|<BOT>/gi, () => shown).replace(/\{\{user\}\}|<USER>/gi, "主人")
     .replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -263,7 +266,9 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
         const path = `${bookPath}.entries[${index}]`;
         const item = entry !== null && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : {};
         for (const [key, nested] of Object.entries(item)) if (key !== "keys" && key !== "content") scanStrings(nested, `${path}.${key}`, "EXCLUDED");
-        const words = Array.isArray(item.keys) ? item.keys.flatMap((key) => (typeof key === "string" ? [key.replace(/\s+/g, " ").trim()] : [])) : [];
+        // A trigger word is one line of plain text, as when the Owner types one: control characters in it are spaces.
+        const words = Array.isArray(item.keys)
+          ? item.keys.flatMap((key) => (typeof key === "string" ? [key.replace(/[\p{Cc}\u2028\u2029\s]+/gu, " ").trim()] : [])) : [];
         const keys = words.filter((word, at) => word !== "" && words.findIndex((other) => other.toLowerCase() === word.toLowerCase()) === at);
         const text = typeof item.content === "string" ? item.content.trim() : "";
         if (keys.length === 0 || text === "" || item.enabled === false) {
@@ -350,12 +355,21 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
   if (typeof example === "string") {
     const path = `${prefix}.mes_example`;
     const whole = exampleDialogue(example, (data.name as string).trim());
-    if (Array.from(whole).length > MAX_EXAMPLE_LENGTH) {
+    const kept = cutTo(whole, MAX_EXAMPLE_LENGTH);
+    if (kept !== whole) {
       addFinding(path, "FIELD_CONSTRAINT", "INFO", "OWNER_REVIEW", example, `Cut to ${MAX_EXAMPLE_LENGTH} characters`);
     }
-    if (whole !== "") {
-      candidates.push(candidate("candidate-dialogueExamples", "dialogueExamples", cutTo(whole, MAX_EXAMPLE_LENGTH), path,
-        (findingIdsByPath.get(path) ?? []).filter((id) => blockingIds.has(id))));
+    if (kept !== "") {
+      let blockedBy = (findingIdsByPath.get(path) ?? []).filter((id) => blockingIds.has(id));
+      if (blockedBy.length === 0) {
+        // Nothing wrong with it as the card has it. But what is kept is not what the card has: the
+        // name is put in and the <START> lines are taken out, and that can make an instruction or a
+        // link out of two harmless halves. So it is scanned once more, as it is kept.
+        const before = findings.length;
+        scanStrings(kept, path);
+        blockedBy = findings.slice(before).map((finding) => finding.id);
+      }
+      candidates.push(candidate("candidate-dialogueExamples", "dialogueExamples", kept, path, blockedBy));
     }
   }
   candidates.push(...memoryCandidates, ...worldCandidates);
