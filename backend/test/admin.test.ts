@@ -703,7 +703,7 @@ it("shows how much the App is used, and the database and the servers", async () 
   const stats = await send("/stats");
   assert.deepEqual(calls, [["activity", "2026-11-01"]]);
   assert.match(stats.body, /<a href="\/stats" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>运营数据<\/a>/);
-  assert.match(stats.body, /<tr><td>本月聊天的人<\/td><td class="num"><b>12<\/b><\/td><td class="muted"><\/td><\/tr><tr><td>新注册<\/td><td class="num"><b>3<\/b>/);
+  assert.match(stats.body, /<tr><td>新注册<\/td><td class="num"><b>3<\/b><\/td><td class="muted"><\/td><\/tr>\s*<\/table><table class="kv">\s*<tr><td>本月聊天的人<\/td><td class="num"><b>12<\/b>/, "two columns: accounts, then use");
   assert.match(stats.body, /<tr><td>今天聊天的人<\/td><td class="num"><b>3<\/b><\/td><td class="muted">主人 20 · 家机 18 条<\/td>/);
   assert.match(stats.body, /<tr><td>消息<\/td><td class="num"><b>57<\/b><\/td><td class="muted">主人 30 · 家机 27 · 失败 3/);
   assert.ok(!stats.body.includes('<span class="seg">'), "this month is the first: no other month to go to");
