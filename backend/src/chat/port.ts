@@ -101,6 +101,9 @@ export interface PostJob {
   others: { author: string; body: string; at: string }[];
 }
 
+/** A world book entry as a prompt takes it: told to the model while one of its `keys` is in the conversation. */
+export interface WorldNote { keys: readonly string[]; body: string; enabled?: boolean | undefined }
+
 /** One long-term memory as a prompt takes it. `createdAt` (when it was noted down) dates its line. */
 export interface Remembered { body: string; createdAt?: string | undefined }
 
@@ -185,6 +188,11 @@ export interface ChatPort {
   savePersona(companionId: string, version: number, fields: Readonly<Record<string, string>>): Promise<unknown>;
   addMemory(companionId: string, body: string, keyHash: string): Promise<unknown>;
   deleteMemory(companionId: string, memoryId: string): Promise<unknown>;
+  /** Every world book entry of the Companion, in the order they were written ({ items }). */
+  worldEntries(companionId: string): Promise<unknown>;
+  /** Server only (the texts are scanned first): a new entry (`entryId` null) or that entry rewritten. */
+  saveWorldEntry(companionId: string, entryId: string | null, keys: readonly string[], body: string, enabled: boolean): Promise<unknown>;
+  deleteWorldEntry(companionId: string, entryId: string): Promise<unknown>;
   /** How the Companion speaks, without the secret. */
   connectionView(companionId: string): Promise<unknown>;
   /** Server only: save a tested connection; `secret` is already sealed. */

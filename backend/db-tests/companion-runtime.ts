@@ -110,6 +110,7 @@ try {
   assert.equal((await call(0, `chats/${group.id}/messages`, "POST", { body: "大家好", mentions: [doomed, friend] })).status, 201);
   assert.ok((await settle(group.id)).items.some(m => m.companionId === doomed));
   assert.equal((await call(0, `companions/${doomed}/memories`, "POST", { body: "主人怕黑" })).status, 201);
+  assert.equal((await call(0, `companions/${doomed}/world-entries`, "POST", { keys: ["小白"], body: "主人养的猫" })).status, 201);
   assert.equal((await call(0, `companions/${doomed}/diary-settings`)).status, 200);
   const day = (await call<{ revision: number }>(0, `companions/${doomed}/anniversary`)).data;
   assert.equal((await call(0, `companions/${doomed}/anniversary`, "PUT",
@@ -154,7 +155,7 @@ try {
   // ---- what was private to it is erased ----
   const list = await roster();
   assert.ok(!list.includes(doomed) && list.includes(friend) && list.includes(A.companion));
-  for (const path of ["memories", "chat-settings", "connection", "diary", "anniversary", "agent-keys"]) {
+  for (const path of ["memories", "world-entries", "reminders", "chat-settings", "connection", "diary", "anniversary", "agent-keys"]) {
     assert.equal((await call(0, `companions/${doomed}/${path}`)).status, 404, path);
   }
   assert.equal((await call(0, "chats", "POST", { companionIds: [doomed] })).status, 404);
@@ -163,8 +164,8 @@ try {
   assert.deepEqual(chats.find(c => c.id === group.id)!.members.map(m => m.companionId), [friend], "it left the group");
   const groupPage = (await call<ChatPage>(0, `chats/${group.id}`)).data;
   assert.ok(groupPage.items.length > 0 && !groupPage.items.some(m => m.companionId === doomed), "what it said in the group is gone, the rest stays");
-  for (const table of ["companion_memories", "memory_notes", "companion_connections", "agent_keys", "diary_settings", "anniversaries", "chat_settings",
-    "chat_members", "chat_messages"]) {
+  for (const table of ["companion_memories", "memory_notes", "world_entries", "chat_reminders", "companion_connections", "agent_keys", "diary_settings",
+    "anniversaries", "chat_settings", "chat_members", "chat_messages"]) {
     assert.equal(await count(`companion_private.${table} where companion_id = $1`, [doomed]), 0, table);
   }
   assert.equal(await count("public.life_event_inbox where companion_id = $1", [doomed]), 0);

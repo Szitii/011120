@@ -932,6 +932,7 @@ paths:
                 values: {type: string, maxLength: 600}
                 boundaries: {type: string, maxLength: 600}
                 aspirations: {type: string, maxLength: 600}
+                dialogueExamples: {type: string, maxLength: 1500}
       responses:
         '200':
           description: The persona as saved
@@ -961,6 +962,110 @@ paths:
     delete:
       operationId: deleteMemory
       summary: Delete one memory; the text is gone
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {const: true}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/world-entries:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: listWorldEntries
+      summary: The Companion's world book, in the order the entries were written (at most 100)
+      description: |
+        世界书 - pieces of background the Companion knows. An entry is told to the model only while one
+        of its trigger words (`keys`) appears in the last few messages of the conversation (anywhere
+        in the text, whatever the case), so a large setting does not ride along with every reply.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: World entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/WorldEntry'}}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    post:
+      operationId: addWorldEntry
+      summary: Add an entry; 409 past 100; 422 when the text may not be kept
+      description: The same words with the same text as an entry it already has returns that entry.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorldEntryInput'}
+      responses:
+        '201':
+          description: The entry
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorldEntry'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: The words or the text hold something that may not be kept; nothing was saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorldEntryRefusal'}
+  /companions/{companionId}/world-entries/{entryId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: entryId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    put:
+      operationId: saveWorldEntry
+      summary: Rewrite an entry whole (words, text, on or off)
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorldEntryInput'}
+      responses:
+        '200':
+          description: The entry
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorldEntry'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '422':
+          description: The words or the text hold something that may not be kept; nothing was saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorldEntryRefusal'}
+    delete:
+      operationId: deleteWorldEntry
+      summary: Delete an entry; the text is gone
       x-capability-status: implemented
       responses:
         '200':
@@ -1505,7 +1610,7 @@ components:
         createdAt: {type: string, format: date-time}
     CompanionPersona:
       type: object
-      required: [companionId, displayName, version, updatedAt, identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations]
+      required: [companionId, displayName, version, updatedAt, identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations, dialogueExamples]
       properties:
         companionId: {type: string, format: uuid}
         displayName: {type: string}
@@ -1517,12 +1622,17 @@ components:
         values: {type: string, description: 在意的事}
         boundaries: {type: string, description: 边界}
         aspirations: {type: string, description: 向往}
+        dialogueExamples:
+          type: string
+          description: |
+            示例对话 - a few lines that show how the Companion speaks (line breaks kept), up to 1500
+            characters. The model learns the tone from them, not the content. "" when there is none.
     PersonaRefusal:
       type: object
       required: [code, field, reason]
       properties:
         code: {type: string, enum: [PERSONA_REFUSED]}
-        field: {type: string, enum: [identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations]}
+        field: {type: string, enum: [identitySummary, personaTraits, speakingStyle, values, boundaries, aspirations, dialogueExamples]}
         reason:
           type: string
           enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]
@@ -1595,7 +1705,50 @@ components:
             Owner, never a second time before the Owner has answered the first, and not after 7 days
             of silence. Reminders the Owner asks for do not depend on it.
             Always sent; on PUT, leaving it out keeps the current one.
+        replyRules:
+          type: array
+          maxItems: 10
+          items: {$ref: '#/components/schemas/ReplyRule'}
+          description: |
+            正则替换 - rules run, in order, over every message the Companion says in chat, before it is
+            shown. Always sent ([] when there are none); on PUT, leaving it out keeps the current list
+            and [] clears it. 400 when a rule cannot be used.
         revision: {type: integer, minimum: 1}
+    ReplyRule:
+      type: object
+      required: [pattern]
+      additionalProperties: false
+      properties:
+        pattern: {type: string, minLength: 1, maxLength: 200, description: 'A JavaScript regular expression, e.g. "（[^）]*）".'}
+        flags: {type: string, pattern: '^[gimsu]*$', description: 'Any of g i m s u, each once. Default "g" - every match.'}
+        replacement: {type: string, maxLength: 200, description: 'What takes the match''s place; $1 is the first group. Default "" - the match is removed.'}
+        enabled: {type: boolean, description: Default true. A rule that is off is kept but not run.}
+    WorldEntry:
+      type: object
+      required: [id, keys, body, enabled, source, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        keys: {type: array, minItems: 1, maxItems: 8, items: {type: string, minLength: 1, maxLength: 40}}
+        body: {type: string, minLength: 1, maxLength: 1000}
+        enabled: {type: boolean}
+        source: {type: string, enum: [IMPORT, OWNER], description: 'IMPORT: approved from a card''s world book. OWNER: written by hand.'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    WorldEntryInput:
+      type: object
+      required: [keys, body]
+      additionalProperties: false
+      properties:
+        keys: {type: array, minItems: 1, maxItems: 8, items: {type: string, minLength: 1, maxLength: 40}}
+        body: {type: string, minLength: 1, maxLength: 1000}
+        enabled: {type: boolean, description: Left out - true.}
+    WorldEntryRefusal:
+      type: object
+      required: [code, field, reason]
+      properties:
+        code: {type: string, enum: [WORLD_ENTRY_REFUSED]}
+        field: {type: string, enum: [keys, body]}
+        reason: {type: string, enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]}
     VoiceInfo:
       type: object
       required: [id, name, gender, description]

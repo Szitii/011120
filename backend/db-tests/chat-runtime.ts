@@ -147,10 +147,10 @@ try {
   assert.match(page.items[0]!.body!, /SecondCompanion接着SampleCompanion的话说一句/);
   passed("a group: both answer the Owner, then they talk to each other within their interaction limit");
 
-  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", proactive: "OFF", revision: 1 });
+  assert.deepEqual((await call<ChatSettings>(0, `companions/${second}/chat-settings`)).data, { groupActivity: "NORMAL", companionInteraction: "NORMAL", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", proactive: "OFF", replyRules: [], revision: 1 });
   assert.equal((await call(1, `companions/${second}/chat-settings`)).status, 404);
   const quiet = await putSettings(second, { groupActivity: "QUIET", companionInteraction: "NONE" });
-  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", proactive: "OFF", revision: 2 });
+  assert.deepEqual(quiet.data, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: null, autoMemory: "SOMETIMES", proactive: "OFF", replyRules: [], revision: 2 });
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: null, revision: 1 })).status, 409);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "LOUD", companionInteraction: "NONE", model: null, revision: 2 })).status, 400);
   assert.equal((await call(0, `companions/${second}/chat-settings`, "PUT", { groupActivity: "ACTIVE", companionInteraction: "NONE", model: "not-in-catalog", revision: 2 })).status, 400);
@@ -245,7 +245,7 @@ try {
   assert.deepEqual([claim.timeZone, claim.ownerName], ["Asia/Shanghai", "阿澈"], "no community settings: the default zone; the chosen title");
   assert.deepEqual([claim.companion.displayName, claim.optional, claim.direct, claim.replyTo], ["SecondCompanion", false, false, "OWNER"]);
   assert.deepEqual(claim.companion.identity, { persona: "calm" });
-  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: "阿澈", autoMemory: "SOMETIMES", proactive: "OFF", revision: 0 });
+  assert.deepEqual({ ...claim.companion.settings, revision: 0 }, { groupActivity: "QUIET", companionInteraction: "NONE", model: null, voice: null, preferredUserTitle: "阿澈", autoMemory: "SOMETIMES", proactive: "OFF", replyRules: [], revision: 0 });
   assert.equal(claim.history.at(-1)!.body, "抢一下");
   assert.equal(await portA.claim(fresh.id), null);
   assert.equal(await portA.finish(claim.replyId, randomUUID(), "SENT", ["冒名"]), false);
@@ -806,6 +806,20 @@ try {
   const [plain] = await voiceReply("好的");
   assert.equal(plain!.audio, null, "no voice: text only");
   passed("voice messages: the daily limit, clips expire to text, malformed audio is refused, and no voice means text");
+
+  // ---- 正则替换: the Owner's rules run over what the Companion says ----
+  const rules = [{ pattern: "（开发环境假回复）", flags: "g", replacement: "", enabled: true }, { pattern: "收到", flags: "g", replacement: "听到了", enabled: false }];
+  assert.deepEqual((await putSettings(A.companion, { replyRules: rules })).data.replyRules, rules);
+  const { replyRules: _rules, ...withoutRules } = (await call<ChatSettings>(0, `companions/${A.companion}/chat-settings`)).data;
+  assert.deepEqual((await call<ChatSettings>(0, `companions/${A.companion}/chat-settings`, "PUT", withoutRules)).data.replyRules, rules, "an app that does not send them keeps them");
+  assert.deepEqual((await voiceReply("规则生效了吗")).map(m => m.body), ["我是SampleCompanion", "收到：「规则生效了吗」"], "the rule that is on, not the one that is off");
+  assert.equal((await putSettings(A.companion, { replyRules: [{ pattern: "(" }] })).status, 400, "a pattern that does not compile");
+  assert.equal((await putSettings(A.companion, { replyRules: Array.from({ length: 11 }, () => ({ pattern: "a" })) })).status, 400, "ten at most");
+  await assert.rejects(pool.query("update companion_private.chat_settings set reply_rules = $1 where companion_id = $2",
+    [JSON.stringify(Array.from({ length: 11 }, () => ({ pattern: "a" }))), A.companion]), /check constraint/, "the database holds the limit too");
+  assert.deepEqual((await putSettings(A.companion, { replyRules: [] })).data.replyRules, []);
+  assert.equal((await voiceReply("规则去掉了")).at(0)!.body, "（开发环境假回复）我是SampleCompanion");
+  passed("reply rules: kept with the settings, run in order over each message, refused when they cannot be used");
 
   // Leave the shared development database as other suites expect it.
   await pool.query("delete from companion_private.diary_entries where companion_id in ($1, $2)", [A.companion, second]);

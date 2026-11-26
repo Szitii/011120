@@ -31,10 +31,14 @@ export type IdentityField =
   | "aspirations"
   | "appearance"
   | "pronouns"
-  | "togetherSince";
+  | "togetherSince"
+  | "dialogueExamples";
 
-/** "memory": one thing the Companion remembers; approved ones go to its memories, not into the identity. */
-export type CandidateField = IdentityField | "memory";
+/**
+ * "memory": one thing the Companion remembers; approved ones go to its memories, not into the identity.
+ * "worldEntry": one world book entry, {keys, body}; approved ones go to its world book.
+ */
+export type CandidateField = IdentityField | "memory" | "worldEntry";
 
 export interface IdentityCandidate {
   readonly id: string;

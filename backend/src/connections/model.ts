@@ -11,7 +11,7 @@
  * (every BYOK connection) or `owner-agent` (every EXTERNAL one).
  */
 import { diaryPrompt, memoryPrompt, parseMemories, parsePost, parseReply, postPrompt, replyPrompt, agentMessages } from "../chat/prompt.ts";
-import { memoriesOf, textsOf } from "../chat/platform.ts";
+import { memoriesOf, textsOf, worldOf } from "../chat/platform.ts";
 import { readCompletion, type ModelResult } from "../chat/providers.ts";
 import type { ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob } from "../chat/port.ts";
 import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer } from "../chat/replies.ts";
@@ -141,7 +141,7 @@ export class ConnectedChatModel implements ChatModel {
     const secret = this.#box.open(stored.secret, companionId);
     const texts = await textsOf(context.port);
     const messages = stored.kind === "EXTERNAL" ? agentMessages(turn, texts)
-      : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId), texts));
+      : toMessages(replyPrompt(turn, await memoriesOf(context.port, companionId), texts, undefined, { world: await worldOf(context.port, companionId) }));
     const result = await complete(this.#post, stored, secret, messages, REPLY_TOKENS, context.signal);
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the reply was cut off");

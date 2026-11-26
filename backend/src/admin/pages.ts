@@ -979,7 +979,7 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
   return [
     { title: "聊天回复", when: "主人发来消息、家机要回复的时候。平台的模型和主人自带 Key 的模型都用这一份。" +
       "记忆多到放不下(约 3000 字)时,更早的记忆里和眼下聊的事有关的几条,会另外附在聊天记录前面。", editable: true,
-      blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REMIND", "CHAT_WEB", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now, true) },
+      blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REMIND", "CHAT_WEB", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now, { web: true }) },
     { title: "主动找主人", editable: true, forms: ["CHAT_REACH"], blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REACH", "CHAT_TIME"],
       when: "主人给这位家机打开了“主动找你”,并且有一阵没来聊天的时候(偶尔:8 小时以上,一天最多 1 次;经常:3 小时以上,一天最多 2 次)。" +
         "主人当地 23 点到 8 点不找;上一次主动说的话主人还没回,就不再找;主人超过 7 天没来也不再找。家机可以决定不说。" +

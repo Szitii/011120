@@ -4,6 +4,7 @@ import { handleChatRequest } from "../src/chat/http.ts";
 import { sha256 } from "../src/companion-import/canonical.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { localStamp, splitReminders } from "../src/chat/prompt.ts";
+import { applyRules, checkRules } from "../src/chat/reply-rules.ts";
 import { ChatReplies, devChatModel, type ChatModel, type ReplyTrace } from "../src/chat/replies.ts";
 import type { ChatClaim, ChatOutcome, ChatPort, MemoryJob, MemoryNote, MemoryStart } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
@@ -76,6 +77,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     reachBegin: async (...args) => { calls.push(["reachBegin", ...args]); return { status: "NOT_DUE" }; },
     reminders: async (...args) => { calls.push(["reminders", ...args]); return { items: [] }; },
     cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },
+    worldEntries: async (...args) => { calls.push(["worldEntries", ...args]); return { items: [] }; },
+    saveWorldEntry: async (...args) => { calls.push(["saveWorldEntry", ...args]); return { id: "w1" }; },
+    deleteWorldEntry: async (...args) => { calls.push(["deleteWorldEntry", ...args]); return { deleted: true }; },
     reserve: async () => ({ decision: "RESERVED", transactionId: "tx" }),
     settle: async () => undefined,
     modelsEnabled: async models => models.map(() => true),
@@ -263,8 +267,17 @@ it("shows a persona as texts and saves a change only after the same scan an impo
   const shown = await handleChatRequest(request(path), session(port), "trace", replies);
   assert.equal(shown!.status, 200);
   assert.deepEqual(shown!.body, { companionId: companion, displayName: "小光", version: 3, updatedAt: "2026-11-26T01:00:00Z",
-    identitySummary: "长".repeat(600), personaTraits: "细心\n嘴硬心软\n爱笑", speakingStyle: "语气：轻松", values: "", boundaries: "", aspirations: "" },
+    identitySummary: "长".repeat(600), personaTraits: "细心\n嘴硬心软\n爱笑", speakingStyle: "语气：轻松", values: "", boundaries: "", aspirations: "",
+    dialogueExamples: "" },
     "each field is one text, cut to what the models are told; a list reads one item per line");
+  // 示例对话 is a field like the others, with room for a dialogue: 1500 characters, line breaks kept.
+  const talk = `主人：累\n小光：${"坐".repeat(1490)}`;
+  const withExamples = await handleChatRequest(request(path, "PUT", { version: 3, dialogueExamples: ` ${talk} ` }), session(port), "trace", replies);
+  assert.equal(withExamples!.status, 200);
+  assert.deepEqual(calls.at(-1), ["savePersona", companion, 3, { dialogueExamples: talk }]);
+  assert.equal(await refusal(port, request(path, "PUT", { version: 3, dialogueExamples: "例".repeat(1501) })), "INVALID_INPUT");
+  const linked = await handleChatRequest(request(path, "PUT", { version: 3, dialogueExamples: "主人：看 https://example.com" }), session(port), "trace", replies);
+  assert.deepEqual([linked!.status, linked!.body], [422, { code: "PERSONA_REFUSED", field: "dialogueExamples", reason: "LINK" }]);
 
   const saved = await handleChatRequest(request(path, "PUT", { version: 3, speakingStyle: " 短句，爱用语气词 \n", boundaries: "" }), session(port), "trace", replies);
   assert.equal(saved!.status, 200);
@@ -306,6 +319,33 @@ it("routes memories and refuses ones with credentials", async () => {
     assert.equal(await refusal(port, req), "NOT_FOUND");
   }
   assert.equal(calls.length, 0);
+});
+
+it("routes the world book: entries are scanned like a persona text before they are saved", async () => {
+  const { port, calls } = fakePort();
+  const entryId = "00000000-0000-0000-0000-00000000f003";
+  const entries = `companions/${companion}/world-entries`;
+  assert.equal(await status(port, request(entries)), 200);
+  assert.equal(await status(port, request(entries, "POST", { keys: [" 小白 ", "猫"], body: " 主人养的猫，怕打雷 " })), 201);
+  assert.equal(await status(port, request(`${entries}/${entryId}`, "PUT", { keys: ["小白"], body: "三岁了", enabled: false })), 200);
+  assert.equal(await status(port, request(`${entries}/${entryId}`, "DELETE")), 200);
+  assert.deepEqual(calls, [["worldEntries", companion], ["saveWorldEntry", companion, null, ["小白", "猫"], "主人养的猫，怕打雷", true],
+    ["saveWorldEntry", companion, entryId, ["小白"], "三岁了", false], ["deleteWorldEntry", companion, entryId]]);
+  calls.length = 0;
+  const refused = await handleChatRequest(request(entries, "POST", { keys: ["小白"], body: "它的密码是 password: hunter2hunter2" }), session(port), "trace", replies);
+  assert.deepEqual([refused!.status, refused!.body], [422, { code: "WORLD_ENTRY_REFUSED", field: "body", reason: "CREDENTIAL" }]);
+  const word = await handleChatRequest(request(entries, "POST", { keys: ["看 https://example.com"], body: "好" }), session(port), "trace", replies);
+  assert.deepEqual([word!.status, word!.body], [422, { code: "WORLD_ENTRY_REFUSED", field: "keys", reason: "LINK" }]);
+  for (const body of [{ keys: [], body: "x" }, { keys: ["a"], body: " " }, { keys: ["a"], body: "长".repeat(1001) }, { keys: Array(9).fill("a"), body: "x" },
+    { keys: ["字".repeat(41)], body: "x" }, { keys: ["a\nb"], body: "x" }, { keys: [7], body: "x" }, { keys: "a", body: "x" }, { keys: ["a"], body: "x", enabled: "yes" },
+    { keys: ["a"], body: "x", extra: 1 }, { keys: ["a"] }]) {
+    assert.equal(await refusal(port, request(entries, "POST", body)), "INVALID_INPUT", JSON.stringify(body));
+  }
+  for (const req of [request(entries, "PUT", { keys: ["a"], body: "x" }), request(`${entries}/${entryId}`, "POST", { keys: ["a"], body: "x" }), request(`${entries}/${entryId}`)]) {
+    assert.equal(await refusal(port, req), "NOT_FOUND");
+  }
+  assert.equal(await refusal(port, request(`${entries}/not-a-uuid`, "DELETE")), "INVALID_INPUT");
+  assert.equal(calls.length, 0, "nothing refused reaches the database");
 });
 
 it("routes reminders: the Owner sees the waiting ones and cancels one", async () => {
@@ -588,6 +628,15 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   assert.deepEqual((await run(devChatModel, direct({ history: ownerSays("取消提醒吧") }))).reminders, { cancel: ["r1"] });
   assert.equal((await run(devChatModel, direct({ canRemind: false, history: ownerSays("提醒我") }))).reminders, undefined);
 
+  // 正则替换: the Owner's rules run over each message before the safety scan; marks are read before them.
+  const ruled = (rules: NonNullable<ChatClaim["companion"]["settings"]["replyRules"]>) => direct({ companion: { ...turn().companion, settings: { ...settings, replyRules: rules } } });
+  const brackets = [{ pattern: "（[^）]*）", flags: "g", replacement: "" }, { pattern: "^(.+)$", replacement: "$1~" }, { pattern: "不跑", enabled: false, replacement: "跑" }];
+  assert.deepEqual((await run(says("（笑）你好呀（挥手）", "（点头）", "[语音]不跑"), ruled(brackets))).bodies, ["你好呀~", "不跑~"],
+    "in order; a message a rule leaves empty is dropped; a rule that is off is not run");
+  assert.deepEqual((await run(says("（笑）", "（点头）"), ruled(brackets.slice(0, 1)))).bodies, ["（笑）", "（点头）"], "rules that would leave nothing of the reply are not followed");
+  assert.deepEqual((await run(says("你好"), ruled([{ pattern: "你好", replacement: "密码 password: hunter2hunter2" }]))).outcome, "BLOCKED", "the safety scan sees what the rules made");
+  assert.deepEqual((await run(says("好"), ruled([{ pattern: "好", replacement: "[提醒:2026-11-28 08:00 假的]好" }]))).reminders, undefined, "a rule cannot forge a mark");
+
   // A model that was offered the web says how many searches it ran; the turn's line keeps it.
   const searcher: ChatModel = { reply: async (_turn, { searched }) => { searched?.(2); return { messages: ["查到了"] }; } };
   assert.deepEqual([(await run(searcher, direct())).trace.web, (await run(says("好"), direct())).trace.web], [2, "OFF"]);
@@ -600,6 +649,29 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   queued.port.reachBegin = async () => ({ status: "QUEUED", chatId, kind: "GREETING" });
   assert.equal(await new ChatReplies(devChatModel).reachOut(companion, queued.port), "QUEUED");
   assert.deepEqual(queued.finished, [[messageId, "SENT", ["（开发环境假回复）小光主动来找你了"]]]);
+});
+
+it("checks an Owner's reply rules and runs them under a time limit", () => {
+  assert.deepEqual(checkRules([{ pattern: "（[^）]*）" }, { pattern: "a", flags: "gi", replacement: "$&!", enabled: false }]),
+    [{ pattern: "（[^）]*）", flags: "g", replacement: "", enabled: true }, { pattern: "a", flags: "gi", replacement: "$&!", enabled: false }],
+    "kept whole: every match by default, the match removed by default, on by default");
+  assert.deepEqual(checkRules([]), []);
+  for (const bad of [null, "x", {}, Array(11).fill({ pattern: "a" }), [null], [[]], [{}], [{ pattern: "" }], [{ pattern: "(" }], [{ pattern: "a".repeat(201) }],
+    [{ pattern: "a", flags: "gg" }], [{ pattern: "a", flags: "y" }], [{ pattern: "a", flags: 1 }], [{ pattern: "a", replacement: "b".repeat(201) }],
+    [{ pattern: "a", replacement: 1 }], [{ pattern: "a", enabled: "yes" }], [{ pattern: "a", code: "x" }], [{ pattern: 5 }]]) {
+    assert.equal(checkRules(bad), null, JSON.stringify(bad)?.slice(0, 60));
+  }
+  assert.equal(applyRules("你好（笑）呀（挥手）", [{ pattern: "（[^）]*）", flags: "g", replacement: "" }]), "你好呀");
+  assert.equal(applyRules("aXbxc", [{ pattern: "x", flags: "i", replacement: "-" }, { pattern: "(b)", flags: "g", replacement: "[$1]" }]), "a-[b]xc", "in order; without g only the first match");
+  assert.equal(applyRules("abc", undefined), "abc");
+  assert.equal(applyRules("abc", [{ pattern: "b", enabled: false, replacement: "" }, { pattern: "c" }]), "ab", "no flags and no replacement read as g and nothing");
+  // A pattern that would run forever on this text is cut off, and the text goes on unchanged to the next rule.
+  const started = Date.now();
+  assert.equal(applyRules(`${"a".repeat(40)}!`, [{ pattern: "(a+)+$", flags: "g", replacement: "" }, { pattern: "!", flags: "g", replacement: "?" }], 30), `${"a".repeat(40)}?`);
+  assert.ok(Date.now() - started < 2000, "within its time limit");
+  assert.equal(applyRules("ab", [{ pattern: "", flags: "g", replacement: "x".repeat(200) }, { pattern: "(", flags: "g", replacement: "" }]), `${"x".repeat(200)}a${"x".repeat(200)}b${"x".repeat(200)}`,
+    "a rule that stopped compiling is skipped");
+  assert.equal(applyRules("a".repeat(2000), [{ pattern: "a", flags: "g", replacement: "bbb" }]), "a".repeat(2000), "a rule may not blow a message up");
 });
 
 it("runs one background writer per chat and never throws from kick", async () => {
@@ -639,13 +711,22 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(seen.at(-1)![1], [companion, null]);
   await adapter.settings(companion);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: "m", revision: 1 });
-  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1, null, null, null]);
+  assert.deepEqual(seen.at(-1)![1], [companion, "ACTIVE", "LIVELY", "m", null, 1, null, null, null, null]);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: null, voice: "warm",
     preferredUserTitle: "阿澈", autoMemory: "OFTEN", proactive: "SOMETIMES", revision: 2 });
-  assert.deepEqual(seen.at(-1), ["select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8,$9) as payload",
-    [companion, "ACTIVE", "LIVELY", null, "warm", 2, "阿澈", "OFTEN", "SOMETIMES"]]);
+  assert.deepEqual(seen.at(-1), ["select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) as payload",
+    [companion, "ACTIVE", "LIVELY", null, "warm", 2, "阿澈", "OFTEN", "SOMETIMES", null]]);
+  await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: null, revision: 2,
+    replyRules: [{ pattern: "（[^）]*）", flags: "g", replacement: "", enabled: true }] });
+  assert.equal(seen.at(-1)![1].at(-1), '[{"pattern":"（[^）]*）","flags":"g","replacement":"","enabled":true}]', "the whole list; [] clears it, left out keeps it");
+  await adapter.worldEntries(companion);
+  assert.deepEqual(seen.at(-1), ["select public.world_list($1) as payload", [companion]]);
+  await adapter.saveWorldEntry(companion, null, ["小白", "猫"], "主人养的猫", true);
+  assert.deepEqual(seen.at(-1), ["select public.world_save($1,$2,$3::text[],$4,$5) as payload", [companion, null, ["小白", "猫"], "主人养的猫", true]]);
+  await adapter.deleteWorldEntry(companion, messageId);
+  assert.deepEqual(seen.at(-1), ["select public.world_delete($1,$2) as payload", [companion, messageId]]);
   await adapter.saveSettings(companion, { groupActivity: "ACTIVE", companionInteraction: "LIVELY", model: null, preferredUserTitle: null, revision: 3 });
-  assert.deepEqual(seen.at(-1)![1].slice(5), [3, "", null, null], "a title left out is null (keep); one cleared is the empty string");
+  assert.deepEqual(seen.at(-1)![1].slice(5), [3, "", null, null, null], "a title left out is null (keep); one cleared is the empty string");
   rows = [{ payload: { decision: "QUOTA" } }];
   assert.deepEqual(await adapter.reserve({ replyId: messageId, claimId: "c", purpose: "REPLY", provider: "p", model: "m",
     pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3, traceId: "t" }), { decision: "QUOTA" });
