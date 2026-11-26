@@ -33,11 +33,11 @@ export interface ChatClaim {
   canAct?: boolean;
   /** Why it writes without being written to; null or left out for an ordinary turn. */
   reach?: Reach | null;
-  /** true: in this reply it may set a reminder for the Owner and cancel ones it set (one-to-one chats, when switched on). */
+  /** true: in this reply it may set a reminder for the Owner and cancel ones it set (answering the Owner one-to-one, when switched on). */
   canRemind?: boolean;
   /** The reminders it still has to deliver, soonest first (at most 20). */
   reminders?: { id: string; dueAt: string; note: string }[];
-  /** true: the operators let Companions search the web. Whether this reply can depends on the model that writes it. */
+  /** true: the operators let Companions search the web and this turn answers the Owner. Whether this reply can depends on the model that writes it. */
   canBrowse?: boolean;
 }
 
@@ -51,7 +51,7 @@ export type Reach = { kind: "GREETING" } | { kind: "REMINDER"; note: string; due
 export interface ReminderChange { set?: { at: string; note: string }; cancel?: string[] }
 
 /** chat_reach_begin: a turn was queued in `chatId`, or why none was. */
-export type ReachStart = { status: "QUEUED"; chatId: string; kind: Reach["kind"] } | { status: "OFF" | "BUSY" | "NOT_DUE" };
+export type ReachStart = { status: "QUEUED"; chatId: string } | { status: "OFF" | "BUSY" | "NOT_DUE" };
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
 
@@ -117,10 +117,8 @@ export interface MemoryJob {
   companion: Pick<ChatClaim["companion"], "companionId" | "displayName">;
   /** The chat since the last time, oldest first; companionId null is the Owner. */
   messages: { companionId: string | null; body: string; action: null; sentAt: string }[];
-  /** What it already remembers, newest first: the newest 60, as text. */
-  memories: string[];
-  /** Every memory it has (at most 200), newest first; left out by an older database, and then nothing can be replaced. */
-  known?: KnownMemory[];
+  /** Every memory it has (at most 200), newest first. */
+  known: KnownMemory[];
   timeZone?: ChatClaim["timeZone"];
 }
 

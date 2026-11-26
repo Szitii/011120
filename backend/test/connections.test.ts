@@ -203,7 +203,7 @@ it("answers through the Owner's key or agent, and through the platform without a
   await assert.rejects(new ConnectedChatModel(undefined, box, post("半", "length")).diary(job, { port: storePort(byok), signal }), /cut off/);
 
   // Memory notes: through the Owner's key; an agent keeps its own memories and is not asked.
-  const notes: MemoryJob = { status: "WRITE", claimId: "c", companion: job.companion, memories: [],
+  const notes: MemoryJob = { status: "WRITE", claimId: "c", companion: job.companion, known: [],
     messages: [{ companionId: null, body: "我怕黑", action: null, sentAt: "2026-11-25T02:00:00Z" }] };
   sent.length = 0;
   assert.deepEqual(await new ConnectedChatModel(undefined, box, post("主人怕黑")).memory(notes, { port: storePort(byok), signal }), { memories: [{ body: "主人怕黑", replaces: null }] });

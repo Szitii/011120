@@ -587,7 +587,7 @@ try {
   let noted: MemoryJob | undefined;
   const watching = new ChatReplies({ reply: async () => ({ pass: true }), memory: async job => { noted = job; return { memories: newNotes("主人周三生日", "主人怕黑", "第三条") }; } });
   assert.equal(await watching.remember(second, portA), "DONE");
-  assert.deepEqual([noted!.messages.length, noted!.messages.at(-1)!.body, noted!.memories[0], noted!.companion.displayName, noted!.timeZone],
+  assert.deepEqual([noted!.messages.length, noted!.messages.at(-1)!.body, noted!.known[0]!.body, noted!.companion.displayName, noted!.timeZone],
     [10, "记忆测试 1", "（开发环境假记忆）主人说过：「记忆测试 10」", "SecondCompanion", "Asia/Shanghai"], "only what was said since, and what it already remembers");
   assert.deepEqual((await memories()).map(m => `${m.source} ${m.body}`).sort(),
     ["AUTO 主人周三生日", "AUTO 主人怕黑", "AUTO （开发环境假记忆）主人说过：「记忆测试 10」"], "two at most");
