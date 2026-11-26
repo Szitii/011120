@@ -44,6 +44,38 @@ export interface ChatMessage {
    * Always sent; optional here so app code written before it still compiles.
    */
   audio?: { durationMs: number } | null;
+  /**
+   * A reminder the Companion set in this reply (the Owner asked "明天 8 点叫我"): show a small line
+   * under the message, like "⏰ 明天 08:00 提醒：叫主人起床". null for every other message. What the
+   * Companion says is not proof that a reminder exists; this field is.
+   * Always sent; optional here so app code written before it still compiles.
+   */
+  reminder?: ChatReminder | null;
+  /**
+   * Why the Companion wrote without being written to. GREETING: on its own (ChatSettings.proactive).
+   * REMINDER: it is delivering a reminder. null: an ordinary reply. Show these as ordinary messages;
+   * the app may mark a REMINDER (⏰). Always sent; optional here so app code written before it still compiles.
+   */
+  reach?: "GREETING" | "REMINDER" | null;
+}
+
+/**
+ * A reminder a Companion promised its Owner. WAITING until its time; then the Companion writes in
+ * the one-to-one chat and it is SENT. CANCELLED by the Owner or by the Companion when the Owner
+ * said so; MISSED when it could not be delivered within a day.
+ */
+export interface ChatReminder {
+  id: string;
+  /** When it is due, an instant (show it in the device's time zone). */
+  dueAt: string;
+  /** What to remind of, up to 100 characters, in the Companion's words. */
+  note: string;
+  status: "WAITING" | "SENT" | "CANCELLED" | "MISSED";
+}
+
+/** GET /v0/companions/{id}/reminders: the reminders still waiting, soonest first (at most 20). */
+export interface ReminderList {
+  items: ChatReminder[];
 }
 
 export interface Chat {
@@ -80,6 +112,11 @@ export interface PlatformFeatures {
   connections: boolean;
   /** The Owner's voice messages (POST /v0/chats/{id}/voice); the same as `input` in GET /v0/voices. Off: 503. */
   voiceInput?: boolean;
+  /**
+   * Companions writing first: on their own (ChatSettings.proactive) and reminders. Off: nothing is
+   * sent or set, whatever the setting says, so hide the setting. Optional here for older app code.
+   */
+  companionReach?: boolean;
 }
 
 /** GET /v0/badges: every unread count for the tab badges. */
@@ -192,6 +229,15 @@ export interface ChatSettings {
    * OFTEN: after every 10; OFF: the Owner turned it off. Always sent; on PUT, leaving it out keeps the current one.
    */
   autoMemory?: "OFF" | "SOMETIMES" | "OFTEN";
+  /**
+   * 主动找你: the Companion sometimes writes first in the one-to-one chat when the Owner has been
+   * away for a while. OFF (default). SOMETIMES: after 8 hours or more of silence, at most once a
+   * day. OFTEN: after 3 hours or more, at most twice a day. Never between 23:00 and 8:00 for the
+   * Owner, and never a second time before the Owner has answered the first.
+   * Reminders the Owner asks for do not depend on this setting.
+   * Always sent; on PUT, leaving it out keeps the current one.
+   */
+  proactive?: "OFF" | "SOMETIMES" | "OFTEN";
   revision: number;
 }
 

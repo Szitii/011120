@@ -8,6 +8,7 @@ import {
 } from "../http/types.ts";
 import { AgentKeyResolver } from "../agent/heartbeat.ts";
 import { createMobileHttpServer } from "../http/mobile-server.ts";
+import { BackgroundScheduler } from "../chat/background-scheduler.ts";
 import { PostgresChatAdapter } from "../chat/postgres.ts";
 import { chatFromEnvironment } from "../chat/setup.ts";
 import { PostgresCommunityAdapter } from "../community/postgres.ts";
@@ -74,16 +75,26 @@ const main = async (): Promise<void> => {
   const bearerToken = process.env.MOBILE_DEV_OWNER_TOKEN ?? "companion-social-stage1-owner";
 
   const pool = createPgPool(connectionString);
+  const chat = chatFromEnvironment("stage1-mobile-dev");
   const server = createMobileDevHttpServer({
     pool,
     bearerToken,
     ownerSubject: process.env.MOBILE_DEV_OWNER_SUBJECT ?? "00000000-0000-0000-0000-0000000000a1",
     ownerId: process.env.MOBILE_DEV_OWNER_ID ?? "00000000-0000-0000-0000-0000000001a1",
-    chat: chatFromEnvironment("stage1-mobile-dev"),
+    chat,
   });
+  // Reminders and Companions that write first, checked every 20 seconds so the app can be built
+  // against them: a message that says 提醒 sets a reminder for one to two minutes later (the fake replies).
+  const reach = (due: "chat_reminder_due" | "chat_reach_due", what: string) => new BackgroundScheduler({
+    server: new PgOwnerExecutor(pool, null),
+    portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
+    due, what, platform: true,
+    write: (companionId, port) => chat.replies.reachOut(companionId, port),
+  }).start(20_000);
+  const stops = [reach("chat_reminder_due", "reminder"), reach("chat_reach_due", "message of its own")];
 
   // Close the pool only after the last request has finished.
-  const shutdown = (): void => { server.close(() => { void pool.end(); }); };
+  const shutdown = (): void => { stops.forEach(stop => stop()); server.close(() => { void pool.end(); }); };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 

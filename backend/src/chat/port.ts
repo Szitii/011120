@@ -8,8 +8,11 @@ export interface ChatClaim {
   chatId: string;
   replyId: string;
   claimId: string;
-  /** What this turn answers: the Owner's message, or another Companion. */
-  replyTo: "OWNER" | "COMPANION";
+  /**
+   * What this turn answers: the Owner's message, another Companion, or nobody (SELF: it writes on
+   * its own; REMINDER: it delivers a reminder). For the last two, `reach` says more.
+   */
+  replyTo: "OWNER" | "COMPANION" | "SELF" | "REMINDER";
   /** true: it may stay quiet (answer { pass: true }) if the message does not concern it. */
   optional: boolean;
   /** A one-to-one chat (otherwise a group). */
@@ -28,7 +31,25 @@ export interface ChatClaim {
   ownerName?: string | null;
   /** true: in this reply it may do one home-room action to the Owner (one-to-one chats, when switched on). */
   canAct?: boolean;
+  /** Why it writes without being written to; null or left out for an ordinary turn. */
+  reach?: Reach | null;
+  /** true: in this reply it may set a reminder for the Owner and cancel ones it set (answering the Owner one-to-one, when switched on). */
+  canRemind?: boolean;
+  /** The reminders it still has to deliver, soonest first (at most 20). */
+  reminders?: { id: string; dueAt: string; note: string }[];
 }
+
+/** GREETING: the Owner has been away and it may write first. REMINDER: it promised to say `note` at `dueAt`. */
+export type Reach = { kind: "GREETING" } | { kind: "REMINDER"; note: string; dueAt: string };
+
+/**
+ * What a reply changes about the Companion's reminders: one to set (`at` is the Owner's local
+ * time, "2026-11-27 08:00"; `note` what to remind of) and the ids of ones to cancel.
+ */
+export interface ReminderChange { set?: { at: string; note: string }; cancel?: string[] }
+
+/** chat_reach_begin: a turn was queued in `chatId`, or why none was. */
+export type ReachStart = { status: "QUEUED"; chatId: string } | { status: "OFF" | "BUSY" | "NOT_DUE" };
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
 
@@ -180,10 +201,17 @@ export interface ChatPort {
   /**
    * Server only: `bodies` are 1 to 3 messages for SENT, else null; `clips` (SENT only) has one entry
    * per body, a Clip for a voice message or null for text; `action` (SENT only) is a home-room action
-   * the Companion does first, and then `bodies` may be empty. False when the claim is stale.
+   * the Companion does first, and then `bodies` may be empty; `reminders` (SENT only) is what the
+   * reply sets and cancels. False when the claim is stale.
    */
   finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[],
-    action?: CompanionAction): Promise<boolean>;
+    action?: CompanionAction, reminders?: ReminderChange): Promise<boolean>;
+  /** Server only: queue a turn of the Companion's own (a reminder that is due, or writing first) if one is due. */
+  reachBegin(companionId: string): Promise<ReachStart>;
+  /** The reminders the Companion still has to deliver, soonest first ({ items }). */
+  reminders(companionId: string): Promise<unknown>;
+  /** The Owner cancels a waiting reminder. */
+  cancelReminder(companionId: string, reminderId: string): Promise<unknown>;
   /** Server only: how many voice messages the Owner may still get from Companions today, and send. */
   voiceLeft(): Promise<{ companion: number; owner: number }>;
   /** Server only: the Owner's voice message, `body` being what the server recognised in `recording`. */

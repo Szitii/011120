@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for suite in protection community account agent chat home memory connection wallet heartbeat admin costs autopost companion; do
+for suite in protection community account agent chat reach home memory connection wallet heartbeat admin costs autopost companion; do
   node --experimental-strip-types "backend/db-tests/${suite}-runtime.ts"
 done
 

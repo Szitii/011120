@@ -24,6 +24,8 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET    /v0/companions/{id}/reminders               the reminders it still has to deliver
+ *   DELETE /v0/companions/{id}/reminders/{reminderId}  cancel one
  *   GET|PUT /v0/companions/{id}/persona                who it is and how it talks, as the Owner wrote it
  *   GET    /v0/features                                what the app may offer (group chats, connections)
  *   GET    /v0/wallet                                  the Owner's credits for platform models
@@ -129,14 +131,14 @@ function text(value: unknown, max: number): string {
 }
 
 /**
- * Every setting is required but `voice`, `preferredUserTitle` and `autoMemory`, which keep their
- * current value when left out. `model` is null (platform default) or an id from the catalog;
+ * Every setting is required but `voice`, `preferredUserTitle`, `autoMemory` and `proactive`, which
+ * keep their current value when left out. `model` is null (platform default) or an id from the catalog;
  * `voice` is null (text only) or an id from the voice catalog; `preferredUserTitle` is null or
  * empty (the default) or 1 to 20 characters on one line.
  */
 function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined, voices: Voices | undefined): ChatSettings {
-  const { groupActivity, companionInteraction, model, voice, preferredUserTitle: title, autoMemory, revision } =
-    body(request, ["groupActivity", "companionInteraction", "model", "voice", "preferredUserTitle", "autoMemory", "revision"]);
+  const { groupActivity, companionInteraction, model, voice, preferredUserTitle: title, autoMemory, proactive, revision } =
+    body(request, ["groupActivity", "companionInteraction", "model", "voice", "preferredUserTitle", "autoMemory", "proactive", "revision"]);
   if (!["QUIET", "NORMAL", "ACTIVE"].includes(groupActivity as string)
     || !["NONE", "RARE", "NORMAL", "LIVELY"].includes(companionInteraction as string)
     || !(model === null || (typeof model === "string" && catalog?.has(model)))
@@ -144,11 +146,12 @@ function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined, voi
     || !(title === undefined || title === null || (typeof title === "string" && Array.from(title.trim()).length <= 20
       && !/[\p{Cc}\u2028\u2029]/u.test(title.trim())))
     || !(autoMemory === undefined || ["OFF", "SOMETIMES", "OFTEN"].includes(autoMemory as string))
+    || !(proactive === undefined || ["OFF", "SOMETIMES", "OFTEN"].includes(proactive as string))
     || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
   return {
     groupActivity, companionInteraction, model, ...(voice === undefined ? {} : { voice }),
     ...(title === undefined ? {} : { preferredUserTitle: (title as string | null)?.trim() || null }),
-    ...(autoMemory === undefined ? {} : { autoMemory }), revision,
+    ...(autoMemory === undefined ? {} : { autoMemory }), ...(proactive === undefined ? {} : { proactive }), revision,
   } as ChatSettings;
 }
 
@@ -272,6 +275,7 @@ export async function handleChatRequest(
   const walletRoute = path[1] === "wallet" && path.length === 2;
   const feedbackRoute = path[1] === "feedback" && (path.length === 2 || (path.length === 4 && ["messages", "read"].includes(path[3]!)));
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
+  const remindersRoute = path[1] === "companions" && path[3] === "reminders" && (path.length === 4 || path.length === 5);
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
@@ -280,7 +284,8 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, personaRoute, connectionRoute, voicesRoute,
+    agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
@@ -424,6 +429,11 @@ export async function handleChatRequest(
     const memory = text(body(request, ["body"]).body, 500);
     if (hasCredential(memory)) return invalid();
     return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
+  }
+  if (remindersRoute) {
+    const companionId = id(path[2]);
+    if (path.length === 5) return method === "DELETE" ? response(200, await port.cancelReminder(companionId, id(path[4]))) : notFound();
+    return method === "GET" ? response(200, await port.reminders(companionId)) : notFound();
   }
   if (personaRoute) {
     const companionId = id(path[2]);
