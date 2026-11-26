@@ -231,7 +231,7 @@ box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;anim
 .msg pre{margin:0;padding:9px 14px;border-radius:18px;background:var(--fill2);line-height:1.45}
 .msg .muted{font-size:11px;margin:2px 12px 0}.msg.me{align-self:flex-end;align-items:flex-end}.msg.me pre{background:var(--blue);color:#fff}
 .msg.me pre .muted{color:rgba(255,255,255,.8)}
-table.kv{width:auto;min-width:min(520px,100%)}table.kv td.num{padding-left:32px}table.kv td.muted{font-size:13px;padding-left:20px}
+.kv2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr));gap:0 48px;align-items:start}table.kv{width:100%;table-layout:fixed}table.kv td:first-child{width:38%}table.kv td.num{width:22%}.kv2 table.kv:first-child tr:last-child td{border-bottom:1px solid var(--line)}table.kv td.num{padding-left:32px}table.kv td.muted{font-size:13px;padding-left:20px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:0 0 20px}.cards .card{margin:0}
 .spend{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:20px 40px;margin:0 0 20px}.spend .big{font-size:44px;letter-spacing:-.03em}
 .spend .today{border-left:1px solid rgba(255,255,255,.15);padding-left:32px}.mid{font-size:26px;font-weight:600;margin:4px 0;font-variant-numeric:tabular-nums}
@@ -249,8 +249,8 @@ table.kv{width:auto;min-width:min(520px,100%)}table.kv td.num{padding-left:32px}
 box-shadow:0 1px 3px rgba(0,0,0,.12)}.seg .btn:hover{filter:none;background:var(--fill)}.seg .btn.on:hover{background:var(--card)}
 svg.chart{width:100%;height:auto;display:block;color:var(--ink)}svg.chart text{font-size:12px;fill:var(--faint)}svg.chart text.end{fill:var(--text);font-size:13px}
 svg.chart .grid{stroke:var(--line);stroke-dasharray:4 3}svg.chart .frame{fill:none;stroke:var(--faint)}svg.chart rect.hit{fill:transparent}svg.chart rect.hit:hover{fill:var(--line)}
-.legend i{border-radius:1px}.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--sub);margin:0 0 8px}
-.legend i,.vhead i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:0;margin-right:6px}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--sub);margin:0 0 8px}
+.legend i,.vhead i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:0;margin-right:6px}.legend i{border-radius:1px}
 .links a{margin-right:16px}.vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin:6px 0 14px}.vendors .card{margin:0}.vendor .big{font-size:22px;margin:2px 0 4px}
 .vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:4px 0;border-bottom:1px solid var(--line)}
 table.lines td:first-child{white-space:normal;word-break:break-word}table.lines td.num{width:88px}table.lines .muted{display:block;font-size:12px}
@@ -870,13 +870,14 @@ export function statsPage(now: Date, a: Activity): string {
   const tools = monthNav("/stats", a.month, now);
   const kpi = (label: string, value: string, note = "") => html`<tr><td>${label}</td><td class="num"><b>${value}</b></td><td class="muted">${note}</td></tr>`;
   return page(`运营数据 · ${a.month}`, "/stats", html`
-<section class="panel"><table class="kv">
-${kpi("主人", count(a.owners))}${kpi("家机", count(a.companions))}
-${kpi(thisMonth ? "本月聊天的人" : "这个月聊天的人", count(a.chatters))}${kpi("新注册", count(sum("newOwners")))}
+<section class="panel"><div class="kv2"><table class="kv">
+${kpi("主人", count(a.owners))}${kpi("家机", count(a.companions))}${kpi("新注册", count(sum("newOwners")))}
+</table><table class="kv">
+${kpi(thisMonth ? "本月聊天的人" : "这个月聊天的人", count(a.chatters))}
 ${today === undefined ? "" : kpi("今天聊天的人", count(today.chatters), `主人 ${count(today.ownerMessages)} · 家机 ${count(today.replies)} 条`)}
 ${kpi("消息", count(sum("ownerMessages") + sum("replies")), `主人 ${count(sum("ownerMessages"))} · 家机 ${count(sum("replies"))}${sum("failed") > 0 ? ` · 失败 ${count(sum("failed"))}` : ""}`)}
 ${kpi("积分消耗", count(sum("creditsSpent")))}
-</table></section>
+</table></div></section>
 ${days.length === 0 ? html`<p class="muted">这个月还没有任何使用。</p>` : html`${panel("每天的人", lineChart(labels, [line("聊天的人", 0, "chatters"), line("新注册", 1, "newOwners")], count, d => d.slice(5), true))}
 ${panel("每天的消息", lineChart(labels, [line("主人发的", 0, "ownerMessages"), line("家机回的", 1, "replies")], count, d => d.slice(5), true))}
 ${panel("每天的语音和社区", lineChart(labels, [line("主人发的语音", 0, "voiceIn"), line("家机发的语音", 1, "voiceOut"),
