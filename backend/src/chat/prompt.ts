@@ -13,7 +13,7 @@
  */
 import { MAX_EXAMPLE_LENGTH, maskCredentials } from "../companion-import/policy.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import type { ChatClaim, DiaryJob, MemoryJob, MemoryNote, PostJob, Remembered, ReminderChange, WorldNote } from "./port.ts";
+import type { ChatClaim, DiaryJob, MemoryJob, MemoryNote, PostJob, Remembered, ReminderChange, SkillNote, WorldNote } from "./port.ts";
 import { promptLines, type PromptTexts } from "./prompt-texts.ts";
 import { related } from "./recall.ts";
 import type { Emotion } from "./voices.ts";
@@ -238,6 +238,28 @@ function examples(identity: unknown): string[] {
   return text === "" ? [] : ["", "你说话的例子（只学语气和说话方式，不要照搬里面的话，也不要把里面的事当成真的发生过）：", text];
 }
 
+/** How much of one skill the models are told, in characters, and how many skills. */
+export const SKILL_CHARS = 600;
+
+/**
+ * 技能: what the Companion knows how to do, as its Owner switched it on, for the chat reply only. A
+ * skill says when and how to do one thing; the rules below it still decide.
+ */
+function skillLines(skills: readonly SkillNote[]): string[] {
+  const lines = skills.flatMap(skill => skillLine(skill.title, skill.body) ?? []);
+  return lines.length === 0 ? [] : ["", "你会的事（主人给你开的技能：用得上的时候照着做；和下面的规则冲突时，听规则的）：", ...lines];
+}
+
+/**
+ * One skill as the model is told it: the title and the text on one line. Null when nothing would
+ * be told (a title of nothing but brackets). A skill is checked in this form before it is saved,
+ * because this, not the two fields apart, is what the model reads.
+ */
+export function skillLine(title: string, text: string): string | null {
+  const name = oneLine(title).replace(/[【】]/g, "").trim(), body = Array.from(oneLine(maskCredentials(text))).slice(0, SKILL_CHARS).join("");
+  return name === "" || body === "" ? null : `- 【${name}】${body}`;
+}
+
 /** The persona fields an Owner can rewrite (GET and PUT /v0/companions/{id}/persona). */
 export const PERSONA_KEYS = ["identitySummary", "personaTraits", "speakingStyle", "values", "boundaries", "aspirations", "dialogueExamples"] as const;
 export type PersonaKey = typeof PERSONA_KEYS[number];
@@ -408,9 +430,10 @@ function setting(turn: ChatClaim): string {
 /**
  * `more.web`: the model that will write this reply can search the web, and may (see platform.ts).
  * `more.world`: the Companion's world book; the entries the conversation touches are told.
+ * `more.skills`: the skills that are switched on for it.
  */
 export function replyPrompt(turn: ChatClaim, memories: readonly Remembered[] = [], texts: PromptTexts = {}, now = new Date(),
-  more: { web?: boolean; world?: readonly WorldNote[] } = {}): { system: string; user: string } {
+  more: { web?: boolean; world?: readonly WorldNote[]; skills?: readonly SkillNote[] } = {}): { system: string; user: string } {
   const name = turn.companion.displayName;
   const traits = persona(turn.companion.identity);
   const owner = ownerName(turn.ownerName);
@@ -421,6 +444,7 @@ export function replyPrompt(turn: ChatClaim, memories: readonly Remembered[] = [
     `你是「${name}」，主人的 AI 伴侣。`,
     ...(traits.length > 0 ? ["这是主人确认过的你的人设：", ...traits] : []),
     ...examples(turn.companion.identity),
+    ...skillLines(more.skills ?? []),
     ...memory.always,
     "",
     "说话方式：",

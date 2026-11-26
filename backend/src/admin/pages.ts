@@ -119,7 +119,7 @@ const SOURCES: Readonly<Record<string, string>> = {
 const TARGETS: Readonly<Record<string, string>> = {
   ACTOR: "账号", POST: "帖子", COMMENT: "评论", OWNER: "主人", SOCIAL_TWIN: "家机", REPORT: "举报", CHAT: "会话",
   CHAT_QUOTA: "每日额度", ALL: "全部模型", PROVIDER: "厂商", MODEL: "模型", FIXED_COST: "固定月费", VOICE_PRICES: "语音单价",
-  PROMPT: "提示词", FEEDBACK: "反馈",
+  PROMPT: "提示词", FEEDBACK: "反馈", TEMPLATE: "人设模板", SKILL: "技能",
 };
 const ACTIONS: Readonly<Record<string, string>> = {
   REMOVE_POST: "移除帖子", REMOVE_COMMENT: "移除评论", RESTORE_POST: "恢复帖子", RESTORE_COMMENT: "恢复评论",
@@ -127,6 +127,7 @@ const ACTIONS: Readonly<Record<string, string>> = {
   RESOLVE_REPORT: "处理举报", MODEL_SWITCH: "模型开关", CHAT_QUOTA: "每日额度", READ_CHAT: "查看私聊",
   FIXED_COST: "固定月费", VOICE_PRICES: "语音单价", PROMPT_SET: "修改提示词",
   FEEDBACK_REPLY: "回复反馈", FEEDBACK_CLOSE: "关闭反馈", FEEDBACK_REOPEN: "重新打开反馈",
+  TEMPLATE_SET: "保存人设模板", TEMPLATE_DELETE: "删除人设模板", SKILL_SET: "保存技能", SKILL_DELETE: "删除技能",
 };
 const MESSAGE_STATUS: Readonly<Record<string, string>> = {
   PENDING: "(正在回复)", FAILED: "(回复失败)", BLOCKED: "(被安全扫描拦下)", PASSED: "(选择不说话)",
@@ -281,7 +282,8 @@ const NAV: readonly (readonly [string, readonly (readonly [string, string, strin
   ["数据", [["/stats", "运营数据", "#30b0c7", "M5 20V11M12 20V4M19 20v-6"], ["/costs", "花费", "#34c759", "M3 6h18v13H3zM3 10h18M7 15h4"],
     ["/system", "系统", "#8e8e93", "M4 4h16v7H4zM4 13h16v7H4zM8 7.5h.01M8 16.5h.01"]]],
   ["设置", [["/models", "模型与额度", "#5e5ce6", "M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4"],
-    ["/prompts", "提示词", "#ff9500", "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"]]],
+    ["/prompts", "提示词", "#ff9500", "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"],
+    ["/kit", "模板与技能", "#af52de", "M4 5h7v7H4zM13 5h7v7h-7zM4 14h7v5H4zM13 14h7v5h-7z"]]],
   ["记录", [["/log", "操作日志", "#636366", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2"]]],
 ];
 
@@ -1052,6 +1054,58 @@ ${cutPrompt(view.system, view.blocks, texts).map(part => typeof part === "string
     : promptBox(zone, part, saved[part.key], first(part.key)))}
 ${view.user === null ? "" : html`<details class="edit"><summary>和这段说明一起发给模型的材料(示例)</summary><pre class="fixed">${view.user}</pre></details>`}`))}`,
   done);
+}
+
+// ---------- 模板与技能: the characters and skills the platform offers ----------
+
+/** companion_admin.kit (migration 0073). */
+export interface Kit {
+  templates: { id: string; title: string; summary: string; name: string; description: string; personality: string; example: string;
+    position: number; enabled: boolean; updatedAt: string }[];
+  skills: { id: string; title: string; summary: string; body: string; position: number; enabled: boolean; updatedAt: string; usedBy: number }[];
+  ownSkills: number;
+}
+
+/** The fields of a template or a skill, filled in with what it has now (nothing: a new one). */
+const kitFields = (kind: "template" | "skill", item?: Kit["templates"][number] | Kit["skills"][number]): Safe => {
+  const t = kind === "template" ? item as Kit["templates"][number] | undefined : undefined;
+  const s = kind === "skill" ? item as Kit["skills"][number] | undefined : undefined;
+  return html`${item === undefined ? "" : hidden("id", item.id)}
+<label>名称 <input name="title" required maxlength="20" value="${item?.title ?? ""}" placeholder="${kind === "template" ? "如:温柔的倾听者" : "如:英语陪练"}"></label>
+<label>一句话介绍 <input name="summary" required maxlength="100" size="40" value="${item?.summary ?? ""}" placeholder="主人在 App 里看到的那句话"></label>
+${kind === "template" ? html`<label>默认名字 <input name="name" required maxlength="20" size="10" value="${t?.name ?? ""}" placeholder="主人可以改"></label>
+<textarea name="description" required maxlength="600" rows="3" placeholder="简介:TA 是谁(最多 600 字)" aria-label="简介">${t?.description ?? ""}</textarea>
+<textarea name="personality" maxlength="600" rows="2" placeholder="性格(可不填,最多 600 字)" aria-label="性格">${t?.personality ?? ""}</textarea>
+<textarea name="example" maxlength="1500" rows="4" placeholder="示例对话(可不填,最多 1500 字),一行一句。用 {{char}} 代表家机的名字,主人改了名字它会跟着变。如:主人：今天好累 / {{char}}：辛苦啦" aria-label="示例对话">${t?.example ?? ""}</textarea>`
+    : html`<textarea name="body" required maxlength="600" rows="4" placeholder="写给模型的话:什么时候用、怎么做(最多 600 字)。App 里不显示这段,但不要写需要保密的内容。" aria-label="技能内容">${s?.body ?? ""}</textarea>`}
+<label>排序 <input name="position" type="number" min="0" max="9999" required size="4" value="${item?.position ?? 0}"></label>
+<label><input type="checkbox" name="enabled" value="on"${item === undefined || item.enabled ? html` checked` : ""}> 上架</label>`;
+};
+
+export function kitPage(zone: string, kit: Kit, done: boolean): string {
+  const back = "/kit";
+  const shelf = (enabled: boolean) => enabled ? html`<span class="tag good">上架中</span>` : html`<span class="tag bad">已下架</span>`;
+  return page("模板与技能", "/kit", html`
+<p>这里是平台提供给主人的两样东西。<b>人设模板</b>是写好的角色,主人新建家机时挑一个当起点,之后可以随便改。
+<b>技能</b>是一段写给模型的话(什么时候、怎么做一件事),主人给自己的家机打开后,每次聊天回复都会带上。App 里主人只看得到技能的名称和一句话介绍。内容不是秘密:它和其他说明一起发给模型,主人接了自己的模型时会发到主人自己的服务上,所以不要写需要保密的东西。</p>
+<p class="muted">每个家机最多同时打开 5 个技能(官方的和主人自己写的加在一起)。下架的技能不再发给任何家机,重新上架后原来打开它的家机会恢复。
+主人自己写的技能现在一共有 ${count(kit.ownSkills)} 个,只对他们自己的家机生效,这里不显示内容。</p>
+${panel("人设模板", html`${kit.templates.length === 0 ? html`<p class="muted">还没有模板。</p>` : kit.templates.map(t => html`<div class="card">
+<p><b>${t.title}</b> ${shelf(t.enabled)} <span class="muted">默认名字:${t.name} · 排序 ${t.position} · 更新于 ${time(zone, t.updatedAt)}</span></p>
+<p class="muted">${t.summary}</p>
+<dl class="detail"><dt>简介</dt><dd><pre>${t.description}</pre></dd>${t.personality === "" ? "" : html`<dt>性格</dt><dd><pre>${t.personality}</pre></dd>`}
+${t.example === "" ? "" : html`<dt>示例对话</dt><dd><pre>${t.example}</pre></dd>`}</dl>
+${edit("修改", act("/kit/template", "保存", back, kitFields("template", t)))}
+${edit("删除", act("/kit/template/delete", "删除这个模板", back, hidden("id", t.id), true))}</div>`)}
+${edit("新增一个模板", act("/kit/template", "新增", back, kitFields("template")))}
+<p class="muted">模板里的文字会像主人导入的角色卡一样过一遍检查:带密钥、电话邮箱、网址或者“忽略以上指令”这类话的保存不了。已经用模板建好的家机不受之后修改的影响。</p>`)}
+${panel("官方技能", html`${kit.skills.length === 0 ? html`<p class="muted">还没有技能。</p>` : kit.skills.map(s => html`<div class="card">
+<p><b>${s.title}</b> ${shelf(s.enabled)} <span class="muted">${count(s.usedBy)} 个家机打开了 · 排序 ${s.position} · 更新于 ${time(zone, s.updatedAt)}</span></p>
+<p class="muted">${s.summary}</p><pre>${s.body}</pre>
+${edit("修改", act("/kit/skill", "保存", back, kitFields("skill", s)))}
+${edit("删除", act("/kit/skill/delete", "删除这个技能", back, hidden("id", s.id), true))}</div>`)}
+${edit("新增一个技能", act("/kit/skill", "新增", back, kitFields("skill")))}
+<p class="muted">改完从下一条回复起生效。技能写在人设后面、平台的规则前面:它不能推翻回答的格式、安全和隐私这些固定的规则。删除一个技能,打开它的家机就没有它了;只是暂时不用请下架。</p>`)}`, done);
 }
 
 export function logPage(zone: string, log: LogPage, owner: string | null): string {

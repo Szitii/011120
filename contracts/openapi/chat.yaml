@@ -976,6 +976,167 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /persona-templates:
+    get:
+      operationId: listPersonaTemplates
+      summary: Ready-made characters to start a Companion from, in the platform's order
+      description: |
+        人设模板 - each has a `card` (a chara_card_v2 character card). To create a Companion from one,
+        send that card to POST /companion-imports like any character card (change `card.data.name`
+        first if the Owner wants another name) and let the Owner approve the candidates.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Templates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/PersonaTemplate'}}
+        '401': *problem
+        '403': *problem
+  /companions/{companionId}/skills:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: listSkills
+      summary: The platform's skills with whether this Companion has each on, and the Owner's own skills for it
+      description: |
+        技能 - what a Companion knows how to do, told to the model with every chat reply while it is
+        switched on. At most `maxEnabled` are on at a time, official ones and its own together.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Skills
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionSkills'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/skills/{skillId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: skillId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    put:
+      operationId: setSkill
+      summary: Switch an official skill on or off for the Companion; 409 when it would be the sixth one on
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: {type: boolean}
+      responses:
+        '200':
+          description: The skills as they are now
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionSkills'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+  /companions/{companionId}/own-skills:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      operationId: addOwnSkill
+      summary: A skill the Owner writes for this Companion; 409 past 10, or when it would be the sixth one on; 422 when the text may not be kept
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OwnSkillInput'}
+      responses:
+        '201':
+          description: The skill
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OwnSkill'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: The title or the text holds something that may not be kept; nothing was saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillRefusal'}
+  /companions/{companionId}/own-skills/{skillId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: skillId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    put:
+      operationId: saveOwnSkill
+      summary: Rewrite one of the Companion's own skills whole (title, text, on or off)
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OwnSkillInput'}
+      responses:
+        '200':
+          description: The skill
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OwnSkill'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: The title or the text holds something that may not be kept; nothing was saved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillRefusal'}
+    delete:
+      operationId: deleteOwnSkill
+      summary: Delete one of the Companion's own skills
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {const: true}
+        '401': *problem
+        '403': *problem
+        '404': *problem
   /companions/{companionId}/world-entries:
     parameters:
     - name: companionId
@@ -1723,6 +1884,69 @@ components:
         flags: {type: string, pattern: '^[gimsu]*$', description: 'Any of g i m s u, each once. Default "g" - every match.'}
         replacement: {type: string, maxLength: 200, description: 'What takes the match''s place; $1 is the first group. Default "" - the match is removed.'}
         enabled: {type: boolean, description: Default true. A rule that is off is kept but not run.}
+    PersonaTemplate:
+      type: object
+      required: [id, title, summary, card]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        summary: {type: string}
+        card:
+          type: object
+          description: A chara_card_v2 character card to hand to POST /companion-imports.
+          required: [spec, spec_version, data]
+          properties:
+            spec: {const: chara_card_v2}
+            spec_version: {type: string}
+            data:
+              type: object
+              required: [name, description]
+              properties:
+                name: {type: string}
+                description: {type: string}
+                personality: {type: string}
+                mes_example: {type: string}
+    CompanionSkills:
+      type: object
+      required: [maxEnabled, official, own]
+      properties:
+        maxEnabled: {type: integer, description: How many skills may be on at a time (official and own together).}
+        official:
+          type: array
+          items:
+            type: object
+            required: [id, title, summary, enabled]
+            properties:
+              id: {type: string, format: uuid}
+              title: {type: string}
+              summary: {type: string}
+              enabled: {type: boolean}
+        own: {type: array, items: {$ref: '#/components/schemas/OwnSkill'}}
+    OwnSkill:
+      type: object
+      required: [id, title, body, enabled, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string, minLength: 1, maxLength: 20}
+        body: {type: string, minLength: 1, maxLength: 600}
+        enabled: {type: boolean}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    OwnSkillInput:
+      type: object
+      required: [title, body]
+      additionalProperties: false
+      properties:
+        title: {type: string, minLength: 1, maxLength: 20}
+        body: {type: string, minLength: 1, maxLength: 600}
+        enabled: {type: boolean, description: Left out - true.}
+    SkillRefusal:
+      type: object
+      required: [code, field, reason]
+      properties:
+        code: {type: string, enum: [SKILL_REFUSED]}
+        field: {type: string, enum: [title, body]}
+        reason: {type: string, enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]}
     WorldEntry:
       type: object
       required: [id, keys, body, enabled, source, createdAt, updatedAt]

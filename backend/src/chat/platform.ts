@@ -10,7 +10,7 @@
  */
 import type { CatalogModel, ChatCatalog } from "./models.ts";
 import { PRICING_VERSION } from "./models.ts";
-import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob, Remembered, ReservationDecision, WorldNote } from "./port.ts";
+import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob, Remembered, ReservationDecision, SkillNote, WorldNote } from "./port.ts";
 import { decisionPrompt, diaryPrompt, memoryPrompt, parseDecision, parseMemories, parsePost, parseReply, postPrompt, replyPrompt } from "./prompt.ts";
 import { usablePromptTexts, type PromptTexts } from "./prompt-texts.ts";
 import type { CallModel, ModelResult } from "./providers.ts";
@@ -46,6 +46,19 @@ export async function worldOf(port: ChatPort, companionId: string): Promise<Worl
     const list = await port.worldEntries(companionId) as { items?: { keys?: unknown; body?: unknown; enabled?: unknown }[] };
     return (list.items ?? []).flatMap(entry => (typeof entry.body !== "string" || !Array.isArray(entry.keys) ? []
       : [{ keys: entry.keys.filter((key): key is string => typeof key === "string"), body: entry.body, enabled: entry.enabled !== false }]));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The skills that are switched on for the Companion (this runs as the Owner). When they cannot be
+ * read (a database not yet migrated, a failed query) the reply is written without them.
+ */
+export async function skillsOf(port: ChatPort, companionId: string): Promise<SkillNote[]> {
+  try {
+    const list = await port.skillTexts(companionId) as { title?: unknown; body?: unknown }[];
+    return list.flatMap(skill => (typeof skill.title === "string" && typeof skill.body === "string" ? [{ title: skill.title, body: skill.body }] : []));
   } catch {
     return [];
   }
@@ -88,13 +101,14 @@ export class PlatformChatModel implements ChatModel {
     }
     const memories = await memoriesOf(port, turn.companion.companionId);
     const world = await worldOf(port, turn.companion.companionId);
+    const skills = await skillsOf(port, turn.companion.companionId);
     const texts = await textsOf(port);
     // The web: where the turn allows it (the operators' switch, and it answers the Owner), on a model
     // that can search. The prompt says so only then, so it is written for the model that actually answers.
     const browses = (m: CatalogModel): boolean => turn.canBrowse === true && m.options?.webTools !== undefined;
     const result = await this.#withFallback(model, m => this.#run(port, book("REPLY"), m,
-      replyPrompt(turn, memories, texts, undefined, { web: browses(m), world }), REPLY_TOKENS, signal, MAX_INPUT_TOKENS,
-      browses(m) ? replyPrompt(turn, memories, texts, undefined, { world }) : undefined));
+      replyPrompt(turn, memories, texts, undefined, { web: browses(m), world, skills }), REPLY_TOKENS, signal, MAX_INPUT_TOKENS,
+      browses(m) ? replyPrompt(turn, memories, texts, undefined, { world, skills }) : undefined));
     if ("failed" in result) return result;
     if (result.web !== undefined) searched?.(result.web, result.inputTokens);
     if (result.refused) return { refused: true };

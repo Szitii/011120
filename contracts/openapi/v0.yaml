@@ -106,6 +106,16 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories
   /companions/{companionId}/memories/{memoryId}:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories~1{memoryId}
+  /persona-templates:
+    $ref: ./chat.yaml#/paths/~1persona-templates
+  /companions/{companionId}/skills:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1skills
+  /companions/{companionId}/skills/{skillId}:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1skills~1{skillId}
+  /companions/{companionId}/own-skills:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1own-skills
+  /companions/{companionId}/own-skills/{skillId}:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1own-skills~1{skillId}
   /companions/{companionId}/world-entries:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1world-entries
   /companions/{companionId}/world-entries/{entryId}:

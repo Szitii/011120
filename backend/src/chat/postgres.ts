@@ -110,6 +110,32 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.memory_delete($1,$2) as payload", [companionId, memoryId]);
   }
 
+  personaTemplates(): Promise<unknown> {
+    return this.#object("select public.persona_template_list() as payload", []);
+  }
+
+  skills(companionId: string): Promise<unknown> {
+    return this.#object("select public.skill_list($1) as payload", [companionId]);
+  }
+
+  setSkill(companionId: string, skillId: string, enabled: boolean): Promise<unknown> {
+    return this.#object("select public.skill_set($1,$2,$3) as payload", [companionId, skillId, enabled]);
+  }
+
+  saveOwnSkill(companionId: string, skillId: string | null, title: string, body: string, enabled: boolean): Promise<unknown> {
+    return this.#object("select public.own_skill_save($1,$2,$3,$4,$5) as payload", [companionId, skillId, title, body, enabled]);
+  }
+
+  deleteOwnSkill(companionId: string, skillId: string): Promise<unknown> {
+    return this.#object("select public.own_skill_delete($1,$2) as payload", [companionId, skillId]);
+  }
+
+  async skillTexts(companionId: string): Promise<unknown> {
+    const payload = await this.#payload("select public.skill_texts($1) as payload", [companionId]);
+    if (!Array.isArray(payload)) throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid chat response.");
+    return payload;
+  }
+
   worldEntries(companionId: string): Promise<unknown> {
     return this.#object("select public.world_list($1) as payload", [companionId]);
   }

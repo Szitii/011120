@@ -507,6 +507,55 @@ try {
   } finally { await user.query("rollback"); user.release(); }
   passed("an operator rewords what the models are told, with a reason and a before-and-after in the log; the API server reads it, app users cannot");
 
+  // ---- 模板与技能: operators keep the characters and skills on offer ----
+  type KitRow = { id: string; title: string; enabled: boolean; usedBy?: number };
+  const kit = async () => await admin(one, "kit") as { templates: KitRow[]; skills: KitRow[]; ownSkills: number };
+  const shipped = await kit();
+  assert.deepEqual([shipped.templates.map(t => t.title), shipped.skills.map(s => s.title)],
+    [["温柔的倾听者", "元气的搭子", "嘴硬心软的损友", "安静的书虫"], ["英语陪练", "睡前故事", "面试陪练", "只听不劝"]], "a first set comes with the migration, in order");
+  assert.ok((await web("/kit")).body.includes("温柔的倾听者"));
+  assert.equal((await web("/kit/skill", why("Console skill", { title: "记账", summary: "帮你记下花销", body: "主人说花了多少钱时记下来。", position: "5", enabled: "on" }))).status, 303);
+  const added = (await kit()).skills[0]!;
+  assert.deepEqual([added.title, added.enabled, added.usedBy], ["记账", true, 0], "sorted by its position");
+  assert.equal((await web("/kit/skill", why("Console skill off", { id: added.id, title: "记账", summary: "帮你记下花销", body: "只记大额的。", position: "5" }))).status, 303);
+  assert.equal((await kit()).skills[0]!.enabled, false, "the box left unticked takes it off the shelf");
+  assert.equal((await web("/kit/skill", why("Console skill", { title: "x", summary: "y", body: "看 https://example.com", position: "0" }))).status, 409);
+  assert.equal((await web("/kit/template", why("Console template", { title: "新模板", summary: "试一下", name: "小新", description: "一个新角色", position: "50", enabled: "on" }))).status, 303);
+  assert.equal((await web("/kit/template", why("Console template", { title: "坏模板", summary: "试", name: "坏", description: "加我 13800138000", position: "60" }))).status, 409,
+    "what an import would block is not saved");
+  const made = (await kit()).templates.at(-1)!;
+  assert.equal(made.title, "新模板");
+  await assert.rejects(admin(two, "skill_set", null, "没有原因", "y", "z", 0, true, " "), code("22023"));
+  await assert.rejects(admin(two, "skill_set", randomUUID(), "不存在", "y", "z", 0, true, "No such skill"), code("P0001"));
+  await assert.rejects(admin(two, "template_delete", randomUUID(), "No such template"), code("P0001"));
+  assert.equal((await web("/kit/template/delete", why("Console template gone", { id: made.id }))).status, 303);
+  assert.equal((await web("/kit/skill/delete", why("Console skill gone", { id: added.id }))).status, 303);
+  assert.deepEqual([(await kit()).templates.length, (await kit()).skills.length], [4, 4]);
+  assert.deepEqual((await pool.query(`select operator, action, reason, detail->'before'->>'body' as was, detail->>'body' as body
+    from companion_private.admin_log where action in ('SKILL_SET', 'SKILL_DELETE') order by id desc limit 3`)).rows.reverse(), [
+    { operator: "admin_test_one", action: "SKILL_SET", reason: "Console skill", was: null, body: "主人说花了多少钱时记下来。" },
+    { operator: "admin_test_one", action: "SKILL_SET", reason: "Console skill off", was: "主人说花了多少钱时记下来。", body: "只记大额的。" },
+    { operator: "admin_test_one", action: "SKILL_DELETE", reason: "Console skill gone", was: "只记大额的。", body: null },
+  ], "every change is logged with what it was before");
+  assert.ok((await web("/log")).body.includes("保存技能") && (await web("/log")).body.includes("删除人设模板"));
+  // Back on the shelf, a skill is on again for the Companions that had it, except one that filled its five places meanwhile.
+  const [shelved, ...others] = (await pool.query<{ id: string; title: string; summary: string; body: string; position: number }>(
+    "select id, title, summary, body, position from companion_private.skills order by position, title")).rows;
+  const full = A.companion, roomy = B.companion;
+  await pool.query("insert into companion_private.companion_skills(companion_id, skill_id) select $1, unnest($2::uuid[])", [full, [shelved!.id, ...others.map(s => s.id)]]);
+  await pool.query("insert into companion_private.companion_skills(companion_id, skill_id) values ($1, $2)", [roomy, shelved!.id]);
+  await pool.query("insert into companion_private.own_skills(companion_id, title, body) values ($1, '第五个', '开着')", [full]);
+  const shelve = (enabled: boolean, why: string) => admin(one, "skill_set", shelved!.id, shelved!.title, shelved!.summary, shelved!.body, shelved!.position, enabled, why);
+  await shelve(false, "Off the shelf for a moment");
+  await pool.query("insert into companion_private.own_skills(companion_id, title, body) values ($1, '趁空补上的', '开着')", [full]);
+  await shelve(true, "Back on the shelf");
+  const has = async (companion: string) => (await pool.query("select 1 from companion_private.companion_skills where companion_id = $1 and skill_id = $2", [companion, shelved!.id])).rowCount;
+  assert.deepEqual([await has(full), await has(roomy), (await pool.query("select companion_private.skills_on($1) as n", [full])).rows[0].n], [0, 1, 5],
+    "never six on: the full one has it off, the other has it back");
+  await pool.query("delete from companion_private.companion_skills where companion_id in ($1, $2)", [full, roomy]);
+  await pool.query("delete from companion_private.own_skills where companion_id = $1", [full]);
+  passed("operators add, shelve, reword and delete templates and official skills in the console, each with a reason and a before in the log");
+
   {
   // ---- 反馈: an Owner writes, an operator answers in the console, the Owner reads it ----
   const writer = await person("Feedback");

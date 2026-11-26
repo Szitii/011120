@@ -9,7 +9,8 @@ export type AdminFunction = "reports" | "report_resolve" | "owners" | "owner_det
   | "content_remove" | "content_restore" | "chats" | "chat_read" | "models" | "model_switch_set" | "chat_quota_set"
   | "spend" | "log" | "features" | "feature_set" | "spend_cap_set" | "wallet_policy_set" | "wallet_adjust"
   | "costs" | "fixed_cost_set" | "voice_prices_set" | "activity" | "system" | "prompts" | "prompt_set"
-  | "feedback" | "feedback_reply" | "feedback_close";
+  | "feedback" | "feedback_reply" | "feedback_close"
+  | "kit" | "template_set" | "template_delete" | "skill_set" | "skill_delete";
 
 export interface AdminDb {
   /** Calls one console function and returns its JSON (undefined for the ones that return nothing). */
@@ -41,6 +42,8 @@ const KNOWN: readonly (readonly [RegExp, string])[] = [
   [/^feedback not found$/, "没有找到这条反馈,可能用户已经删除了账号。"],
   [/^feedback already in that state$/, "这条反馈已经是这个状态了。"],
   [/^invalid feedback$/, "回复不能是空的,最多 2000 个字。"],
+  [/^template not found$/, "没有找到这个模板,可能已经被删掉了。"],
+  [/^skill not found$/, "没有找到这个技能,可能已经被删掉了。"],
   [/^permission denied/, "这个数据库账号没有管理权限(需要属于 companion_admin)。"],
 ];
 // SQLSTATEs that mean "refused, nothing happened": what the console functions raise on purpose
