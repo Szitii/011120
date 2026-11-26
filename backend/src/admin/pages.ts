@@ -996,7 +996,7 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
       ...postPrompt({ status: "WRITE", runId: "sample", claimId: "sample", companion, localTime: "(示例)主人当地的时间",
         own: [{ body: "(示例)小满最近发过的动态", at: at(300) }], others: [{ author: "(示例)别人", body: "(示例)社区里别人的动态", at: at(60) }] }, texts) },
     { title: "自动记忆", when: "自动记忆默认开着(主人可以关):主人在私聊里每说满 50 句(选了“经常”是 10 句),从这段私聊里挑出值得长期记住的事。", editable: true, blocks: ["MEMORY_WHAT"],
-      ...memoryPrompt({ status: "WRITE", claimId: "sample", companion, timeZone: zone, memories: [],
+      ...memoryPrompt({ status: "WRITE", claimId: "sample", companion, timeZone: zone,
         known: [{ id: "sample-auto", source: "AUTO", body: "(示例)以前自动记下的一件事", createdAt: at(40 * 24 * 60) },
           { id: "sample-owner", source: "OWNER", body: "(示例)主人亲手写的一件事", createdAt: at(90 * 24 * 60) }],
         messages: [{ companionId: null, body: "(示例)主人说的话", action: null, sentAt: at(5) }] }, texts, now) },

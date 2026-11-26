@@ -13,7 +13,7 @@
  */
 import { maskCredentials } from "../companion-import/policy.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
-import type { ChatClaim, DiaryJob, KnownMemory, MemoryJob, MemoryNote, PostJob, Remembered, ReminderChange } from "./port.ts";
+import type { ChatClaim, DiaryJob, MemoryJob, MemoryNote, PostJob, Remembered, ReminderChange } from "./port.ts";
 import { promptLines, type PromptTexts } from "./prompt-texts.ts";
 import { related } from "./recall.ts";
 import type { Emotion } from "./voices.ts";
@@ -593,11 +593,11 @@ export function memoryPrompt(job: MemoryJob, texts: PromptTexts = {}, now = new 
   const name = job.companion.displayName;
   const clock = clockOf(job.timeZone);
   const noted = notedOn(clock, now);
-  const all: readonly KnownMemory[] = job.known ?? job.memories.map(body => ({ id: "", body, source: "" }));
+  const all = job.known;
   const near = fitting(related(all, job.messages.map(message => message.body).join("\n")), noted, KNOWN_RELATED_CHARS);
   const shown = fitting([...near, ...all.filter(memory => !near.includes(memory))], noted, KNOWN_CHARS);
   const numbered: string[] = [];
-  const known = shown.map(memory => memoryLine(memory, noted, memory.source === "AUTO" && memory.id ? `${numbered.push(memory.id)}.` : "-"));
+  const known = shown.map(memory => memoryLine(memory, noted, memory.source === "AUTO" ? `${numbered.push(memory.id)}.` : "-"));
   const system = [
     `你在帮「${name}」（主人的 AI 伴侣）整理长期记忆：从它和主人的一段私聊里，挑出以后聊天还用得上的事。`,
     ...promptLines(texts, "MEMORY_WHAT"),

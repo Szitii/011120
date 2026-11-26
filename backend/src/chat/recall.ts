@@ -73,8 +73,8 @@ export function related<T extends { body: string }>(memories: readonly T[], abou
   for (const list of shared) for (const word of list) having.set(word, (having.get(word) ?? 0) + 1);
   const all = Math.log(Math.max(memories.length, 2));
   const weight = (word: string): number => 1 - Math.log(having.get(word)!) / all;
-  return memories.map((memory, i) => ({ memory, i, score: shared[i]!.reduce((sum, word) => sum + weight(word), 0) }))
+  return memories.map((memory, i) => ({ memory, score: shared[i]!.reduce((sum, word) => sum + weight(word), 0) }))
     .filter(scored => scored.score >= RELATED)
-    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .sort((a, b) => b.score - a.score) // the sort keeps the order of equals
     .map(scored => scored.memory);
 }

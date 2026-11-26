@@ -20,7 +20,7 @@ const reminding: ChatClaim = { ...turn, canRemind: true };
 const greeting: ChatClaim = { ...turn, replyTo: "SELF", optional: true, reach: { kind: "GREETING" } };
 const diary: DiaryJob = { status: "WRITE", entryId: "e", claimId: "c", companion, messages: [], posts: [] };
 const post: PostJob = { status: "WRITE", runId: "r", claimId: "c", companion, localTime: "11/26 10:00", own: [], others: [] };
-const memory: MemoryJob = { status: "WRITE", claimId: "c", companion, messages: [], memories: [] };
+const memory: MemoryJob = { status: "WRITE", claimId: "c", companion, messages: [], known: [] };
 
 it("keeps the built-in wording in step with what the server reads back", () => {
   const text = (key: string) => promptBlock(key)!.text;
