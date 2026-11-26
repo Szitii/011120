@@ -35,6 +35,7 @@ export function ChatSettingsScreen({
   ownerId,
   onDeleteCompanion,
   onConversationDeleted,
+  focusPersona = false,
 }: {
   client: ChatClient;
   companionId?: string;
@@ -48,6 +49,7 @@ export function ChatSettingsScreen({
   onBack?: () => void;
   onDeleteCompanion?: () => Promise<void>;
   onConversationDeleted?: () => void;
+  focusPersona?: boolean;
 }) {
   const { ui } = useSkin();
   const s = useThemedStyles(createStyles);
@@ -200,6 +202,10 @@ export function ChatSettingsScreen({
   }
 
   const usableModels = (models?.items ?? []).filter(m => m.available);
+  const personaEditor = companionId && (
+    <PersonaSettings client={client} companionId={companionId}
+      isExternal={activeConnection?.kind === "EXTERNAL"} initiallyExpanded={focusPersona} />
+  );
 
   return (
     <View style={s.root}>
@@ -215,13 +221,14 @@ export function ChatSettingsScreen({
             <Ionicons name="chevron-back" size={19} color={ui.ink} />
           </Pressable>
           <Text accessibilityRole="header" style={s.headerTitle}>
-            {connectionMode === "key" ? "自带 API Key" : connectionMode === "external" ? "连接自建家机" : "聊天设置"}
+            {connectionMode === "key" ? "自带 API Key" : connectionMode === "external" ? "连接自建家机" : focusPersona ? "编辑人设" : "聊天设置"}
           </Text>
           <View style={s.headerSpacer} />
         </View>
       )}
 
       <ScrollView style={s.scroll} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+        {!connectionMode && focusPersona && personaEditor}
         {!!(notice || (!form && saveNotice)) && (
           <View style={s.noticeBanner}>
             <Text accessibilityLiveRegion="polite" style={s.noticeText}>{notice || saveNotice}</Text>
@@ -271,11 +278,7 @@ export function ChatSettingsScreen({
 
         {!connectionMode && companionId && (
           <>
-            <PersonaSettings
-              client={client}
-              companionId={companionId}
-              isExternal={activeConnection?.kind === "EXTERNAL"}
-            />
+            {!focusPersona && personaEditor}
             {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
 
             {!form ? (

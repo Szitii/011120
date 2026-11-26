@@ -36,7 +36,7 @@ import { ChatSettingsScreen } from "./src/chat/ChatSettingsScreen";
 import { FeedbackScreen } from "./src/feedback/FeedbackScreen";
 import { CreateGroupScreen } from "./src/messages/CreateGroupScreen";
 import { ComposePostScreen } from "./src/community/ComposePostScreen";
-import { CommunityScreen } from "./src/community/CommunityScreen";
+import { CommunityScreen, type ManagedProfileActions } from "./src/community/CommunityScreen";
 import { AgentDraftsScreen } from "./src/community/AgentDraftsScreen";
 import { AgentSettingsScreen } from "./src/community/AgentSettingsScreen";
 import { CommunityFollowList, type FollowDirection } from "./src/community/CommunityFollowList";
@@ -220,13 +220,15 @@ function WorldApp({ client, account, isMockMode }: {
     return () => { current = false; };
   }, [homeSelectionKey]);
   const selectHomeCompanion = useCallback((companionId: string) => {
-    if (!ownerId || !availableCompanions.some(item => item.companionId === companionId)) return;
+    if (!ownerId || (createdHome?.companionId !== companionId
+      && !availableCompanions.some(item => item.companionId === companionId))) return;
     homeSelectionTouched.current = true;
     setSelectedHomeCompanionId(companionId);
     if (homeSelectionKey) void AsyncStorage.setItem(homeSelectionKey, companionId).catch(() => undefined);
-  }, [homeSelectionKey, ownerId, availableCompanions]);
+  }, [homeSelectionKey, ownerId, availableCompanions, createdHome?.companionId]);
   const homeCompanion = ownerId ? (
     availableCompanions.find(item => item.companionId === selectedHomeCompanionId)
+    ?? (createdHome?.companionId === selectedHomeCompanionId ? createdHome : undefined)
     ?? availableCompanions[0]
     ?? createdHome
   ) : undefined;
@@ -241,7 +243,12 @@ function WorldApp({ client, account, isMockMode }: {
   const worldVisible = route.type === "root" && route.tab === "world";
   const homeScope = ownerId && homeCompanion ? { ownerId, companionId: homeCompanion.companionId } : undefined;
   const diaryClient = viewer?.kind === "OWNER" && !identitySwitchPending ? client.api.diary : undefined;
-  const profileId = route.type === "profile" ? route.companionId
+  const profileTarget = route.type === "community-target" && route.target.type === "profile" ? route.target : undefined;
+  const managedCompanion = ownerId && profileTarget?.companionId
+    ? availableCompanions.find(item => item.companionId === profileTarget.companionId)
+      ?? (createdHome?.companionId === profileTarget.companionId ? createdHome : undefined)
+    : undefined;
+  const profileId = profileTarget?.companionId && !managedCompanion ? profileTarget.companionId
     : route.type === "root" && route.tab === "my" && viewer?.kind === "COMPANION" ? viewer.id
     : undefined;
   const encounterId = route.type === "encounter" ? route.encounterId : undefined;
@@ -340,20 +347,13 @@ function WorldApp({ client, account, isMockMode }: {
     if (identity.kind !== "success") return;
     if (route.type === "root" && route.tab === "world" && !client.api.community) void loadWorld();
     if (route.type === "life-archive") void loadLife();
-    if (
-      route.type === "root" &&
-      route.tab === "my" &&
-      identity.value.activeSubject.kind === "COMPANION"
-    ) {
-      void loadProfile(identity.value.activeSubject.id);
-    }
+    if (profileId) void loadProfile(profileId);
     if (route.type === "encounter") void loadEncounter(route.encounterId);
-    if (route.type === "profile") void loadProfile(route.companionId);
   }, [
     route.type,
     route.type === "root" ? route.tab : "",
     route.type === "encounter" ? route.encounterId : "",
-    route.type === "profile" ? route.companionId : "",
+    profileId,
     viewerKey,
     client.api.community,
     cache.epoch,
@@ -408,7 +408,9 @@ function WorldApp({ client, account, isMockMode }: {
     setCompanionDeleteRevision(value => value + 1);
     setNav(current => {
       if (current.stack.at(-1) === route) return selectTab(current, "home");
-      const stack = current.stack.filter(item => !("companionId" in item && item.companionId === companionId));
+      const stack = current.stack.filter(item => item.type === "community-target"
+        ? !(item.target.type === "profile" && item.target.companionId === companionId)
+        : !("companionId" in item && item.companionId === companionId));
       return stack.length === current.stack.length ? current : { ...current, stack };
     });
     if (roster) ownerCompanionsRequest.current++;
@@ -627,8 +629,61 @@ function WorldApp({ client, account, isMockMode }: {
     setNav((current) => pushRoute(current, { type: "encounter", encounterId: item.linkedObject.id }));
   }
 
-  function openProfile(companionId: string) {
-    setNav((current) => pushRoute(current, { type: "profile", companionId }));
+  function openProfile(companionId: string, chatId?: string) {
+    if (!ownerId && client.api.community && activeCompanion?.companionId === companionId) {
+      openCommunity({ type: "profile" });
+      return;
+    }
+    openCommunity({ type: "profile", companionId, ...(chatId ? { chatId } : {}) });
+  }
+
+  function companionProfileActions(item: OwnerCompanionSummary): ManagedProfileActions {
+    const companionId = item.companionId;
+    const chatId = profileTarget?.companionId === companionId ? profileTarget.chatId : undefined;
+    const open = (next: Route) => setNav(current => pushRoute(current, next));
+    const onCommunitySettings = () => {
+      if (item.socialReady) {
+        open({ type: "controls", companionId });
+      } else {
+        open({
+          type: "social-activation", companionId, identityId: item.identityId,
+          displayName: item.displayName, approvedFields: item.approvedFields,
+        });
+      }
+    };
+    const menu: ManagedProfileActions["menu"] = [];
+    if (client.api.chat?.getPersona && client.api.chat.savePersona) {
+      menu.push({ label: "编辑人设／资料", onPress: () => open({ type: "chat-settings", companionId, focusPersona: true }) });
+    }
+    if (client.api.chat?.saveAvatar) {
+      menu.push({ label: "更换头像", onPress: () => open({ type: "avatar-settings", companionId }) });
+    }
+    if (canUseChat) {
+      menu.push({ label: "聊天设置", onPress: () => open({ type: "chat-settings", companionId, chatId }) });
+    }
+    menu.push({ label: "社区公开设置", onPress: onCommunitySettings });
+    if (item.socialReady && client.api.community) {
+      menu.push({ label: "家机活动设置", onPress: () => open({ type: "agent-settings", companionId }) });
+    }
+    menu.push({ label: "更新导入资料", onPress: () => open({ type: "bring-companion", companionId }) });
+
+    return {
+      onChat: canUseChat ? () => {
+        const previous = nav.stack.at(-2);
+        if (previous?.type === "chat" && (previous.companionId === companionId
+          || (chatId && previous.chatId === chatId))) {
+          goBack();
+          return;
+        }
+        open({ type: "chat", companionId, companionName: item.displayName, chatId, fromTab: nav.rootTab });
+      } : undefined,
+      onHome: () => {
+        selectHomeCompanion(companionId);
+        setNav(current => selectTab(current, "home"));
+      },
+      onCommunitySettings,
+      menu,
+    };
   }
 
   function goBack() {
@@ -740,9 +795,11 @@ function WorldApp({ client, account, isMockMode }: {
           isCompanion={isSampleCompanion}
           isActive={route.type === "root" && route.tab === "home"}
           companionName={homeCompanion?.displayName ?? companionDisplayName}
-          companionAvatar={homeCompanion?.avatar}
+          companionAvatar={homeCompanion?.avatar ?? activeCompanion?.avatar}
           companions={availableCompanions}
           onSelectCompanion={selectHomeCompanion}
+          onOpenProfile={homeCompanion ? () => openProfile(homeCompanion.companionId)
+            : activeCompanion ? () => openProfile(activeCompanion.companionId) : undefined}
           onOpenDiary={diaryClient && homeScope ? () => openDiary(homeScope.companionId) : undefined}
           onOpenAlbum={homeScope ? () => openFromTab("home", { type: "album", companionId: homeScope.companionId }) : undefined}
         />}
@@ -782,9 +839,14 @@ function WorldApp({ client, account, isMockMode }: {
         </View>
       )}
 
-      {route.type === "community-target" && viewer && client.api.community && (
+      {route.type === "community-target" && viewer && (client.api.community || profileTarget?.companionId) && (
         <CommunityScreen key={JSON.stringify([viewerKey, route.target])} client={client.api.community}
           viewer={viewer} initialTarget={route.target} onNavigate={openCommunity} onFollowList={openFollows}
+          ownedCompanion={managedCompanion} ownedCompanions={ownerId ? availableCompanions : undefined}
+          getManagedActions={ownerId ? companionProfileActions : undefined}
+          legacyProfile={profileTarget?.companionId && profile.kind === "success" ? profile.value : undefined}
+          legacyProfileError={profileTarget?.companionId && profile.kind === "error" ? profile.title : undefined}
+          onRetryLegacyProfile={profileId && profile.kind === "error" && profile.retry ? () => void loadProfile(profileId) : undefined}
           onBack={goBack} revision={communityRevision} onChanged={invalidateCommunity} onScroll={() => {}} />
       )}
 
@@ -821,7 +883,7 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
         <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId, route.chatId])} client={client.api.chat} companionId={route.companionId} companions={availableCompanions} chatId={route.chatId} ownerId={ownerId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
-          onAvailabilityChanged={refreshFeatures} onBack={goBack}
+          focusPersona={route.focusPersona} onAvailabilityChanged={refreshFeatures} onBack={goBack}
           onConversationDeleted={route.chatId ? () => {
             refreshBadges();
             setNav(current => {
@@ -848,8 +910,8 @@ function WorldApp({ client, account, isMockMode }: {
           backLabel={route.fromTab === "messages" ? "返回消息" : route.fromTab === "my" ? "返回" : "返回小家"}
           onSaveQuote={ownerId && route.companionId ? quote => addAlbumQuote({ ownerId, companionId: route.companionId! }, quote) : undefined}
           onOpenSettings={(chatId, companionId) => setNav(current => pushRoute(current, { type: "chat-settings", chatId, companionId }))}
-          onOpenProfile={companionId => {
-            if (companionId) openProfile(companionId);
+          onOpenProfile={(companionId, chatId) => {
+            if (companionId) openProfile(companionId, chatId);
             else if (client.api.community) openCommunity({ type: "profile" });
           }}
           onRead={refreshBadges}
@@ -902,35 +964,10 @@ function WorldApp({ client, account, isMockMode }: {
           avatar={activeAvatar}
           selfProfile={profile}
           onAddCompanion={() => setNav(current => pushRoute(current, { type: "bring-companion" }))}
-          onSelectHomeCompanion={companionId => {
-            selectHomeCompanion(companionId);
-            setNav(current => selectTab(current, "home"));
-          }}
-          onOpenCompanionProfile={(item) => openProfile(item.companionId)}
-          onUpdateCompanion={(item) => setNav(current => pushRoute(current, { type: "bring-companion", companionId: item.companionId }))}
-          onChangeAvatar={ownerId && client.api.chat?.saveAvatar ? item =>
-            setNav(current => pushRoute(current, { type: "avatar-settings", companionId: item.companionId })) : undefined}
-          onAgentSettings={ownerId && client.api.community ? item =>
-            setNav(current => pushRoute(current, { type: "agent-settings", companionId: item.companionId })) : undefined}
-          onChatSettings={canUseChat ? item =>
-            setNav(current => pushRoute(current, { type: "chat-settings", companionId: item.companionId })) : undefined}
-          onOpenCompanionChat={canUseChat ? (item) => setNav((current) => pushRoute(current, { type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my" })) : undefined}
-          onControls={(item) => {
-            setCompanionDisplayName(item.displayName);
-            setNav((current) => pushRoute(current, {
-              type: "controls",
-              companionId: item.companionId,
-            }));
-          }}
-          onResumeCompanion={(item) => {
-            setNav((current) => pushRoute(current, {
-              type: "social-activation",
-              companionId: item.companionId,
-              identityId: item.identityId,
-              displayName: item.displayName,
-              approvedFields: item.approvedFields,
-            }));
-          }}
+          onOpenCompanionProfile={item => openProfile(item.companionId)}
+          onOpenCompanionChat={canUseChat ? item => setNav(current => pushRoute(current, {
+            type: "chat", companionId: item.companionId, companionName: item.displayName, fromTab: "my",
+          })) : undefined}
           onFollowList={openFollows}
           onPosts={id => openCommunity({ type: "profile", id })}
           onOpenPostDetail={id => openCommunity({ type: "detail", id })}
@@ -997,20 +1034,6 @@ function WorldApp({ client, account, isMockMode }: {
         />
       )}
 
-      {route.type === "profile" && (
-        <ProfileScreen
-          state={profile}
-          avatar={availableCompanions.find(item => item.companionId === route.companionId)?.avatar}
-          onRetry={() => void loadProfile(route.companionId)}
-          onControls={() => {
-            const p = profile.kind === "success" ? profile.value : undefined;
-            if (!p || p.viewer.capabilities.openControls !== true) return;
-            setCompanionDisplayName(p.displayName);
-            setNav((current) => pushRoute(current, { type: "controls", companionId: p.companionId }));
-          }}
-        />
-      )}
-
       {route.type === "bring-companion" && viewer?.kind === "OWNER" && (
         <BringCompanionScreen
           key={route.companionId ?? "new"}
@@ -1050,21 +1073,22 @@ function WorldApp({ client, account, isMockMode }: {
         </KeyboardAvoidingView>
       )}
 
-      {route.type === "social-activation" && (
+      {route.type === "social-activation" && ownerId && (
         <SocialActivationScreen
           api={client.api}
-          companion={{
-            companionId: route.companionId,
-            identityId: route.identityId,
-            displayName: route.displayName,
-            approvedFields: route.approvedFields,
-          }}
-          onActivated={() => {
+          companion={route}
+          onActivated={({ persona, twin }) => {
+            const apply = (item: OwnerCompanionSummary) => item.companionId === route.companionId
+              ? { ...item, socialReady: true, handle: persona.handle, socialTwinId: twin.id }
+              : item;
+            setOwnerCompanions(previous => previous.kind === "success" ? {
+              kind: "success", value: { items: previous.value.items.map(apply) },
+            } : previous);
+            setCreatedHome(previous => previous && apply(previous));
             invalidateCompanionViews();
-            void loadOwnerCompanions();
-          }}
-          onOpenCompanion={() => {
-            openProfile(route.companionId);
+            invalidateCommunity();
+            void loadOwnerCompanions(true);
+            setNav(current => current.stack.at(-1) === route ? popRoute(current) : current);
           }}
         />
       )}
@@ -1073,8 +1097,11 @@ function WorldApp({ client, account, isMockMode }: {
         <ControlsScreen
           api={client.api}
           companionId={route.companionId}
-          companionName={companionDisplayName}
-          onVisibilitySaved={invalidateCompanionViews}
+          companionName={availableCompanions.find(item => item.companionId === route.companionId)?.displayName ?? companionDisplayName}
+          onVisibilitySaved={() => {
+            invalidateCompanionViews();
+            invalidateCommunity();
+          }}
           diaryClient={diaryClient}
           onChatSettings={canUseChat ? () => setNav(current => pushRoute(current, { type: "chat-settings", companionId: route.companionId })) : undefined}
         />
@@ -1470,43 +1497,6 @@ function EncounterScreen({
 }
 
 
-function ProfileScreen({
-  state,
-  avatar,
-  onRetry,
-  onControls,
-}: {
-  state: LoadState<CompanionProfile>;
-  avatar?: string | null;
-  onRetry: () => void;
-  onControls: () => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  if (state.kind === "loading" || state.kind === "idle") return <Loading />;
-  if (state.kind === "error") {
-    return <ErrorState title={state.title} retry={state.retry} onRetry={onRetry} />;
-  }
-  if (state.kind !== "success") return <Centered title="TA 的主页没打开。" />;
-
-  const p = state.value;
-
-  return (
-    <ScrollView style={styles.secondaryPage} contentContainerStyle={styles.profilePage}>
-      <UnifiedProfileView name={p.displayName} role="companion" avatar={avatar} subtitle={`@${p.handle}`}>
-        <Text style={styles.profileMeta}>可见范围 · {p.profileVisibility}</Text>
-        {p.viewer.capabilities.openControls === true && (
-          <CommunityButton label="权限设置" onPress={onControls} />
-        )}
-      </UnifiedProfileView>
-      {p.completeness === "PARTIAL" && (
-        <View style={styles.inlineNotice}>
-          <Text style={styles.inlineNoticeText}>部分资料暂时无法显示。</Text>
-        </View>
-      )}
-    </ScrollView>
-  );
-}
-
 function LifeScreen({
   state,
   isCompanion,
@@ -1579,15 +1569,8 @@ function MyScreen({
   selfProfile,
   homeCompanionId,
   onAddCompanion,
-  onSelectHomeCompanion,
   onOpenCompanionProfile,
-  onUpdateCompanion,
-  onChangeAvatar,
-  onAgentSettings,
-  onChatSettings,
   onOpenCompanionChat,
-  onControls,
-  onResumeCompanion,
   onFollowList,
   onPosts,
   onOpenPostDetail,
@@ -1606,15 +1589,8 @@ function MyScreen({
   selfProfile: LoadState<CompanionProfile>;
   homeCompanionId?: string;
   onAddCompanion: () => void;
-  onSelectHomeCompanion: (companionId: string) => void;
   onOpenCompanionProfile: (item: OwnerCompanionSummary) => void;
-  onUpdateCompanion: (item: OwnerCompanionSummary) => void;
-  onChangeAvatar?: (item: OwnerCompanionSummary) => void;
-  onAgentSettings?: (item: OwnerCompanionSummary) => void;
-  onChatSettings?: (item: OwnerCompanionSummary) => void;
   onOpenCompanionChat?: (item: OwnerCompanionSummary) => void;
-  onControls: (item: OwnerCompanionSummary) => void;
-  onResumeCompanion: (item: OwnerCompanionSummary) => void;
   onFollowList: (direction: FollowDirection) => void;
   communityRevision: number;
   onPosts: (id: string) => void;
@@ -1629,7 +1605,6 @@ function MyScreen({
 
   const [communityData, setCommunityData] = useState<LoadState<CommunityPost[]>>({ kind: "idle" });
   const [ownProfile, setOwnProfile] = useState<CommunityProfile>();
-  const [companionMenu, setCompanionMenu] = useState<OwnerCompanionSummary>();
   const [refreshing, setRefreshing] = useState(false);
   const [manualRefreshTick, setManualRefreshTick] = useState(0);
   const subject = identity.kind === "success" ? identity.value.activeSubject : undefined;
@@ -1718,42 +1693,20 @@ function MyScreen({
                   gap: 8,
                 }}
               >
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${item.displayName} 的主页`}
+                  onPress={() => onOpenCompanionProfile(item)} style={styles.myCompanionIdentity}>
                   <PixelAvatar name={item.displayName} role="companion" uri={item.avatar} size={38} />
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`${item.displayName} 的更多操作`}
-                    onPress={() => setCompanionMenu(item)}
-                    style={{ padding: 4 }}
-                  >
-                    <Ionicons name="ellipsis-horizontal" size={16} color={muted} />
-                  </Pressable>
-                </View>
-                <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${item.displayName} 的资料`}
-                  onPress={item.socialReady ? () => onOpenCompanionProfile(item) : () => onResumeCompanion(item)}>
                   <Text style={[styles.relTitle, { color: ink }]} numberOfLines={1}>{item.displayName}</Text>
                   <Text style={[styles.relSub, { color: muted }]} numberOfLines={1}>
                     {item.companionId === homeCompanionId ? "● 正在小家" : "主页"}
                   </Text>
                 </Pressable>
-                <View style={{ flexDirection: "row", gap: 6 }}>
-                  {onOpenCompanionChat && (
-                    <Pressable
-                      onPress={() => onOpenCompanionChat(item)}
-                      style={[styles.relControlBtn, { flex: 1, alignItems: "center", backgroundColor: ui.iceBlue, borderColor: ui.highlight }]}
-                    >
-                      <Text style={[styles.relControlText, { color: ui.accentInk }]}>聊天</Text>
-                    </Pressable>
-                  )}
-                  {item.socialReady && (
-                    <Pressable
-                      onPress={() => onControls(item)}
-                      style={[styles.relControlBtn, { backgroundColor: skin.colors.canvas, borderColor: skin.colors.border }]}
-                    >
-                      <Text style={[styles.relControlText, { color: ink }]}>权限</Text>
-                    </Pressable>
-                  )}
-                </View>
+                {onOpenCompanionChat && (
+                  <Pressable accessibilityRole="button" onPress={() => onOpenCompanionChat(item)}
+                    style={[styles.relControlBtn, { alignItems: "center", backgroundColor: ui.iceBlue, borderColor: ui.highlight }]}>
+                    <Text style={[styles.relControlText, { color: ui.accentInk }]}>聊天</Text>
+                  </Pressable>
+                )}
               </View>
             ))}
             <Pressable accessibilityRole="button" accessibilityLabel="添加家机" onPress={onAddCompanion}
@@ -1834,31 +1787,6 @@ function MyScreen({
         </View>
       )}
 
-      <BottomSheet visible={!!companionMenu} title={companionMenu?.displayName} onClose={() => setCompanionMenu(undefined)}>
-        <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={() => {
-          const item = companionMenu;
-          setCompanionMenu(undefined);
-          if (item) onUpdateCompanion(item);
-        }}><Text style={[styles.cleanRowTitle, { color: ink }]}>编辑 / 更新资料</Text></Pressable>
-        {companionMenu && <>
-          <CommunityButton label="去 TA 的小家" onPress={() => {
-            setCompanionMenu(undefined);
-            onSelectHomeCompanion(companionMenu.companionId);
-          }} />
-          {onChangeAvatar && <CommunityButton label="更换家机头像" onPress={() => {
-            setCompanionMenu(undefined);
-            onChangeAvatar(companionMenu);
-          }} />}
-          {onAgentSettings && companionMenu.socialReady && <CommunityButton label="家机活动设置" onPress={() => {
-            setCompanionMenu(undefined);
-            onAgentSettings(companionMenu);
-          }} />}
-          {onChatSettings && <CommunityButton label="聊天设置与家机管理" onPress={() => {
-            setCompanionMenu(undefined);
-            onChatSettings(companionMenu);
-          }} />}
-        </>}
-      </BottomSheet>
     </ScrollView>
   );
 }
@@ -2265,8 +2193,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
 
 
   secondaryPage: { flex: 1, backgroundColor: ui.background[0] },
-  profilePage: { padding: CHROME.screenInset, paddingBottom: 44 },
-  profileMeta: { fontSize: 12, color: ui.muted },
 
   lifePage: { padding: CHROME.screenInset, paddingBottom: 44 },
   lifeSub: { marginTop: 10, fontSize: 14, lineHeight: 22, color: ui.muted },
@@ -2411,6 +2337,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     fontSize: 11.5,
     marginTop: 2,
   },
+  myCompanionIdentity: { gap: 4 },
   relControlBtn: {
     paddingHorizontal: 12,
     paddingVertical: 6,

@@ -87,7 +87,7 @@ export function ChatScreen({
   onAvailabilityChanged: () => void;
   onRead?: () => void;
   onOpenSettings: (chatId: string, companionId?: string) => void;
-  onOpenProfile: (companionId: string | null) => void;
+  onOpenProfile: (companionId: string | null, chatId?: string) => void;
 }) {
   const { ui } = useSkin();
   const styles = useThemedStyles(createStyles);
@@ -476,7 +476,7 @@ export function ChatScreen({
           disabled={!profileId}
           accessibilityRole={profileId ? "button" : undefined}
           accessibilityLabel={profileId ? `查看 ${title} 的主页` : undefined}
-          onPress={profileId ? () => onOpenProfile(profileId) : undefined}
+          onPress={profileId ? () => onOpenProfile(profileId, chat?.direct ? chat.id : undefined) : undefined}
           style={({ pressed }) => [styles.titleBlock, profileId && pressed && { opacity: 0.72 }]}
         >
           <ChatAvatar name={title} avatar={directMember?.avatar} size={30} />
@@ -557,7 +557,7 @@ export function ChatScreen({
             return (
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
                 <ChatAvatar name={senderName} owner={isMine} avatar={isMine ? ownerAvatar : sender?.avatar} size={32}
-                  onPress={() => onOpenProfile(item.companionId)} />
+                  onPress={() => onOpenProfile(item.companionId, chat?.direct ? chat.id : undefined)} />
                 <View style={[styles.bubbleWrap, isMine && styles.bubbleWrapMine]}>
                   {!isMine && !chat?.direct ? (
                     <Text style={styles.senderLabel}>{senderName}</Text>

@@ -1,8 +1,11 @@
-import { useThemedStyles } from "./theme/SkinProvider";
+import { useSkin, useThemedStyles } from "./theme/SkinProvider";
 import type { UiPalette } from "./theme/skinTokens";
 import React, { useEffect, useRef, useState } from "react";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +17,7 @@ import type {
   ClientApi,
   ControlsPatch,
   ControlsResource,
+  ProjectionResult,
   ProjectionSelection,
 } from "./contracts.ts";
 import { CommunityButton, SecondaryHeading, createCommunityStyles } from "./community/components.tsx";
@@ -131,9 +135,9 @@ export function ControlsScreen({
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.page}>
-      <SecondaryHeading title={companionName} />
+      <SecondaryHeading title="社区公开设置" />
       {saveError && <Text accessibilityRole="alert" style={styles.bodyMuted}>{saveError}</Text>}
-      <Text style={styles.bodyMuted}>能动的都在这儿。不能动的，先别动。</Text>
+      <Text style={styles.bodyMuted}>{companionName}</Text>
 
       <ControlSection title="谁能看到">
         <PillOptions
@@ -253,7 +257,6 @@ export function SocialActivationScreen({
   api,
   companion,
   onActivated,
-  onOpenCompanion,
 }: {
   api: ClientApi;
   companion: {
@@ -262,22 +265,21 @@ export function SocialActivationScreen({
     identityId: string;
     approvedFields: string[];
   };
-  onActivated?: () => void;
-  onOpenCompanion?: () => void;
+  onActivated: (result: ProjectionResult) => void;
 }) {
   const styles = useThemedStyles(createStyles);
+  const { ui } = useSkin();
   const [handle, setHandle] = useState(() => {
     const base = companion.displayName.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
     const suffix = companion.companionId.replaceAll("-", "").slice(-4);
-    return (base.length >= 3 ? base : "home") + "_" + suffix;
+    return `${base.length >= 3 ? base.slice(0, 30 - suffix.length - 1) : "home"}_${suffix}`;
   });
-  const [visibility, setVisibility] = useState<"PRIVATE" | "FRIENDS" | "PUBLIC">("PRIVATE");
+  const [visibility, setVisibility] = useState<"PRIVATE" | "FRIENDS" | "PUBLIC">("PUBLIC");
   const [autonomy, setAutonomy] = useState<"QUIET" | "NORMAL" | "ACTIVE">("QUIET");
   const [selectedFields, setSelectedFields] = useState<string[]>(["displayName"]);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const commandKeys = useCommandKeys();
-  const [activated, setActivated] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const projectionTargets: Record<string, ProjectionSelection["targetField"]> = {
@@ -301,7 +303,7 @@ export function SocialActivationScreen({
     if (busyRef.current) return;
     const normalized = handle.trim().toLowerCase();
     if (!/^[a-z0-9_]{3,30}$/.test(normalized)) {
-      setMessage("这个名字牌不太行。只能用小写字母、数字和下划线。");
+      setMessage("社区账号名需为 3 到 30 位小写字母、数字或下划线。");
       return;
     }
 
@@ -327,11 +329,9 @@ export function SocialActivationScreen({
         selections,
       };
       const key = commandKeys.forRequest("social-persona", [companion.companionId, payload]);
-      await api.projectSocialPersona(companion.companionId, payload, key);
+      const result = await api.projectSocialPersona(companion.companionId, payload, key);
       commandKeys.complete("social-persona");
-      setActivated(true);
-      setMessage(`${companion.displayName} 可以出门了。`);
-      onActivated?.();
+      onActivated(result);
     } catch (error) {
       setMessage(safeClientMessage(error).title);
     } finally {
@@ -341,16 +341,15 @@ export function SocialActivationScreen({
   }
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.page}>
-      <Text style={styles.eyebrow}>SOCIAL ID</Text>
-      <SecondaryHeading title={companion.displayName} />
-
-      {!activated ? (
-        <>
-          <Text style={styles.bodyMuted}>TA 已经到了。现在决定哪些东西能跟着出门。</Text>
-
-          <Text style={styles.fieldLabel}>名字牌</Text>
+    <KeyboardAvoidingView style={styles.activationScreen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
+      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+        <SecondaryHeading title="公开到社区" />
+        <Text style={styles.bodyMuted}>设置 {companion.displayName} 的社区账号名、可见范围和展示资料。</Text>
+        <View style={styles.activationForm}>
+          <Text style={styles.fieldLabel}>社区账号名（@ID）</Text>
           <TextInput
+            accessibilityLabel="社区账号名（@ID）"
             value={handle}
             onChangeText={setHandle}
             editable={!busy}
@@ -359,7 +358,7 @@ export function SocialActivationScreen({
             style={styles.shortInput}
           />
 
-          <Text style={styles.fieldLabel}>带哪些出去</Text>
+          <Text style={styles.fieldLabel}>主页展示资料</Text>
           <View style={styles.pillWrap}>
             {availableFields
               .filter((field) => field !== "displayName")
@@ -389,7 +388,7 @@ export function SocialActivationScreen({
                 );
               })}
           </View>
-          <Text style={styles.helpFootnote}>名字会带上。其他的，你点了才出门。</Text>
+          <Text style={styles.helpFootnote}>主页会展示昵称和你勾选的资料。</Text>
 
           <Text style={styles.fieldLabel}>谁能看到</Text>
           <PillOptions
@@ -405,32 +404,16 @@ export function SocialActivationScreen({
             values={["QUIET", "NORMAL", "ACTIVE"]}
             selected={autonomy}
             disabled={busy}
-            labels={{ QUIET: "安静点", NORMAL: "正常", ACTIVE: "多出去" }}
+            labels={{ QUIET: "较少", NORMAL: "适中", ACTIVE: "较多" }}
             onSelect={(value) => setAutonomy(value as "QUIET" | "NORMAL" | "ACTIVE")}
           />
 
-          <Pressable
-            disabled={busy}
-            onPress={() => void activate()}
-            style={[styles.primaryPill, busy && styles.disabled]}
-          >
-            <Text style={styles.primaryText}>{busy ? "正在办。" : "让 TA 出门"}</Text>
-          </Pressable>
-        </>
-      ) : (
-        <View style={styles.activationBlock}>
-          <Text style={styles.activationTitle}>{companion.displayName} 已经在这儿了。</Text>
-          <Text style={styles.bodyMuted}>这次是真的。</Text>
-          {onOpenCompanion && (
-            <Pressable style={styles.primaryPill} onPress={onOpenCompanion}>
-              <Text style={styles.primaryText}>去看看 TA</Text>
-            </Pressable>
-          )}
+          {message && <Text accessibilityRole="alert" style={styles.message}>{message}</Text>}
+          <CommunityButton primary disabled={busy} onPress={() => void activate()}
+            label={busy ? "正在保存…" : visibility === "PUBLIC" ? "公开到社区" : "保存社区设置"} />
         </View>
-      )}
-
-      {message && <Text style={styles.message}>{message}</Text>}
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -440,7 +423,6 @@ const createStyles = (ui: UiPalette) => {
     screen: community.page,
     page: { ...community.content, gap: 0 },
     center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 28 },
-    eyebrow: { fontSize: 10, letterSpacing: 1.2, color: ui.accentInk, fontWeight: "700" },
     h2: { fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink, textAlign: "center" },
     bodyMuted: { marginTop: 6, fontSize: 13, lineHeight: 20, color: ui.muted },
     micro: { marginTop: 4, fontSize: 11, lineHeight: 17, color: ui.muted },
@@ -465,12 +447,10 @@ const createStyles = (ui: UiPalette) => {
     toggleOn: { backgroundColor: ui.accent },
     toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: ui.white },
     toggleKnobOn: { alignSelf: "flex-end" },
-    activationBlock: { marginTop: 26, paddingTop: 22, borderTopWidth: 1, borderColor: ui.line },
-    activationTitle: { marginTop: 7, fontSize: 22, lineHeight: 28, fontWeight: "700", color: ui.ink },
+    activationScreen: { flex: 1, backgroundColor: ui.white },
+    activationForm: { ...community.card, marginTop: 12 },
     fieldLabel: { marginTop: 18, marginBottom: 8, fontSize: 12, fontWeight: "700", color: ui.ink },
     shortInput: { minHeight: 44, paddingHorizontal: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 14, color: ui.ink, fontSize: 13 },
-    primaryPill: { minHeight: 44, marginTop: 14, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 999, backgroundColor: ui.accentWash, alignItems: "center", justifyContent: "center" },
-    primaryText: { color: ui.accentInk, fontSize: 14, fontWeight: "600" },
     secondaryPill: { minHeight: 42, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, alignItems: "center", justifyContent: "center" },
     secondaryText: { color: ui.ink, fontSize: 13, fontWeight: "600" },
     message: { marginTop: 18, textAlign: "center", fontSize: 13, color: ui.ink },

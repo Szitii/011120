@@ -24,6 +24,7 @@ export function PrivateHomeScreen({
   companionAvatar,
   companions = [],
   onSelectCompanion,
+  onOpenProfile,
   isCompanion,
   isActive,
   onOpenDiary,
@@ -35,6 +36,7 @@ export function PrivateHomeScreen({
   companionAvatar?: string | null;
   companions?: OwnerCompanionSummary[];
   onSelectCompanion?: (companionId: string) => void;
+  onOpenProfile?: () => void;
   isCompanion: boolean;
   isActive: boolean;
   onOpenDiary?: () => void;
@@ -84,18 +86,21 @@ export function PrivateHomeScreen({
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      {canSwitch && (
+      {(onOpenProfile || canSwitch) && (
         <View style={styles.switchRow}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="切换小家家机"
-            onPress={() => setSwitcherOpen(true)}
-            style={({ pressed }) => [styles.switchPill, pressed && { opacity: 0.8 }]}
-          >
-            <PixelAvatar name={companionName} role="companion" uri={companionAvatar} size={20} />
-            <Text style={styles.switchText}>小家里：{companionName}</Text>
-            <Ionicons name="chevron-down" size={14} color={ui.accentInk} />
-          </Pressable>
+          {onOpenProfile && (
+            <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${companionName} 的主页`}
+              onPress={onOpenProfile} style={({ pressed }) => [styles.switchPill, pressed && { opacity: 0.8 }]}>
+              <PixelAvatar name={companionName} role="companion" uri={companionAvatar} size={24} />
+              <Text style={styles.switchText} numberOfLines={1}>小家里：{companionName}</Text>
+            </Pressable>
+          )}
+          {canSwitch && (
+            <Pressable accessibilityRole="button" accessibilityLabel="切换小家家机"
+              onPress={() => setSwitcherOpen(true)} style={styles.switchButton}>
+              <Ionicons name="chevron-down" size={16} color={ui.accentInk} />
+            </Pressable>
+          )}
         </View>
       )}
 
@@ -154,11 +159,13 @@ export function PrivateHomeScreen({
 const createStyles = (ui: UiPalette) => StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingHorizontal: CHROME.screenInset, paddingTop: 10, paddingBottom: CHROME.scrollBottomClearance + 8, gap: 12 },
-  switchRow: { flexDirection: "row", justifyContent: "flex-start" },
+  switchRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   switchPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    minHeight: 44,
+    flexShrink: 1,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: RADIUS.pill,
@@ -166,7 +173,9 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderWidth: 1,
     borderColor: ui.line,
   },
-  switchText: { fontSize: 13, fontWeight: "600", color: ui.ink },
+  switchText: { flexShrink: 1, fontSize: 13, fontWeight: "600", color: ui.ink },
+  switchButton: { width: 44, height: 44, borderRadius: RADIUS.pill, backgroundColor: ui.accentWash,
+    alignItems: "center", justifyContent: "center" },
   cards: { flexDirection: "row", gap: 12 },
   card: {
     flex: 1, minHeight: 84, borderRadius: 16, borderWidth: 1, borderColor: ui.line,

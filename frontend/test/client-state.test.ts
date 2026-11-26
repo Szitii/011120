@@ -21,7 +21,7 @@ describe("real client binding state architecture", () => {
     let state = initialNavigationState();
     state = saveScroll(state, "owner-1", "world", 428);
     state = pushRoute(state, { type: "encounter", encounterId: "enc-1" });
-    state = pushRoute(state, { type: "profile", companionId: "sample_companion-1" });
+    state = pushRoute(state, { type: "community-target", target: { type: "profile", companionId: "sample_companion-1" } });
     state = popRoute(state);
     assert.deepEqual(state.stack.at(-1), { type: "encounter", encounterId: "enc-1" });
     state = popRoute(state);
@@ -32,12 +32,11 @@ describe("real client binding state architecture", () => {
   it("keeps profile navigation distinct from explicit identity switching", () => {
     let state = initialNavigationState();
     state = selectTab(state, "my");
-    state = pushRoute(state, { type: "profile", companionId: "sample_companion-1" });
+    state = pushRoute(state, { type: "community-target", target: { type: "profile", companionId: "sample_companion-1" } });
     const route = state.stack.at(-1);
-    assert.equal(route?.type, "profile");
-    if (route?.type === "profile") {
-      assert.equal(route.companionId, "sample_companion-1");
-      assert.equal("viewContext" in route, false);
+    assert.equal(route?.type, "community-target");
+    if (route?.type === "community-target") {
+      assert.deepEqual(route.target, { type: "profile", companionId: "sample_companion-1" });
     }
     assert.equal(state.rootTab, "my");
   });

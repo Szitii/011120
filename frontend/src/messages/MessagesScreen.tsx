@@ -46,7 +46,7 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   visible: boolean;
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
-  onOpenCompanionProfile?: (companionId: string) => void;
+  onOpenCompanionProfile?: (companionId: string, chatId?: string) => void;
   onCommunityTarget: (target: CommunityTarget) => void;
   onLife: (item: LifeEventInboxItem) => void;
   onRead: () => void;
@@ -120,7 +120,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
   active: boolean;
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
-  onOpenCompanionProfile?: (companionId: string) => void;
+  onOpenCompanionProfile?: (companionId: string, chatId?: string) => void;
   onCreateGroup?: () => void;
 }) {
   const { ui } = useSkin();
@@ -190,7 +190,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
             const member = chat.direct ? chat.members[0] : undefined;
             const openChat = () => onChat(chat);
             const openProfile = member && onOpenCompanionProfile
-              ? () => onOpenCompanionProfile(member.companionId)
+              ? () => onOpenCompanionProfile(member.companionId, chat.id)
               : undefined;
             return (
               <View key={chat.id} style={[styles.chatRow, index < items.length - 1 && styles.chatRowDivider]}>

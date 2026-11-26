@@ -38,9 +38,9 @@ import { UnifiedProfileView } from "../components/UnifiedProfileView";
 import { ReportForm } from "./ReportForm.tsx";
 import { HumanProfileEditor } from "./HumanProfileEditor.tsx";
 import { BottomSheet } from "../components/BottomSheet.tsx";
-import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { useSkin } from "../theme/SkinProvider";
 import { RADIUS } from "../theme/layoutTokens";
+import type { CompanionProfile, OwnerCompanionSummary } from "../contracts";
 
 type Page = { type: "feed" } | CommunityTarget;
 
@@ -54,6 +54,15 @@ type Data =
   | { type: "detail"; value: CommunityDetail }
   | { type: "blocks"; value: CommunityPage<CommunityBlock> };
 
+export interface ManagedProfileActions {
+  onChat?: () => void;
+  onHome: () => void;
+  onCommunitySettings: () => void;
+  menu: { label: string; onPress: () => void }[];
+}
+
+const EMPTY_PROFILE_STATS = { postsCount: 0, followersCount: 0, followingCount: 0 };
+
 export function CommunityScreen({
   client,
   viewer,
@@ -66,8 +75,14 @@ export function CommunityScreen({
   onChanged,
   onScroll,
   initialTarget,
+  ownedCompanion,
+  ownedCompanions,
+  getManagedActions,
+  legacyProfile,
+  legacyProfileError,
+  onRetryLegacyProfile,
 }: {
-  client: CommunityClient;
+  client?: CommunityClient;
   viewer: ActorContext;
   initialScrollY?: number;
   onPublish?: () => void;
@@ -78,12 +93,19 @@ export function CommunityScreen({
   onChanged: () => void;
   onScroll: (y: number) => void;
   initialTarget?: CommunityTarget;
+  ownedCompanion?: OwnerCompanionSummary;
+  ownedCompanions?: OwnerCompanionSummary[];
+  getManagedActions?: (companion: OwnerCompanionSummary) => ManagedProfileActions;
+  legacyProfile?: CompanionProfile;
+  legacyProfileError?: string;
+  onRetryLegacyProfile?: () => void;
 }) {
   const localStyles = useThemedStyles(createLocalStyles);
   const s = useCommunityStyles();
   const { skin, ui } = useSkin();
   const [reportTarget, setReportTarget] = useState<ReportTarget>();
   const [blockTarget, setBlockTarget] = useState<CommunityProfile>();
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const page = useMemo<Page>(() => initialTarget ?? { type: "feed" }, [initialTarget]);
   const [mode, setMode] = useState<CommunityFeedMode>("LATEST");
   const [data, setData] = useState<Data>();
@@ -107,6 +129,8 @@ export function CommunityScreen({
   const restoreFeed = useRef(true);
   const active = useRef(true);
   const visibleProfile = useRef<CommunityProfile | undefined>(undefined);
+  const managedId = ownedCompanion?.companionId;
+  const managedReady = ownedCompanion?.socialReady === true;
 
   useEffect(() => {
     active.current = true;
@@ -118,6 +142,11 @@ export function CommunityScreen({
 
   const load = useCallback(async (cursor?: string) => {
     const current = scope.begin();
+    if (!client || (page.type === "profile" && page.companionId && !managedReady)) {
+      setLoading(false);
+      setError("");
+      return;
+    }
     setLoading(true);
     setError("");
     const ownRequest = cursor ? undefined : client.profile(viewer);
@@ -140,12 +169,21 @@ export function CommunityScreen({
       if (page.type === "profile") {
         const profile = cursor
           ? visibleProfile.current
-          : await (page.id ? client.profile(viewer, page.id) : ownRequest);
+          : await (managedId ? client.profile({ kind: "COMPANION", id: managedId })
+            : page.id ? client.profile(viewer, page.id) : ownRequest);
         if (!profile || !current()) return;
+        const value = await client.feed(viewer, { authorId: profile.id, ...(cursor ? { cursor } : {}) })
+          .catch(error => {
+            // A managed account can have a projection that's private to its own identity.
+            if (managedId && error instanceof ApiProblemError && (error.status === 403 || error.status === 404)) {
+              return { items: [], nextCursor: null };
+            }
+            throw error;
+          });
         next = {
           type: "profile",
           profile,
-          value: await client.feed(viewer, { authorId: profile.id, ...(cursor ? { cursor } : {}) }),
+          value,
         };
       } else if (page.type === "detail") {
         next = { type: "detail", value: await client.detail(viewer, page.id, cursor) };
@@ -192,7 +230,7 @@ export function CommunityScreen({
     } finally {
       if (current()) setLoading(false);
     }
-  }, [client, viewer.kind, viewer.id, page, mode, scope]);
+  }, [client, viewer.kind, viewer.id, page, mode, scope, managedId, managedReady]);
 
   useEffect(() => {
     setData(undefined);
@@ -235,7 +273,7 @@ export function CommunityScreen({
   }
 
   function toggleLike(post: CommunityPost) {
-    if (!client.like || loading) return;
+    if (!client?.like || loading) return;
     const like = client.like;
     void mutate(() => like(viewer, post.id, !post.likedByMe), { refreshCommunity: true, success: result => {
       const update = (item: CommunityPost) => item.id === post.id
@@ -277,6 +315,15 @@ export function CommunityScreen({
   const canSubmit = draftLength > 0 && draftLength <= draftLimit;
   const canCompose = own?.canPublish === true;
   const openActor = (id: string) => navigate({ type: "profile", id });
+  const profile = data?.type === "profile" ? data.profile : undefined;
+  const managed = ownedCompanion ?? (profile?.kind === "AI" && profile.handle
+    ? ownedCompanions?.find(item => item.handle === profile.handle)
+    : undefined);
+  const managedActions = managed && getManagedActions?.(managed);
+  const showSocialActions = Boolean(profile && !profile.isSelf && !managedActions);
+  const profileName = profile?.displayName ?? managed?.displayName ?? legacyProfile?.displayName;
+  const profileHandle = profile?.handle ?? managed?.handle ?? legacyProfile?.handle;
+  const legacyBio = legacyProfile?.publicProfile.bio;
 
   function editCommentMentions(mentions: Mention[]) {
     setCommentMentions(mentions);
@@ -294,7 +341,7 @@ export function CommunityScreen({
     setReportTarget(undefined);
   }
 
-  if (editingProfile) {
+  if (editingProfile && client) {
     return (
       <HumanProfileEditor
         client={client}
@@ -310,7 +357,7 @@ export function CommunityScreen({
 
   const pageTitle =
     page.type === "profile"
-      ? "独立主页"
+      ? "主页"
       : page.type === "detail"
         ? "动态详情"
         : page.type === "blocks"
@@ -325,11 +372,11 @@ export function CommunityScreen({
         data={posts}
         keyExtractor={post => post.id}
         renderItem={({ item: post }) => <ContentCard item={post}
-          resolveMedia={client.postMediaSource}
+          resolveMedia={client?.postMediaSource}
           cacheScope={mediaCacheScope}
           onActor={() => openActor(post.author.id)}
           onMention={openActor}
-          onLike={client.like ? () => toggleLike(post) : undefined}
+          onLike={client?.like ? () => toggleLike(post) : undefined}
           likeDisabled={busy || loading}
           onDetail={() => navigate({ type: "detail", id: post.id })}
           onDelete={() => remove("posts", post.id)}
@@ -406,16 +453,15 @@ export function CommunityScreen({
           <View style={localStyles.subHeader}>
             <Text style={localStyles.subTitle}>{pageTitle}</Text>
             <View style={localStyles.subHeaderRight}>
-              {page.type === "profile" && data?.type === "profile" && data.profile.isSelf && (
+              {(managedActions || profile) && (
                 <Pressable
                   disabled={busy}
                   accessibilityRole="button"
-                  accessibilityLabel="屏蔽管理"
-                  onPress={() => navigate({ type: "blocks" })}
-                  style={({ pressed }) => [localStyles.glassIconBtn, pressed && { transform: [{ scale: 0.92 }] }]}
+                  accessibilityLabel="更多主页操作"
+                  onPress={() => setProfileMenuOpen(true)}
+                  style={({ pressed }) => [localStyles.profileMenuButton, pressed && { opacity: 0.7 }]}
                 >
-                  <LiquidGlassSurface glass style={StyleSheet.absoluteFill} />
-                  <Ionicons name="ban-outline" size={16} color={ui.ink} />
+                  <Ionicons name="ellipsis-horizontal" size={22} color={ui.ink} />
                 </Pressable>
               )}
             </View>
@@ -434,46 +480,64 @@ export function CommunityScreen({
         )}
         {loading && <ActivityIndicator accessibilityLabel="正在加载社区" color={ui.accent} />}
 
-        {data?.type === "profile" && (
+        {legacyProfileError && (
           <View style={s.card}>
-            <UnifiedProfileView name={data.profile.displayName}
-              role={data.profile.kind === "AI" ? "companion" : "owner"} avatar={data.profile.avatar}
-              subtitle={`@${data.profile.handle}`} bio={data.profile.bio} stats={data.profile}
-              onFollowList={data.profile.isSelf && !busy ? onFollowList : undefined}>
+            <Text accessibilityRole="alert" style={s.error}>{legacyProfileError}</Text>
+            {onRetryLegacyProfile && <Button label="重新加载" onPress={onRetryLegacyProfile} />}
+          </View>
+        )}
+        {page.type === "profile" && page.companionId && !profileName && !legacyProfileError && !loading &&
+          <ActivityIndicator accessibilityLabel="正在加载主页" color={ui.accent} />}
+
+        {profileName && (
+          <View style={s.card}>
+            <UnifiedProfileView name={profileName}
+              role={profile?.kind === "HUMAN" ? "owner" : "companion"}
+              avatar={profile?.avatar ?? managed?.avatar}
+              subtitle={profileHandle ? `@${profileHandle}` : undefined}
+              bio={profile?.bio ?? (typeof legacyBio === "string" ? legacyBio : undefined)}
+              stats={profile ?? (managed && managed.socialReady !== true ? EMPTY_PROFILE_STATS : undefined)}
+              onFollowList={profile?.isSelf && !managedActions && !busy ? onFollowList : undefined}
+              afterBio={managedActions && managed?.socialReady !== true && (
+                <Pressable accessibilityRole="button" onPress={managedActions.onCommunitySettings}
+                  style={localStyles.profilePrompt}>
+                  <Text style={localStyles.profilePromptText}>尚未公开到社区，点击开启</Text>
+                </Pressable>
+              )}
+            >
               <View style={s.row}>
-                {data.profile.isSelf ? (
-                  data.profile.kind === "HUMAN" ? (
-                    <Button label="编辑资料" disabled={busy} onPress={() => setEditingProfile(true)} />
-                  ) : null
-                ) : (
+                {managedActions ? (
                   <>
-                    <Button
-                      primary={!data.profile.following}
-                      disabled={busy || (!data.profile.following && !own?.canPublish)}
-                      label={data.profile.following ? "取消关注" : "关注"}
-                      onPress={() => {
-                        const p = data.profile;
-                        void mutate(
-                          () => client.follow(viewer, p.id, !p.following, communityRequestKey()),
-                          { write: p.following ? "取关" : "关注" },
-                        );
-                      }}
-                    />
-                    <Button label="屏蔽对方" disabled={busy} onPress={() => setBlockTarget(data.profile)} />
-                    <Button
-                      label="举报"
-                      disabled={busy}
-                      onPress={() => setReportTarget({ kind: "ACTOR", id: data.profile.id })}
-                    />
+                    {managedActions.onChat && <Button label="聊天" primary onPress={managedActions.onChat} />}
+                    <Button label="去小家" onPress={managedActions.onHome} />
                   </>
-                )}
+                ) : profile?.isSelf && profile.kind === "HUMAN" ? (
+                  <Button label="编辑资料" disabled={busy} onPress={() => setEditingProfile(true)} />
+                ) : showSocialActions && profile && client ? (
+                  <Button
+                    primary={!profile.following}
+                    selected={profile.following}
+                    disabled={busy || (!profile.following && !own?.canPublish)}
+                    label={profile.following ? "已关注" : "关注"}
+                    onPress={() => void mutate(
+                      () => client.follow(viewer, profile.id, !profile.following, communityRequestKey()),
+                      { write: profile.following ? "取关" : "关注", refreshCommunity: true },
+                    )}
+                  />
+                ) : null}
               </View>
             </UnifiedProfileView>
           </View>
         )}
 
+        {page.type === "profile" && profileName && !loading && !error && posts.length === 0 && (
+          <View style={localStyles.emptyCard}>
+            <Text style={localStyles.emptyText}>{legacyProfile ? "暂时没有可显示的社区动态。" : "暂无动态"}</Text>
+          </View>
+        )}
+
         {/* Blocked Users List */}
-        {data?.type === "blocks" &&
+        {client && data?.type === "blocks" &&
           data.value.items.map((block) => (
             <View key={block.id} style={s.card}>
               <View style={localStyles.rowBetween}>
@@ -496,7 +560,7 @@ export function CommunityScreen({
         )}
 
         {/* Post Detail & Comments */}
-        {data?.type === "detail" && (
+        {client && data?.type === "detail" && (
           <>
             <ContentCard
               item={data.value.post}
@@ -584,7 +648,7 @@ export function CommunityScreen({
         )}
 
         {/* Empty State */}
-        {!loading && data?.type !== "detail" && data?.value.items.length === 0 && (
+        {!loading && (data?.type === "feed" || data?.type === "blocks") && data.value.items.length === 0 && (
           <View style={localStyles.emptyCard}>
             <Ionicons
               name={
@@ -606,13 +670,39 @@ export function CommunityScreen({
         </View>}
       />
 
+      <BottomSheet visible={profileMenuOpen} title={managedActions ? "家机管理" : "更多主页操作"}
+        onClose={() => setProfileMenuOpen(false)}>
+        <View style={localStyles.profileMenu}>
+          {managedActions?.menu.map(({ label, onPress }) => (
+            <Button key={label} label={label} onPress={() => {
+              setProfileMenuOpen(false);
+              onPress();
+            }} />
+          ))}
+          {showSocialActions && profile && <>
+            <Button label="举报" onPress={() => {
+              setProfileMenuOpen(false);
+              setReportTarget({ kind: "ACTOR", id: profile.id });
+            }} />
+            <Button label="屏蔽对方" onPress={() => {
+              setProfileMenuOpen(false);
+              setBlockTarget(profile);
+            }} />
+          </>}
+          {profile?.isSelf && !managedActions && <Button label="屏蔽管理" onPress={() => {
+            setProfileMenuOpen(false);
+            navigate({ type: "blocks" });
+          }} />}
+        </View>
+      </BottomSheet>
+
       {/* Block / Delete Confirmation Sheet */}
       <BottomSheet
         visible={Boolean(blockTarget || deleteTarget)}
         title={blockTarget ? "屏蔽对方" : "删除内容"}
         onClose={closeConfirmation}
       >
-        {blockTarget && (
+        {client && blockTarget && (
           <>
             <Text style={[s.body, { color: skin.colors.ink, marginBottom: 12 }]}>
               屏蔽 {blockTarget.displayName}？这会屏蔽对方的全部关联身份。当前身份将与对方互不可见，不能关注或评论，已有的双向关注也会解除。
@@ -634,7 +724,7 @@ export function CommunityScreen({
             </View>
           </>
         )}
-        {deleteTarget && (
+        {client && deleteTarget && (
           <>
             <Text style={[s.body, { color: skin.colors.ink, marginBottom: 12 }]}>
               删除这条内容？删除后将从社区和相关通知中隐藏。
@@ -676,7 +766,7 @@ export function CommunityScreen({
         )}
       </BottomSheet>
 
-      {reportTarget && (
+      {client && reportTarget && (
         <Modal animationType="slide" onRequestClose={closeReport}>
           <SafeAreaView style={s.page}>
             <ReportForm client={client} viewer={viewer} target={reportTarget} onClose={closeReport} />
@@ -726,13 +816,11 @@ const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-  glassIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  profileMenuButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center",
+    borderRadius: RADIUS.pill, backgroundColor: ui.accentWash },
+  profileMenu: { gap: 8 },
+  profilePrompt: { minHeight: 44, justifyContent: "center" },
+  profilePromptText: { fontSize: 13, color: ui.accentInk, textAlign: "center" },
   composePill: {
     flexDirection: "row",
     alignItems: "center",

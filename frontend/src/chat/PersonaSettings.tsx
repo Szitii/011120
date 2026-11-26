@@ -1,5 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { CompanionPersona, PersonaInput } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
@@ -48,14 +48,16 @@ export function PersonaSettings({
   client,
   companionId,
   isExternal = false,
+  initiallyExpanded = false,
 }: {
   client: ChatClient;
   companionId: string;
   isExternal?: boolean;
+  initiallyExpanded?: boolean;
 }) {
   const { ui } = useSkin();
   const s = useThemedStyles(createStyles);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const [showMore, setShowMore] = useState(false);
   const [saved, setSaved] = useState<CompanionPersona>();
   const [draft, setDraft] = useState<Record<PersonaField, string>>();
@@ -75,11 +77,10 @@ export function PersonaSettings({
     return () => { mounted.current = false; };
   }, [client, companionId]);
 
-  if (!client.getPersona || !client.savePersona) return null;
   const getPersona = client.getPersona;
   const savePersona = client.savePersona;
 
-  function applyLoaded(persona: CompanionPersona) {
+  const applyLoaded = useCallback((persona: CompanionPersona) => {
     setSaved(persona);
     setDraft({
       identitySummary: persona.identitySummary,
@@ -89,10 +90,10 @@ export function PersonaSettings({
       boundaries: persona.boundaries,
       aspirations: persona.aspirations,
     });
-  }
+  }, []);
 
-  async function load() {
-    if (pending.current) return;
+  const load = useCallback(async () => {
+    if (!getPersona || pending.current) return;
     pending.current = true;
     const version = ++reqId.current;
     setBusy(true);
@@ -107,7 +108,13 @@ export function PersonaSettings({
       pending.current = false;
       if (mounted.current && version === reqId.current) setBusy(false);
     }
-  }
+  }, [getPersona, companionId, applyLoaded]);
+
+  useEffect(() => {
+    if (initiallyExpanded) void load();
+  }, [initiallyExpanded, load]);
+
+  if (!getPersona || !savePersona) return null;
 
   const changedPatch: Partial<Record<PersonaField, string>> = {};
   let hasOverLimit = false;
@@ -119,7 +126,7 @@ export function PersonaSettings({
   }
   const hasChanges = Object.keys(changedPatch).length > 0;
 
-  async function save() {
+  const save = async () => {
     if (!saved || !draft || !hasChanges || hasOverLimit || pending.current) return;
     pending.current = true;
     const version = ++reqId.current;
@@ -153,7 +160,7 @@ export function PersonaSettings({
       pending.current = false;
       if (mounted.current && version === reqId.current) setBusy(false);
     }
-  }
+  };
 
   const renderField = ([key, label, placeholder]: readonly [PersonaField, string, string]) => {
     if (!draft) return null;

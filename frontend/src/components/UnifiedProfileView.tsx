@@ -7,12 +7,13 @@ import { PixelAvatar } from "./PixelAvatar";
 
 type Stats = Pick<CommunityProfile, "postsCount" | "followersCount" | "followingCount">;
 
-export function UnifiedProfileView({ name, role, avatar, bio, subtitle, stats, onFollowList, children }: {
+export function UnifiedProfileView({ name, role, avatar, bio, subtitle, afterBio, stats, onFollowList, children }: {
   name: string;
   role: "owner" | "companion";
   avatar?: string | null;
   bio?: string;
   subtitle?: string;
+  afterBio?: ReactNode;
   stats?: Stats;
   onFollowList?: (direction: "followers" | "following") => void;
   children?: ReactNode;
@@ -24,6 +25,7 @@ export function UnifiedProfileView({ name, role, avatar, bio, subtitle, stats, o
       <Text accessibilityRole="header" style={s.name}>{name}</Text>
       {!!subtitle && <Text style={s.meta}>{subtitle}</Text>}
       {!!bio && <Text style={s.bio}>{bio}</Text>}
+      {afterBio}
       {stats && <View style={s.stats}>
         <Stat count={stats.postsCount} label="动态" />
         <Stat count={stats.followersCount} label="粉丝" onPress={onFollowList && (() => onFollowList("followers"))} />
