@@ -434,7 +434,7 @@ try {
   await pool.query("insert into companion_private.chat_members(chat_id, companion_id, position) values ($1, $2, 1)", [consoleChat, A.companion]);
   await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
     values ($1, 'console private line', 'SENT', repeat('e', 64), now())`, [consoleChat]);
-  assert.ok((await web(`/owners/${A.owner}`)).body.includes(`<tr><td>Console fixture chat</td>`));
+  assert.ok((await web(`/owners/${A.owner}`)).body.includes(`<tr><td>Console fixture chat <span class="muted">`));
   const gate = await web(`/chats/${consoleChat}`);
   assert.ok(gate.status === 200 && !gate.body.includes("console private line"));
   assert.equal((await web(`/chats/${consoleChat}`, { reason: " " })).status, 409);
@@ -471,7 +471,7 @@ try {
   assert.ok((await web(`/log?owner=${target.owner}`)).body.includes("Console suspension"));
   passed("the console pages work end to end as an operator: reports, Owners, Companions, content, chats, models, costs and the log");
 
-  // ---- 家机说明: an operator rewords a block of what the models are told; the API server reads it ----
+  // ---- 提示词: an operator rewords a block of what the models are told; the API server reads it ----
   const server = new PostgresChatAdapter(viewer);
   assert.deepEqual(await server.promptTexts(), {});
   assert.deepEqual(await admin(one, "prompts"), {});
@@ -494,7 +494,7 @@ try {
     { operator: "admin_test_two", reason: "Second wording", detail: { before: "- 留意现在几点。", body: "- 第二版。" } },
     { operator: "admin_test_one", reason: "Console wording back", detail: { before: "- 第二版。", body: null } },
   ], "every change is logged with the wording before and after");
-  assert.ok((await web("/log")).body.includes("修改家机说明"));
+  assert.ok((await web("/log")).body.includes("修改提示词"));
   // An app user reaches neither the wording nor the way to change it.
   const user = await pool.connect();
   try {

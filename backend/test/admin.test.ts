@@ -246,17 +246,18 @@ it("lists and searches Owners, and opens one with what can be done about them", 
   assert.deepEqual(calls, [["owner_detail", OWNER], ["chats", OWNER], ["log", null, OWNER]]);
   assert.ok(!detail.body.includes("<script>alert"));
   const actions = [...detail.body.matchAll(/<form class="act" method="post" action="([^"]+)">/g)].map(m => m[1]);
-  assert.deepEqual(actions, [`/owners/${OWNER}/suspend`, "/models/credit", `/twins/${TWIN}/suspend`, `/twins/${id(21)}/restore`,
+  assert.deepEqual(actions, ["/models/credit", `/owners/${OWNER}/suspend`, `/twins/${TWIN}/suspend`, `/twins/${id(21)}/restore`,
     `/content/post/${POST}/remove`, `/content/post/${id(41)}/restore`, `/content/comment/${COMMENT}/remove`]);
   assert.match(detail.body, /<input type="hidden" name="owner" value="00000000-0000-0000-0000-000000000001">/, "credits for this Owner, no id to type");
   assert.match(detail.body, /<form class="act read" method="post" action="\/chats\/[0-9a-f-]+">[\s\S]*?name="reason" required[\s\S]*?<button>查看<\/button>/, "a chat is read from its row");
   assert.match(detail.body, /举报<span class="badge" aria-label="3 条待处理">3<\/span>/, "the sidebar shows the waiting reports");
   assert.match(detail.body, /作者已删除/);
   assert.match(detail.body, /本人发的[\s\S]*主人代发/);
-  assert.match(detail.body, /<b>Mochi<\/b> <span class="muted">正常<\/span>[\s\S]*<span class="muted">草稿<\/span>/);
-  assert.match(detail.body, /社区身份:还没有/);
-  assert.match(detail.body, new RegExp(`<tr><td>一对一</td>[\\s\\S]*?action="/chats/${CHAT}"`));
-  assert.match(detail.body, /<tr><td>群聊<\/td>/);
+  assert.match(detail.body, /<td><b>Mochi<\/b><\/td><td>正常<\/td>[\s\S]*<td>草稿<\/td>/);
+  assert.match(detail.body, /<td><span class="muted">还没有<\/span><\/td>/, "no community account yet");
+  assert.match(detail.body, /<a href="\/owners">← 用户与聊天<\/a>/, "a way back to the list");
+  assert.match(detail.body, new RegExp(`<tr><td>一对一 <span class="muted">[^<]*</span>[\\s\\S]*?action="/chats/${CHAT}"`));
+  assert.match(detail.body, /<tr><td>群聊 <span class="muted">/);
   assert.match(detail.body, new RegExp(`<a href="/log\\?owner=${OWNER}&before=8">更早的记录</a>`));
   assert.match(detail.body, /操作已完成/);
   assert.ok((detail.body.match(new RegExp(`name="back" value="/owners/${OWNER}"`, "g")) ?? []).length === 7, "six changes and the credits");
@@ -267,7 +268,7 @@ it("lists and searches Owners, and opens one with what can be done about them", 
     chats: { items: [] }, log: { items: [], next: null } });
   const empty = await quiet.send(`/owners/${OWNER}`);
   assert.match(empty.body, new RegExp(`action="/owners/${OWNER}/restore"`));
-  assert.match(empty.body, /没有会话。[\s\S]*没有家机。[\s\S]*没有记录。/);
+  assert.match(empty.body, /没有家机。[\s\S]*没有会话。[\s\S]*没有记录。/);
   const deleted = await start({ owner_detail: { ...fixtures.owner_detail!, owner: { ...fixtures.owner_detail!.owner, status: "DELETED" } } });
   assert.ok(!(await deleted.send(`/owners/${OWNER}`)).body.includes(`action="/owners/${OWNER}/`));
 
@@ -524,13 +525,12 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.deepEqual(calls, [["costs", "2026-11-01"], ["models"]], "this month (UTC) by default, with today's cap");
   assert.ok(!page.body.includes("http-equiv") && !page.body.includes("自动刷新"), "the page is read again when the browser reloads it");
   assert.ok(!page.body.includes(">刷新<") && !page.body.includes("每天明细"), "no second refresh button, no daily table (it is in the export)");
-  assert.match(page.body, /今天\(UTC\)平台模型已花,含进行中的调用<\/div><div class="big">\$3\.45<\/div>/);
-  assert.match(page.body, /每天上限 \$20\.00 · 用了 17%/);
-  assert.match(page.body, /<summary>改金额<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
+  assert.match(page.body, /其中今天\(UTC\)平台模型<\/div><div class="mid">\$3\.45 <span class="muted">\/ 上限 \$20\.00<\/span><\/div>/);
+  assert.match(page.body, /<summary>改上限<\/summary><form class="act" method="post" action="\/costs\/cap"><input type="hidden" name="back" value="\/costs\?month=2026-11">/);
   assert.match(page.body, /name="dollars" required inputmode="decimal" size="6" value="20">/);
   assert.match(page.body, /<a href="\/costs" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>花费<\/a>/);
   assert.match(page.body, /总花费<\/div><div class="big">\$40\.45<\/div>/, "models + recognition + over the plan + fixed");
-  assert.match(page.body, /按用量的 \$5\.45 \+ 固定月费 \$35\.00/);
+  assert.match(page.body, /按用量 \$5\.45 \+ 固定月费 \$35\.00/);
   const vendor = (name: string) => page.body.split('<div class="card vendor">').find(card => card.includes(`<b>${name}</b>`)) ?? "";
   assert.deepEqual([...page.body.matchAll(/<div class="card vendor"><div class="vhead"><span><i [^>]*><\/i><b>([^<]+)<\/b><\/span>\s*<span class="muted">占 ([^<]+)<\/span><\/div><div class="big">([^<]+)</g)]
     .map(m => [m[1], m[2], m[3]]), [["Fly.io", "74%", "$30.00"], ["MiniMax", "17%", "$7.00"], ["claude", "9%", "$3.45"], ["Supabase", "0%", "$0.00"]],
@@ -685,14 +685,14 @@ it("shows how much the App is used, and the database and the servers", async () 
   const page = await (await start({ system }, undefined, fly(machines))).send("/system");
   assert.deepEqual(asked, ["api/machines", "api/volumes", "admin/machines", "admin/volumes"].map(p => [`https://api.machines.dev/v1/apps/${p}`, "Bearer fly-ro"]));
   assert.match(page.body, /主机<\/div>\s*<div class="big">1 \/ 3<\/div>/);
-  assert.match(page.body, /<td>api<\/td><td>api-1 <span class="muted">m1<\/span><\/td>\s*<td><span class="tag ">运行中<\/span><\/td><td>nrt<\/td>\s*<td>1 核 · 512 MB 内存<\/td>\s*<td class="num">\$4\.83<\/td><td>deployment-7<\/td>/);
+  assert.match(page.body, /<td><b>api<\/b><\/td>\s*<td><span class="tag good">运行中<\/span><\/td>\s*<td>1 核 · 512 MB · nrt<\/td>\s*<td class="num">\$4\.83<\/td>/);
   // shared-cpu-1x with 512 MB in Tokyo: ($0.69 + $3.00) × 1.308; the 1 GB disk $0.15; stopped machines nothing.
-  assert.match(page.body, /<td class="num">1 GB<\/td><td class="num">\$0\.15<\/td>/);
+  assert.match(page.body, /<td>1 GB · [a-z]+<\/td>\s*<td class="num">\$0\.15<\/td>/);
   assert.ok(!page.body.includes("Fly 一整月约"), "the month's estimate is on the costs page");
-  assert.match(page.body, /停止时只收磁盘/);
-  assert.match(page.body, /2025\/11\/24 16:00:00 · 退出码 137 <span class="tag bad">内存不够被杀掉<\/span>/, "the latest exit");
+  assert.match(page.body, /只收磁盘/);
+  assert.match(page.body, /2025\/11\/24 16:00:00 <span class="tag bad">内存不够被杀掉<\/span>/, "the latest exit");
   assert.match(page.body, /<td><span class="tag bad">已停止<\/span><\/td>/);
-  assert.match(page.body, /<span class="muted">没有记录<\/span>/);
+  assert.match(page.body, /<span class="muted">—<\/span>/);
   const refused = await (await start({ system }, undefined, fly(() => new Response("no", { status: 401 })))).send("/system");
   assert.match(refused.body, /读不到 Fly 的主机状态:Fly 回答 401\(应用 api\)/);
   const broken = await (await start({ system }, undefined, { token: "x", apps: ["api"], fetch: (async () => { throw "offline"; }) as typeof fetch })).send("/system?auto=off");
@@ -704,7 +704,7 @@ it("shows what the models are told, and rewords a block only when the wording ca
   const { send, calls } = await start({ prompts: {} });
   const page = await send("/prompts");
   assert.deepEqual(calls, [["prompts"]]);
-  assert.match(page.body, /<a href="\/prompts" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>家机说明<\/a>/);
+  assert.match(page.body, /<a href="\/prompts" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>提示词<\/a>/);
   assert.match(page.body, /现在有 0 \/ 7 段改过/);
   // Each prompt whole: the fixed lines, and every block in its place with a form.
   for (const title of ["聊天回复", "写日记", "发社区动态", "自动记忆", "主人自己接的 agent(自建家机)", "群聊里要不要开口"]) assert.ok(page.body.includes(`<h2>${title}</h2>`), title);

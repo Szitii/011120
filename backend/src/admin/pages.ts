@@ -105,7 +105,7 @@ function html(strings: TemplateStringsArray, ...values: unknown[]): Safe {
 
 const REASONS: Readonly<Record<string, string>> = { SPAM: "垃圾信息", HARASSMENT: "骚扰", HARMFUL: "有害内容", PRIVACY: "隐私", OTHER: "其他" };
 export const RESOLUTIONS: Readonly<Record<string, string>> = {
-  NONE: "不处理", REMOVED: "移除内容", TWIN_SUSPENDED: "停用家机的社区身份", OWNER_SUSPENDED: "封禁主人",
+  NONE: "不处理", REMOVED: "移除内容", TWIN_SUSPENDED: "停用家机的社区账号", OWNER_SUSPENDED: "封禁主人",
 };
 const OWNER_STATUS: Readonly<Record<string, string>> = { ACTIVE: "正常", SUSPENDED: "已封禁", DELETED: "已删除" };
 const TWIN_STATUS: Readonly<Record<string, string>> = { ACTIVE: "正常", LIMITED: "受限", SUSPENDED: "已停用" };
@@ -117,13 +117,13 @@ const SOURCES: Readonly<Record<string, string>> = {
 const TARGETS: Readonly<Record<string, string>> = {
   ACTOR: "账号", POST: "帖子", COMMENT: "评论", OWNER: "主人", SOCIAL_TWIN: "家机", REPORT: "举报", CHAT: "会话",
   CHAT_QUOTA: "每日额度", ALL: "全部模型", PROVIDER: "厂商", MODEL: "模型", FIXED_COST: "固定月费", VOICE_PRICES: "语音单价",
-  PROMPT: "家机说明",
+  PROMPT: "提示词",
 };
 const ACTIONS: Readonly<Record<string, string>> = {
   REMOVE_POST: "移除帖子", REMOVE_COMMENT: "移除评论", RESTORE_POST: "恢复帖子", RESTORE_COMMENT: "恢复评论",
   SUSPEND_TWIN: "停用家机", RESTORE_TWIN: "恢复家机", SUSPEND_OWNER: "封禁主人", RESTORE_OWNER: "解封主人",
   RESOLVE_REPORT: "处理举报", MODEL_SWITCH: "模型开关", CHAT_QUOTA: "每日额度", READ_CHAT: "查看私聊",
-  FIXED_COST: "固定月费", VOICE_PRICES: "语音单价", PROMPT_SET: "修改家机说明",
+  FIXED_COST: "固定月费", VOICE_PRICES: "语音单价", PROMPT_SET: "修改提示词",
 };
 const MESSAGE_STATUS: Readonly<Record<string, string>> = {
   PENDING: "(正在回复)", FAILED: "(回复失败)", BLOCKED: "(被安全扫描拦下)", PASSED: "(选择不说话)",
@@ -218,7 +218,7 @@ details>summary::before{content:"";display:inline-block;width:6px;height:6px;mar
 transform:rotate(-45deg);transition:transform .2s}details[open]>summary::before{transform:rotate(45deg)}
 .muted{color:var(--sub)}p.muted,div.muted{font-size:13px}
 .tag{display:inline-block;padding:1px 9px;border-radius:980px;background:var(--fill2);color:var(--sub);font-size:12px;font-weight:500;line-height:20px}
-.tag.bad{background:var(--red-soft);color:var(--red)}.bad{color:var(--red)}
+.tag.bad{background:var(--red-soft);color:var(--red)}.tag.good{background:var(--green-soft);color:var(--green)}.tag{white-space:nowrap}.bad{color:var(--red)}
 .ok{background:var(--green-soft);color:var(--green);padding:10px 16px;border-radius:12px;font-weight:500}
 .toast{position:fixed;z-index:20;top:16px;left:50%;transform:translateX(-50%);margin:0;background:var(--card);color:var(--text);
 box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;animation:toast 4.5s ease forwards;pointer-events:none}
@@ -231,7 +231,10 @@ box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;anim
 .msg .muted{font-size:11px;margin:2px 12px 0}.msg.me{align-self:flex-end;align-items:flex-end}.msg.me pre{background:var(--blue);color:#fff}
 .msg.me pre .muted{color:rgba(255,255,255,.8)}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:0 0 20px}.cards .card{margin:0}
-.cards.hero{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.spend{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:20px 40px;margin:0 0 20px}.spend .big{font-size:44px;letter-spacing:-.03em}
+.spend .today{border-left:1px solid rgba(255,255,255,.15);padding-left:32px}.mid{font-size:26px;font-weight:600;margin:4px 0;font-variant-numeric:tabular-nums}
+.spend .today.near .mid{color:#ffb340}.spend .today.over .mid{color:#ff6961}.mid .muted{font-size:15px;font-weight:400}.total summary{color:#64d2ff}.total details.edit{border-color:rgba(255,255,255,.15)}
+.total input{background:rgba(255,255,255,.12);color:#fff}.total form.act label{color:rgba(255,255,255,.75)}
 .card>.muted:first-child{font-size:13px;font-weight:500}
 .big{font-size:30px;font-weight:600;line-height:1.2;letter-spacing:-.02em;margin:4px 0;font-variant-numeric:tabular-nums}.hero .big{font-size:44px;letter-spacing:-.03em}
 .total{background:linear-gradient(160deg,#1d1d1f,#3a3a3c);color:#fff}.total .muted{color:rgba(255,255,255,.65)}
@@ -253,10 +256,13 @@ table.lines tr:hover td{background:none}
 .sub{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}svg.spark{width:100%;height:36px;display:block;margin:4px 0}
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px 24px;margin:4px 0 8px}.facts div{font-size:13px;color:var(--sub)}
 .facts div b{display:block;font-size:15px;font-weight:500;color:var(--text)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));gap:16px;align-items:start;margin-top:20px}.two section.panel{margin:0 0 16px;min-width:0}
+.item+.item{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}td details.edit{margin-top:6px;padding-top:0;border:0}td details.edit summary{font-size:13px}
 .report-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px}.report-head b{font-size:17px}
 .empty{text-align:center;padding:48px 16px;color:var(--sub);background:var(--card);border-radius:18px;box-shadow:var(--shadow)}
 @media (max-width:860px){h1{font-size:26px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.cards.hero{grid-template-columns:1fr}
-.card{padding:14px 16px}.big{font-size:24px}.hero .big{font-size:36px}section.panel{padding:18px 16px}.msg{max-width:90%}}
+.card{padding:14px 16px}.big{font-size:24px}.hero .big{font-size:36px}section.panel{padding:18px 16px}.msg{max-width:90%}
+.spend .big{font-size:36px}.spend .today{border-left:0;padding-left:0;border-top:1px solid rgba(255,255,255,.15);padding-top:16px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}.toast{animation-duration:6s}}`;
 
 /** The sidebar: grouped like a phone's settings, each with a small line icon. */
@@ -265,7 +271,7 @@ const NAV: readonly (readonly [string, readonly (readonly [string, string, strin
   ["数据", [["/stats", "运营数据", "#30b0c7", "M5 20V11M12 20V4M19 20v-6"], ["/costs", "花费", "#34c759", "M3 6h18v13H3zM3 10h18M7 15h4"],
     ["/system", "系统", "#8e8e93", "M4 4h16v7H4zM4 13h16v7H4zM8 7.5h.01M8 16.5h.01"]]],
   ["设置", [["/models", "模型与额度", "#5e5ce6", "M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4"],
-    ["/prompts", "家机说明", "#ff9500", "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"]]],
+    ["/prompts", "提示词", "#ff9500", "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"]]],
   ["记录", [["/log", "操作日志", "#636366", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2"]]],
 ];
 
@@ -381,40 +387,44 @@ ${list.more ? html`<p class="muted">结果超过 100 个,只显示最新的 100 
 ${list.items.length === 0 ? html`<p class="muted">没有找到。</p>` : ""}`);
 }
 
+/** Recent posts or comments, one line each; removing is folded away. */
 function contentRows(zone: string, kind: "post" | "comment", items: Content[], back: string): Safe {
   if (items.length === 0) return html`<p class="muted">没有。</p>`;
-  return html`${items.map(c => html`<div class="card"><div class="muted">${name(c.author.displayName)}(${c.author.kind === "AI" ? "家机" : "真人"})
+  return html`${items.map(c => html`<div class="item"><div class="muted">${name(c.author.displayName)}(${c.author.kind === "AI" ? "家机" : "真人"})
  · ${time(zone, c.createdAt)} · ${word(SOURCES, c.source)}${c.removedByAdmin ? html` · <span class="tag bad">已被管理员移除</span>`
     : c.deletedAt === null ? "" : html` · <span class="tag">作者已删除</span>`}</div>
 <blockquote>${c.body}</blockquote>
 ${c.removedByAdmin ? act(`/content/${kind}/${c.id}/restore`, "恢复", back)
-    : c.deletedAt === null ? act(`/content/${kind}/${c.id}/remove`, "移除", back, "", true) : ""}</div>`)}`;
+    : c.deletedAt === null ? edit("移除", act(`/content/${kind}/${c.id}/remove`, "移除", back, "", true)) : ""}</div>`)}`;
 }
+
+/** Where a Companion stands in the community: its account there posts, comments and can be found by others. */
+const communityAccount = (c: OwnerDetail["companions"][number]) => c.twinId === null ? html`<span class="muted">还没有</span>` : status(TWIN_STATUS, c.twinStatus);
 
 export function ownerPage(zone: string, detail: OwnerDetail, chats: ChatList, log: LogPage, done: boolean): string {
   const o = detail.owner, back = `/owners/${o.id}`, suspended = o.status === "SUSPENDED";
-  return page(`用户:${o.email ?? name(o.displayName)}`, "/owners", html`
-<div class="card"><div class="facts"><div>名字<b>${name(o.displayName)}</b></div><div>邮箱<b>${o.email ?? "(没有)"}</b></div>
-<div>注册<b>${time(zone, o.createdAt)}</b></div><div>状态<b>${status(OWNER_STATUS, o.status)}</b></div></div>
+  return page(o.email ?? name(o.displayName), "/owners", html`<p><a href="/owners">← 用户与聊天</a></p>
+<div class="card"><div class="facts"><div>名字<b>${name(o.displayName)}</b></div><div>注册<b>${time(zone, o.createdAt)}</b></div>
+<div>状态<b>${status(OWNER_STATUS, o.status)}</b></div><div>家机<b>${detail.companions.length} 个</b></div></div>
 <div class="muted">主人编号:${o.id}</div>
-${o.status === "DELETED" ? "" : act(`/owners/${o.id}/${suspended ? "restore" : "suspend"}`, suspended ? "解封" : "封禁", back, "", !suspended)}
-<div class="muted">封禁后:这个人的所有请求立刻被拒绝,他和他的家机在社区里对别人不可见。</div>
-${o.status === "DELETED" ? "" : edit("加减积分", html`${act("/models/credit", "调整积分", back, html`${hidden("owner", o.id)}
-<label>积分(可以是负数)<input name="credits" type="number" required></label>`)}<p class="muted">调整的是赠送积分;负数最多扣到 0。积分钱包关着时不起作用。</p>`)}</div>
-<h2 id="chats">聊天记录(私聊会话)</h2>${chats.items.length === 0 ? html`<p class="muted">没有会话。</p>` : html`
-<div class="scroll"><table><tr><th>会话</th><th>成员</th><th class="num">消息</th><th>最近活动</th><th>查看(填原因,记入日志)</th></tr>${chats.items.map(c => html`
-<tr><td>${c.title ?? (c.direct ? "一对一" : "群聊")}</td><td>${c.members.map(m => name(m.displayName)).join("、")}</td>
-<td class="num">${c.messages}</td><td>${time(zone, c.activeAt)}</td><td><form class="act read" method="post" action="/chats/${c.id}">${hidden("back", `/chats/${c.id}`)}
-<input name="reason" required maxlength="500" placeholder="原因" aria-label="查看这个会话的原因"><button>查看</button></form></td></tr>`)}</table></div>`}
-<h2>家机</h2>${detail.companions.length === 0 ? html`<p class="muted">没有家机。</p>` : detail.companions.map(c => html`<div class="card">
-<b>${name(c.displayName)}</b> <span class="muted">${word(COMPANION_STATUS, c.status)}</span> · 社区身份:${c.twinId === null ? "还没有" : status(TWIN_STATUS, c.twinStatus)}
-${c.twinId === null ? "" : act(`/twins/${c.twinId}/${c.twinStatus === "SUSPENDED" ? "restore" : "suspend"}`,
-    c.twinStatus === "SUSPENDED" ? "恢复社区身份" : "停用社区身份", back, "", c.twinStatus !== "SUSPENDED")}</div>`)}
-<p class="muted">停用社区身份后:这个家机发不了帖,别人看不到它;和主人的私聊不受影响。</p>
-<h2>最近的帖子</h2>${contentRows(zone, "post", detail.posts, back)}
-<h2>最近的评论</h2>${contentRows(zone, "comment", detail.comments, back)}
-<h2>关于这个用户的操作记录</h2>${logTable(zone, log)}
-${log.next === null ? "" : html`<p><a href="/log?owner=${o.id}&before=${log.next}">更早的记录</a></p>`}`, done);
+${o.status === "DELETED" ? "" : html`${edit("加减积分", html`${act("/models/credit", "调整积分", back, html`${hidden("owner", o.id)}
+<label>积分(可以是负数)<input name="credits" type="number" required></label>`)}<p class="muted">调整的是赠送积分;负数最多扣到 0。积分钱包关着时不起作用。</p>`)}
+${suspended ? edit("解封", act(`/owners/${o.id}/restore`, "解封", back))
+    : edit("封禁", html`${act(`/owners/${o.id}/suspend`, "封禁", back, "", true)}<p class="muted">封禁后,这个人的所有请求立刻被拒绝,他和他的家机在社区里对别人不可见。</p>`)}`}</div>
+<div class="two">
+${panel("家机", detail.companions.length === 0 ? html`<p class="muted">没有家机。</p>` : html`<table><tr><th>名字</th><th>状态</th><th>社区账号</th></tr>${detail.companions.map(c => html`
+<tr><td><b>${name(c.displayName)}</b></td><td>${word(COMPANION_STATUS, c.status)}</td><td>${communityAccount(c)}${c.twinId === null ? ""
+    : c.twinStatus === "SUSPENDED" ? edit("恢复", act(`/twins/${c.twinId}/restore`, "恢复社区账号", back))
+    : edit("停用", act(`/twins/${c.twinId}/suspend`, "停用社区账号", back, "", true))}</td></tr>`)}</table>
+<p class="muted">社区账号 = 家机在社区里发帖、评论、被别人看到用的账号。停用后它发不了帖,别人看不到它;和主人的私聊照常。</p>`)}
+${panel("私聊", chats.items.length === 0 ? html`<p class="muted">没有会话。</p>` : html`<table><tr><th>会话</th><th class="num">消息</th><th>最近活动</th></tr>${chats.items.map(c => html`
+<tr><td>${c.title ?? (c.direct ? "一对一" : "群聊")} <span class="muted">${c.members.map(m => name(m.displayName)).join("、")}</span>
+${edit("查看", html`<form class="act read" method="post" action="/chats/${c.id}">${hidden("back", `/chats/${c.id}`)}
+<input name="reason" required maxlength="500" placeholder="原因(必填,记入日志)" aria-label="查看这个会话的原因"><button>查看</button></form>`)}</td>
+<td class="num">${c.messages}</td><td>${time(zone, c.activeAt)}</td></tr>`)}</table>`)}
+</div>
+<div class="two">${panel("最近的帖子", contentRows(zone, "post", detail.posts, back))}${panel("最近的评论", contentRows(zone, "comment", detail.comments, back))}</div>
+${panel("操作记录", html`${logTable(zone, log)}${log.next === null ? "" : html`<p><a href="/log?owner=${o.id}&before=${log.next}">更早的记录</a></p>`}`)}`, done);
 }
 
 export function chatGatePage(chatId: string): string {
@@ -428,7 +438,7 @@ export function chatPage(zone: string, chat: ChatPage, reason: string): string {
   const names = new Map(chat.chat.members.map(m => [m.companionId, name(m.displayName)]));
   const speaker = (id: string | null) => id === null ? "主人" : names.get(id) ?? "(已离开的家机)";
   return page(`私聊:${chat.chat.title ?? (chat.chat.direct ? "一对一" : "群聊")}`, "/owners", html`
-<p><a href="/owners/${chat.chat.ownerId}">回到这个用户</a> · 成员:${chat.chat.members.map(m => name(m.displayName)).join("、")}</p>
+<p><a href="/owners/${chat.chat.ownerId}">← 回到这个用户</a> · 成员:${chat.chat.members.map(m => name(m.displayName)).join("、")}</p>
 <p class="muted">本次查看已记入日志,原因:${reason}</p>
 ${chat.next === null ? html`<p class="muted">已经是最早的消息。</p>` : html`<form method="post" action="/chats/${chat.chat.id}">
 <input type="hidden" name="back" value="/chats/${chat.chat.id}"><input type="hidden" name="reason" value="${reason}">
@@ -661,10 +671,10 @@ const costsTabs = (year: boolean, month: string) => html`<span class="seg"><a cl
   year ? "on" : ""}" href="/costs?year=${month.slice(0, 4)}">按年</a></span>`;
 
 /** The Fly estimate under its card: a month at today's machine sizes, from Fly's list prices. Not in any total. */
-const FLY_ESTIMATE_NOTE = "按 Fly 公布的单价和现在每台机器的配置算,运行中的机器按整月算。不含流量和 IP 等小额费用,也没扣 Fly 每月的免费额度;以 Fly 账单为准。";
+const FLY_ESTIMATE_NOTE = "按现在的机器配置和 Fly 单价算,不含流量和免费额度;以 Fly 账单为准。";
 function flyEstimate(h: Hosts): Safe {
   return h.ok ? html`<div class="sub"><div>估算:按现在的配置,一整月约 <b>${usd(flyMonthCents(h))}</b> <span class="tag">估算</span></div>
-<div class="muted">${FLY_ESTIMATE_NOTE}不计入上面的总花费。</div></div>` : html`<div class="sub muted">估算不出:${h.why}</div>`;
+<div class="muted">${FLY_ESTIMATE_NOTE}不计入总花费。</div></div>` : html`<div class="sub muted">估算不出:${h.why}</div>`;
 }
 
 function vendorCard(v: Vendor, total: number, c: Costs, days: readonly string[], fly: Hosts | null, status: VendorStatus | undefined): Safe {
@@ -675,7 +685,7 @@ ${v.lines.length === 0 ? html`<p class="muted">这个月没有花费。${v.key =
     : html`<table class="lines">${v.lines.map(l => html`<tr><td>${l.label}${l.fixed ? html` <span class="tag">固定月费</span>` : ""}${
       l.note ? html` <span class="muted">${l.note}</span>` : ""}</td><td class="num">${usd(l.cents)}</td></tr>`)}</table>`}
 ${v.key === "minimax" ? html`<div class="sub"><div>语音包月点数:已用 ${count(c.totals.speakPoints)} / ${count(p.planPoints)}(${Math.round(used * 100)}%)</div>${meter(used)}
-<div class="muted">${used > 1 ? "已经超出包月,超出部分按量收费。" : used > 0.8 ? "快用完了,用完后按量收费。" : "家机发的每条语音和选声音时的试听按字数用点数。在 MiniMax 网站上自己试的不算。"}</div></div>` : ""}
+${used > 0.8 ? html`<div class="muted">${used > 1 ? "已经超出包月,超出部分按量收费。" : "快用完了,用完后按量收费。"}</div>` : ""}</div>` : ""}
 ${v.models.map(m => html`<div class="sub model"><div class="mhead"><b>${m.model}</b><b>${m.currency === "USD" ? usd(m.costMinor) : money(m.costMinor, m.currency)}</b></div>
 ${spark(days.map(d => m.perDay.get(d) ?? 0), vendorColor(v.key))}
 <div class="muted">调用 ${count(m.calls)} 次${m.failed > 0 ? ` · 未成功 ${count(m.failed)}` : ""} · 输入 ${compact(m.inputTokens)} token · 输出 ${compact(m.outputTokens)} token</div></div>`)}
@@ -708,28 +718,25 @@ export function costsPage(now: Date, c: Costs, cap: Models["cap"] | null, done: 
     return page(`花费 · ${c.month}`, "/costs", html`<p class="empty">${c.month} 还没有任何用量,也不算固定月费。</p>`, done, bar(tools));
   }
   return page(`花费 · ${c.month}`, "/costs", html`
-<div class="cards hero">
-<div class="card total"><div class="muted">${thisMonth ? "本月到今天" : "这个月"}总花费</div><div class="big">${usd(total)}</div>
-<div class="muted">按用量的 ${usd(usage)} + 固定月费 ${usd(t.fixedCents)}</div></div>
-${cap === null ? "" : html`<div class="card ${cap.enabled && capShare > 1 ? "alarm" : cap.enabled && capShare > 0.8 ? "warn" : ""}">
-<div class="muted">今天(UTC)平台模型已花,含进行中的调用</div><div class="big">${money(cap.spentTodayMinor, cap.currency)}</div>
-${cap.enabled ? html`${meter(capShare)}<div class="muted">每天上限 ${money(cap.dailyCostMinor, cap.currency)} · 用了 ${percent(cap.spentTodayMinor, cap.dailyCostMinor)}
-</div>` : html`<div class="muted">没有设每天上限</div>`}
+<div class="card total spend"><div><div class="muted">${thisMonth ? "本月到今天" : "这个月"}总花费</div><div class="big">${usd(total)}</div>
+<div class="muted">按用量 ${usd(usage)} + 固定月费 ${usd(t.fixedCents)}</div></div>
+${cap === null ? "" : html`<div class="today ${cap.enabled && capShare > 1 ? "over" : cap.enabled && capShare > 0.8 ? "near" : ""}">
+<div class="muted">其中今天(UTC)平台模型</div><div class="mid">${money(cap.spentTodayMinor, cap.currency)}${cap.enabled ? html` <span class="muted">/ 上限 ${money(cap.dailyCostMinor, cap.currency)}</span>` : ""}</div>
+${cap.enabled ? meter(capShare) : ""}
 <div>${toggle("/costs/cap", cap.enabled, "每天花费上限", self, hidden("dollars", ((cap.dailyCostMinor > 0 ? cap.dailyCostMinor : 500) / 100).toString()),
-    cap.enabled ? "上限开着" : `上限关着${cap.dailyCostMinor > 0 ? "" : ",打开时是每天 5 美元"}`)}</div>
-${edit("改金额", act("/costs/cap", "保存", self, html`${hidden("enabled", cap.enabled ? "on" : "off")}
-<label>每天(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(cap.dailyCostMinor / 100).toString()}"></label>`))}
-<div class="muted">到了上限,平台模型当天就不再回复(显示“平台模型暂时关闭”),不扣主人额度。</div></div>`}
+    cap.enabled ? "每天上限开着" : `每天上限关着${cap.dailyCostMinor > 0 ? "" : ",打开时是每天 5 美元"}`)}</div>
+${edit("改上限", html`${act("/costs/cap", "保存", self, html`${hidden("enabled", cap.enabled ? "on" : "off")}
+<label>每天(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(cap.dailyCostMinor / 100).toString()}"></label>`)}
+<p class="muted">到了上限,平台模型当天不再回复,不扣主人额度。</p>`)}</div>`}
 </div>
 ${panel("每天按用量的花费", html`${series.length === 0 ? html`<p class="muted">这个月还没有按用量的花费。</p>` : lineChart(days, series, usd, d => d.slice(5))}
-<p class="muted">鼠标停在某一天上,能看到那天每家花了多少。固定月费和语音包月不按天算,不在图里。</p>`)}
+<p class="muted">固定月费不在图里。</p>`)}
 <h2>按厂商</h2>
 <div class="vendors">${vendors.map(v => vendorCard(v, total, c, days, fly, statuses.find(s => s.key === v.key)))}</div>
 ${m.byCompanion.length === 0 ? "" : panel("AI 模型:花费最多的家机(前 20)", html`<div class="scroll"><table><tr><th>家机</th><th class="num">调用</th><th class="num">花费</th></tr>${
     m.byCompanion.map(x => html`
 <tr><td>${ownerLink(x.ownerId, x.displayName)}</td><td class="num">${x.calls}</td><td class="num">${x.currency === "USD" ? usd(x.costMinor) : money(x.costMinor, x.currency)}</td></tr>`)}</table></div>`)}
-<p class="muted">按 UTC 日期,美元。“未成功”包括调用失败、被安全扫描拦下、结果不明(按占用额全额记账)。主人自带 Key 和自己的 Agent 不花平台的钱,不在这里。
-每天的明细在导出的 xlsx 里;固定月费和语音单价在 <a href="/costs/settings">费用设置</a> 里改。</p>`, done, bar(tools));
+<p class="muted">按 UTC 日期。主人自带 Key 和自己的 Agent 不花平台的钱,不在这里。固定月费和语音单价在 <a href="/costs/settings">费用设置</a> 里改。</p>`, done, bar(tools));
 }
 
 /** A year of months (oldest first), each company's share, like a ledger. */
@@ -774,8 +781,7 @@ ${panel("语音单价", html`
 <span class="muted">更新于 ${time(zone, p.updatedAt)}</span></p>
 ${act("/costs/prices", "修改单价", back, html`<label>包月点数 <input name="points" type="number" min="0" required value="${p.planPoints}"></label>
 <label>超出后每百万字符(美元)<input name="speak" required inputmode="decimal" size="8" value="${(p.speakCentsPerMillion / 100).toString()}"></label>
-<label>转文字每小时(美元)<input name="hear" required inputmode="decimal" size="8" value="${(p.hearCentsPerHour / 100).toString()}"></label>`)}
-<p class="muted">默认值来自 MiniMax 国际版官网价格(2026-11):Starter 包月 5 美元 100,000 点,speech-2.8-hd 每百万字符 100 美元,语音识别每小时 0.38 美元。</p>`)}`, done);
+<label>转文字每小时(美元)<input name="hear" required inputmode="decimal" size="8" value="${(p.hearCentsPerHour / 100).toString()}"></label>`)}`)}`, done);
 }
 
 // ---------- 运营数据 ----------
@@ -816,7 +822,7 @@ ${[...days].reverse().map(d => html`<tr><td>${d.day}</td><td class="num">${count
 <td class="num">${count(d.ownerMessages)}</td><td class="num">${count(d.replies)}</td><td class="num">${count(d.failed)}</td><td class="num">${count(d.voiceIn)}</td>
 <td class="num">${count(d.voiceOut)}</td><td class="num">${count(d.posts)}</td><td class="num">${count(d.aiPosts)}</td><td class="num">${count(d.comments)}</td>
 <td class="num">${count(d.creditsSpent)}</td></tr>`)}</table></div></details>`)}`}
-<p class="muted">按 UTC 日期,只有数量,不含内容。“聊天的人”= 那天至少发过一条消息的主人。“家机发的语音”含选声音时的试听。</p>`,
+<p class="muted">按 UTC 日期,只有数量,不含内容。“聊天的人”= 那天至少发过一条消息的主人。</p>`,
   false, bar(tools));
 }
 
@@ -845,17 +851,15 @@ export function systemPage(zone: string, s: SystemInfo, h: Hosts): string {
 <div class="card ${h.ok && running < h.machines.length ? "warn" : ""}"><div class="muted">主机</div>
 <div class="big">${h.ok ? `${running} / ${h.machines.length}` : "—"}</div><div class="muted">${h.ok ? "在运行的机器 / 全部机器" : "读不到"}</div></div>
 </div>
-${panel(html`主机(Fly.io) <span class="muted links">${billingLink("fly")}</span>`, h.ok ? html`<div class="scroll"><table><tr><th>应用</th><th>机器</th><th>状态</th><th>地区</th><th>配置</th><th class="num">一整月约</th><th>版本</th><th>最近一次停止</th></tr>
-${h.machines.map(m => html`<tr><td>${m.app}</td><td>${m.name} <span class="muted">${m.id}</span></td>
-<td><span class="tag ${m.state === "started" ? "" : "bad"}">${word(MACHINE_STATE, m.state)}</span></td><td>${m.region}</td>
-<td>${m.cpus === null ? "" : `${m.cpus} 核`}${m.memoryMb === null ? "" : ` · ${m.memoryMb} MB 内存`}</td>
-<td class="num">${machineCents(m) === null ? html`<span class="muted">停止时只收磁盘</span>` : usd(machineCents(m)!)}</td><td>${m.image}</td>
-<td>${m.lastExit === null ? html`<span class="muted">没有记录</span>` : html`${time(zone, m.lastExit.at)}${m.lastExit.code === null ? "" : ` · 退出码 ${m.lastExit.code}`}${
-    m.lastExit.oom ? html` <span class="tag bad">内存不够被杀掉</span>` : ""}`}</td></tr>`)}</table></div>
-${h.volumes.length === 0 ? "" : html`<div class="scroll"><table><tr><th>应用</th><th>磁盘</th><th>地区</th><th class="num">大小</th><th class="num">一整月约</th></tr>
-${h.volumes.map(v => html`<tr><td>${v.app}</td><td>${v.name} <span class="muted">${v.id}</span></td><td>${v.region}</td>
-<td class="num">${v.sizeGb} GB</td><td class="num">${usd(volumeCents(v))}</td></tr>`)}</table></div>`}
-<p class="muted">“最近一次停止”包括每次部署时的正常重启;如果写着“内存不够被杀掉”,说明机器内存太小了。</p>
+${panel(html`主机(Fly.io) <span class="muted links">${billingLink("fly")}</span>`, h.ok ? html`<div class="scroll"><table class="hosts"><tr><th>应用</th><th>状态</th><th>配置</th><th class="num">每月约</th><th>最近一次停止</th></tr>
+${h.machines.map(m => html`<tr><td><b>${m.app}</b></td>
+<td><span class="tag ${m.state === "started" ? "good" : "bad"}">${word(MACHINE_STATE, m.state)}</span></td>
+<td>${[m.cpus === null ? "" : `${m.cpus} 核`, m.memoryMb === null ? "" : `${m.memoryMb} MB`, m.region].filter(x => x !== "").join(" · ")}</td>
+<td class="num">${machineCents(m) === null ? html`<span class="muted">只收磁盘</span>` : usd(machineCents(m)!)}</td>
+<td>${m.lastExit === null ? html`<span class="muted">—</span>` : html`${time(zone, m.lastExit.at)}${
+    m.lastExit.oom ? html` <span class="tag bad">内存不够被杀掉</span>` : ""}`}</td></tr>`)}
+${h.volumes.map(v => html`<tr><td><b>${v.app}</b> <span class="muted">磁盘 ${v.name}</span></td><td></td><td>${v.sizeGb} GB · ${v.region}</td>
+<td class="num">${usd(volumeCents(v))}</td><td></td></tr>`)}</table></div>
 <p class="muted">费用是估算:${FLY_ESTIMATE_NOTE}</p>`
     : html`<p class="err">${h.why}</p>`)}
 ${panel(html`数据库(Supabase 免费版) <span class="muted links">${billingLink("supabase")}</span>`, html`<p>PostgreSQL ${s.version} · 上次重启 ${time(zone, s.startedAt)}</p>
@@ -866,7 +870,7 @@ ${panel(html`数据库(Supabase 免费版) <span class="muted links">${billingLi
   false);
 }
 
-// ---------- 家机说明: what a model is told, and the blocks the operators can reword ----------
+// ---------- 提示词: what a model is told, and the blocks the operators can reword ----------
 
 /** The saved wording of each reworded block, as companion_admin.prompts() returns it. */
 export type SavedPrompts = Readonly<Record<string, { body: string; updatedAt: string }>>;
@@ -947,8 +951,8 @@ ${act("/prompts/set", "恢复内置文字", "/prompts", html`${key}<input type="
 export function promptsPage(zone: string, now: Date, saved: SavedPrompts, done: boolean): string {
   const texts = usablePromptTexts(Object.fromEntries(Object.entries(saved).map(([key, row]) => [key, row.body])));
   const changed = PROMPT_BLOCKS.filter(block => saved[block.key] !== undefined).length;
-  return page("家机说明", "/prompts", html`
-<p>这里是服务器每次请模型开口时写给它的说明,和线上用的是同一份代码生成的。<b>黄色框</b>里的段落可以改,保存后从下一条回复起生效;
+  return page("提示词", "/prompts", html`
+<p>这里是服务器每次请模型开口时写给它的说明(提示词),和线上用的是同一份代码生成的;只有管理员看得到,主人看不到。<b>黄色框</b>里的段落可以改,保存后从下一条回复起生效;
 <span class="muted">折起来的是固定的部分</span>,点开能看:回答的格式(服务器要照着读)、防止别人的话被当成指令、隐私和“不让主人离不开”的底线,这些要改得改代码。</p>
 <p class="muted">示例里的家机、人设、记忆和聊天是编的,只为了让你看到完整的样子;真实调用时,标着(示例)的位置填的是主人自己写的人设、称呼、记忆和真实的聊天记录。
 每次修改都记在<a href="/log">操作日志</a>里,带修改前和修改后的文字,想找回以前的版本去那里看。现在有 ${changed} / ${PROMPT_BLOCKS.length} 段改过。</p>
