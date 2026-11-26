@@ -46,6 +46,34 @@ const replyFailureMessages = {
   ERROR: "这条回复没发出来，可以重试",
 };
 
+const MAX_MESSAGE_LENGTH = 2000;
+
+export function formatQuotedReplyPrefix(sourceText: string): string {
+  const normalized = sourceText.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "";
+  const quotedLines = normalized.split("\n").map(line => `> ${line}`).join("\n");
+  return `${quotedLines}\n`;
+}
+
+export function insertQuotedTextIntoDraft(
+  currentDraft: string,
+  sourceText: string,
+  maxLength = MAX_MESSAGE_LENGTH,
+): { nextDraft: string; truncated: boolean } {
+  const prefix = formatQuotedReplyPrefix(sourceText);
+  if (!prefix) return { nextDraft: currentDraft, truncated: false };
+  const suffix = currentDraft.replace(/^\n+/, "");
+  const availableForPrefix = maxLength - suffix.length;
+  if (availableForPrefix <= 4) {
+    return { nextDraft: currentDraft, truncated: true };
+  }
+  if (prefix.length <= availableForPrefix) {
+    return { nextDraft: `${prefix}${suffix}`, truncated: false };
+  }
+  const clippedBody = prefix.slice(0, availableForPrefix - 2).replace(/[\uD800-\uDBFF]$/, "").replace(/\n$/, "");
+  return { nextDraft: `${clippedBody}…\n${suffix}`, truncated: true };
+}
+
 function mergeLatestMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
   const byId = new Map<string, ChatMessage>();
   for (const m of existing) byId.set(m.id, m);
@@ -145,6 +173,7 @@ export function ChatScreen({
   const [quoteSaving, setQuoteSaving] = useState(false);
   const [quoteResult, setQuoteResult] = useState("");
   const quotePending = useRef(false);
+  const quoteFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
   const chatIdRef = useRef<string | undefined>(initialChatId);
   const sessionRef = useRef(0);
@@ -307,6 +336,10 @@ export function ChatScreen({
       reqVersionRef.current++;
       chatIdRef.current = undefined;
       clearTimeout(focusTimer);
+      if (quoteFocusTimerRef.current) {
+        clearTimeout(quoteFocusTimerRef.current);
+        quoteFocusTimerRef.current = null;
+      }
     };
   }, [client, initialChatId, companionId, autoFocus, loadLatest, bootstrapRevision, adoptDraftKey]);
 
@@ -355,7 +388,7 @@ export function ChatScreen({
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (groupReadOnly || voiceBusy || !text || text.length > 2000 || !targetId || sendingRef.current) return;
+    if (groupReadOnly || voiceBusy || !text || text.length > MAX_MESSAGE_LENGTH || !targetId || sendingRef.current) return;
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
@@ -469,16 +502,17 @@ export function ChatScreen({
     }
   }
 
-  async function saveQuote() {
-    if (!quote || !onSaveQuote || quotePending.current) return;
+  async function saveQuoteEntry(target: QuoteInput) {
+    if (!onSaveQuote || quotePending.current) return;
     const session = sessionRef.current;
     quotePending.current = true;
     setQuoteSaving(true);
     setQuoteResult("");
     try {
-      await onSaveQuote(quote);
+      await onSaveQuote(target);
       if (session !== sessionRef.current) return;
       setQuote(undefined);
+      setVoiceMenuMsg(undefined);
       setQuoteResult("已保存到小家相册。");
     } catch {
       if (session === sessionRef.current) setQuoteResult("这句话没保存成功，请再试一次。");
@@ -486,6 +520,29 @@ export function ChatScreen({
       quotePending.current = false;
       if (session === sessionRef.current) setQuoteSaving(false);
     }
+  }
+
+  function quoteMessageToInput(sourceText: string) {
+    if (groupReadOnly || voiceBusy) return;
+    const { nextDraft, truncated } = insertQuotedTextIntoDraft(draftRef.current, sourceText, MAX_MESSAGE_LENGTH);
+    if (nextDraft === draftRef.current && truncated) {
+      setQuote(undefined);
+      setVoiceMenuMsg(undefined);
+      setQuoteResult("输入框字数已满，请先删减后再引用。");
+      return;
+    }
+    setQuote(undefined);
+    setVoiceMenuMsg(undefined);
+    setAttachNotice("");
+    setTray("none");
+    setVoiceMode(false);
+    updateDraft(nextDraft);
+    setQuoteResult(truncated ? "引用内容较长，已截断插入输入框。" : "");
+    if (quoteFocusTimerRef.current) clearTimeout(quoteFocusTimerRef.current);
+    quoteFocusTimerRef.current = setTimeout(() => {
+      quoteFocusTimerRef.current = null;
+      inputRef.current?.focus();
+    }, 80);
   }
 
   const theme = resolveChatThemeStyles(themePref, ui);
@@ -558,7 +615,9 @@ export function ChatScreen({
         </View>
       ) : null}
 
-      {quoteResult && !quote ? <Text accessibilityLiveRegion="polite" style={styles.quoteResult}>{quoteResult}</Text> : null}
+      {quoteResult && !quote && !voiceMenuMsg ? (
+        <Text accessibilityLiveRegion="polite" style={styles.quoteResult}>{quoteResult}</Text>
+      ) : null}
 
       {loading ? (
         <View style={styles.center}>
@@ -595,12 +654,30 @@ export function ChatScreen({
             const audioLength = item.audio ? Math.max(1, Math.ceil(item.audio.durationMs / 1000)) : 0;
             const voiceLabel = voiceStatus === "loading" ? "取消加载"
               : voiceStatus === "playing" ? "停止播放" : voiceStatus === "expired" ? "语音已过期" : "播放语音";
-            const openQuote = chat && item.body && item.status === "SENT"
+            const quotePayload: QuoteInput | undefined = chat && item.body && item.status === "SENT"
+              ? { chatId: chat.id, messageId: item.id, speaker: senderName, text: item.body, sentAt: item.sentAt }
+              : undefined;
+            const openQuote = quotePayload
               ? () => {
-                  if (!item.body) return;
                   setQuoteResult("");
-                  setQuote({ chatId: chat.id, messageId: item.id, speaker: senderName, text: item.body, sentAt: item.sentAt });
+                  setQuote(quotePayload);
                 }
+              : undefined;
+            const canQuoteToInput = Boolean(item.body && item.status === "SENT" && !groupReadOnly && !voiceBusy);
+            const textA11yActions = quotePayload
+              ? [
+                  { name: "copy", label: "复制文字" },
+                  ...(canQuoteToInput ? [{ name: "quote-reply", label: "引用到输入框" }] : []),
+                  ...(onSaveQuote ? [{ name: "save-quote", label: "保存到小家相册" }] : []),
+                ]
+              : undefined;
+            const voiceA11yActions = item.body
+              ? [
+                  { name: "transcript", label: expandedVoiceIds[item.id] ? "收起文字" : "转文字" },
+                  { name: "copy", label: "复制文字" },
+                  ...(canQuoteToInput ? [{ name: "quote-reply", label: "引用到输入框" }] : []),
+                  ...(onSaveQuote && quotePayload ? [{ name: "save-quote", label: "保存到小家相册" }] : []),
+                ]
               : undefined;
 
             return (
@@ -647,10 +724,27 @@ export function ChatScreen({
                                   void toggle(item.id, () => client.messageAudio!(chat.id, item.id));
                                 }
                               }}
-                              onLongPress={item.body ? () => setVoiceMenuMsg(item) : undefined}
-                              accessibilityActions={item.body ? [{ name: "transcript", label: "文字与留念选项" }] : undefined}
+                              onLongPress={item.body ? () => {
+                                setQuoteResult("");
+                                setVoiceMenuMsg(item);
+                              } : undefined}
+                              accessibilityActions={voiceA11yActions}
                               onAccessibilityAction={event => {
-                                if (event.nativeEvent.actionName === "transcript" && item.body) setVoiceMenuMsg(item);
+                                if (!item.body) return;
+                                switch (event.nativeEvent.actionName) {
+                                  case "transcript":
+                                    setExpandedVoiceIds(prev => ({ ...prev, [item.id]: !prev[item.id] }));
+                                    break;
+                                  case "copy":
+                                    void copyMessage(item.body);
+                                    break;
+                                  case "quote-reply":
+                                    quoteMessageToInput(item.body);
+                                    break;
+                                  case "save-quote":
+                                    if (quotePayload) void saveQuoteEntry(quotePayload);
+                                    break;
+                                }
                               }}
                               style={[
                                 styles.voiceBubble,
@@ -676,9 +770,20 @@ export function ChatScreen({
                           <Pressable
                             disabled={!openQuote}
                             onLongPress={openQuote}
-                            accessibilityActions={openQuote ? [{ name: "save-quote", label: "保存到小家相册" }] : undefined}
+                            accessibilityActions={textA11yActions}
                             onAccessibilityAction={event => {
-                              if (event.nativeEvent.actionName === "save-quote") openQuote?.();
+                              if (!quotePayload) return;
+                              switch (event.nativeEvent.actionName) {
+                                case "copy":
+                                  void copyMessage(quotePayload.text);
+                                  break;
+                                case "quote-reply":
+                                  quoteMessageToInput(quotePayload.text);
+                                  break;
+                                case "save-quote":
+                                  void saveQuoteEntry(quotePayload);
+                                  break;
+                              }
                             }}
                           >
                             <Text style={[styles.msgText, isMine && { color: theme.mineText }]}>
@@ -709,14 +814,36 @@ export function ChatScreen({
           <View style={styles.quoteSheet}>
             <Text style={styles.msgText} numberOfLines={5} selectable>{quote.text}</Text>
             {quoteResult !== "" && <Text accessibilityRole="alert" style={styles.mutedText}>{quoteResult}</Text>}
-            <CommunityButton label="复制文字" onPress={() => void copyMessage(quote.text)} />
+            <CommunityButton
+              label="复制文字"
+              onPress={() => {
+                const text = quote.text;
+                setQuote(undefined);
+                void copyMessage(text);
+              }}
+            />
+            {!groupReadOnly && !voiceBusy && (
+              <CommunityButton
+                label="引用到输入框"
+                onPress={() => quoteMessageToInput(quote.text)}
+              />
+            )}
             {onSaveQuote && (
-              <CommunityButton label="保存到相册" primary disabled={quoteSaving} onPress={() => void saveQuote()} />
+              <CommunityButton
+                label="保存到小家相册"
+                primary
+                disabled={quoteSaving}
+                onPress={() => void saveQuoteEntry(quote)}
+              />
             )}
           </View>
         )}
         {!quote && voiceMenuMsg && (
-          <View style={{ gap: 10 }}>
+          <View style={styles.quoteSheet}>
+            {!!voiceMenuMsg.body && (
+              <Text style={styles.msgText} numberOfLines={5} selectable>{voiceMenuMsg.body}</Text>
+            )}
+            {quoteResult !== "" && <Text accessibilityRole="alert" style={styles.mutedText}>{quoteResult}</Text>}
             {!!voiceMenuMsg.body && (
               <CommunityButton
                 primary
@@ -730,22 +857,41 @@ export function ChatScreen({
             )}
             {!!voiceMenuMsg.body && (
               <CommunityButton
-                label="复制转写文字"
+                label="复制文字"
                 onPress={() => {
                   if (!voiceMenuMsg.body) return;
+                  const text = voiceMenuMsg.body;
                   setVoiceMenuMsg(undefined);
-                  void copyMessage(voiceMenuMsg.body);
+                  void copyMessage(text);
+                }}
+              />
+            )}
+            {!!voiceMenuMsg.body && voiceMenuMsg.status === "SENT" && !groupReadOnly && !voiceBusy && (
+              <CommunityButton
+                label="引用到输入框"
+                onPress={() => {
+                  if (!voiceMenuMsg.body) return;
+                  quoteMessageToInput(voiceMenuMsg.body);
                 }}
               />
             )}
             {onSaveQuote && chat && voiceMenuMsg.body && voiceMenuMsg.status === "SENT" && (
               <CommunityButton
                 label="保存到小家相册"
+                disabled={quoteSaving}
                 onPress={() => {
                   const m = voiceMenuMsg;
-                  setVoiceMenuMsg(undefined);
-                  setQuoteResult("");
-                  setQuote({ chatId: chat.id, messageId: m.id, speaker: m.companionId === null ? ownerName : chat.members.find(member => member.companionId === m.companionId)?.displayName ?? title, text: m.body!, sentAt: m.sentAt });
+                  if (!m.body) return;
+                  const speaker = m.companionId === null
+                    ? ownerName
+                    : chat.members.find(member => member.companionId === m.companionId)?.displayName ?? title;
+                  void saveQuoteEntry({
+                    chatId: chat.id,
+                    messageId: m.id,
+                    speaker,
+                    text: m.body,
+                    sentAt: m.sentAt,
+                  });
                 }}
               />
             )}
@@ -817,7 +963,7 @@ export function ChatScreen({
                   style={styles.input}
                   multiline
                   editable={!!chat && !voiceBusy}
-                  maxLength={2000}
+                  maxLength={MAX_MESSAGE_LENGTH}
                   returnKeyType="send"
                   onSubmitEditing={() => void handleSend()}
                 />
@@ -876,7 +1022,7 @@ export function ChatScreen({
                   key={emoji}
                   onPress={() => {
                     const next = draftRef.current + emoji;
-                    if (next.length <= 2000) updateDraft(next);
+                    if (next.length <= MAX_MESSAGE_LENGTH) updateDraft(next);
                   }}
                   style={styles.emojiBtn}
                 >
