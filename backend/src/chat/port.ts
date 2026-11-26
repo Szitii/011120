@@ -78,6 +78,15 @@ export interface PostJob {
   others: { author: string; body: string; at: string }[];
 }
 
+/** One long-term memory as a prompt takes it. `createdAt` (when it was noted down) dates its line. */
+export interface Remembered { body: string; createdAt?: string | undefined }
+
+/** A memory the notes can name. Only one the Companion noted down itself (source AUTO) may be replaced. */
+export interface KnownMemory extends Remembered { id: string; source: string }
+
+/** One sentence to remember; `replaces` is the id of the memory it takes the place of, or null for a new one. */
+export interface MemoryNote { body: string; replaces: string | null }
+
 /** Memories to note down from the one-to-one chat (memory_auto_begin said WRITE). */
 export interface MemoryJob {
   status: "WRITE";
@@ -85,8 +94,8 @@ export interface MemoryJob {
   companion: Pick<ChatClaim["companion"], "companionId" | "displayName">;
   /** The chat since the last time, oldest first; companionId null is the Owner. */
   messages: { companionId: string | null; body: string; action: null; sentAt: string }[];
-  /** What it already remembers, newest first. */
-  memories: string[];
+  /** Every memory it has (at most 200), newest first. */
+  known: KnownMemory[];
   timeZone?: ChatClaim["timeZone"];
 }
 
@@ -215,6 +224,9 @@ export interface ChatPort {
   memoryBegin(companionId: string): Promise<MemoryStart>;
   /** Server only: book the model call for the attempt (like reserve). */
   memoryReserve(companionId: string, claimId: string, booking: Booking): Promise<ReservationDecision>;
-  /** Server only: keep the sentences (0 to 2), or null when the attempt failed. False when it was given up. */
-  memoryFinish(companionId: string, claimId: string, bodies: string[] | null): Promise<boolean>;
+  /**
+   * Server only: keep the sentences (0 to 2), or null when the attempt failed. `accepted` false when it
+   * was given up; `added` and `replaced` count what was kept as new and in place of an older memory.
+   */
+  memoryFinish(companionId: string, claimId: string, notes: readonly MemoryNote[] | null): Promise<{ accepted: boolean; added: number; replaced: number }>;
 }

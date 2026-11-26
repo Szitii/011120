@@ -964,10 +964,11 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
   const history = [said(null, "(示例)主人昨晚说的话", 600), said("sample", "(示例)小满的回答", 599), said(null, "(示例)主人刚发的消息", 1)];
   const turn: ChatClaim = { chatId: "sample", replyId: "sample", claimId: "sample", replyTo: "OWNER", optional: false, direct: true, canAct: true,
     companion, members: [{ companionId: "sample", displayName: "小满" }], history, timeZone: zone, ownerName: "(示例)称呼" };
-  const memories = ["(示例)主人记下的、或自动记忆记下的一件事"];
+  const memories = [{ body: "(示例)主人记下的、或自动记忆记下的一件事", createdAt: at(40 * 24 * 60) }];
   const group = { ...turn, direct: false, optional: true, canAct: false, members: [...turn.members, { companionId: "other", displayName: "(示例)另一位家机" }] };
   return [
-    { title: "聊天回复", when: "主人发来消息、家机要回复的时候。平台的模型和主人自带 Key 的模型都用这一份。", editable: true,
+    { title: "聊天回复", when: "主人发来消息、家机要回复的时候。平台的模型和主人自带 Key 的模型都用这一份。" +
+      "记忆多到放不下(约 3000 字)时,更早的记忆里和眼下聊的事有关的几条,会另外附在聊天记录前面。", editable: true,
       blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now) },
     { title: "写日记", when: "家机写日记的时候。", editable: true, blocks: ["DIARY_STYLE"],
       ...diaryPrompt({ status: "WRITE", entryId: "sample", claimId: "sample", companion, messages: history, timeZone: zone, ownerName: turn.ownerName,
@@ -976,7 +977,9 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
       ...postPrompt({ status: "WRITE", runId: "sample", claimId: "sample", companion, localTime: "(示例)主人当地的时间",
         own: [{ body: "(示例)小满最近发过的动态", at: at(300) }], others: [{ author: "(示例)别人", body: "(示例)社区里别人的动态", at: at(60) }] }, texts) },
     { title: "自动记忆", when: "自动记忆默认开着(主人可以关):主人在私聊里每说满 50 句(选了“经常”是 10 句),从这段私聊里挑出值得长期记住的事。", editable: true, blocks: ["MEMORY_WHAT"],
-      ...memoryPrompt({ status: "WRITE", claimId: "sample", companion, timeZone: zone, memories: ["(示例)已经记住的一件事"],
+      ...memoryPrompt({ status: "WRITE", claimId: "sample", companion, timeZone: zone,
+        known: [{ id: "sample-auto", source: "AUTO", body: "(示例)以前自动记下的一件事", createdAt: at(40 * 24 * 60) },
+          { id: "sample-owner", source: "OWNER", body: "(示例)主人亲手写的一件事", createdAt: at(90 * 24 * 60) }],
         messages: [{ companionId: null, body: "(示例)主人说的话", action: null, sentAt: at(5) }] }, texts, now) },
     { title: "主人自己接的 agent(自建家机)", editable: false, blocks: ["CHAT_VOICE", "CHAT_ACTION"], user: null,
       when: "主人接了自己的 agent 的时候。它有自己的人设和记忆,我们只给它这几条规则。语音和动作两段和“聊天回复”是同一份,在上面改。",

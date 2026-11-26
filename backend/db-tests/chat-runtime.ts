@@ -553,7 +553,8 @@ try {
   passed("diary model calls are booked as DIARY_ENTRY and settled");
 
   // ---- memories a Companion notes down by itself (自动记忆) ----
-  const memories = async () => (await call<{ items: { body: string; source: string }[] }>(0, `companions/${second}/memories`)).data.items;
+  const memories = async () => (await call<{ items: { id: string; body: string; source: string }[] }>(0, `companions/${second}/memories`)).data.items;
+  const newNotes = (...bodies: string[]) => bodies.map(body => ({ body, replaces: null }));
   const ownerSays = (n: number) => pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
     select $1, '记忆测试 ' || g, 'SENT', encode(sha256(convert_to(gen_random_uuid()::text,'UTF8')), 'hex'), clock_timestamp() from generate_series(1, $2::int) g`,
     [secondChat.id, n]);
@@ -568,7 +569,7 @@ try {
   await ownerSays(1);
   const fiftieth = await portA.memoryBegin(second);
   assert.equal(fiftieth.status, "WRITE");
-  assert.equal(await portA.memoryFinish(second, (fiftieth as MemoryJob).claimId, []), true);
+  assert.deepEqual(await portA.memoryFinish(second, (fiftieth as MemoryJob).claimId, []), { accepted: true, added: 0, replaced: 0 });
   await putSettings(second, { autoMemory: "OFF" });
   assert.equal(await fake.remember(second, portA), "OFF");
   assert.equal((await putSettings(second, { autoMemory: "LOUD" as never })).status, 400);
@@ -584,16 +585,47 @@ try {
   assert.equal(await fake.remember(second, portA), "NOT_DUE", "nine are not ten");
   await ownerSays(1);
   let noted: MemoryJob | undefined;
-  const watching = new ChatReplies({ reply: async () => ({ pass: true }), memory: async job => { noted = job; return { memories: ["主人周三生日", "主人怕黑", "第三条"] }; } });
+  const watching = new ChatReplies({ reply: async () => ({ pass: true }), memory: async job => { noted = job; return { memories: newNotes("主人周三生日", "主人怕黑", "第三条") }; } });
   assert.equal(await watching.remember(second, portA), "DONE");
-  assert.deepEqual([noted!.messages.length, noted!.messages.at(-1)!.body, noted!.memories[0], noted!.companion.displayName, noted!.timeZone],
+  assert.deepEqual([noted!.messages.length, noted!.messages.at(-1)!.body, noted!.known[0]!.body, noted!.companion.displayName, noted!.timeZone],
     [10, "记忆测试 1", "（开发环境假记忆）主人说过：「记忆测试 10」", "SecondCompanion", "Asia/Shanghai"], "only what was said since, and what it already remembers");
   assert.deepEqual((await memories()).map(m => `${m.source} ${m.body}`).sort(),
     ["AUTO 主人周三生日", "AUTO 主人怕黑", "AUTO （开发环境假记忆）主人说过：「记忆测试 10」"], "two at most");
+  assert.deepEqual(noted!.known!.map(m => [m.body, m.source, typeof m.id, Number.isNaN(Date.parse(m.createdAt!))]),
+    [["（开发环境假记忆）主人说过：「记忆测试 10」", "AUTO", "string", false]], "and every memory with its id, for the ones that may be replaced");
+  // A note takes the place of a memory the Companion noted down itself, never of one the Owner wrote or of another Companion's.
+  const ownerWrote = (await call<{ id: string }>(0, `companions/${second}/memories`, "POST", { body: "主人在甲公司上班" })).data.id;
+  const elsewhere = (await call<{ id: string }>(0, `companions/${A.companion}/memories`, "POST", { body: "主人的另一位家机记得的事" })).data.id;
+  const idOf = async (body: string) => (await memories()).find(m => m.body === body)!.id;
+  await ownerSays(10);
+  const birthday = await idOf("主人周三生日");
+  const replacing = new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: [
+    { body: "主人周三过了生日，收到一束花", replaces: birthday }, { body: "主人去了乙公司上班", replaces: ownerWrote }] }) });
+  assert.equal(await replacing.remember(second, portA), "DONE");
+  assert.deepEqual((await memories()).map(m => `${m.source} ${m.body}`).sort(), ["AUTO 主人去了乙公司上班", "AUTO 主人周三过了生日，收到一束花", "AUTO 主人怕黑",
+    "AUTO （开发环境假记忆）主人说过：「记忆测试 10」", "OWNER 主人在甲公司上班"], "its own memory is replaced; the Owner's stays and the sentence is kept as a new one");
+  await ownerSays(10);
+  const flowers = await idOf("主人周三过了生日，收到一束花");
+  const second2 = await portA.memoryBegin(second) as MemoryJob;
+  assert.deepEqual(await portA.memoryFinish(second, second2.claimId, [{ body: "主人怕黑", replaces: flowers }, { body: "主人有两位家机", replaces: elsewhere }]),
+    { accepted: true, added: 1, replaced: 1 }, "what it already says elsewhere is not stored twice: the outdated memory just goes");
+  assert.deepEqual((await memories()).map(m => m.body).sort(), ["主人去了乙公司上班", "主人在甲公司上班", "主人怕黑", "主人有两位家机", "（开发环境假记忆）主人说过：「记忆测试 10」"]);
+  assert.equal((await call<{ items: { id: string }[] }>(0, `companions/${A.companion}/memories`)).data.items.some(m => m.id === elsewhere), true, "another Companion's memory is not touched");
+  await call(0, `companions/${A.companion}/memories/${elsewhere}`, "DELETE");
+  await pool.query("delete from companion_private.companion_memories where companion_id = $1 and body = any($2)", [second, ["主人去了乙公司上班", "主人在甲公司上班", "主人有两位家机"]]);
+  await ownerSays(10);
+  const uneven = await portA.memoryBegin(second) as MemoryJob;
+  await assert.rejects(pool.query("select public.memory_auto_finish($1,$2,$3::text[],$4::uuid[])", [second, uneven.claimId, ["一句"], [null, null]]), "one id per sentence");
+  assert.deepEqual(await portA.memoryFinish(second, uneven.claimId, newNotes("主人周三生日")), { accepted: true, added: 1, replaced: 0 });
+  await ownerSays(10);
+  const same = await portA.memoryBegin(second) as MemoryJob;
+  const unchanged = (await memories()).find(m => m.body === "主人周三生日")!.id;
+  assert.deepEqual(await portA.memoryFinish(second, same.claimId, [{ body: "主人周三生日", replaces: unchanged }]), { accepted: true, added: 0, replaced: 0 });
+  assert.equal(await idOf("主人周三生日"), unchanged, "replacing a memory with its own words changes nothing, not even its date");
   // The same sentence again is not kept twice; a failed attempt waits ten minutes and keeps the messages for the next one.
   await ownerSays(10);
   const before3 = (await memories()).length;
-  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: ["主人怕黑"] }) }).remember(second, portA), "DONE");
+  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: newNotes("主人怕黑") }) }).remember(second, portA), "DONE");
   assert.equal((await memories()).length, before3);
   await ownerSays(10);
   assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }) }).remember(second, portA), "FAILED", "no model that takes notes");
@@ -613,7 +645,7 @@ try {
   assert.equal((await portA.memoryBegin(second)).status, "WRITING");
   await pool.query("update companion_private.memory_notes set claimed_at = now() - interval '4 minutes' where companion_id = $1", [second]);
   assert.equal((await portA.memoryBegin(second)).status, "NOT_DUE");
-  assert.equal(await portA.memoryFinish(second, (hangingJob as MemoryJob).claimId, ["太晚了"]), false, "the abandoned attempt cannot hand anything in");
+  assert.equal((await portA.memoryFinish(second, (hangingJob as MemoryJob).claimId, newNotes("太晚了"))).accepted, false, "the abandoned attempt cannot hand anything in");
   // Turned off while an attempt hangs: the next reply still closes it.
   await pool.query("update companion_private.memory_notes set failed_at = null where companion_id = $1", [second]);
   assert.equal((await portA.memoryBegin(second)).status, "WRITE");
@@ -622,26 +654,26 @@ try {
   assert.equal((await portA.memoryBegin(second)).status, "OFF");
   assert.equal((await pool.query("select claim_id from companion_private.memory_notes where companion_id = $1", [second])).rows[0].claim_id, null);
   await putSettings(second, { autoMemory: "OFTEN" });
-  await assert.rejects(portA.memoryFinish(second, randomUUID(), ["一", "二", "三"]));
+  await assert.rejects(portA.memoryFinish(second, randomUUID(), newNotes("一", "二", "三")));
   // At 200 memories the oldest one it noted itself makes room; the Owner's own are never removed.
   await pool.query("update companion_private.memory_notes set failed_at = null where companion_id = $1", [second]);
   const notedBefore = (await memories()).filter(m => m.source === "AUTO").length;
   await pool.query(`insert into companion_private.companion_memories(companion_id, body, source, key_hash)
     select $1, '主人写的 ' || g, 'OWNER', encode(sha256(convert_to('fill' || g,'UTF8')), 'hex') from generate_series(1, $2::int) g`,
     [second, 200 - (await memories()).length]);
-  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: ["新的一条"] }) }).remember(second, portA), "DONE");
+  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: newNotes("新的一条") }) }).remember(second, portA), "DONE");
   const full = await memories();
   assert.deepEqual([full.length, full.filter(m => m.source === "AUTO").length, full.some(m => m.body === "新的一条"),
     full.some(m => m.body.startsWith("（开发环境假记忆）"))], [200, notedBefore, true, false], "the oldest AUTO memory made room");
   await pool.query("update companion_private.companion_memories set source = 'OWNER', key_hash = encode(sha256(convert_to(id::text,'UTF8')), 'hex') where companion_id = $1 and source = 'AUTO'", [second]);
   await ownerSays(10);
-  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: ["放不下的一条"] }) }).remember(second, portA), "DONE");
+  assert.equal(await new ChatReplies({ reply: async () => ({ pass: true }), memory: async () => ({ memories: newNotes("放不下的一条") }) }).remember(second, portA), "DONE");
   assert.equal((await memories()).some(m => m.body === "放不下的一条"), false, "full of the Owner's own: nothing is removed, nothing added");
   assert.equal((await call(1, `companions/${second}/memories`)).status, 404);
   await assert.rejects(new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).memoryBegin(second), { code: "NOT_FOUND" });
   await pool.query("delete from companion_private.companion_memories where companion_id = $1", [second]);
   await putSettings(second, { autoMemory: "OFF" });
-  passed("memories it notes down by itself: on by default every 50 messages, every 10 when asked, two at most, booked, 200 kept with the Owner's own never removed");
+  passed("memories it notes down by itself: on by default every 50 messages, every 10 when asked, two at most, its own replaced when outdated, booked, 200 kept with the Owner's own never removed");
 
   // ---- background diaries (autoWrite, migration 0052) ----
   const background = (platform: boolean, written: string[]) => new BackgroundScheduler({
