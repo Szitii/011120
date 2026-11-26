@@ -103,9 +103,9 @@ export class PlatformChatModel implements ChatModel {
     const world = await worldOf(port, turn.companion.companionId);
     const skills = await skillsOf(port, turn.companion.companionId);
     const texts = await textsOf(port);
-    // The web: where the operators allow it, to answer the Owner, on a model that can search. The
-    // prompt says so only then, so it is written for the model that actually answers.
-    const browses = (m: CatalogModel): boolean => turn.canBrowse === true && turn.replyTo === "OWNER" && m.options?.webTools !== undefined;
+    // The web: where the turn allows it (the operators' switch, and it answers the Owner), on a model
+    // that can search. The prompt says so only then, so it is written for the model that actually answers.
+    const browses = (m: CatalogModel): boolean => turn.canBrowse === true && m.options?.webTools !== undefined;
     const result = await this.#withFallback(model, m => this.#run(port, book("REPLY"), m,
       replyPrompt(turn, memories, texts, undefined, { web: browses(m), world, skills }), REPLY_TOKENS, signal, MAX_INPUT_TOKENS,
       browses(m) ? replyPrompt(turn, memories, texts, undefined, { world, skills }) : undefined));

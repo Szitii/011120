@@ -50,7 +50,7 @@
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
-import { hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
+import { MAX_WORLD_BODY_LENGTH, MAX_WORLD_KEY_LENGTH, MAX_WORLD_KEYS, hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
@@ -61,7 +61,7 @@ import { newAgentToken } from "../agent/heartbeat.ts";
 import type {
   CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, SkillRefusal, WorldEntryRefusal,
 } from "../../../contracts/chat.ts";
-import { PERSONA_KEYS, personaLimit, personaTexts, skillLine, type PersonaKey } from "./prompt.ts";
+import { PERSONA_KEYS, SKILL_CHARS, personaLimit, personaTexts, skillLine, type PersonaKey } from "./prompt.ts";
 import { checkRules } from "./reply-rules.ts";
 import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
@@ -128,22 +128,16 @@ function personaInput(request: MvpHttpRequest): { version: number; fields: Parti
 
 /** A world book entry as sent: 1 to 8 trigger words of 1 to 40 characters on one line, and a text of 1 to 1000 characters. */
 function worldEntry(request: MvpHttpRequest): { keys: string[]; body: string; enabled: boolean } {
-  const { keys, body: text, enabled } = body(request, ["keys", "body", "enabled"]);
-  if (!Array.isArray(keys) || keys.length < 1 || keys.length > 8 || typeof text !== "string"
-    || !(enabled === undefined || typeof enabled === "boolean")) return invalid();
-  const words = keys.map(key => (typeof key === "string" ? key.trim() : ""));
-  const length = Array.from(text.trim()).length;
-  if (words.some(word => word === "" || Array.from(word).length > 40 || /[\p{Cc}\u2028\u2029]/u.test(word)) || length < 1 || length > 1000) return invalid();
-  return { keys: words, body: text.trim(), enabled: enabled !== false };
+  const { keys, body: entry, enabled } = body(request, ["keys", "body", "enabled"]);
+  if (!Array.isArray(keys) || keys.length < 1 || keys.length > MAX_WORLD_KEYS || !(enabled === undefined || typeof enabled === "boolean")) return invalid();
+  return { keys: keys.map(key => line(key, MAX_WORLD_KEY_LENGTH)), body: text(entry, MAX_WORLD_BODY_LENGTH), enabled: enabled !== false };
 }
 
 /** A skill of the Companion's own as sent: a title of 1 to 20 characters on one line and a text of 1 to 600 characters. */
 function ownSkill(request: MvpHttpRequest): { title: string; body: string; enabled: boolean } {
-  const { title, body: text, enabled } = body(request, ["title", "body", "enabled"]);
-  if (typeof title !== "string" || typeof text !== "string" || !(enabled === undefined || typeof enabled === "boolean")) return invalid();
-  const name = title.trim(), length = Array.from(text.trim()).length;
-  if (name === "" || Array.from(name).length > 20 || /[\p{Cc}\u2028\u2029]/u.test(name) || length < 1 || length > 600) return invalid();
-  return { title: name, body: text.trim(), enabled: enabled !== false };
+  const { title, body: skill, enabled } = body(request, ["title", "body", "enabled"]);
+  if (!(enabled === undefined || typeof enabled === "boolean")) return invalid();
+  return { title: line(title, 20), body: text(skill, SKILL_CHARS), enabled: enabled !== false };
 }
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
@@ -158,6 +152,12 @@ function text(value: unknown, max: number): string {
   const trimmed = value.trim();
   const length = Array.from(trimmed).length;
   return length >= 1 && length <= max ? trimmed : invalid();
+}
+
+/** The same, on one line: no control characters. */
+function line(value: unknown, max: number): string {
+  const trimmed = text(value, max);
+  return /[\p{Cc}\u2028\u2029]/u.test(trimmed) ? invalid() : trimmed;
 }
 
 /**

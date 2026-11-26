@@ -58,8 +58,8 @@ end $$;
 -- same text as an entry the Companion already has returns that entry, so a retried request adds nothing.
 create function public.world_save(p_companion uuid, p_entry uuid, p_keys text[], p_body text, p_enabled boolean)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
-  w companion_private.world_entries%rowtype; v_body text := btrim(p_body, E' \t\r\n');
+declare c uuid := companion_private.locked_companion(p_companion); -- first, so two requests cannot both count 99
+  o uuid := companion_private.chat_owner(); w companion_private.world_entries%rowtype; v_body text := btrim(p_body, E' \t\r\n');
   -- Trimmed, in the order given, without a word that came before in another case.
   v_keys text[] := array(select btrim(x) from unnest(p_keys) with ordinality t(x, i)
     where x is not null and not exists(select 1 from unnest(p_keys) with ordinality e(y, j)
@@ -70,10 +70,6 @@ begin
     or exists(select 1 from unnest(v_keys) k where k = '' or char_length(k) > 40 or k ~ '[[:cntrl:]]') then
     raise exception using errcode='22023', message='invalid world entry';
   end if;
-  -- The Companion first, so two requests cannot both count 99.
-  -- Waits for a deletion that is under way, and then finds the Companion gone instead of writing into it.
-  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
-  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   if p_entry is null then
     select * into w from companion_private.world_entries where companion_id = c and body = v_body and keys = v_keys limit 1;
     if found then return companion_private.world_json(w); end if;
@@ -314,7 +310,7 @@ end $$;
 -- As in 0064, plus dialogueExamples: a text like identitySummary, up to 1500 characters.
 create or replace function public.persona_save(p_companion uuid, p_version integer, p_fields jsonb)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
+declare c uuid := companion_private.locked_companion(p_companion); o uuid := companion_private.chat_owner();
   cur public.companion_identities%rowtype; doc jsonb; k text; v text;
   new_id uuid := gen_random_uuid(); manifest jsonb; hash text; at timestamptz := now();
 begin
@@ -325,9 +321,6 @@ begin
         or char_length(f.value #>> '{}') > case f.key when 'dialogueExamples' then 1500 else 600 end) then
     raise exception using errcode='22023', message='invalid persona';
   end if;
-  -- Waits for a deletion that is under way, and then finds the Companion gone instead of writing into it.
-  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
-  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   select i.* into cur from public.companions x join public.companion_identities i on i.id = x.current_identity_version_id
     where x.id = c;
   if cur.version <> p_version then raise exception using errcode='23505', message='persona version conflict'; end if;
@@ -360,25 +353,11 @@ end $$;
 -- ---------- 3. rules over what it says ----------
 
 alter table companion_private.chat_settings
-  add column reply_rules jsonb not null default '[]';
-
--- The shape of the list, whoever stores it (chat_update_settings can be called without the API
--- server): up to 10 rules, each exactly {pattern, flags, replacement, enabled} of the right kinds
--- and lengths. Whether a pattern compiles is the API server's to say, when it saves a list and again
--- before it runs one.
-create function companion_private.reply_rules_ok(p jsonb)
-returns boolean language sql immutable as $$
-  select case when jsonb_typeof(p) is distinct from 'array' or jsonb_array_length(p) > 10 then false
-    else not exists(select 1 from jsonb_array_elements(p) r where case when jsonb_typeof(r) <> 'object' then true else
-      r - array['pattern', 'flags', 'replacement', 'enabled'] <> '{}'::jsonb
-      or jsonb_typeof(r->'pattern') is distinct from 'string' or char_length(r->>'pattern') not between 1 and 200
-      or jsonb_typeof(r->'flags') is distinct from 'string' or r->>'flags' !~ '^[gimsu]{0,5}$'
-      or jsonb_typeof(r->'replacement') is distinct from 'string' or char_length(r->>'replacement') > 200
-      or jsonb_typeof(r->'enabled') is distinct from 'boolean' end) end
-$$;
-revoke all on function companion_private.reply_rules_ok(jsonb) from public, anon, authenticated;
-alter table companion_private.chat_settings
-  add constraint chat_settings_reply_rules_check check (companion_private.reply_rules_ok(reply_rules));
+  add column reply_rules jsonb not null default '[]'
+    -- Up to 10 rules, of a bounded size. What a rule is, the API server says: when it saves a list,
+    -- and again before it runs one (there, what is not a rule is passed over).
+    check (case when jsonb_typeof(reply_rules) = 'array'
+      then jsonb_array_length(reply_rules) <= 10 and octet_length(reply_rules::text) <= 20000 else false end);
 
 -- As in 0070, plus replyRules.
 create or replace function companion_private.chat_settings_json(s companion_private.chat_settings)

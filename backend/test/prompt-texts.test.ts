@@ -17,10 +17,10 @@ const turn: ChatClaim = { chatId: "chat", replyId: "reply", claimId: "claim", re
   history: [{ companionId: null, body: "在吗", action: null, mentions: [], sentAt: "2026-11-26T02:00:00Z" }] };
 /** The same chat where it may set reminders, and a turn in which it writes first. */
 const reminding: ChatClaim = { ...turn, canRemind: true };
-const greeting: ChatClaim = { ...turn, replyTo: "SELF", optional: true, reach: { kind: "GREETING" } };
+const greeting: ChatClaim = { ...turn, replyTo: "SELF", optional: true, canRemind: false, reach: { kind: "GREETING" } };
 const diary: DiaryJob = { status: "WRITE", entryId: "e", claimId: "c", companion, messages: [], posts: [] };
 const post: PostJob = { status: "WRITE", runId: "r", claimId: "c", companion, localTime: "11/26 10:00", own: [], others: [] };
-const memory: MemoryJob = { status: "WRITE", claimId: "c", companion, messages: [], memories: [] };
+const memory: MemoryJob = { status: "WRITE", claimId: "c", companion, messages: [], known: [] };
 
 it("keeps the built-in wording in step with what the server reads back", () => {
   const text = (key: string) => promptBlock(key)!.text;
@@ -29,8 +29,8 @@ it("keeps the built-in wording in step with what the server reads back", () => {
   // The marks the rules show are the ones the server understands.
   assert.deepEqual(splitVoice("[语音:开心] 早呀"), { text: "早呀", voice: "happy" });
   assert.deepEqual(splitAction(["[动作:抱抱]"]), { messages: [""], action: "HUG" });
-  assert.deepEqual(splitReminders(["[提醒:2026-11-27 08:00 叫主人起床]", "[取消提醒:1]"], [{ id: "r" }]).reminders,
-    { set: { at: "2026-11-27 08:00", note: "叫主人起床" }, cancel: ["r"] });
+  assert.deepEqual(splitReminders(["[提醒:2026-11-27 08:00 叫主人起床]", "[取消提醒:1]"], [{ id: "r" }]),
+    { messages: ["", ""], set: { at: "2026-11-27 08:00", note: "叫主人起床" }, cancel: ["r"] });
   for (const mark of ["[提醒:2026-11-27 08:00 叫主人起床]", "[取消提醒:1]"]) assert.ok(text("CHAT_REMIND").includes(mark), `the reminder rules show ${mark}`);
   for (const block of PROMPT_BLOCKS) {
     assert.equal(promptTextRefusal(block, block.text), null, `${block.key}: the built-in wording passes its own check`);
