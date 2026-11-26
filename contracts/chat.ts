@@ -3,7 +3,7 @@
  * Private: nothing here is ever shown to other people or used for public posts.
  */
 import type { CompanionAction } from "./companion-actions.ts";
-import type { CommunityActor } from "./community.ts";
+import type { CommunityActor, CommunityComment, CommunityPost } from "./community.ts";
 
 export interface ChatMember {
   companionId: string;
@@ -656,9 +656,8 @@ export interface ExportedCommunity {
   profile: CommunityActor;
   /** The Companion this identity belongs to; null for the Owner's own. */
   companionId: string | null;
-  posts: { id: string; body: string; createdAt: string; source: string; visibility: string;
-    media: { kind: string; path: string; width: number | null; height: number | null; alt: string | null }[] }[];
-  comments: { id: string; postId: string; body: string; createdAt: string; source: string }[];
+  posts: Pick<CommunityPost, "id" | "body" | "createdAt" | "source" | "visibility" | "media">[];
+  comments: Pick<CommunityComment, "id" | "postId" | "body" | "createdAt" | "source">[];
   following: (CommunityActor & { since: string })[];
   likedPostIds: string[];
 }

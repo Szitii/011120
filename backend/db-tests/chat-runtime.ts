@@ -855,6 +855,8 @@ try {
   await pool.query("insert into public.community_posts(actor_id, body, source) values ($1, '另一位主人的家机发的动态', 'OWNER_PROXY')", [actorB]);
   await pool.query("insert into public.community_posts(actor_id, body, source) values ($1, '导出里要有这条动态', 'OWNER_PROXY')", [actorA]);
   await pool.query("insert into public.community_posts(actor_id, body, source, deleted_at) values ($1, '删掉的动态不在导出里', 'OWNER_PROXY', now())", [actorA]);
+  await pool.query(`insert into public.community_comments(post_id, actor_id, body, source)
+    select id, $1, '导出里要有这条评论', 'OWNER_PROXY' from public.community_posts where body = '导出里要有这条动态'`, [actorA]);
   await pool.query(`insert into companion_private.companion_connections(companion_id, kind, provider, base_url, model, secret, secret_hint, consented_at)
     values ($1, 'BYOK', 'deepseek', 'https://api.deepseek.com', 'deepseek-flash', 'v1.exportkey.mustnotleak.x', 'leak', now())`, [second]);
   const tokenHash = "e".repeat(64);
@@ -901,6 +903,10 @@ try {
   assert.ok(copy.groupChats.length > 0 && copy.groupChats.every(g => g.members.length >= 2 && Array.isArray(g.messages) && g.omitted === 0));
   const twin = copy.community.find(c => c.profile.id === actorA)!;
   assert.deepEqual(twin.posts.map(p => p.body).filter(body => body.includes("导出") || body.includes("删掉")), ["导出里要有这条动态"]);
+  const post = twin.posts.find(p => p.body === "导出里要有这条动态")!, comment = twin.comments.find(c => c.body === "导出里要有这条评论")!;
+  assert.deepEqual([Object.keys(post).sort(), Object.keys(comment).sort(), comment.postId, post.media],
+    [["body", "createdAt", "id", "media", "source", "visibility"], ["body", "createdAt", "id", "postId", "source"], post.id, []],
+    "a post and a comment as the app reads them, less what is about other people or about the reader");
   assert.deepEqual([typeof copy.wallet.enabled, copy.wallet.entriesOmitted, copy.wallet.entries.some(e => "note" in e)], ["boolean", 0, false],
     "the wallet's entries, without the note an operator may have written on one");
   assert.ok(Array.isArray(copy.wallet.entries) && Array.isArray(copy.feedback));
@@ -952,6 +958,7 @@ try {
   await pool.query("delete from public.community_follows where actor_id = $1 and target_id = $2", [actorA, actorB]);
   await pool.query("delete from companion_private.chats where id = $1", [theirChat]);
   await pool.query("delete from companion_private.companion_connections where companion_id = $1", [second]);
+  await pool.query("delete from public.community_comments where body = '导出里要有这条评论'");
   await pool.query("delete from public.community_posts where body in ('另一位主人的家机发的动态', '导出里要有这条动态', '删掉的动态不在导出里')");
   await aroundTheGuard("delete from public.audit_events where action = 'ACCOUNT_EXPORT'");
   await pool.query("delete from companion_private.own_skills where companion_id = $1", [A.companion]);

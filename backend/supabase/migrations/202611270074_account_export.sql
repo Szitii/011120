@@ -33,7 +33,6 @@ create function public.account_export()
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare o uuid := companion_private.chat_owner(); v_wallet jsonb; v_from timestamptz;
 begin
-  if o is null then raise exception using errcode='42501', message='active Owner authentication is required'; end if;
   -- One at a time per Owner, without waiting: requests sent together would each hold a connection
   -- while they queue. The count below is then safe from them too.
   if not pg_try_advisory_xact_lock(hashtextextended('account_export:' || o::text, 0)) then return null; end if;
@@ -96,14 +95,12 @@ begin
     'community', coalesce((select jsonb_agg(jsonb_build_object(
         'profile', companion_private.community_actor_json(a.id),
         'companionId', t.companion_id,
-        'posts', coalesce((select jsonb_agg(jsonb_build_object('id', p.id, 'body', p.body, 'createdAt', p.created_at, 'source', p.source,
-            'visibility', p.visibility,
-            'media', coalesce((select jsonb_agg(jsonb_build_object('kind', m.kind, 'path', m.object_name, 'width', m.width,
-                'height', m.height, 'alt', m.alt) order by m.position)
-              from companion_private.post_media m where m.post_id = p.id and m.review_status = 'VISIBLE'), '[]')) order by p.created_at, p.id)
+        -- Its posts and comments as the app reads them, less what is about other people or about the reader.
+        'posts', coalesce((select jsonb_agg(companion_private.community_post_json(p.id, a.id)
+            - '{author,mentions,commentsCount,likeCount,likedByMe,canDelete}'::text[] order by p.created_at, p.id)
           from public.community_posts p where p.actor_id = a.id and p.deleted_at is null), '[]'),
-        'comments', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'postId', m.post_id, 'body', m.body, 'createdAt', m.created_at,
-            'source', m.source) order by m.created_at, m.id)
+        'comments', coalesce((select jsonb_agg(companion_private.community_comment_json(m.id, a.id)
+            - '{author,mentions,canDelete}'::text[] order by m.created_at, m.id)
           from public.community_comments m where m.actor_id = a.id and m.deleted_at is null), '[]'),
         -- Who it follows, as the app's own list shows them: not a profile that went private, was
         -- suspended, or is on the other side of a block.
