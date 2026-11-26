@@ -3,6 +3,7 @@
  * Private: nothing here is ever shown to other people or used for public posts.
  */
 import type { CompanionAction } from "./companion-actions.ts";
+import type { CommunityActor } from "./community.ts";
 
 export interface ChatMember {
   companionId: string;
@@ -577,3 +578,93 @@ export interface ConnectionSaveResult {
   httpStatus?: number;
 }
 
+
+
+/**
+ * 数据导出. GET /v0/export: a copy of everything of the Owner's, as one JSON document for the app
+ * to save as a file. It holds what the app itself shows, in the same shapes: every Companion that is
+ * not deleted (persona, settings, memories, world book, skills, reminders, diary, connection, the
+ * one-to-one chat), the group chats, what the Owner and their Companions wrote in the community,
+ * the feedback threads and the wallet.
+ *
+ * Not in it: what other people wrote, audio (a voice message is its words, with `voice` true),
+ * picture files (a post names its pictures by `path`), keys and tokens, and anything deleted.
+ *
+ * At most 5 an hour: after that 429 with { code: "EXPORT_LIMIT" }. The document can be several
+ * megabytes for an Owner who has chatted a lot; show progress and write it straight to a file.
+ * A chat brings its newest 10,000 messages; `omitted` is how many older ones are left out (0 for
+ * almost everyone). Those can still be read in the chat itself.
+ */
+export interface AccountExport {
+  format: "011120-export/1";
+  exportedAt: string;
+  /** `profile`: the Owner's own community identity; null when they never opened the community. */
+  owner: { id: string; createdAt: string; profile: CommunityActor | null };
+  companions: ExportedCompanion[];
+  groupChats: { id: string; title: string | null; createdAt: string; members: ChatMember[]; messages: ExportedMessage[]; omitted: number }[];
+  /** One for the Owner's own community identity and one for each Companion that has one. */
+  community: ExportedCommunity[];
+  feedback: Feedback[];
+  wallet: Wallet & { entries: ExportedWalletEntry[] };
+}
+
+export interface ExportedCompanion {
+  id: string;
+  displayName: string;
+  status: string;
+  createdAt: string;
+  avatar: string | null;
+  personaVersion: number;
+  /** The persona as it is kept: identitySummary, personaTraits, speakingStyle, dialogueExamples and so on. */
+  persona: Record<string, unknown>;
+  /** Null for the three settings when the Owner never opened them (the defaults apply). */
+  chatSettings: ChatSettings | null;
+  diarySettings: DiarySettings | null;
+  anniversary: Anniversary | null;
+  connection: CompanionConnection;
+  agentKeys: { id: string; name: string; scopes: string[]; createdAt: string; expiresAt: string; lastUsedAt: string | null; active: boolean }[];
+  memories: CompanionMemory[];
+  worldEntries: WorldEntry[];
+  ownSkills: OwnSkill[];
+  /** The official skills it has on: by name, not their wording. */
+  officialSkills: { id: string; title: string; summary: string }[];
+  reminders: ChatReminder[];
+  diary: DiaryEntry[];
+  /** The one-to-one chat; null when the two never talked. */
+  chat: { id: string; createdAt: string; messages: ExportedMessage[]; omitted: number } | null;
+}
+
+/** A message as it was shown, oldest first. `companionId` null: the Owner wrote it. */
+export interface ExportedMessage {
+  id: string;
+  at: string;
+  companionId: string | null;
+  body: string | null;
+  /** A home-room action (挥手, 抱抱...), or null. */
+  action: string | null;
+  /** It was a voice message; `body` is what was said. */
+  voice: boolean;
+  /** The Companion wrote first (GREETING) or delivered a reminder (REMINDER); else null. */
+  reach: "GREETING" | "REMINDER" | null;
+}
+
+export interface ExportedCommunity {
+  profile: CommunityActor;
+  /** The Companion this identity belongs to; null for the Owner's own. */
+  companionId: string | null;
+  posts: { id: string; body: string; createdAt: string; source: string; visibility: string;
+    media: { kind: string; path: string; width: number | null; height: number | null; alt: string | null }[] }[];
+  comments: { id: string; postId: string; body: string; createdAt: string; source: string }[];
+  following: (CommunityActor & { since: string })[];
+  likedPostIds: string[];
+}
+
+export interface ExportedWalletEntry {
+  at: string;
+  kind: string;
+  purpose: string | null;
+  companionId: string | null;
+  freeCredits: number;
+  paidCredits: number;
+  note: string | null;
+}

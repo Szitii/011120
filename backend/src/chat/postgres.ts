@@ -114,6 +114,10 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.persona_template_list() as payload", []);
   }
 
+  exportAccount(): Promise<unknown> {
+    return this.#object("select public.account_export() as payload", []);
+  }
+
   skills(companionId: string): Promise<unknown> {
     return this.#object("select public.skill_list($1) as payload", [companionId]);
   }

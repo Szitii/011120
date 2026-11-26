@@ -976,6 +976,34 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /export:
+    get:
+      operationId: exportAccount
+      summary: A copy of everything of the Owner's, as one JSON document
+      description: |
+        数据导出 - every Companion that is not deleted (persona, settings, memories, world book,
+        skills, reminders, diary, connection, the one-to-one chat), the group chats, what the Owner
+        and their Companions wrote in the community, the feedback threads and the wallet. Not in
+        it: other people's content, audio, picture files, keys and tokens, anything deleted.
+        At most 5 an hour; each one is recorded. The document can be several megabytes.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The copy
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccountExport'}
+        '401': *problem
+        '403': *problem
+        '429':
+          description: More than 5 in the last hour
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code]
+                properties:
+                  code: {type: string, enum: [EXPORT_LIMIT]}
   /persona-templates:
     get:
       operationId: listPersonaTemplates
@@ -1884,6 +1912,25 @@ components:
         flags: {type: string, pattern: '^[gimsu]*$', description: 'Any of g i m s u, each once. Default "g" - every match.'}
         replacement: {type: string, maxLength: 200, description: 'What takes the match''s place; $1 is the first group. Default "" - the match is removed.'}
         enabled: {type: boolean, description: Default true. A rule that is off is kept but not run.}
+    AccountExport:
+      type: object
+      description: See AccountExport in contracts/chat.ts for the shape of every part.
+      required: [format, exportedAt, owner, companions, groupChats, community, feedback, wallet]
+      properties:
+        format: {const: 011120-export/1}
+        exportedAt: {type: string, format: date-time}
+        owner:
+          type: object
+          required: [id, createdAt, profile]
+          properties:
+            id: {type: string, format: uuid}
+            createdAt: {type: string, format: date-time}
+            profile: {type: [object, 'null']}
+        companions: {type: array, items: {type: object}}
+        groupChats: {type: array, items: {type: object}}
+        community: {type: array, items: {type: object}}
+        feedback: {type: array, items: {type: object}}
+        wallet: {type: object}
     PersonaTemplate:
       type: object
       required: [id, title, summary, card]

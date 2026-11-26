@@ -106,6 +106,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories
   /companions/{companionId}/memories/{memoryId}:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories~1{memoryId}
+  /export:
+    $ref: ./chat.yaml#/paths/~1export
   /persona-templates:
     $ref: ./chat.yaml#/paths/~1persona-templates
   /companions/{companionId}/skills:

@@ -78,6 +78,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     reminders: async (...args) => { calls.push(["reminders", ...args]); return { items: [] }; },
     cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },
     personaTemplates: async () => { calls.push(["personaTemplates"]); return { items: [] }; },
+    exportAccount: async () => { calls.push(["exportAccount"]); return { format: "011120-export/1", companions: [] }; },
     skills: async (...args) => { calls.push(["skills", ...args]); return { maxEnabled: 5, official: [], own: [] }; },
     setSkill: async (...args) => { calls.push(["setSkill", ...args]); return { maxEnabled: 5, official: [], own: [] }; },
     saveOwnSkill: async (...args) => { calls.push(["saveOwnSkill", ...args]); return { id: "s1" }; },
@@ -385,6 +386,18 @@ it("routes persona templates and skills: an Owner's own skill is scanned like a 
     assert.equal(await refusal(port, req), "NOT_FOUND");
   }
   assert.equal(calls.length, 0, "nothing refused reaches the database");
+});
+
+it("routes the export: the Owner's copy, or 429 past the limit", async () => {
+  const { port, calls } = fakePort();
+  const copy = await handleChatRequest(request("export"), session(port), "trace", replies);
+  assert.deepEqual([copy!.status, copy!.body, copy!.headers["cache-control"]], [200, { format: "011120-export/1", companions: [] }, "no-store"]);
+  port.exportAccount = async () => ({ limited: true });
+  const limited = await handleChatRequest(request("export"), session(port), "trace", replies);
+  assert.deepEqual([limited!.status, limited!.body], [429, { code: "EXPORT_LIMIT" }]);
+  assert.deepEqual(calls, [["exportAccount"]]);
+  for (const req of [request("export", "POST", {}), request("export", "DELETE")]) assert.equal(await refusal(port, req), "NOT_FOUND");
+  assert.equal(await handleChatRequest(request("export/more"), session(port), "trace", replies), undefined, "not a route of this module");
 });
 
 it("routes reminders: the Owner sees the waiting ones and cancels one", async () => {
@@ -809,6 +822,8 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(seen.at(-1), ["select public.world_list($1) as payload", [companion]]);
   await adapter.personaTemplates();
   assert.deepEqual(seen.at(-1), ["select public.persona_template_list() as payload", []]);
+  await adapter.exportAccount();
+  assert.deepEqual(seen.at(-1), ["select public.account_export() as payload", []]);
   await adapter.skills(companion);
   assert.deepEqual(seen.at(-1), ["select public.skill_list($1) as payload", [companion]]);
   await adapter.setSkill(companion, messageId, true);

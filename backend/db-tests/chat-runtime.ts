@@ -9,7 +9,7 @@ import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import { BackgroundScheduler } from "../src/chat/background-scheduler.ts";
 import type { ChatClaim, DiaryJob, MemoryJob } from "../src/chat/port.ts";
-import type { Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, DiaryPage, DiarySettings, DiaryWriteResult, VoiceList }
+import type { AccountExport, Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, CompanionSkills, DiaryPage, DiarySettings, DiaryWriteResult, VoiceList }
   from "../../contracts/chat.ts";
 
 const connectionString = process.env.DATABASE_URL;
@@ -839,6 +839,95 @@ try {
   assert.deepEqual((await putSettings(A.companion, { replyRules: [] })).data.replyRules, []);
   assert.equal((await voiceReply("规则去掉了")).at(0)!.body, "（开发环境假回复）我是SampleCompanion");
   passed("reply rules: kept with the settings, run in order over each message, refused when they cannot be used");
+
+  {
+  // ---- 数据导出: everything of the Owner's in one document, and nothing that is not theirs to have ----
+  // Planted where it could leak from: another Owner's chat and post, and this Owner's own key and token.
+  const theirChat = randomUUID();
+  await pool.query("insert into companion_private.chats(id, owner_id, direct_companion_id) values ($1, $2, $3)", [theirChat, B.owner, B.companion]);
+  await pool.query(`insert into companion_private.chat_messages(chat_id, body, status, key_hash, shown_at)
+    values ($1, '只有另一位主人能看见的话', 'SENT', repeat('b', 64), now())`, [theirChat]);
+  await pool.query("insert into public.community_posts(actor_id, body, source) values ($1, '另一位主人的家机发的动态', 'OWNER_PROXY')", [actorB]);
+  await pool.query("insert into public.community_posts(actor_id, body, source) values ($1, '导出里要有这条动态', 'OWNER_PROXY')", [actorA]);
+  await pool.query("insert into public.community_posts(actor_id, body, source, deleted_at) values ($1, '删掉的动态不在导出里', 'OWNER_PROXY', now())", [actorA]);
+  await pool.query(`insert into companion_private.companion_connections(companion_id, kind, provider, base_url, model, secret, secret_hint, consented_at)
+    values ($1, 'BYOK', 'deepseek', 'https://api.deepseek.com', 'deepseek-flash', 'v1.exportkey.mustnotleak.x', 'leak', now())`, [second]);
+  const tokenHash = "e".repeat(64);
+  await pool.query(`insert into companion_private.agent_keys(owner_id, companion_id, name, token_hash, scopes, expires_at)
+    values ($1, $2, '导出测试', $3, array['COMMUNITY_READ'], now() + interval '30 days')`, [A.owner, A.companion, tokenHash]);
+  assert.equal((await call(0, `companions/${A.companion}/memories`, "POST", { body: "导出里要有这条记忆" })).status, 201);
+  assert.equal((await call(0, `companions/${A.companion}/world-entries`, "POST", { keys: ["导出"], body: "导出里要有这条设定" })).status, 201);
+  assert.equal((await call(0, `companions/${A.companion}/own-skills`, "POST", { title: "导出", body: "导出里要有这个技能" })).status, 201);
+  const official = (await call<CompanionSkills>(0, `companions/${A.companion}/skills`)).data.official[0]!;
+  assert.equal((await call(0, `companions/${A.companion}/skills/${official.id}`, "PUT", { enabled: true })).status, 200);
+
+  const exported = await call<AccountExport>(0, "export");
+  assert.equal(exported.status, 200, JSON.stringify(exported.data).slice(0, 300));
+  const copy = exported.data, text = JSON.stringify(copy);
+  assert.deepEqual([copy.format, copy.owner.id, Math.abs(Date.parse(copy.exportedAt) - Date.now()) < 60_000], ["011120-export/1", A.owner, true]);
+  const mine = copy.companions.find(c => c.id === A.companion)!, other = copy.companions.find(c => c.id === second)!;
+  assert.deepEqual([mine.displayName, mine.status, typeof mine.persona, mine.chatSettings!.replyRules, mine.connection.kind],
+    ["SampleCompanion", "ACTIVE", "object", [], "PLATFORM"]);
+  assert.ok(mine.memories.some(m => m.body === "导出里要有这条记忆") && mine.worldEntries.some(e => e.body === "导出里要有这条设定")
+    && mine.ownSkills.some(s => s.body === "导出里要有这个技能"), "what the Owner wrote for it");
+  assert.deepEqual([mine.officialSkills, Object.keys(mine.agentKeys.at(-1)!).sort()],
+    [[{ id: official.id, title: official.title, summary: official.summary }], ["active", "companionId", "createdAt", "expiresAt", "id", "lastUsedAt", "name", "scopes"]],
+    "an official skill by name, an agent key without what stands for its token");
+  const shown = (await pool.query<{ n: number; voiced: number }>(`select count(*)::int as n, count(a.message_id)::int as voiced
+    from companion_private.chat_messages m left join companion_private.chat_audio a on a.message_id = m.id
+    where m.chat_id = $1 and m.status = 'SENT'`, [mine.chat!.id])).rows[0]!;
+  assert.deepEqual([mine.chat!.messages.length, mine.chat!.messages.filter(m => m.voice).length], [shown.n, shown.voiced], "every message that was shown, voice ones marked");
+  assert.ok(shown.n > 5 && shown.voiced > 0 && mine.chat!.messages.some(m => m.companionId === A.companion && m.body === "收到：「规则去掉了」")
+    && mine.chat!.messages.some(m => m.companionId === null && m.body === "规则去掉了"));
+  assert.ok(mine.chat!.messages.every((m, i, all) => i === 0 || all[i - 1]!.at <= m.at), "oldest first");
+  assert.equal(mine.chat!.omitted, 0);
+  // A very long chat brings its newest messages and says how many older ones it leaves out.
+  const newest = (await pool.query<{ payload: { messages: { id: string }[]; omitted: number } }>(
+    "select companion_private.export_messages($1, 3) as payload", [mine.chat!.id])).rows[0]!.payload;
+  assert.deepEqual([newest.messages.map(m => m.id), newest.omitted], [mine.chat!.messages.slice(-3).map(m => m.id), shown.n - 3]);
+  assert.deepEqual([other.connection.kind, other.connection.keyHint], ["BYOK", "leak"], "how it is connected, with the hint the app shows");
+  assert.ok(copy.groupChats.length > 0 && copy.groupChats.every(g => g.members.length >= 2 && Array.isArray(g.messages) && g.omitted === 0));
+  const twin = copy.community.find(c => c.profile.id === actorA)!;
+  assert.deepEqual(twin.posts.map(p => p.body).filter(body => body.includes("导出") || body.includes("删掉")), ["导出里要有这条动态"]);
+  assert.equal(typeof copy.wallet.enabled, "boolean");
+  assert.ok(Array.isArray(copy.wallet.entries) && Array.isArray(copy.feedback));
+  for (const never of ["只有另一位主人能看见的话", "另一位主人的家机发的动态", "删掉的动态不在导出里", "v1.exportkey.mustnotleak.x", tokenHash, B.owner, B.companion, actorB, "secret\"", "key_hash"]) {
+    assert.ok(!text.includes(never), `not in the copy: ${never.slice(0, 24)}`);
+  }
+  // The other Owner's copy is theirs alone; nobody gets one without signing in.
+  const others = JSON.stringify((await call<AccountExport>(1, "export")).data);
+  assert.ok(others.includes("只有另一位主人能看见的话") && !others.includes("导出里要有这条记忆") && !others.includes(A.companion));
+  assert.equal((await fetch(`${bases[0]}/v0/export`)).status, 401);
+  // Five an hour, each one in the audit log; an old one no longer counts.
+  for (let i = 2; i <= 5; i += 1) assert.equal((await call(0, "export")).status, 200, `export ${i}`);
+  const limited = await call<{ code: string }>(0, "export");
+  assert.deepEqual([limited.status, limited.data], [429, { code: "EXPORT_LIMIT" }]);
+  assert.equal((await pool.query("select count(*)::int as n from public.audit_events where owner_id = $1 and action = 'ACCOUNT_EXPORT'", [A.owner])).rows[0].n, 5);
+  // The audit log cannot be changed, so the test steps around its guard to let an hour pass and to leave no exports behind.
+  const aroundTheGuard = async (sql: string, values: unknown[] = []) => {
+    const client = await pool.connect();
+    try {
+      await client.query("set session_replication_role = replica");
+      await client.query(sql, values);
+    } finally {
+      await client.query("reset session_replication_role");
+      client.release();
+    }
+  };
+  await aroundTheGuard(`update public.audit_events set occurred_at = now() - interval '61 minutes'
+    where id = (select id from public.audit_events where owner_id = $1 and action = 'ACCOUNT_EXPORT' order by occurred_at limit 1)`, [A.owner]);
+  assert.equal((await call(0, "export")).status, 200);
+  await pool.query("delete from companion_private.chats where id = $1", [theirChat]);
+  await pool.query("delete from companion_private.companion_connections where companion_id = $1", [second]);
+  await pool.query("delete from public.community_posts where body in ('另一位主人的家机发的动态', '导出里要有这条动态', '删掉的动态不在导出里')");
+  await aroundTheGuard("delete from public.audit_events where action = 'ACCOUNT_EXPORT'");
+  await pool.query("delete from companion_private.own_skills where companion_id = $1", [A.companion]);
+  await pool.query("delete from companion_private.companion_skills where companion_id = $1", [A.companion]);
+  await pool.query("delete from companion_private.world_entries where companion_id = $1 and body = '导出里要有这条设定'", [A.companion]);
+  await pool.query("delete from companion_private.companion_memories where companion_id = $1 and body = '导出里要有这条记忆'", [A.companion]);
+  await pool.query("delete from companion_private.agent_keys where companion_id = $1 and name = '导出测试'", [A.companion]);
+  passed("the export: everything of the Owner's in one document, nothing of anyone else's, no key or token, five an hour and each one audited");
+  }
 
   // Leave the shared development database as other suites expect it.
   await pool.query("delete from companion_private.diary_entries where companion_id in ($1, $2)", [A.companion, second]);

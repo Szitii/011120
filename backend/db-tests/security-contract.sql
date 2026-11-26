@@ -1942,6 +1942,15 @@ select public.test_assert(
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
   'templates, skills and the world book are reachable only through functions, each by the role it is for'
 );
+-- The export: a signed-in Owner asks for their own copy; the piece that reads a chat's messages by
+-- id is nobody's to call.
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.account_export()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.account_export()'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_function_privilege(r.role, 'companion_private.export_messages(uuid,integer)'::regprocedure, 'EXECUTE')),
+  'an Owner exports their own data; a chat''s messages cannot be read by id'
+);
 select public.test_assert(
   not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.admin_log'),
       ('companion_private.chat_quota')) t(name)
