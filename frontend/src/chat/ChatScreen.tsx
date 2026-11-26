@@ -20,6 +20,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
 import { formatChatAction } from "./actions";
 import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
+import { chatDraftKey, type ChatDraftStore } from "./draftStore";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
@@ -71,8 +72,10 @@ export function ChatScreen({
   onRead,
   groupSendEnabled,
   onAvailabilityChanged,
+  draftStore,
 }: {
   client: ChatClient;
+  draftStore: ChatDraftStore;
   initialChatId?: string;
   companionId?: string;
   companionName: string;
@@ -128,8 +131,13 @@ export function ChatScreen({
     return () => { current = false; };
   }, [chat?.id, initialChatId, ownerId]);
 
-  const [draft, setDraft] = useState("");
-  const [mentions, setMentions] = useState<string[]>([]);
+  const initialDraftKey = initialChatId
+    ? chatDraftKey(ownerId, { chatId: initialChatId })
+    : companionId
+      ? chatDraftKey(ownerId, { companionId })
+      : undefined;
+  const [draft, setDraft] = useState(() => draftStore.read(initialDraftKey).text);
+  const [mentions, setMentions] = useState<string[]>(() => draftStore.read(initialDraftKey).mentions);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [expandedVoiceIds, setExpandedVoiceIds] = useState<Record<string, boolean>>({});
   const [voiceMenuMsg, setVoiceMenuMsg] = useState<ChatMessage>();
@@ -147,6 +155,39 @@ export function ChatScreen({
   const reqVersionRef = useRef(0);
   const cursorExhaustedRef = useRef(false);
   const pendingSendRef = useRef<{ text: string; key: string } | null>(null);
+  const draftKeyRef = useRef<string | undefined>(initialDraftKey);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const mentionsRef = useRef(mentions);
+  mentionsRef.current = mentions;
+
+  const saveDraft = useCallback((text: string, companionIds: string[]) => {
+    draftStore.write(draftKeyRef.current, { text, mentions: companionIds });
+  }, [draftStore]);
+
+  const updateDraft = useCallback((text: string) => {
+    draftRef.current = text;
+    setDraft(text);
+    saveDraft(text, mentionsRef.current);
+  }, [saveDraft]);
+
+  const updateMentions = useCallback((change: (current: string[]) => string[]) => {
+    const next = change(mentionsRef.current);
+    mentionsRef.current = next;
+    setMentions(next);
+    saveDraft(draftRef.current, next);
+  }, [saveDraft]);
+
+  const adoptDraftKey = useCallback((targetChatId: string) => {
+    const nextKey = chatDraftKey(ownerId, { chatId: targetChatId });
+    if (!nextKey || nextKey === draftKeyRef.current) return;
+    const restored = draftStore.adopt(draftKeyRef.current, nextKey);
+    draftKeyRef.current = nextKey;
+    draftRef.current = restored.text;
+    mentionsRef.current = restored.mentions;
+    setDraft(restored.text);
+    setMentions(restored.mentions);
+  }, [draftStore, ownerId]);
 
   const latestReply = messages.find(item => item.companionId !== null);
   const quotaId = latestReply?.status === "FAILED" && latestReply.failure === "QUOTA" ? latestReply.id : undefined;
@@ -247,6 +288,7 @@ export function ChatScreen({
           return;
         }
         chatIdRef.current = targetId;
+        adoptDraftKey(targetId);
         await loadLatest(targetId, false);
         if (active && autoFocus) {
           focusTimer = setTimeout(() => inputRef.current?.focus(), 220);
@@ -266,7 +308,14 @@ export function ChatScreen({
       chatIdRef.current = undefined;
       clearTimeout(focusTimer);
     };
-  }, [client, initialChatId, companionId, autoFocus, loadLatest, bootstrapRevision]);
+  }, [client, initialChatId, companionId, autoFocus, loadLatest, bootstrapRevision, adoptDraftKey]);
+
+  useEffect(() => {
+    if (!chat || chat.direct !== false) return;
+    const current = mentionsRef.current;
+    const valid = current.filter(id => chat.members.some(member => member.companionId === id));
+    if (valid.length !== current.length) updateMentions(() => valid);
+  }, [chat?.id, updateMentions]);
 
   useEffect(() => {
     if (!appActive || !chat?.replying || !chatIdRef.current) return;
@@ -310,7 +359,7 @@ export function ChatScreen({
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
-    setDraft("");
+    updateDraft("");
     setTray("none");
     const recipients = chat?.direct === false ? mentions : [];
     const signature = JSON.stringify([text, recipients]);
@@ -325,12 +374,12 @@ export function ChatScreen({
       const res = await client.sendMessage(targetId, text, recipients, key);
       if (session !== sessionRef.current) return;
       pendingSendRef.current = null;
-      setMentions([]);
+      updateMentions(() => []);
       setMentionOpen(false);
       acceptSent(res, targetId);
     } catch (e) {
       if (session !== sessionRef.current) return;
-      setDraft(current => current || text);
+      if (!draftRef.current) updateDraft(text);
       setError(writeError(e));
     } finally {
       sendingRef.current = false;
@@ -712,7 +761,7 @@ export function ChatScreen({
               label={`@${member.displayName}`}
               selected={mentions.includes(member.companionId)}
               disabled={sending || voiceBusy}
-              onPress={() => setMentions(current => current.includes(member.companionId)
+              onPress={() => updateMentions(current => current.includes(member.companionId)
                 ? current.filter(id => id !== member.companionId) : [...current, member.companionId])}
             />
           ))}
@@ -761,7 +810,7 @@ export function ChatScreen({
                 <TextInput
                   ref={inputRef}
                   value={draft}
-                  onChangeText={val => { setDraft(val); setAttachNotice(""); }}
+                  onChangeText={val => { updateDraft(val); setAttachNotice(""); }}
                   onFocus={() => setTray("none")}
                   placeholder="发消息…"
                   placeholderTextColor={ui.muted}
@@ -825,7 +874,10 @@ export function ChatScreen({
               {QUICK_EMOJIS.map(emoji => (
                 <Pressable
                   key={emoji}
-                  onPress={() => setDraft(prev => (prev + emoji).length <= 2000 ? prev + emoji : prev)}
+                  onPress={() => {
+                    const next = draftRef.current + emoji;
+                    if (next.length <= 2000) updateDraft(next);
+                  }}
                   style={styles.emojiBtn}
                 >
                   <Text style={styles.emojiText}>{emoji}</Text>

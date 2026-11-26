@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { WalletBalance } from "./src/wallet/WalletBalance";
 import type { ChatClient } from "./src/chat/client";
+import { createChatDraftStore } from "./src/chat/draftStore";
 import type { Badges, PlatformFeatures } from "../contracts/chat";
 import { useAppIsActive } from "./src/state/useAppIsActive";
 import { ConnectionForm } from "./src/onboarding/ConnectionForm";
@@ -171,6 +172,7 @@ function WorldApp({ client, account, isMockMode }: {
   const styles = useThemedStyles(createStyles);
   const { skin, ui } = useSkin();
   const [cache] = useState(() => new ViewerSensitiveCache());
+  const [chatDrafts] = useState(() => createChatDraftStore());
   const [nav, setNav] = useState<NavigationState>(initialNavigationState);
   const [identity, setIdentity] = useState<LoadState<ActiveIdentityContext>>({ kind: "loading" });
   const [world, setWorld] = useState<LoadState<WorldCollection>>({ kind: "idle" });
@@ -900,6 +902,7 @@ function WorldApp({ client, account, isMockMode }: {
         <ChatScreen
           key={JSON.stringify([viewerKey, route.chatId, route.companionId])}
           client={client.api.chat}
+          draftStore={chatDrafts}
           initialChatId={route.chatId}
           companionId={route.companionId}
           companionName={route.companionName ?? companionDisplayName}

@@ -199,29 +199,43 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
                   accessibilityLabel={openProfile ? `查看 ${title} 的主页` : `打开 ${title} 的会话`}
                   onPress={openProfile ?? openChat}
                   style={styles.avatarWrap}
+                  hitSlop={4}
                 >
                   <PixelAvatar name={title} role="companion" uri={member?.avatar} size={46} />
                   {hasUnread && <View style={styles.unreadDot} />}
                 </Pressable>
-                <Pressable accessibilityRole="button" onPress={openChat}
-                  style={({ pressed }) => [styles.chatMain, pressed && styles.chatMainPressed]}>
+                <View style={styles.chatMain}>
                   <View style={styles.chatHeaderRow}>
-                    <Text style={styles.chatTitle} numberOfLines={1}>
-                      {title}{chat.direct ? "" : " · 群聊"}
-                    </Text>
-                    {!!timeStr && <Text style={styles.chatTime}>{timeStr}</Text>}
-                  </View>
-                  <View style={styles.chatFooterRow}>
-                    <Text style={styles.chatPreview} numberOfLines={1}>{preview}</Text>
-                    {hasUnread && (
-                      <View style={styles.unreadPill}>
-                        <Text style={styles.unreadCount}>
-                          {(chat.unreadCount ?? 0) > 99 ? "99+" : chat.unreadCount}
-                        </Text>
-                      </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={openProfile ? `查看 ${title} 的主页` : `打开 ${title} 的会话`}
+                      onPress={openProfile ?? openChat}
+                      style={styles.chatTitlePress}
+                    >
+                      <Text style={styles.chatTitle} numberOfLines={1}>
+                        {title}{chat.direct ? "" : " · 群聊"}
+                      </Text>
+                    </Pressable>
+                    {!!timeStr && (
+                      <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${title} 的会话`} onPress={openChat}>
+                        <Text style={styles.chatTime}>{timeStr}</Text>
+                      </Pressable>
                     )}
                   </View>
-                </Pressable>
+                  <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${title} 的会话`} onPress={openChat}
+                    style={({ pressed }) => pressed && styles.chatMainPressed}>
+                    <View style={styles.chatFooterRow}>
+                      <Text style={styles.chatPreview} numberOfLines={1}>{preview}</Text>
+                      {hasUnread && (
+                        <View style={styles.unreadPill}>
+                          <Text style={styles.unreadCount}>
+                            {(chat.unreadCount ?? 0) > 99 ? "99+" : chat.unreadCount}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </Pressable>
+                </View>
               </View>
             );
           })}
@@ -241,14 +255,24 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
                     accessibilityRole="button"
                     accessibilityLabel={openProfile ? `查看 ${companion.displayName} 的主页` : `与 ${companion.displayName} 开始对话`}
                     onPress={openProfile ?? startChat}
+                    hitSlop={4}
                   >
                     <PixelAvatar name={companion.displayName} role="companion" uri={companion.avatar} size={44} />
                   </Pressable>
-                  <Pressable accessibilityRole="button" onPress={startChat}
-                    style={({ pressed }) => [styles.chatMain, pressed && styles.chatMainPressed]}>
-                    <Text style={styles.chatTitle} numberOfLines={1}>{companion.displayName}</Text>
-                    <Text style={styles.chatPreview}>发第一条消息打个招呼</Text>
-                  </Pressable>
+                  <View style={styles.chatMain}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={openProfile ? `查看 ${companion.displayName} 的主页` : `与 ${companion.displayName} 开始对话`}
+                      onPress={openProfile ?? startChat}
+                      style={styles.chatTitlePress}
+                    >
+                      <Text style={styles.chatTitle} numberOfLines={1}>{companion.displayName}</Text>
+                    </Pressable>
+                    <Pressable accessibilityRole="button" accessibilityLabel={`与 ${companion.displayName} 开始对话`} onPress={startChat}
+                      style={({ pressed }) => pressed && styles.chatMainPressed}>
+                      <Text style={styles.chatPreview}>发第一条消息打个招呼</Text>
+                    </Pressable>
+                  </View>
                 </View>
               );
             })}
@@ -485,13 +509,14 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderColor: ui.white,
   },
   chatMain: { flex: 1, gap: 4 },
+  chatTitlePress: { flex: 1 },
   chatHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
   },
-  chatTitle: { fontSize: 15.5, fontWeight: "700", color: ui.ink, flex: 1 },
+  chatTitle: { fontSize: 15.5, fontWeight: "700", color: ui.ink },
   chatTime: { fontSize: 12, color: ui.muted },
   chatFooterRow: {
     flexDirection: "row",
