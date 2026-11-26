@@ -27,6 +27,9 @@
  *   GET|PUT /v0/companions/{id}/persona                who it is and how it talks, as the Owner wrote it
  *   GET    /v0/features                                what the app may offer (group chats, connections)
  *   GET    /v0/wallet                                  the Owner's credits for platform models
+ *   GET|POST /v0/feedback                              the Owner's feedback threads; { body, appVersion?, platform? } opens one
+ *   POST   /v0/feedback/{id}/messages                  { body }  a follow-up (opens a closed thread again)
+ *   PUT    /v0/feedback/{id}/read                      the Owner has read the team's answers
  *   GET|POST /v0/companions/{id}/agent-keys             keys for the Owner's own agent to check in (agent/heartbeat.ts)
  *   DELETE /v0/companions/{id}/agent-keys/{keyId}      revoke one
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
@@ -34,7 +37,7 @@
  *   DELETE /v0/companions/{id}                         delete the Companion and what was private to it
  *   PUT    /v0/owner/avatar, /v0/companions/{id}/avatar { avatar }  a built-in avatar ("preset:<id>") or null
  *
- * POST /v0/chats, POST .../messages, POST .../voice and POST .../actions need an Idempotency-Key. After a send, a retry, or a read
+ * POST /v0/chats, POST .../messages, POST .../voice, POST .../actions and POST /v0/feedback(...) need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
@@ -61,6 +64,9 @@ const RECOGNITION_TIMEOUT_MS = 30_000;
 
 // Same names as contracts/companion-actions.ts (checked again by the database).
 const ACTIONS: readonly CompanionAction[] = ["WAVE", "PAT_HEAD", "HUG", "CUDDLE"];
+/** 意见反馈: one message of up to 2000 characters; the App may say which build and system it is. */
+const FEEDBACK_CHARS = 2000;
+const FEEDBACK_PLATFORMS: readonly string[] = ["IOS", "ANDROID", "WEB"];
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid chat request."); };
 const notFound = (): never => { throw new PostgresPersistenceError("NOT_FOUND", "Chat route not found."); };
@@ -264,6 +270,7 @@ export async function handleChatRequest(
   const badgesRoute = path[1] === "badges" && path.length === 2;
   const featuresRoute = path[1] === "features" && path.length === 2;
   const walletRoute = path[1] === "wallet" && path.length === 2;
+  const feedbackRoute = path[1] === "feedback" && (path.length === 2 || (path.length === 4 && ["messages", "read"].includes(path[3]!)));
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
@@ -273,7 +280,7 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, memoriesRoute, personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
@@ -291,6 +298,21 @@ export async function handleChatRequest(
   }
   if (modelsRoute) return method === "GET" ? response(200, await models(port, catalog)) : notFound();
   if (walletRoute) return method === "GET" ? response(200, await port.wallet()) : notFound();
+  if (feedbackRoute) {
+    if (path.length === 2) {
+      if (method === "GET") return response(200, await port.feedback());
+      if (method !== "POST") return notFound();
+      const { body: message, appVersion, platform } = body(request, ["body", "appVersion", "platform"]);
+      if (!(appVersion === undefined || appVersion === null || (typeof appVersion === "string" && Array.from(appVersion.trim()).length <= 40))
+        || !(platform === undefined || platform === null || FEEDBACK_PLATFORMS.includes(platform as string))) return invalid();
+      return response(201, await port.sendFeedback(text(message, FEEDBACK_CHARS), typeof appVersion === "string" ? appVersion.trim() || null : null,
+        (platform as string | undefined) ?? null, retryKey(request, session.ownerId)));
+    }
+    const feedbackId = id(path[2]);
+    if (path[3] === "read") return method === "PUT" ? response(200, await port.readFeedback(feedbackId)) : notFound();
+    if (method !== "POST") return notFound();
+    return response(201, await port.addFeedback(feedbackId, text(body(request, ["body"]).body, FEEDBACK_CHARS), retryKey(request, session.ownerId)));
+  }
   if (featuresRoute) {
     if (method !== "GET") return notFound();
     const switches = await port.features() as Omit<PlatformFeatures, "connections">;

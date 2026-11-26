@@ -45,6 +45,10 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     markRead: async (...args) => { calls.push(["markRead", ...args]); return {}; },
     features: async () => { calls.push(["features"]); return { groupChatCreate: false, groupChatSend: true }; },
     wallet: async () => { calls.push(["wallet"]); return { enabled: false }; },
+    feedback: async () => { calls.push(["feedback"]); return { items: [] }; },
+    sendFeedback: async (...args) => { calls.push(["sendFeedback", ...args]); return { id: "f1" }; },
+    addFeedback: async (...args) => { calls.push(["addFeedback", ...args]); return { id: args[0] }; },
+    readFeedback: async (...args) => { calls.push(["readFeedback", ...args]); return { id: args[0] }; },
     badges: async () => { calls.push(["badges"]); return {}; },
     anniversary: async (...args) => { calls.push(["anniversary", ...args]); return {}; },
     saveAnniversary: async (...args) => { calls.push(["saveAnniversary", ...args]); return {}; },
@@ -196,6 +200,28 @@ it("routes the wallet", async () => {
   assert.equal(await status(port, request("wallet")), 200);
   assert.equal(await refusal(port, request("wallet", "POST")), "NOT_FOUND");
   assert.deepEqual(calls, [["wallet"]]);
+});
+
+it("routes feedback: a thread, follow-ups and reading the answers", async () => {
+  const { port, calls } = fakePort();
+  const key = sha256(`chat:${ownerId}:stable-chat-test-key-1`), thread = "00000000-0000-0000-0000-00000000f001";
+  assert.equal(await status(port, request("feedback")), 200);
+  assert.equal(await status(port, request("feedback", "POST", { body: " 语音有时候发不出去 ", appVersion: " 1.2.0 ", platform: "IOS" })), 201);
+  assert.equal(await status(port, request("feedback", "POST", { body: "希望能换主题" })), 201);
+  assert.equal(await status(port, request(`feedback/${thread}/messages`, "POST", { body: "补充:是在地铁上" })), 201);
+  assert.equal(await status(port, request(`feedback/${thread}/read`, "PUT")), 200);
+  assert.deepEqual(calls, [["feedback"], ["sendFeedback", "语音有时候发不出去", "1.2.0", "IOS", key], ["sendFeedback", "希望能换主题", null, null, key],
+    ["addFeedback", thread, "补充:是在地铁上", key], ["readFeedback", thread]]);
+  for (const bad of [{ body: "" }, { body: "长".repeat(2001) }, { body: "x", platform: "MAC" }, { body: "x", appVersion: "v".repeat(41) },
+    { body: "x", appVersion: 3 }, { body: "x", extra: 1 }]) {
+    assert.equal(await refusal(port, request("feedback", "POST", bad)), "INVALID_INPUT", JSON.stringify(bad));
+  }
+  assert.equal(await refusal(port, request("feedback", "POST", { body: "x" }, { "Idempotency-Key": "short" })), "INVALID_INPUT", "a retry key is needed");
+  assert.equal(await refusal(port, request("feedback/not-a-uuid/read", "PUT")), "INVALID_INPUT");
+  assert.equal(await refusal(port, request(`feedback/${thread}/read`)), "NOT_FOUND");
+  assert.equal(await refusal(port, request(`feedback/${thread}/messages`)), "NOT_FOUND");
+  assert.equal(await refusal(port, request("feedback", "DELETE")), "NOT_FOUND");
+  assert.equal(await handleChatRequest(request(`feedback/${thread}`), session(port), "trace", replies), undefined, "not a feedback route");
 });
 
 it("routes agent keys: the token is shown once and only its hash reaches the database", async () => {

@@ -117,13 +117,14 @@ const SOURCES: Readonly<Record<string, string>> = {
 const TARGETS: Readonly<Record<string, string>> = {
   ACTOR: "账号", POST: "帖子", COMMENT: "评论", OWNER: "主人", SOCIAL_TWIN: "家机", REPORT: "举报", CHAT: "会话",
   CHAT_QUOTA: "每日额度", ALL: "全部模型", PROVIDER: "厂商", MODEL: "模型", FIXED_COST: "固定月费", VOICE_PRICES: "语音单价",
-  PROMPT: "提示词",
+  PROMPT: "提示词", FEEDBACK: "反馈",
 };
 const ACTIONS: Readonly<Record<string, string>> = {
   REMOVE_POST: "移除帖子", REMOVE_COMMENT: "移除评论", RESTORE_POST: "恢复帖子", RESTORE_COMMENT: "恢复评论",
   SUSPEND_TWIN: "停用家机", RESTORE_TWIN: "恢复家机", SUSPEND_OWNER: "封禁主人", RESTORE_OWNER: "解封主人",
   RESOLVE_REPORT: "处理举报", MODEL_SWITCH: "模型开关", CHAT_QUOTA: "每日额度", READ_CHAT: "查看私聊",
   FIXED_COST: "固定月费", VOICE_PRICES: "语音单价", PROMPT_SET: "修改提示词",
+  FEEDBACK_REPLY: "回复反馈", FEEDBACK_CLOSE: "关闭反馈", FEEDBACK_REOPEN: "重新打开反馈",
 };
 const MESSAGE_STATUS: Readonly<Record<string, string>> = {
   PENDING: "(正在回复)", FAILED: "(回复失败)", BLOCKED: "(被安全扫描拦下)", PASSED: "(选择不说话)",
@@ -258,6 +259,8 @@ table.lines tr:hover td{background:none}
 .facts div b{display:block;font-size:15px;font-weight:500;color:var(--text)}
 .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));gap:16px;align-items:start;margin-top:20px}.two section.panel{margin:0 0 16px;min-width:0}
 .item+.item{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}td details.edit{margin-top:6px;padding-top:0;border:0}td details.edit summary{font-size:13px}
+form.reply{margin:14px 0 4px}form.reply textarea{min-height:64px}form.reply .row{display:flex;justify-content:flex-end;align-items:center;gap:14px;margin-top:8px}
+form.reply label{color:var(--sub);font-size:14px}form.reply button{background:var(--blue);color:#fff}form.quick{margin:6px 0 0;justify-content:flex-end}form.act button.plain{background:transparent;color:var(--sub);padding:4px 0;font-weight:400;font-size:13px}
 .report-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px}.report-head b{font-size:17px}
 .empty{text-align:center;padding:48px 16px;color:var(--sub);background:var(--card);border-radius:18px;box-shadow:var(--shadow)}
 @media (max-width:860px){h1{font-size:26px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.cards.hero{grid-template-columns:1fr}
@@ -267,7 +270,7 @@ table.lines tr:hover td{background:none}
 
 /** The sidebar: grouped like a phone's settings, each with a small line icon. */
 const NAV: readonly (readonly [string, readonly (readonly [string, string, string, string])[]])[] = [
-  ["处理", [["/reports", "举报", "#ff3b30", "M5 21V4h11l-2 4 2 4H5"], ["/owners", "用户与聊天", "#0a84ff", "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c0-4 4-6 8-6s8 2 8 6"]]],
+  ["处理", [["/reports", "举报", "#ff3b30", "M5 21V4h11l-2 4 2 4H5"], ["/feedback", "反馈", "#34c759", "M4 5h16v11H9l-5 4z"], ["/owners", "用户与聊天", "#0a84ff", "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c0-4 4-6 8-6s8 2 8 6"]]],
   ["数据", [["/stats", "运营数据", "#30b0c7", "M5 20V11M12 20V4M19 20v-6"], ["/costs", "花费", "#34c759", "M3 6h18v13H3zM3 10h18M7 15h4"],
     ["/system", "系统", "#8e8e93", "M4 4h16v7H4zM4 13h16v7H4zM8 7.5h.01M8 16.5h.01"]]],
   ["设置", [["/models", "模型与额度", "#5e5ce6", "M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4"],
@@ -275,11 +278,12 @@ const NAV: readonly (readonly [string, readonly (readonly [string, string, strin
   ["记录", [["/log", "操作日志", "#636366", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2"]]],
 ];
 
-/** Where the sidebar shows how many reports wait; the server fills it in (withPending). */
-const PENDING = "<!--pending-->";
-/** A page with the number of reports waiting next to 举报 (nothing when none wait). */
-export const withPending = (page: string, pending: number) =>
-  page.replace(PENDING, pending > 0 ? `<span class="badge" aria-label="${pending} 条待处理">${Math.min(pending, 99)}</span>` : "");
+/** Where the sidebar shows how many reports and feedback threads wait; the server fills them in (withPending). */
+const PENDING: Readonly<Record<string, string>> = { "/reports": "<!--pending:reports-->", "/feedback": "<!--pending:feedback-->" };
+const badge = (n: number) => n > 0 ? `<span class="badge" aria-label="${n} 条待处理">${Math.min(n, 99)}</span>` : "";
+/** A page with the number of reports waiting next to 举报, and of feedback waiting for an answer next to 反馈 (nothing when none). */
+export const withPending = (page: string, reports: number, feedback: number) =>
+  page.replace(PENDING["/reports"]!, badge(reports)).replace(PENDING["/feedback"]!, badge(feedback));
 
 /** `tools` goes to the right of the title. */
 function page(title: string, at: string, body: Safe, done = false, tools: Safe | "" = ""): string {
@@ -287,7 +291,7 @@ function page(title: string, at: string, body: Safe, done = false, tools: Safe |
 <title>${title} · 管理后台</title><style>${new Safe(STYLE)}</style></head><body><div class="shell">
 <aside><a class="brand" href="/reports">管理后台</a><nav>${NAV.map(([group, items]) => html`<p>${group}</p>${items.map(([path, label, color, icon]) =>
     html`<a href="${path}" class="${at === path ? "on" : ""}"${at === path ? html` aria-current="page"` : ""}><svg viewBox="0 0 24 24" style="background:${color}" aria-hidden="true"><path d="${icon}"/></svg>${label}${
-    path === "/reports" ? new Safe(PENDING) : ""}</a>`)}`)}</nav></aside>
+    new Safe(PENDING[path] ?? "")}</a>`)}`)}</nav></aside>
 <main>${done ? html`<p class="ok toast" role="status">操作已完成,已记入日志。</p>` : ""}<div class="head"><h1>${title}</h1>${tools}</div>${body}</main></div></body></html>`.text;
 }
 
@@ -375,6 +379,48 @@ ${queue.items.map(r => reportCard(zone, r, back))}
 ${queue.items.length === 100 ? html`<p class="muted">只显示前 100 条。</p>` : ""}`, done, html`<div class="tools">
 <span class="seg"><a class="btn ${state === "SUBMITTED" ? "on" : ""}" href="/reports?status=SUBMITTED">待处理(${queue.pending})</a>
 <a class="btn ${state === "REVIEWED" ? "on" : ""}" href="/reports?status=REVIEWED">已处理</a></span></div>`);
+}
+
+// ---------- 反馈 ----------
+
+/** companion_admin.feedback (migration 0068): threads with one status, waiting ones first. */
+export interface FeedbackThread {
+  id: string; status: "OPEN" | "CLOSED"; waiting: boolean; appVersion: string | null; platform: string | null; createdAt: string; updatedAt: string;
+  owner: { id: string; email: string | null; displayName: string | null; status: string } | null;
+  messages: { id: string; author: "OWNER" | "TEAM"; operator: string | null; body: string; createdAt: string }[];
+}
+export interface FeedbackQueue { waiting: number; items: FeedbackThread[] }
+const PLATFORMS: Readonly<Record<string, string>> = { IOS: "iPhone", ANDROID: "安卓", WEB: "网页" };
+
+/** A form that needs no typed reason: what it does is the reason, and the log keeps the text. */
+const quick = (path: string, label: string, back: string, reason: string, fields: Safe | "" = "", primary = true) =>
+  html`<form class="act quick" method="post" action="${path}">${hidden("back", back)}${hidden("reason", reason)}${hidden("confirm", "yes")}${fields}
+<button class="${primary ? "" : "plain"}">${label}</button></form>`;
+
+function feedbackCard(zone: string, f: FeedbackThread, back: string): Safe {
+  const who = f.owner === null ? html`<span class="muted">(账号已删除)</span>`
+    : html`<a href="/owners/${f.owner.id}">${f.owner.email ?? name(f.owner.displayName)}</a>`;
+  return html`<div class="card"><div class="report-head"><b>${who}</b>${f.waiting && f.status === "OPEN" ? html`<span class="tag bad">等回复</span>` : ""}
+${f.status === "CLOSED" ? html`<span class="tag">已关闭</span>` : ""}<span class="muted">${[f.platform === null ? "" : word(PLATFORMS, f.platform),
+    f.appVersion === null ? "" : `版本 ${f.appVersion}`, time(zone, f.createdAt)].filter(x => x !== "").join(" · ")}</span></div>
+<div class="thread">${f.messages.map(m => html`<div class="msg${m.author === "TEAM" ? " me" : ""}"><b>${m.author === "TEAM" ? `我们(${m.operator})` : "用户"}</b>
+<pre>${m.body}</pre><span class="muted">${time(zone, m.createdAt)}</span></div>`)}</div>
+<form class="reply" method="post" action="/feedback/${f.id}/reply">${hidden("back", back)}${hidden("reason", "回复反馈")}${hidden("confirm", "yes")}
+<textarea name="body" required maxlength="2000" rows="2" placeholder="回复用户(对方在 App 里能看到)" aria-label="回复内容"></textarea>
+<div class="row"><label><input type="checkbox" name="close" value="yes"${f.status === "OPEN" ? " checked" : ""}> 回复后关闭</label><button>回复</button></div></form>
+${f.status === "OPEN" ? quick(`/feedback/${f.id}/close`, "不回复,直接关闭", back, "关闭反馈", "", false)
+    : quick(`/feedback/${f.id}/reopen`, "重新打开", back, "重新打开反馈", "", false)}</div>`;
+}
+
+export function feedbackPage(zone: string, queue: FeedbackQueue, state: "OPEN" | "CLOSED", done: boolean): string {
+  const back = `/feedback?status=${state}`;
+  return page("反馈", "/feedback", html`
+${queue.items.length === 0 ? html`<p class="empty">${state === "OPEN" ? "没有待处理的反馈。" : "还没有关闭的反馈。"}</p>` : ""}
+${queue.items.map(f => feedbackCard(zone, f, back))}
+${queue.items.length === 100 ? html`<p class="muted">只显示前 100 条。</p>` : ""}
+<p class="muted">用户在 App 的「意见反馈」里写的。你的回复用户在 App 里能看到(不显示是谁回的);用户再回一句,关闭的反馈会自动重新打开。</p>`, done, html`<div class="tools">
+<span class="seg"><a class="btn ${state === "OPEN" ? "on" : ""}" href="/feedback?status=OPEN">待处理(${queue.waiting})</a>
+<a class="btn ${state === "CLOSED" ? "on" : ""}" href="/feedback?status=CLOSED">已关闭</a></span></div>`);
 }
 
 export function ownersPage(zone: string, list: OwnerList, search: string): string {

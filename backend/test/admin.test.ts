@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { after, it } from "node:test";
 import type pg from "pg";
 import { AdminRefusal, PgAdminDb, explain, type AdminDb, type AdminFunction } from "../src/admin/db.ts";
-import type { Activity, ChatList, ChatPage, Costs, LogPage, SystemInfo, Models, OwnerDetail, OwnerList, Report, ReportQueue, Spend } from "../src/admin/pages.ts";
+import type { Activity, FeedbackQueue, ChatList, ChatPage, Costs, LogPage, SystemInfo, Models, OwnerDetail, OwnerList, Report, ReportQueue, Spend } from "../src/admin/pages.ts";
 import type { FlyAccess } from "../src/admin/fly.ts";
 import { createAdminServer } from "../src/admin/server.ts";
 
@@ -56,6 +56,13 @@ const fixtures = {
   spend: { from: "2026-11-17", to: "2026-11-23", totals: [{ currency: "USD", calls: 12, costMinor: 345 }],
     byDay: [{ day: "2026-11-23", provider: "claude", model: "claude-big", currency: "USD", calls: 12, failed: 1, inputTokens: 9000, outputTokens: 700, costMinor: 345 }],
     byCompanion: [{ companionId: COMPANION, ownerId: OWNER, displayName: "Mochi", currency: "USD", calls: 12, costMinor: 345 }] } satisfies Spend as Spend,
+  feedback: { waiting: 2, items: [
+    { id: id(91), status: "OPEN", waiting: true, appVersion: "1.2.0", platform: "IOS", createdAt: AT, updatedAt: AT,
+      owner: { id: OWNER, email: "a@example.test", displayName: "Alice", status: "ACTIVE" },
+      messages: [{ id: id(92), author: "OWNER", operator: null, body: NASTY, createdAt: AT }] },
+    { id: id(93), status: "OPEN", waiting: false, appVersion: null, platform: null, createdAt: AT, updatedAt: AT, owner: null,
+      messages: [{ id: id(94), author: "OWNER", operator: null, body: "换个主题吧", createdAt: AT },
+        { id: id(95), author: "TEAM", operator: "admin_alice", body: "收到,在做了", createdAt: AT }] }] } satisfies FeedbackQueue as FeedbackQueue,
   log: { items: [{ id: 9, operator: "admin_alice", action: "REMOVE_POST", targetType: "POST", targetId: POST, ownerId: OWNER, reason: NASTY, detail: { body: NASTY }, createdAt: AT },
     { id: 8, operator: "admin_bob", action: "MODEL_SWITCH", targetType: "ALL", targetId: "*", ownerId: null, reason: "outage", detail: {}, createdAt: AT }], next: 8 } satisfies LogPage as LogPage,
 };
@@ -67,7 +74,7 @@ function fakeDb(returns: Returned = {}, failure?: unknown) {
   const db: AdminDb = {
     async call<T>(fn: AdminFunction, ...args: unknown[]): Promise<T> {
       // The sidebar's count of waiting reports, read with every page: kept out of `calls` (asserted on its own).
-      if (fn === "reports" && args.length === 0) { badges.push(fn); return (returns.reports ?? fixtures.reports) as T; }
+      if ((fn === "reports" || fn === "feedback") && args.length === 0) { badges.push(fn); return (returns[fn] ?? fixtures[fn]) as T; }
       calls.push([fn, ...args]);
       if (failure !== undefined) throw failure;
       return (fn in returns ? returns[fn] : (fixtures as Returned)[fn]) as T;
@@ -184,6 +191,43 @@ it("shows the report queue with everything escaped, and closes a report only wit
   for (const back of ["https://evil.example/", "//evil.example", "/reports//x", "reports", "/owners/<x>", ""]) {
     assert.equal((await send(`/reports/${REPORT}/resolve`, { form: change({ resolution: "NONE", back }) })).headers.location, "/reports?ok=1", back);
   }
+});
+
+it("shows feedback threads, answers them and closes or reopens one", async () => {
+  const { send, calls } = await start();
+  const queue = await send("/feedback");
+  assert.deepEqual(calls, [["feedback", "OPEN"]]);
+  assert.ok(!queue.body.includes("<script>alert"), "user text never becomes markup");
+  assert.match(queue.body, /待处理\(2\)/);
+  assert.match(queue.body, /反馈<span class="badge" aria-label="2 条待处理">2<\/span>/, "the sidebar shows threads waiting for an answer");
+  assert.match(queue.body, /<a href="\/owners\/00000000-0000-0000-0000-000000000001">a@example.test<\/a><\/b><span class="tag bad">等回复<\/span>/);
+  assert.match(queue.body, /iPhone · 版本 1\.2\.0/);
+  assert.match(queue.body, /\(账号已删除\)/);
+  assert.match(queue.body, /<div class="msg me"><b>我们\(admin_alice\)<\/b>\s*<pre>收到,在做了<\/pre>/);
+  assert.match(queue.body, new RegExp(`<form class="reply" method="post" action="/feedback/${id(91)}/reply">`));
+  assert.match(queue.body, /name="close" value="yes" checked> 回复后关闭/);
+  const closed = await (await start({ feedback: { waiting: 0, items: [{ ...fixtures.feedback.items[1]!, status: "CLOSED" }] } })).send("/feedback?status=CLOSED");
+  assert.match(closed.body, /<span class="tag">已关闭<\/span>/);
+  assert.match(closed.body, /重新打开<\/button>/);
+  assert.ok(!closed.body.includes(" checked> 回复后关闭"), "answering a closed thread leaves it open unless ticked");
+  assert.match((await (await start({ feedback: { waiting: 0, items: [] } })).send("/feedback")).body, /没有待处理的反馈/);
+  assert.match((await (await start({ feedback: { waiting: 0, items: [] } })).send("/feedback?status=CLOSED")).body, /还没有关闭的反馈/);
+
+  calls.length = 0;
+  const back = "/feedback?status=OPEN";
+  const replied = await send(`/feedback/${id(91)}/reply`, { form: { back, reason: "回复反馈", confirm: "yes", body: " 谢谢,已经修好了 ", close: "yes" } });
+  assert.deepEqual([replied.status, replied.headers.location], [303, "/feedback?status=OPEN&ok=1"]);
+  await send(`/feedback/${id(91)}/reply`, { form: { back, reason: "回复反馈", confirm: "yes", body: "还在查" } });
+  await send(`/feedback/${id(91)}/close`, { form: { back, reason: "关闭反馈", confirm: "yes" } });
+  await send(`/feedback/${id(91)}/reopen`, { form: { back, reason: "重新打开反馈", confirm: "yes" } });
+  assert.deepEqual(calls, [["feedback_reply", id(91), "谢谢,已经修好了", true, "回复反馈"], ["feedback_reply", id(91), "还在查", false, "回复反馈"],
+    ["feedback_close", id(91), true, "关闭反馈"], ["feedback_close", id(91), false, "重新打开反馈"]]);
+  calls.length = 0;
+  for (const body of ["  ", "长".repeat(2001)]) {
+    assert.equal((await send(`/feedback/${id(91)}/reply`, { form: { back, reason: "回复反馈", confirm: "yes", body } })).status, 409);
+  }
+  assert.equal((await send(`/feedback/${id(91)}/delete`, { form: { back, reason: "x", confirm: "yes" } })).status, 404);
+  assert.deepEqual(calls, []);
 });
 
 it("tells the operator why the database refused, and hides what went wrong otherwise", async () => {
