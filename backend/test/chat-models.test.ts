@@ -267,7 +267,7 @@ it("tells the model how to set reminders, and what a turn that answers nobody is
   const may = replyPrompt({ ...direct, canRemind: false }, [], {}, now);
   assert.doesNotMatch(may.system + may.user, /提醒/, "where it may not set one it is not told how");
 
-  const greeting: ChatClaim = { ...direct, replyTo: "SELF", optional: true, reach: { kind: "GREETING" },
+  const greeting: ChatClaim = { ...direct, replyTo: "SELF", optional: true, canRemind: false, reach: { kind: "GREETING" },
     history: [{ companionId: null, body: "晚安", action: null, mentions: [], sentAt: "2026-11-25T15:00:00Z" }] };
   const first = replyPrompt(greeting, [], {}, now);
   assert.match(first.system, /- 主动找主人时像朋友那样自然[^]*- 主动找主人时不催主人回复，不问主人为什么不理你/);
@@ -456,7 +456,7 @@ it("speaks through a platform model: books, calls, settles, and asks the cheap m
   // Through the reply writer: a model answer becomes SENT messages.
   const finished: unknown[] = [];
   const writerPort = { ...port, claim: async () => (finished.length === 0 ? turn() : null),
-    finish: async (...args: unknown[]) => { finished.push(args); return true; } } as unknown as ChatPort;
+    finish: async (...args: unknown[]) => { finished.push(args.slice(0, args.findLastIndex(arg => arg !== undefined) + 1)); return true; } } as unknown as ChatPort;
   answers["claude-big"] = "嗯";
   await new ChatReplies(platform).drain("chat", writerPort);
   assert.deepEqual(finished, [["reply", "claim", "SENT", ["嗯"]]]);

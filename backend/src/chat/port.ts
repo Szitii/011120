@@ -33,7 +33,7 @@ export interface ChatClaim {
   canAct?: boolean;
   /** Why it writes without being written to; null or left out for an ordinary turn. */
   reach?: Reach | null;
-  /** true: in this reply it may set a reminder for the Owner and cancel ones it set (one-to-one chats, when switched on). */
+  /** true: in this reply it may set a reminder for the Owner and cancel ones it set (answering the Owner one-to-one, when switched on). */
   canRemind?: boolean;
   /** The reminders it still has to deliver, soonest first (at most 20). */
   reminders?: { id: string; dueAt: string; note: string }[];
@@ -49,7 +49,7 @@ export type Reach = { kind: "GREETING" } | { kind: "REMINDER"; note: string; due
 export interface ReminderChange { set?: { at: string; note: string }; cancel?: string[] }
 
 /** chat_reach_begin: a turn was queued in `chatId`, or why none was. */
-export type ReachStart = { status: "QUEUED"; chatId: string; kind: Reach["kind"] } | { status: "OFF" | "BUSY" | "NOT_DUE" };
+export type ReachStart = { status: "QUEUED"; chatId: string } | { status: "OFF" | "BUSY" | "NOT_DUE" };
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
 

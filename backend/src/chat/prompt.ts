@@ -102,10 +102,10 @@ const REMINDER_NOTE_CHARS = 100;
 /**
  * The messages with every reminder mark removed, and what the marks ask for: the first reminder
  * they set (`at` is the Owner's local time as written, "2026-11-27 08:00") and the waiting reminders
- * they cancel, by their number in `waiting`. Undefined when they ask for nothing.
+ * they cancel, by their number in `waiting`.
  */
 export function splitReminders(messages: readonly string[], waiting: readonly { id: string }[] = []):
-  { messages: string[]; reminders: ReminderChange | undefined } {
+  { messages: string[]; set: ReminderChange["set"]; cancel: string[] } {
   let set: ReminderChange["set"];
   const cancel: string[] = [];
   const two = (digits: string): string => digits.padStart(2, "0");
@@ -121,14 +121,12 @@ export function splitReminders(messages: readonly string[], waiting: readonly { 
       return "";
     })
     .replace(OTHER_REMIND_MARK, "").trim());
-  const reminders = set === undefined && cancel.length === 0 ? undefined
-    : { ...(set === undefined ? {} : { set }), ...(cancel.length === 0 ? {} : { cancel }) };
-  return { messages: rest, reminders };
+  return { messages: rest, set, cancel };
 }
 
 /** Only where a Companion may set reminders, and only when it answers the Owner: when, and how to mark it. */
 const remindRules = (turn: ChatClaim, texts: PromptTexts): string[] =>
-  turn.canRemind && turn.replyTo === "OWNER" ? promptLines(texts, "CHAT_REMIND") : [];
+  turn.canRemind ? promptLines(texts, "CHAT_REMIND") : [];
 
 /**
  * Only for a turn in which it writes on its own: how. The last line is not the operators' to
@@ -137,8 +135,6 @@ const remindRules = (turn: ChatClaim, texts: PromptTexts): string[] =>
 const reachRules = (turn: ChatClaim, texts: PromptTexts): string[] => turn.reach?.kind !== "GREETING" ? []
   : [...promptLines(texts, "CHAT_REACH"), "- 主动找主人时不催主人回复，不问主人为什么不理你，不说想念得难受、离不开主人这类让人有负担的话。"];
 
-/** A turn that may end without a word: an optional one, but never one that delivers a reminder. */
-const mayPass = (turn: ChatClaim): boolean => turn.optional && turn.reach?.kind !== "REMINDER";
 
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 
@@ -147,7 +143,8 @@ const PAUSE_MS = 30 * 60_000;
 const DEFAULT_ZONE = "Asia/Shanghai";
 
 /** A moment on the Owner's clock: `day` "11月26日", `text` "11月26日 周四 10:50". */
-type Clock = (at: Date) => { year: string; day: string; text: string };
+/** `stamp`: the moment as a reminder mark writes it and the database reads it, "2026-11-27 08:00". */
+type Clock = (at: Date) => { year: string; day: string; text: string; stamp: string };
 
 /** The clock of a time zone; of Asia/Shanghai for a zone this server does not know. */
 function clockOf(zone: string = DEFAULT_ZONE): Clock {
@@ -159,7 +156,8 @@ function clockOf(zone: string = DEFAULT_ZONE): Clock {
   return at => {
     const part = Object.fromEntries(clock.formatToParts(at).map(({ type, value }) => [type, value]));
     const day = `${part.month}月${part.day}日`;
-    return { year: part.year!, day, text: `${day} ${part.weekday} ${part.hour}:${part.minute}` };
+    return { year: part.year!, day, text: `${day} ${part.weekday} ${part.hour}:${part.minute}`,
+      stamp: `${part.year}-${part.month!.padStart(2, "0")}-${part.day!.padStart(2, "0")} ${part.hour}:${part.minute}` };
   };
 }
 
@@ -186,16 +184,8 @@ function timeMarks(sent: readonly (string | undefined)[], clock: Clock): (string
   });
 }
 
-/** A moment as a reminder mark writes it and the database reads it: "2026-11-27 08:00" on the clock of `zone`. */
-export function localStamp(at: Date, zone: string = DEFAULT_ZONE): string {
-  const format = (timeZone: string) => new Intl.DateTimeFormat("sv-SE", {
-    timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  });
-  let stamp: Intl.DateTimeFormat;
-  try { stamp = format(zone); } catch { stamp = format(DEFAULT_ZONE); }
-  const part = Object.fromEntries(stamp.formatToParts(at).map(({ type, value }) => [type, value]));
-  return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}`;
-}
+/** A moment as a reminder mark writes it: "2026-11-27 08:00" on the clock of `zone`. */
+export const localStamp = (at: Date, zone?: string): string => clockOf(zone)(at).stamp;
 
 /** "现在是 2026年11月26日 周四 10:50。", and how long ago the last message was when the talk had paused. */
 function nowLine(now: Date, lastSent: string | undefined, clock: Clock): string {
@@ -341,7 +331,7 @@ const chatTranscript = (turn: ChatClaim, clock = clockOf(turn.timeZone)): string
 
 /** The reminders the Companion still has to deliver, numbered the way [取消提醒:1] names them; none: no lines. */
 function waitingReminders(turn: ChatClaim, clock: Clock): string[] {
-  const waiting = turn.canRemind && turn.replyTo === "OWNER" ? turn.reminders ?? [] : [];
+  const waiting = turn.canRemind ? turn.reminders ?? [] : [];
   return waiting.length === 0 ? [] : ["", "你答应过主人、还没到时间的提醒：",
     ...waiting.map((reminder, i) => `${i + 1}. ${clock(new Date(reminder.dueAt)).text} ${oneLine(reminder.note)}`)];
 }
@@ -432,7 +422,7 @@ export function agentMessages(turn: ChatClaim, texts: PromptTexts = {}, now = ne
     ...actionRules(turn, texts),
     ...remindRules(turn, texts),
     ...waitingReminders(turn, clock).slice(1),
-    ...(mayPass(turn) && !turn.reach ? [`如果最后的消息和你无关、你也不想说话，只输出 ${PASS}。`] : []),
+    ...(turn.optional && !turn.reach ? [`如果最后的消息和你无关、你也不想说话，只输出 ${PASS}。`] : []),
   ].join("\n");
   const marks = timeMarks(history.map(message => message.sentAt), clock);
   const said = history.map((message, i) => {

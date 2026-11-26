@@ -213,7 +213,7 @@ try {
   // The Owner writes while a turn of its own is still queued: it answers the Owner and drops its own.
   await ownerSays(chat.id, "嗯");
   await age(chat.id, 7);
-  assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id, kind: "GREETING" });
+  assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id });
   await portA.send(chat.id, "我回来了", [], keyHash());
   assert.equal(await replies.drain(chat.id, portA), 1, "one turn is written");
   page = await settle(chat.id);
@@ -298,7 +298,7 @@ try {
   page = await answer("好", `[提醒:${inHours(1)} 排上了又取消]`);
   const late = page.items[0]!.reminder!;
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [late.id]);
-  assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id, kind: "REMINDER" });
+  assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id });
   assert.equal((await call(0, `companions/${A.companion}/reminders/${late.id}`, "DELETE")).status, 200);
   const shown = (await settle(chat.id)).items.length;
   assert.equal(await replies.drain(chat.id, portA), 0);
@@ -306,7 +306,7 @@ try {
   // Queued, and then the server stopped before writing it: the scheduler finds it again.
   page = await answer("好", `[提醒:${inHours(1)} 服务器停过一下]`);
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [page.items[0]!.reminder!.id]);
-  assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id, kind: "REMINDER" });
+  assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id });
   assert.deepEqual(await dueList(false, true), [{ companionId: A.companion, subject: A.subject }], "still due: nobody is writing it");
   const stuck = (await portA.claim(chat.id))!;
   assert.deepEqual([stuck.replyTo, stuck.reach], ["REMINDER", { kind: "REMINDER", note: "服务器停过一下", dueAt: (await waiting())[0]!.dueAt }]);

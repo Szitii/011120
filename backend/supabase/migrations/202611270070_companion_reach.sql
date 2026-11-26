@@ -100,9 +100,7 @@ create table companion_private.chat_reminders (
   message_id uuid references companion_private.chat_messages(id) on delete set null,
   turn_id uuid references companion_private.chat_messages(id) on delete set null,
   attempts smallint not null default 0,
-  created_at timestamptz not null default now(),
-  done_at timestamptz,
-  check ((status = 'WAITING') = (done_at is null))
+  created_at timestamptz not null default now()
 );
 create index chat_reminders_waiting on companion_private.chat_reminders(due_at) where status = 'WAITING';
 create index chat_reminders_companion on companion_private.chat_reminders(companion_id, due_at);
@@ -160,9 +158,13 @@ begin
   -- nothing it wrote first, a reminder included, still unanswered; no attempt of its own within the gap.
   return not exists(select 1 from companion_private.chat_messages h where h.chat_id = c.id and h.status = 'PENDING'
       and not (h.reply_to = 'SELF' and coalesce(h.claimed_at, h.created_at) < now() - interval '2 minutes'))
-    and not exists(select 1 from companion_private.chat_messages h where h.chat_id = c.id
-      and ((h.reply_to in ('SELF', 'REMINDER') and h.status = 'SENT' and h.shown_at > last_at)
-        or (h.reply_to = 'SELF' and h.created_at > now() - gap)))
+    -- (The Owner's last message is at least a gap old here, and a turn is shown no earlier than it was
+    -- queued: so all of this lies after that message or is still pending, and the chat's older
+    -- messages are never read.)
+    and not exists(select 1 from companion_private.chat_messages h where h.chat_id = c.id and h.shown_at > last_at
+      and ((h.reply_to in ('SELF', 'REMINDER') and h.status = 'SENT') or (h.reply_to = 'SELF' and h.created_at > now() - gap)))
+    and not exists(select 1 from companion_private.chat_messages h where h.chat_id = c.id and h.status = 'PENDING'
+      and h.reply_to = 'SELF' and h.created_at > now() - gap)
     and (select count(*) from companion_private.chat_messages h where h.chat_id = c.id and h.reply_to = 'SELF'
         and h.status = 'SENT' and h.part = 1 and h.shown_at >= date_trunc('day', v_local) at time zone v_zone)
       < case p_level when 'OFTEN' then 2 else 1 end;
@@ -202,6 +204,8 @@ returns jsonb language sql stable security definer set search_path='' as $$
     join public.owners o on o.id = c.owner_id and o.status = 'ACTIVE'
     join companion_private.chats ch on ch.direct_companion_id = s.companion_id
     where companion_private.feature_on('COMPANION_REACH') and s.proactive <> 'OFF'
+      -- A chat is active no earlier than its Owner's last message, and nobody is written to after 7 days of silence.
+      and ch.active_at > now() - interval '7 days'
       and (p_platform or exists(select 1 from companion_private.companion_connections k where k.companion_id = s.companion_id))
       and companion_private.chat_greeting_due(ch, s.proactive)
     order by ch.active_at
@@ -212,7 +216,7 @@ $$;
 --   OFF      the operators' switch is off
 --   BUSY     a reminder is due but someone is writing another reply in the chat right now: next round
 --   NOT_DUE  nothing to do (any more)
---   QUEUED   with chatId and kind (REMINDER or GREETING): write the chat's queued turns now
+--   QUEUED   with chatId: write the chat's queued turns now
 --            (also when a turn queued earlier, the reminder's own or one standing before it, was
 --            left unwritten for two minutes: writing those is what makes room)
 create function public.chat_reach_begin(p_companion uuid)
@@ -231,12 +235,12 @@ begin
       and coalesce(h.claimed_at, h.created_at) < now() - interval '2 minutes';
   update companion_private.chat_messages set status = 'PASSED', shown_at = now(), typing_at = null, claim_id = null, compute_tx = null
     where chat_id = c.id and status = 'PENDING' and reply_to = 'SELF' and coalesce(claimed_at, created_at) < now() - interval '2 minutes';
-  update companion_private.chat_reminders set status = 'MISSED', done_at = now()
+  update companion_private.chat_reminders set status = 'MISSED'
     where companion_id = p_companion and status = 'WAITING' and turn_id is null
       and (due_at < now() - interval '24 hours' or attempts >= 5);
   if exists(select 1 from companion_private.chat_reminders w join companion_private.chat_messages t on t.id = w.turn_id
       where w.companion_id = p_companion and w.status = 'WAITING' and t.status = 'PENDING') then
-    return jsonb_build_object('status', 'QUEUED', 'chatId', c.id, 'kind', 'REMINDER');
+    return jsonb_build_object('status', 'QUEUED', 'chatId', c.id);
   end if;
   select * into r from companion_private.chat_reminders
     where companion_id = p_companion and status = 'WAITING' and turn_id is null and due_at <= now()
@@ -248,17 +252,17 @@ begin
           and coalesce(claimed_at, created_at) > now() - interval '2 minutes') then
         return jsonb_build_object('status', 'BUSY');
       end if;
-      return jsonb_build_object('status', 'QUEUED', 'chatId', c.id, 'kind', 'REMINDER');
+      return jsonb_build_object('status', 'QUEUED', 'chatId', c.id);
     end if;
     insert into companion_private.chat_messages(chat_id, companion_id, status, reply_to, optional)
       values (c.id, p_companion, 'PENDING', 'REMINDER', true) returning id into v_turn;
     update companion_private.chat_reminders set turn_id = v_turn, attempts = attempts + 1 where id = r.id;
-    return jsonb_build_object('status', 'QUEUED', 'chatId', c.id, 'kind', 'REMINDER');
+    return jsonb_build_object('status', 'QUEUED', 'chatId', c.id);
   end if;
   if not companion_private.chat_greeting_due(c, s.proactive) then return jsonb_build_object('status', 'NOT_DUE'); end if;
   insert into companion_private.chat_messages(chat_id, companion_id, status, reply_to, optional)
     values (c.id, p_companion, 'PENDING', 'SELF', true);
-  return jsonb_build_object('status', 'QUEUED', 'chatId', c.id, 'kind', 'GREETING');
+  return jsonb_build_object('status', 'QUEUED', 'chatId', c.id);
 end $$;
 
 -- The Owner's view: the reminders a Companion still has to deliver, soonest first ({ items }).
@@ -276,7 +280,7 @@ create function public.chat_reminder_cancel(p_companion uuid, p_reminder uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
 begin
-  update companion_private.chat_reminders set status = 'CANCELLED', done_at = now()
+  update companion_private.chat_reminders set status = 'CANCELLED'
     where id = p_reminder and companion_id = c and status = 'WAITING';
   if not found then raise exception using errcode='P0001', message='reminder not found'; end if;
   insert into public.audit_events(owner_id, companion_id, actor_type, actor_id, action, target_type, target_id)
@@ -288,7 +292,7 @@ end $$;
 
 -- As in 0060, plus what a turn that answers nobody needs:
 --   reach      {kind: GREETING} or {kind: REMINDER, note, dueAt}; null for an ordinary turn
---   canRemind  in this reply it may set and cancel reminders (one-to-one chats, switch on)
+--   canRemind  in this reply it may set and cancel reminders (answering the Owner in a one-to-one chat, switch on)
 --   reminders  the reminders it still has to deliver, soonest first: [{id, dueAt, note}]
 -- A queued turn of its own initiative is dropped when the Owner wrote meanwhile (it will answer
 -- that instead) or when it has waited ten minutes (a message nobody asked for is not written late,
@@ -339,7 +343,7 @@ begin
   end loop;
   update companion_private.chat_messages set claim_id = claim, claimed_at = now(), attempts = attempts + 1, compute_tx = null
     where id = m.id;
-  reach := c.direct_companion_id is not null and companion_private.feature_on('COMPANION_REACH');
+  reach := m.reply_to = 'OWNER' and c.direct_companion_id is not null and companion_private.feature_on('COMPANION_REACH');
   return jsonb_build_object('chatId', c.id, 'replyId', m.id, 'claimId', claim, 'replyTo', m.reply_to,
     'optional', m.optional, 'direct', c.direct_companion_id is not null,
     'companion', companion_private.chat_companion_json(m.companion_id)
@@ -477,11 +481,11 @@ begin
     select voice_keep_days into keep from companion_private.chat_quota;
     delete from companion_private.chat_audio where message_id in (select message_id from companion_private.chat_audio
       where created_at < now() - make_interval(days => keep) order by created_at limit 20);
-    update companion_private.chat_reminders set status = 'SENT', done_at = now() where turn_id = m.id and status = 'WAITING';
+    update companion_private.chat_reminders set status = 'SENT' where turn_id = m.id and status = 'WAITING';
     if p_reminders is not null and c.direct_companion_id is not null and companion_private.feature_on('COMPANION_REACH') then
       -- A text that is not a time, an id that is not one: that part is skipped, the reply is kept.
       begin
-        update companion_private.chat_reminders set status = 'CANCELLED', done_at = now()
+        update companion_private.chat_reminders set status = 'CANCELLED'
           where companion_id = m.companion_id and status = 'WAITING' and turn_id is null
             and id in (select x::uuid from jsonb_array_elements_text(coalesce(p_reminders->'cancel', '[]')) x);
       exception when data_exception then null;
