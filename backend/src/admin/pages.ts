@@ -231,9 +231,7 @@ box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;anim
 .msg pre{margin:0;padding:9px 14px;border-radius:18px;background:var(--fill2);line-height:1.45}
 .msg .muted{font-size:11px;margin:2px 12px 0}.msg.me{align-self:flex-end;align-items:flex-end}.msg.me pre{background:var(--blue);color:#fff}
 .msg.me pre .muted{color:rgba(255,255,255,.8)}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));background:var(--card);border-radius:12px;box-shadow:var(--shadow);margin:0 0 14px;overflow:hidden}
-.kpis>div{display:flex;flex-direction:column;padding:10px 16px;border-left:1px solid var(--line);margin-left:-1px}.kpis .muted{font-size:12px}.kpis .muted:first-child{white-space:nowrap}
-.kpis b{font-size:22px;font-weight:600;line-height:1.3;font-variant-numeric:tabular-nums}
+table.kv{width:auto;min-width:min(520px,100%)}table.kv td.num{padding-left:32px}table.kv td.muted{font-size:13px;padding-left:20px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:0 0 20px}.cards .card{margin:0}
 .spend{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:20px 40px;margin:0 0 20px}.spend .big{font-size:44px;letter-spacing:-.03em}
 .spend .today{border-left:1px solid rgba(255,255,255,.15);padding-left:32px}.mid{font-size:26px;font-weight:600;margin:4px 0;font-variant-numeric:tabular-nums}
@@ -250,11 +248,11 @@ box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;anim
 .seg .btn{border-radius:7px;background:transparent;padding:4px 14px;font-size:13px}.seg .btn.on{background:var(--card);color:var(--text);
 box-shadow:0 1px 3px rgba(0,0,0,.12)}.seg .btn:hover{filter:none;background:var(--fill)}.seg .btn.on:hover{background:var(--card)}
 svg.chart{width:100%;height:auto;display:block;color:var(--ink)}svg.chart text{font-size:12px;fill:var(--faint)}svg.chart text.end{fill:var(--text);font-size:13px}
-svg.chart .grid{stroke:var(--line)}svg.chart rect.hit{fill:transparent}svg.chart rect.hit:hover{fill:var(--line)}
-.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--sub);margin:0 0 8px}
+svg.chart .grid{stroke:var(--line);stroke-dasharray:4 3}svg.chart .frame{fill:none;stroke:var(--faint)}svg.chart rect.hit{fill:transparent}svg.chart rect.hit:hover{fill:var(--line)}
+.legend i{border-radius:1px}.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--sub);margin:0 0 8px}
 .legend i,.vhead i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:0;margin-right:6px}
-.links a{margin-right:16px}.vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:8px 0 20px}.vendors .card{margin:0}
-.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:7px 0;border-bottom:1px solid var(--line)}
+.links a{margin-right:16px}.vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin:6px 0 14px}.vendors .card{margin:0}.vendor .big{font-size:22px;margin:2px 0 4px}
+.vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:4px 0;border-bottom:1px solid var(--line)}
 table.lines td:first-child{white-space:normal;word-break:break-word}table.lines td.num{width:88px}table.lines .muted{display:block;font-size:12px}
 table.lines tr:hover td{background:none}
 .sub{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}svg.spark{width:100%;height:36px;display:block;margin:4px 0}
@@ -264,7 +262,11 @@ table.lines tr:hover td{background:none}
 .item+.item{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}td details.edit{margin-top:6px;padding-top:0;border:0}td details.edit summary{font-size:13px}
 form.reply{margin:14px 0 4px}form.reply textarea{min-height:64px}form.reply .row{display:flex;justify-content:flex-end;align-items:center;gap:14px;margin-top:8px}
 form.reply label{color:var(--sub);font-size:14px}form.reply button{background:var(--blue);color:#fff}form.quick{margin:6px 0 0;justify-content:flex-end}form.act button.plain{background:transparent;color:var(--sub);padding:4px 0;font-weight:400;font-size:13px}
-.report-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px}.report-head b{font-size:17px}
+.report-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px}
+.report-head form.quick{margin:0 0 0 auto}details.fb{padding:0}details.fb>summary{display:flex;gap:10px;align-items:center;width:auto;padding:12px 16px;color:var(--text);font-weight:400}
+details.fb>summary .peek{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--sub)}details.fb>summary .muted{font-size:13px;white-space:nowrap}
+details.fb>:not(summary){margin-left:16px;margin-right:16px}details.fb[open]{padding-bottom:14px}details.fb[open]>summary{border-bottom:1px solid var(--line);margin-bottom:12px}
+.report-head b{font-size:17px}
 .empty{text-align:center;padding:48px 16px;color:var(--sub);background:var(--card);border-radius:18px;box-shadow:var(--shadow)}
 @media (max-width:860px){h1{font-size:26px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.cards.hero{grid-template-columns:1fr}
 .card{padding:14px 16px}.big{font-size:24px}.hero .big{font-size:36px}section.panel{padding:18px 16px}.msg{max-width:90%}
@@ -400,26 +402,29 @@ const quick = (path: string, label: string, back: string, reason: string, fields
   html`<form class="act quick" method="post" action="${path}">${hidden("back", back)}${hidden("reason", reason)}${hidden("confirm", "yes")}${fields}
 <button class="${primary ? "" : "plain"}">${label}</button></form>`;
 
-function feedbackCard(zone: string, f: FeedbackThread, back: string): Safe {
-  const who = f.owner === null ? html`<span class="muted">(账号已删除)</span>`
-    : html`<a href="/owners/${f.owner.id}">${f.owner.email ?? name(f.owner.displayName)}</a>`;
-  return html`<div class="card"><div class="report-head"><b>${who}</b>${f.waiting && f.status === "OPEN" ? html`<span class="tag bad">等回复</span>` : ""}
-${f.status === "CLOSED" ? html`<span class="tag">已关闭</span>` : ""}<span class="muted">${[f.platform === null ? "" : word(PLATFORMS, f.platform),
-    f.appVersion === null ? "" : `版本 ${f.appVersion}`, time(zone, f.createdAt)].filter(x => x !== "").join(" · ")}</span></div>
+function feedbackCard(zone: string, f: FeedbackThread, back: string, open: boolean): Safe {
+  const who = f.owner === null ? html`<span class="muted">(账号已删除)</span>` : html`${f.owner.email ?? name(f.owner.displayName)}`;
+  const last = f.messages.at(-1);
+  return html`<details class="card fb" id="f-${f.id}"${open ? " open" : ""}><summary><b>${who}</b>${f.waiting && f.status === "OPEN" ? html`<span class="tag bad">等回复</span>` : ""}
+<span class="peek">${last === undefined ? "" : `${last.author === "TEAM" ? "我们:" : ""}${Array.from(last.body).slice(0, 60).join("")}`}</span><span class="muted">${time(zone, f.updatedAt)}</span></summary>
+<div class="report-head"><span class="muted">${[f.platform === null ? "" : word(PLATFORMS, f.platform),
+    f.appVersion === null ? "" : `版本 ${f.appVersion}`, `开始于 ${time(zone, f.createdAt)}`].filter(x => x !== "").join(" · ")}</span>
+${f.owner === null ? "" : html`<a href="/owners/${f.owner.id}">看这个用户</a>`}
+${f.status === "OPEN" ? quick(`/feedback/${f.id}/close`, "关闭", back, "关闭反馈", "", false)
+    : quick(`/feedback/${f.id}/reopen`, "重新打开", back, "重新打开反馈", "", false)}</div>
 <div class="thread">${f.messages.map(m => html`<div class="msg${m.author === "TEAM" ? " me" : ""}"><b>${m.author === "TEAM" ? `我们(${m.operator})` : "用户"}</b>
 <pre>${m.body}</pre><span class="muted">${time(zone, m.createdAt)}</span></div>`)}</div>
-<form class="reply" method="post" action="/feedback/${f.id}/reply">${hidden("back", back)}${hidden("reason", "回复反馈")}${hidden("confirm", "yes")}
+<form class="reply" method="post" action="/feedback/${f.id}/reply">${hidden("back", `${back}&open=${f.id}`)}${hidden("reason", "回复反馈")}${hidden("confirm", "yes")}
 <textarea name="body" required maxlength="2000" rows="2" placeholder="回复用户(对方在 App 里能看到)" aria-label="回复内容"></textarea>
-<div class="row"><label><input type="checkbox" name="close" value="yes"${f.status === "OPEN" ? " checked" : ""}> 回复后关闭</label><button>回复</button></div></form>
-${f.status === "OPEN" ? quick(`/feedback/${f.id}/close`, "不回复,直接关闭", back, "关闭反馈", "", false)
-    : quick(`/feedback/${f.id}/reopen`, "重新打开", back, "重新打开反馈", "", false)}</div>`;
+<div class="row"><label><input type="checkbox" name="close" value="yes"> 回复后关闭</label><button>回复</button></div></form></details>`;
 }
 
-export function feedbackPage(zone: string, queue: FeedbackQueue, state: "OPEN" | "CLOSED", done: boolean): string {
+/** One line per thread, newest activity first; a click opens it. `open` is the thread just answered. */
+export function feedbackPage(zone: string, queue: FeedbackQueue, state: "OPEN" | "CLOSED", done: boolean, open: string | null = null): string {
   const back = `/feedback?status=${state}`;
   return page("反馈", "/feedback", html`
 ${queue.items.length === 0 ? html`<p class="empty">${state === "OPEN" ? "没有待处理的反馈。" : "还没有关闭的反馈。"}</p>` : ""}
-${queue.items.map(f => feedbackCard(zone, f, back))}
+${queue.items.map(f => feedbackCard(zone, f, back, f.id === open || queue.items.length === 1))}
 ${queue.items.length === 100 ? html`<p class="muted">只显示前 100 条。</p>` : ""}
 <p class="muted">用户在 App 的「意见反馈」里写的。你的回复用户在 App 里能看到(不显示是谁回的);用户再回一句,关闭的反馈会自动重新打开。</p>`, done, html`<div class="tools">
 <span class="seg"><a class="btn ${state === "OPEN" ? "on" : ""}" href="/feedback?status=OPEN">待处理(${queue.waiting})</a>
@@ -594,10 +599,13 @@ function lineChart(labels: readonly string[], series: readonly Series[], format:
   for (let i = ends.length - 1; i >= 0; i--) ends[i]!.y = Math.min(ends[i]!.y, i === ends.length - 1 ? H - B - 4 : ends[i + 1]!.y - 15);
   return html`${series.length > 1 ? html`<div class="legend">${series.map(s => html`<span><i style="background:${s.color}"></i>${s.name}</span>`)}</div>` : ""}
 <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${series.map(s => s.name).join("、")}">
-${[0, 0.25, 0.5, 0.75, 1].map(f => html`<line class="grid" x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}"/><text x="${L - 8}" y="${y(max * f) + 4}" text-anchor="end">${format(max * f)}</text>`)}
+${[0.25, 0.5, 0.75].map(f => html`<line class="grid" x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}"/>`)}
+${labels.map((_, i) => i % every === 0 && i > 0 && i < labels.length - 1 ? html`<line class="grid" x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}"/>` : "")}
+<rect class="frame" x="${L}" y="${T}" width="${W - R - L}" height="${H - T - B}"/>
+${[0, 0.25, 0.5, 0.75, 1].map(f => html`<text x="${L - 8}" y="${y(max * f) + 4}" text-anchor="end">${format(max * f)}</text>`)}
 ${labels.map((d, i) => i % every === 0 || i === labels.length - 1 ? html`<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${label(d)}</text>` : "")}
-${series.map(s => html`<polyline fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" points="${s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}"/>
-${labels.length <= 31 ? s.values.map((v, i) => html`<circle cx="${x(i)}" cy="${y(v)}" r="3" fill="${s.color}"/>`) : ""}`)}
+${series.map(s => html`<polyline fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="miter" points="${s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}"/>
+${labels.length <= 31 ? s.values.map((v, i) => html`<rect x="${r1(x(i) - 3.5)}" y="${r1(y(v) - 3.5)}" width="7" height="7" fill="${s.color}"/>`) : ""}`)}
 ${named ? ends.map(e => html`<text class="end" x="${W - R + 8}" y="${e.y + 4}">${e.name}</text>`) : ""}
 ${labels.map((d, i) => html`<rect class="hit" x="${r1(x(i) - step / 2)}" y="${T}" width="${r1(step)}" height="${H - T - B}"><title>${d}
 ${series.map(s => `${s.name}:${format(s.values[i] ?? 0)}`).join("\n")}</title></rect>`)}
@@ -717,6 +725,15 @@ export function vendorsOf(c: Costs): Vendor[] {
 // ---------- 花费 ----------
 
 /** Month or year, and the export of what is shown. */
+/** The App's first month: nothing was used before it, so there is no month before it to pick. */
+const FIRST_MONTH = "2026-11";
+/** ← last month · next month →, only between the first month and this one. */
+function monthNav(path: string, month: string, now: Date): Safe {
+  const shift = (n: number) => { const d = new Date(`${month}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 7); };
+  const prev = shift(-1), next = shift(1), hasPrev = month > FIRST_MONTH, hasNext = next <= now.toISOString().slice(0, 7);
+  return !hasPrev && !hasNext ? html`` : html`<span class="seg">${hasPrev ? html`<a class="btn" href="${path}?month=${prev}">← ${prev}</a>` : ""}${
+    hasNext ? html`<a class="btn" href="${path}?month=${next}">${next} →</a>` : ""}</span>`;
+}
 const costsTabs = (year: boolean, month: string) => html`<span class="seg"><a class="btn ${year ? "" : "on"}" href="/costs?month=${month}">按月</a><a class="btn ${
   year ? "on" : ""}" href="/costs?year=${month.slice(0, 4)}">按年</a></span>`;
 
@@ -761,7 +778,7 @@ export function costsPage(now: Date, c: Costs, cap: Models["cap"] | null, done: 
   const daily = vendors.filter(v => v.perDay.size > 0).map(v => ({ name: v.name, color: vendorColor(v.key), values: days.map(d => v.perDay.get(d) ?? 0) }));
   const series = daily.length > 1 ? [{ name: "合计", color: INK, values: days.map((_, i) => daily.reduce((n, s) => n + s.values[i]!, 0)) }, ...daily] : daily;
   const m = c.models;
-  const tools = html`${costsTabs(false, c.month)}<form method="get" action="/costs" class="act"><input type="month" name="month" value="${c.month}" max="${now.toISOString().slice(0, 7)}" required><button>看这个月</button></form>
+  const tools = html`${costsTabs(false, c.month)}${monthNav("/costs", c.month, now)}
 <a class="btn" href="/costs/export.xlsx?month=${c.month}">导出 xlsx</a>`;
   // A past month with no use at all is before the App started: nothing was paid, not even the fixed bills.
   if (!thisMonth && usedMonths([c]).length === 0) {
@@ -850,16 +867,16 @@ export function statsPage(now: Date, a: Activity): string {
   const today = thisMonth ? days.at(-1) : undefined;
   const labels = days.map(d => d.day);
   const line = (name: string, slot: number, k: keyof Omit<ActivityDay, "day">) => ({ name, color: SLOTS[slot]!, values: days.map(d => d[k]) });
-  const tools = html`<form method="get" action="/stats" class="act"><input type="month" name="month" value="${a.month}" max="${now.toISOString().slice(0, 7)}" required><button>看这个月</button></form>`;
-  const kpi = (label: string, value: string, note = "") => html`<div><span class="muted">${label}</span><b>${value}</b>${note === "" ? "" : html`<span class="muted">${note}</span>`}</div>`;
+  const tools = monthNav("/stats", a.month, now);
+  const kpi = (label: string, value: string, note = "") => html`<tr><td>${label}</td><td class="num"><b>${value}</b></td><td class="muted">${note}</td></tr>`;
   return page(`运营数据 · ${a.month}`, "/stats", html`
-<div class="kpis">
+<section class="panel"><table class="kv">
 ${kpi("主人", count(a.owners))}${kpi("家机", count(a.companions))}
 ${kpi(thisMonth ? "本月聊天的人" : "这个月聊天的人", count(a.chatters))}${kpi("新注册", count(sum("newOwners")))}
 ${today === undefined ? "" : kpi("今天聊天的人", count(today.chatters), `主人 ${count(today.ownerMessages)} · 家机 ${count(today.replies)} 条`)}
 ${kpi("消息", count(sum("ownerMessages") + sum("replies")), `主人 ${count(sum("ownerMessages"))} · 家机 ${count(sum("replies"))}${sum("failed") > 0 ? ` · 失败 ${count(sum("failed"))}` : ""}`)}
 ${kpi("积分消耗", count(sum("creditsSpent")))}
-</div>
+</table></section>
 ${days.length === 0 ? html`<p class="muted">这个月还没有任何使用。</p>` : html`${panel("每天的人", lineChart(labels, [line("聊天的人", 0, "chatters"), line("新注册", 1, "newOwners")], count, d => d.slice(5), true))}
 ${panel("每天的消息", lineChart(labels, [line("主人发的", 0, "ownerMessages"), line("家机回的", 1, "replies")], count, d => d.slice(5), true))}
 ${panel("每天的语音和社区", lineChart(labels, [line("主人发的语音", 0, "voiceIn"), line("家机发的语音", 1, "voiceOut"),
