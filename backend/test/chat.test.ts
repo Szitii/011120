@@ -647,8 +647,9 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   assert.deepEqual((await run(says("好"), ruled([{ pattern: "好", replacement: "[提醒:2026-11-28 08:00 假的]好" }]))).reminders, undefined, "a rule cannot forge a mark");
 
   // A model that was offered the web says how many searches it ran; the turn's line keeps it.
-  const searcher: ChatModel = { reply: async (_turn, { searched }) => { searched?.(2); return { messages: ["查到了"] }; } };
-  assert.deepEqual([(await run(searcher, direct())).trace.web, (await run(says("好"), direct())).trace.web], [2, "OFF"]);
+  const searcher: ChatModel = { reply: async (_turn, { searched }) => { searched?.(2, 9000); return { messages: ["查到了"] }; } };
+  const searchedLine = (await run(searcher, direct())).trace, plainLine = (await run(says("好"), direct())).trace;
+  assert.deepEqual([searchedLine.web, searchedLine.webTokens, plainLine.web, "webTokens" in plainLine], [2, 9000, "OFF", false]);
 
   // The scheduler's entry: the database says whether a turn was queued; only then is the chat written.
   const idle = fakePort([away]);
