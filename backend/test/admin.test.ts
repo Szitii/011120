@@ -200,16 +200,21 @@ it("shows feedback threads, answers them and closes or reopens one", async () =>
   assert.ok(!queue.body.includes("<script>alert"), "user text never becomes markup");
   assert.match(queue.body, /待处理\(2\)/);
   assert.match(queue.body, /反馈<span class="badge" aria-label="2 条待处理">2<\/span>/, "the sidebar shows threads waiting for an answer");
-  assert.match(queue.body, /<a href="\/owners\/00000000-0000-0000-0000-000000000001">a@example.test<\/a><\/b><span class="tag bad">等回复<\/span>/);
+  assert.match(queue.body, /<summary><b>a@example.test<\/b><span class="tag bad">等回复<\/span>/, "one line per thread");
+  assert.match(queue.body, /<a href="\/owners\/00000000-0000-0000-0000-000000000001">看这个用户<\/a>/);
+  assert.ok(!queue.body.includes("<details class=\"card fb\" id=\"f-"+"00000000-0000-0000-0000-000000000091\" open"), "two threads: both folded");
+  const opened = await send(`/feedback?open=${id(91)}`);
+  assert.match(opened.body, new RegExp(`<details class="card fb" id="f-${id(91)}" open>`), "the thread just answered stays open");
   assert.match(queue.body, /iPhone · 版本 1\.2\.0/);
   assert.match(queue.body, /\(账号已删除\)/);
   assert.match(queue.body, /<div class="msg me"><b>我们\(admin_alice\)<\/b>\s*<pre>收到,在做了<\/pre>/);
   assert.match(queue.body, new RegExp(`<form class="reply" method="post" action="/feedback/${id(91)}/reply">`));
-  assert.match(queue.body, /name="close" value="yes" checked> 回复后关闭/);
+  assert.match(queue.body, /name="close" value="yes"> 回复后关闭/, "nothing ticked: closing is a choice");
+  assert.match(queue.body, new RegExp(`<input type="hidden" name="back" value="/feedback\\?status=OPEN&amp;open=${id(91)}">`));
   const closed = await (await start({ feedback: { waiting: 0, items: [{ ...fixtures.feedback.items[1]!, status: "CLOSED" }] } })).send("/feedback?status=CLOSED");
-  assert.match(closed.body, /<span class="tag">已关闭<\/span>/);
+  assert.match(closed.body, new RegExp(`<details class="card fb" id="f-${id(93)}" open>`), "a single thread opens by itself");
   assert.match(closed.body, /重新打开<\/button>/);
-  assert.ok(!closed.body.includes(" checked> 回复后关闭"), "answering a closed thread leaves it open unless ticked");
+  assert.ok(!closed.body.includes(" checked"));
   assert.match((await (await start({ feedback: { waiting: 0, items: [] } })).send("/feedback")).body, /没有待处理的反馈/);
   assert.match((await (await start({ feedback: { waiting: 0, items: [] } })).send("/feedback?status=CLOSED")).body, /还没有关闭的反馈/);
 
@@ -612,7 +617,7 @@ it("shows one month of everything the platform paid for, and changes the fixed b
   assert.ok(!october.body.includes("http-equiv") && !october.body.includes("自动刷新"));
   assert.match(october.body, /2026-10 还没有任何用量,也不算固定月费/, "a month before the App started costs nothing");
   assert.match(october.body, /操作已完成/);
-  assert.match(october.body, /<input type="month" name="month" value="2026-10" max="2026-11" required>/, "no month after this one to pick");
+  assert.match(october.body, /<span class="seg"><a class="btn" href="\/costs\?month=2026-11">2026-11 →<\/a><\/span>/, "nothing before the first month, nothing after this one");
   await quiet.send("/costs?month=2027-03");
   await quiet.send("/stats?month=2027-03");
   assert.deepEqual(quiet.calls.slice(-3), [["costs", "2026-11-01"], ["models"], ["activity", "2026-11-01"]], "a month to come is read as this month");
@@ -698,9 +703,10 @@ it("shows how much the App is used, and the database and the servers", async () 
   const stats = await send("/stats");
   assert.deepEqual(calls, [["activity", "2026-11-01"]]);
   assert.match(stats.body, /<a href="\/stats" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>运营数据<\/a>/);
-  assert.match(stats.body, /本月聊天的人<\/span><b>12<\/b><\/div>\s*<div><span class="muted">新注册<\/span><b>3<\/b>/);
-  assert.match(stats.body, /今天聊天的人<\/span><b>3<\/b><span class="muted">主人 20 · 家机 18 条<\/span>/);
-  assert.match(stats.body, /消息<\/span><b>57<\/b><span class="muted">主人 30 · 家机 27 · 失败 3/);
+  assert.match(stats.body, /<tr><td>本月聊天的人<\/td><td class="num"><b>12<\/b><\/td><td class="muted"><\/td><\/tr><tr><td>新注册<\/td><td class="num"><b>3<\/b>/);
+  assert.match(stats.body, /<tr><td>今天聊天的人<\/td><td class="num"><b>3<\/b><\/td><td class="muted">主人 20 · 家机 18 条<\/td>/);
+  assert.match(stats.body, /<tr><td>消息<\/td><td class="num"><b>57<\/b><\/td><td class="muted">主人 30 · 家机 27 · 失败 3/);
+  assert.ok(!stats.body.includes('<span class="seg">'), "this month is the first: no other month to go to");
   assert.match(stats.body, /<title>2026-11-23\n聊天的人:3\n新注册:2<\/title>/);
   assert.ok(!stats.body.includes("2026-11-21"), "the days before anyone used the App are left out");
   const past = await (await start({ activity: { ...activity, month: "2026-10", days: [unused("2026-10-01")] } })).send("/stats?month=2026-10");

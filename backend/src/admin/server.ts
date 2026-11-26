@@ -139,7 +139,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
     }
     if (path === "/feedback") {
       const state = query.get("status") === "CLOSED" ? "CLOSED" : "OPEN";
-      return feedbackPage(zone, await db.call<FeedbackQueue>("feedback", state), state, done);
+      return feedbackPage(zone, await db.call<FeedbackQueue>("feedback", state), state, done, query.get("open"));
     }
     if (path === "/owners") {
       const search = (query.get("q") ?? "").trim();
