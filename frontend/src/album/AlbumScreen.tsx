@@ -66,10 +66,12 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
       data={items ?? []}
       keyExtractor={item => item.id}
       ListHeaderComponent={<View style={styles.header}>
-        <SecondaryHeading title="相册" />
-        <Text style={s.meta}>留念保存在当前设备。</Text>
-        <CommunityButton label="从相册选图" disabled={busy}
-          onPress={() => void change(importPhoto, "照片没保存成功，请再试一次。")} />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <SecondaryHeading title="相册" />
+          <CommunityButton primary label="添加照片" disabled={busy}
+            onPress={() => void change(importPhoto, "照片没保存成功，请再试一次。")} />
+        </View>
+        <Text style={s.meta}>照片和聊天金句都保存在当前设备。</Text>
         {error !== "" && <View accessibilityRole="alert">
           <Text style={s.body}>{error}</Text>
           <CommunityButton label="重新加载" onPress={() => { setError(""); void refresh(); }} />

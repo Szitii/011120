@@ -9,6 +9,13 @@ import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import type { ChatClient } from "./client";
 
+function memorySourceLabel(source: string): string {
+  if (source === "IMPORT") return "从角色卡导入";
+  if (source === "OWNER") return "手动添加";
+  if (source === "AUTO") return "TA 自己记的";
+  return source || "长期记忆";
+}
+
 export function MemorySettings({ client, companionId }: { client: ChatClient; companionId: string }) {
   const { ui } = useSkin();
   const s = useThemedStyles(createStyles);
@@ -131,7 +138,7 @@ export function MemorySettings({ client, companionId }: { client: ChatClient; co
                 <View key={item.id} style={s.itemCard}>
                   <Text selectable style={s.itemBody}>{item.body}</Text>
                   <View style={s.itemFooter}>
-                    <Text style={s.itemMeta}>{item.source === "IMPORT" ? "从角色卡导入" : "手动添加"}</Text>
+                    <Text style={s.itemMeta}>{memorySourceLabel(item.source)}</Text>
                     <View style={s.itemActions}>
                       {confirmId === item.id && (
                         <Pressable onPress={() => setConfirmId(undefined)} disabled={busy}>

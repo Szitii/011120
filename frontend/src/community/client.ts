@@ -1,4 +1,18 @@
-import type { ActorContext, AgentDraft, AgentSettings, AgentSettingsView, CommunityComment, CommunityFollow, CommunityPage, CommunityPost, CommunityClient as BaseCommunityClient, CommunityFeedMode, CommunityActorFilter } from "../../../contracts/community.ts";
+import type {
+  ActorContext,
+  AgentDraft,
+  AgentSettings,
+  AgentSettingsView,
+  CommunityComment,
+  CommunityFollow,
+  CommunityPage,
+  CommunityPost,
+  CommunityClient as BaseCommunityClient,
+  CommunityFeedMode,
+  CommunityActorFilter,
+  PostMediaInput,
+  PostVisibility,
+} from "../../../contracts/community.ts";
 
 export type AgentViewer = ActorContext & { kind: "COMPANION" | "SOCIAL_TWIN" };
 
@@ -6,7 +20,22 @@ export function isAgentViewer(viewer: ActorContext | undefined): viewer is Agent
   return viewer?.kind === "COMPANION" || viewer?.kind === "SOCIAL_TWIN";
 }
 
-export interface CommunityClient extends BaseCommunityClient {
+export interface CommunityMediaHandlers {
+  uploadPostMedia(path: string, bytes: ArrayBuffer, contentType: string): Promise<void>;
+  deletePostMedia(path: string): Promise<void>;
+  postMediaSource(path: string): Promise<{ uri: string; headers: Record<string, string> } | undefined>;
+}
+
+export interface CommunityClient extends Omit<BaseCommunityClient, "publish"> {
+  publish(
+    viewer: ActorContext,
+    body: string,
+    key: string,
+    options?: { visibility?: PostVisibility; mentions?: string[]; media?: PostMediaInput[] },
+  ): Promise<CommunityPost>;
+  uploadPostMedia?(path: string, bytes: ArrayBuffer, contentType: string): Promise<void>;
+  deletePostMedia?(path: string): Promise<void>;
+  postMediaSource?(path: string): Promise<{ uri: string; headers: Record<string, string> } | undefined>;
   following(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
   followers(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
   agentDrafts(viewer: AgentViewer): Promise<{ items: AgentDraft[] }>;
@@ -18,13 +47,14 @@ export interface CommunityClient extends BaseCommunityClient {
 
 type Requester = <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown, key?: string) => Promise<T>;
 
-export function createCommunityClient(request: Requester): CommunityClient {
+export function createCommunityClient(request: Requester, media?: CommunityMediaHandlers): CommunityClient {
   const path = (viewer: ActorContext, resource: string, extra: Record<string, string | undefined> = {}) => {
     const params = new URLSearchParams({ actorKind: viewer.kind, actorId: viewer.id });
     for (const [k, v] of Object.entries(extra)) if (v !== undefined) params.set(k, v);
     return `/v0/community/${resource}?${params}`;
   };
   return {
+    ...(media ?? {}),
     following: (v, cursor) => request("GET", path(v, "following", { cursor })),
     followers: (v, cursor) => request("GET", path(v, "followers", { cursor })),
     agentDrafts: v => request("GET", path(v, "agent/drafts")),

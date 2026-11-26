@@ -1,6 +1,7 @@
 import type {
   AvatarChoice,
-  Anniversary, Badges, CompanionMemory, MemoryList, CompanionConnection, ConnectionInput, ConnectionSaveResult,
+  Anniversary, Badges, CompanionMemory, CompanionPersona, MemoryList,
+  CompanionConnection, ConnectionCopyInput, ConnectionInput, ConnectionSaveResult,
   Chat,
   ChatMessage,
   ChatModelList,
@@ -8,6 +9,7 @@ import type {
   ChatSendResult,
   ChatSettings,
   ChatVoiceInput,
+  PersonaInput,
   PlatformFeatures,
   VoiceList,
   Wallet,
@@ -59,8 +61,10 @@ export interface ChatClient {
   deleteCompanion?(id: string): Promise<{ deleted: true }>;
   saveAvatar?(id: string | null, avatar: string | null): Promise<AvatarChoice>;
   getConnection?(id: string): Promise<CompanionConnection>;
-  saveConnection?(id: string, input: ConnectionInput): Promise<ConnectionSaveResult>;
+  saveConnection?(id: string, input: ConnectionInput | ConnectionCopyInput): Promise<ConnectionSaveResult>;
   removeConnection?(id: string): Promise<CompanionConnection>;
+  getPersona?(id: string): Promise<CompanionPersona>;
+  savePersona?(id: string, input: PersonaInput): Promise<CompanionPersona>;
   listChats(): Promise<{ items: Chat[] }>;
   openChat(companionIds: string[], title?: string, key?: string): Promise<Chat>;
   getChat(chatId: string, cursor?: string): Promise<ChatPage>;
@@ -128,6 +132,8 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
     getConnection: id => send("GET", `${companion(id)}/connection`),
     saveConnection: (id, input) => send("PUT", `${companion(id)}/connection`, input),
     removeConnection: id => send("DELETE", `${companion(id)}/connection`),
+    getPersona: id => send("GET", `${companion(id)}/persona`),
+    savePersona: (id, input) => send("PUT", `${companion(id)}/persona`, input),
     listChats() {
       return send("GET", "/v0/chats");
     },

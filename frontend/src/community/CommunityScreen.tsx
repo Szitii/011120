@@ -32,6 +32,7 @@ import type { CommunityTarget } from "../state/navigation";
 import { CommunityRequestScope } from "./request-scope.ts";
 import { ActorLine, CommunityButton as Button, ContentCard, useCommunityStyles } from "./components.tsx";
 import { MentionChips, MentionPicker, type Mention } from "./MentionPicker";
+import { UnifiedProfileView } from "../components/UnifiedProfileView";
 import { ReportForm } from "./ReportForm.tsx";
 import { HumanProfileEditor } from "./HumanProfileEditor.tsx";
 import { BottomSheet } from "../components/BottomSheet.tsx";
@@ -117,7 +118,8 @@ export function CommunityScreen({
     const current = scope.begin();
     setLoading(true);
     setError("");
-    if (!cursor) void client.profile(viewer).then(
+    const ownRequest = cursor ? undefined : client.profile(viewer);
+    void ownRequest?.then(
       (profile) => {
         if (current()) {
           setOwn(profile);
@@ -134,7 +136,9 @@ export function CommunityScreen({
     try {
       let next: Data;
       if (page.type === "profile") {
-        const profile = cursor ? visibleProfile.current : await client.profile(viewer, page.id);
+        const profile = cursor
+          ? visibleProfile.current
+          : await (page.id ? client.profile(viewer, page.id) : ownRequest);
         if (!profile || !current()) return;
         next = {
           type: "profile",
@@ -318,6 +322,7 @@ export function CommunityScreen({
         data={posts}
         keyExtractor={post => post.id}
         renderItem={({ item: post }) => <ContentCard item={post}
+          resolveMedia={client.postMediaSource}
           onActor={() => openActor(post.author.id)}
           onMention={openActor}
           onLike={client.like ? () => toggleLike(post) : undefined}
@@ -423,60 +428,41 @@ export function CommunityScreen({
         )}
         {loading && <ActivityIndicator accessibilityLabel="正在加载社区" color={ui.accent} />}
 
-        {/* Profile Card */}
         {data?.type === "profile" && (
           <View style={s.card}>
-            <ActorLine actor={data.profile} subtitle={`@${data.profile.handle}`} />
-            {data.profile.bio !== "" && <Text style={s.body}>{data.profile.bio}</Text>}
-            {data.profile.isSelf ? (
+            <UnifiedProfileView name={data.profile.displayName}
+              role={data.profile.kind === "AI" ? "companion" : "owner"} avatar={data.profile.avatar}
+              subtitle={`@${data.profile.handle}`} bio={data.profile.bio} stats={data.profile}
+              onFollowList={data.profile.isSelf && !busy ? onFollowList : undefined}>
               <View style={s.row}>
-                <Text style={s.meta}>动态 {data.profile.postsCount}</Text>
-                <Button
-                  label={`关注 ${data.profile.followingCount}`}
-                  disabled={busy}
-                  onPress={() => onFollowList("following")}
-                />
-                <Button
-                  label={`粉丝 ${data.profile.followersCount}`}
-                  disabled={busy}
-                  onPress={() => onFollowList("followers")}
-                />
-              </View>
-            ) : (
-              <Text style={s.meta}>
-                动态 {data.profile.postsCount} · 关注 {data.profile.followingCount} · 粉丝 {data.profile.followersCount}
-              </Text>
-            )}
-            <View style={s.row}>
-              {data.profile.isSelf ? (
-                data.profile.kind === "HUMAN" ? (
-                  <Button label="编辑资料" disabled={busy} onPress={() => setEditingProfile(true)} />
+                {data.profile.isSelf ? (
+                  data.profile.kind === "HUMAN" ? (
+                    <Button label="编辑资料" disabled={busy} onPress={() => setEditingProfile(true)} />
+                  ) : null
                 ) : (
-                  <Text style={s.meta}>当前操作身份的独立主页</Text>
-                )
-              ) : (
-                <>
-                  <Button
-                    primary={!data.profile.following}
-                    disabled={busy || (!data.profile.following && !own?.canPublish)}
-                    label={data.profile.following ? "取消关注" : "关注"}
-                    onPress={() => {
-                      const p = data.profile;
-                      void mutate(
-                        () => client.follow(viewer, p.id, !p.following, communityRequestKey()),
-                        { write: p.following ? "取关" : "关注" },
-                      );
-                    }}
-                  />
-                  <Button label="屏蔽对方" disabled={busy} onPress={() => setBlockTarget(data.profile)} />
-                  <Button
-                    label="举报"
-                    disabled={busy}
-                    onPress={() => setReportTarget({ kind: "ACTOR", id: data.profile.id })}
-                  />
-                </>
-              )}
-            </View>
+                  <>
+                    <Button
+                      primary={!data.profile.following}
+                      disabled={busy || (!data.profile.following && !own?.canPublish)}
+                      label={data.profile.following ? "取消关注" : "关注"}
+                      onPress={() => {
+                        const p = data.profile;
+                        void mutate(
+                          () => client.follow(viewer, p.id, !p.following, communityRequestKey()),
+                          { write: p.following ? "取关" : "关注" },
+                        );
+                      }}
+                    />
+                    <Button label="屏蔽对方" disabled={busy} onPress={() => setBlockTarget(data.profile)} />
+                    <Button
+                      label="举报"
+                      disabled={busy}
+                      onPress={() => setReportTarget({ kind: "ACTOR", id: data.profile.id })}
+                    />
+                  </>
+                )}
+              </View>
+            </UnifiedProfileView>
           </View>
         )}
 
@@ -508,6 +494,7 @@ export function CommunityScreen({
           <>
             <ContentCard
               item={data.value.post}
+              resolveMedia={client.postMediaSource}
               onActor={() => openActor(data.value.post.author.id)}
               onMention={openActor}
               onLike={client.like ? () => toggleLike(data.value.post) : undefined}
@@ -653,10 +640,22 @@ export function CommunityScreen({
                 disabled={busy}
                 onPress={() => {
                   const target = deleteTarget;
+                  const postMediaPaths = target.kind === "posts"
+                    ? (data?.type === "detail" && data.value.post.id === target.id
+                        ? data.value.post.media
+                        : posts.find(item => item.id === target.id)?.media)?.map(media => media.path) ?? []
+                    : [];
                   void mutate(
                     () => client.remove(viewer, target.kind, target.id, communityRequestKey()),
-                    { success: () => setDeleteTarget(undefined),
-                      nextPage: target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined },
+                    {
+                      success: () => {
+                        setDeleteTarget(undefined);
+                        for (const mediaPath of postMediaPaths) {
+                          void client.deletePostMedia?.(mediaPath).catch(() => undefined);
+                        }
+                      },
+                      nextPage: target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined,
+                    },
                   );
                 }}
               />

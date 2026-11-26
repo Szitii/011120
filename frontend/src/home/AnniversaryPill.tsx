@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { CommunityButton } from "../community/components";
 import { BottomSheet } from "../components/BottomSheet";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
-import { CommunityButton, useCommunityStyles } from "../community/components";
-import { useSkin } from "../theme/SkinProvider";
+import { useSkin, useThemedStyles } from "../theme/SkinProvider";
+import type { UiPalette } from "../theme/skinTokens";
 import { RADIUS } from "../theme/layoutTokens";
 import { ApiProblemError } from "../adapters/real-api";
 import type { ChatClient } from "../chat/client";
@@ -13,9 +14,28 @@ import type { Anniversary as RemoteAnniversary } from "../../../contracts/chat";
 import { daysTogether, type Anniversary } from "./anniversary";
 import { homeStorageKey, type HomeScope } from "./keys";
 
+function parseDateParts(iso: string): { year: number; month: number; day: number } {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (m) {
+    return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+  }
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
+}
+
+function daysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate();
+}
+
+function formatIsoDate(year: number, month: number, day: number) {
+  const maxDay = daysInMonth(year, month);
+  const clamped = Math.max(1, Math.min(day, maxDay));
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(clamped).padStart(2, "0")}`;
+}
+
 export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; client?: ChatClient; active: boolean }) {
-  const s = useCommunityStyles();
-  const { skin } = useSkin();
+  const { skin, ui } = useSkin();
+  const st = useThemedStyles(createStyles);
   const key = homeStorageKey(scope, "anniversary");
   const [anniversary, setAnniversary] = useState<Anniversary>();
   const [ready, setReady] = useState(false);
@@ -76,8 +96,35 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
     return () => { current = false; };
   }, [active, client, key, scope.companionId, reload]);
 
-  const days = anniversary && daysTogether(anniversary);
-  const label = days ? `在一起的第 ${days} 天 · 纪念日` : "设置纪念日";
+  function openSheet() {
+    if (anniversary?.startDate) {
+      setDraft(anniversary.startDate);
+    } else {
+      const now = new Date();
+      setDraft(formatIsoDate(now.getFullYear(), now.getMonth() + 1, now.getDate()));
+    }
+    if (!usesCloud || remote) setError("");
+    setOpen(true);
+  }
+
+  function stepDate(field: "year" | "month" | "day", delta: number) {
+    const cur = parseDateParts(draft);
+    let { year, month, day } = cur;
+    if (field === "year") year = Math.max(1900, Math.min(new Date().getFullYear(), year + delta));
+    if (field === "month") {
+      month += delta;
+      if (month > 12) month = 1;
+      if (month < 1) month = 12;
+    }
+    if (field === "day") {
+      const maxD = daysInMonth(year, month);
+      day += delta;
+      if (day > maxD) day = 1;
+      if (day < 1) day = maxD;
+    }
+    setDraft(formatIsoDate(year, month, day));
+    setError("");
+  }
 
   async function save(clear = false) {
     if (!ready || pending.current || (usesCloud && !remote)) return;
@@ -86,7 +133,7 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
       timeZone: anniversary?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
     if (!clear && daysTogether(next) === undefined) {
-      setError("请输入有效日期，格式为 YYYY-MM-DD，日期不能晚于今天。");
+      setError("请选择今天或更早的日期。");
       return;
     }
     pending.current = true;
@@ -123,46 +170,159 @@ export function AnniversaryPill({ scope, client, active }: { scope: HomeScope; c
     }
   }
 
-  return <>
-    <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={!ready} onPress={() => {
-      setDraft(anniversary?.startDate ?? "");
-      setOpen(true);
-    }}>
-      <LiquidGlassSurface glass borderRadius={RADIUS.pill}>
-        <View style={styles.pill}>
-          <Ionicons name="calendar-outline" size={17} color={skin.colors.tabActive} />
-          <Text style={[s.body, { color: skin.colors.ink, flexShrink: 1 }]}>
-            {label}
-          </Text>
-          <Ionicons name="chevron-forward" size={15} color={skin.colors.inkSub} />
-        </View>
-      </LiquidGlassSurface>
-    </Pressable>
-    <BottomSheet visible={open} title="纪念日" onClose={() => { if (!saving) setOpen(false); }}>
-      <View style={styles.form}>
-        <Text style={s.meta}>{usesCloud ? "填写你们开始相伴的日子，日期会同步到其他设备。" : "填写你们开始相伴的日子。日期保存在当前设备。"}</Text>
-        <TextInput
-          accessibilityLabel="相伴起始日期"
-          value={draft}
-          onChangeText={setDraft}
-          placeholder="YYYY-MM-DD"
-          autoCapitalize="none"
-          editable={!saving}
-          maxLength={10}
-          returnKeyType="done"
-          onSubmitEditing={() => void save()}
-          style={s.input}
-        />
-        {error !== "" && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-        <CommunityButton label="保存纪念日" primary disabled={!ready || saving || (usesCloud && !remote)} onPress={() => void save()} />
-        {anniversary && <CommunityButton label="清除纪念日" disabled={!ready || saving || (usesCloud && !remote)} onPress={() => void save(true)} />}
-        {usesCloud && !remote && <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />}
-      </View>
-    </BottomSheet>
-  </>;
+  const days = anniversary && daysTogether(anniversary);
+  const label = !ready ? "纪念日" : days ? `在一起的第 ${days} 天 · 纪念日` : "设置我们的纪念日";
+  const previewDays = daysTogether({
+    startDate: draft,
+    timeZone: anniversary?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+  const nextMilestone = previewDays === undefined ? undefined : (Math.floor(previewDays / 100) + 1) * 100;
+  const parts = parseDateParts(draft);
+
+  return (
+    <>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        disabled={!ready}
+        onPress={openSheet}
+        style={({ pressed }) => [st.pill, { borderColor: skin.colors.border }, pressed && { opacity: 0.78 }]}
+      >
+        <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
+        <Ionicons name="calendar-outline" size={14} color={ui.accentInk} />
+        <Text style={st.pillText}>{label}</Text>
+        <Ionicons name="chevron-forward" size={14} color={ui.muted} />
+      </Pressable>
+
+      <BottomSheet visible={open} title="纪念日" onClose={() => { if (!saving) setOpen(false); }}>
+        <ScrollView contentContainerStyle={st.sheetBody} keyboardShouldPersistTaps="handled">
+          <View style={st.heroCard}>
+            <Text style={st.heroEyebrow}>我们的纪念日</Text>
+            <View style={st.heroNumberRow}>
+              <Text style={st.heroNumber}>{previewDays ?? "—"}</Text>
+              <Text style={st.heroUnit}>天</Text>
+            </View>
+            <Text style={st.heroSub}>
+              始于 {parts.year} 年 {parts.month} 月 {parts.day} 日
+            </Text>
+            {previewDays !== undefined && nextMilestone !== undefined && (
+              <Text style={st.heroSub}>距离 {nextMilestone} 天还有 {nextMilestone - previewDays} 天</Text>
+            )}
+          </View>
+
+          <View style={st.formCard}>
+            <Text style={st.fieldLabel}>开始日期</Text>
+            <View style={st.wheelRow}>
+              {[
+                { key: "year" as const, label: "年份", value: `${parts.year} 年` },
+                { key: "month" as const, label: "月份", value: `${parts.month} 月` },
+                { key: "day" as const, label: "日期", value: `${parts.day} 日` },
+              ].map(col => (
+                <View key={col.key} style={st.wheelCol}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`增加${col.label}`}
+                    disabled={saving}
+                    onPress={() => stepDate(col.key, 1)}
+                    style={st.stepBtn}
+                  >
+                    <Ionicons name="chevron-up" size={18} color={ui.accentInk} />
+                  </Pressable>
+                  <View style={st.wheelValBox}>
+                    <Text style={st.wheelValText}>{col.value}</Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`减少${col.label}`}
+                    disabled={saving}
+                    onPress={() => stepDate(col.key, -1)}
+                    style={st.stepBtn}
+                  >
+                    <Ionicons name="chevron-down" size={18} color={ui.accentInk} />
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {(error || previewDays === undefined) && <Text accessibilityRole="alert" style={st.errorText}>
+            {error || "请选择今天或更早的日期。"}
+          </Text>}
+
+          <CommunityButton primary label={saving ? "保存中…" : "保存纪念日"}
+            disabled={!ready || saving || previewDays === undefined || (usesCloud && !remote)} onPress={() => void save()} />
+          {anniversary && <CommunityButton label="清除纪念日"
+            disabled={!ready || saving || (usesCloud && !remote)} onPress={() => void save(true)} />}
+          {usesCloud && ready && !remote && <CommunityButton label="重新加载" onPress={() => setReload(value => value + 1)} />}
+        </ScrollView>
+      </BottomSheet>
+    </>
+  );
 }
 
-const styles = StyleSheet.create({
-  pill: { minHeight: 44, paddingHorizontal: 14, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8 },
-  form: { gap: 10 },
+const createStyles = (ui: UiPalette) => StyleSheet.create({
+  pill: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  pillText: { fontSize: 13.5, fontWeight: "600", color: ui.ink },
+  sheetBody: { gap: 14, paddingBottom: 12 },
+  heroCard: {
+    borderRadius: 20,
+    backgroundColor: ui.accentWash,
+    borderWidth: 1,
+    borderColor: ui.highlight,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    gap: 4,
+  },
+  heroEyebrow: { fontSize: 13.5, fontWeight: "600", color: ui.accentInk },
+  heroNumberRow: { flexDirection: "row", alignItems: "baseline", gap: 4 },
+  heroNumber: { fontSize: 40, fontWeight: "800", color: ui.accent, letterSpacing: -0.5 },
+  heroUnit: { fontSize: 15, fontWeight: "700", color: ui.accentInk },
+  heroSub: { fontSize: 12, color: ui.muted, marginTop: 2 },
+  formCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: ui.line,
+    backgroundColor: ui.white,
+    padding: 16,
+    gap: 10,
+  },
+  fieldLabel: { fontSize: 13.5, fontWeight: "700", color: ui.ink },
+  wheelRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  wheelCol: {
+    flex: 1,
+    alignItems: "center",
+    gap: 4,
+  },
+  stepBtn: {
+    width: "100%",
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: ui.background[0],
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  wheelValBox: {
+    width: "100%",
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: ui.accentWash,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  wheelValText: { fontSize: 15, fontWeight: "700", color: ui.ink },
+  errorText: { fontSize: 12.5, color: ui.danger, textAlign: "center" },
 });

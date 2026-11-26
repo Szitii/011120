@@ -8,6 +8,11 @@ export const DUO_SPRITES = {
   CUDDLE: [require("../../assets/room_v2/duo_cuddle_1.png"), require("../../assets/room_v2/duo_cuddle_2.png")],
 } satisfies Record<Exclude<CompanionAction, "WAVE">, readonly [RoomImage, RoomImage]>;
 
+export const DUO_COMPANION_PAT_SPRITES: readonly [RoomImage, RoomImage] = [
+  require("../../assets/room_v2/duo_pat_by_companion_1.png"),
+  require("../../assets/room_v2/duo_pat_by_companion_2.png"),
+];
+
 type RoomLayerKind = "floor_base" | "wall_back" | "dynamic_y";
 
 interface RoomSlotSpec {
@@ -26,6 +31,7 @@ interface RoomSlotSpec {
 }
 
 export const DIARY_SLOT_IMAGE: RoomImage = require("../../assets/room_v2/slot_diary.png");
+export const ALBUM_SLOT_IMAGE: RoomImage = require("../../assets/room_v2/slot_album.png");
 export const ROOM_BASE_IMAGE: RoomImage = require("../../assets/room_v2/room_base.png");
 export const BED_QUILT_OVERLAY: RoomImage = require("../../assets/room_v2/slot_bed_quilt.png");
 
@@ -59,75 +65,75 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
     name: "窗台小猫",
     layer: "wall_back",
     source: require("../../assets/room_v2/slot_pet.png"),
-    left: 0.49,
-    top: 0.22,
-    width: 0.16,
-    height: 0.075,
+    left: 0.48,
+    top: 0.20,
+    width: 0.11,
+    height: 0.09,
     sortY: 0.25,
     interactive: "pet",
   },
   {
     id: "slot_art_left",
-    name: "左侧挂画",
+    name: "左侧装饰画",
     layer: "wall_back",
     source: require("../../assets/room_v2/slot_art_left.png"),
-    left: 0.11,
-    top: 0.11,
-    width: 0.13,
-    height: 0.12,
-    sortY: 0.2,
+    left: 0.06,
+    top: 0.05,
+    width: 0.17,
+    height: 0.13,
+    sortY: 0.22,
   },
   {
     id: "slot_art_right",
-    name: "右侧挂画",
+    name: "右侧装饰画",
     layer: "wall_back",
     source: require("../../assets/room_v2/slot_art_right.png"),
-    left: 0.78,
-    top: 0.11,
-    width: 0.11,
-    height: 0.11,
-    sortY: 0.2,
+    left: 0.80,
+    top: 0.08,
+    width: 0.16,
+    height: 0.12,
+    sortY: 0.22,
   },
   {
     id: "slot_bed",
-    name: "双人床组",
+    name: "格子双人床与床头柜",
     layer: "wall_back",
     source: require("../../assets/room_v2/slot_bed.png"),
-    left: 0.025,
-    top: 0.23,
-    width: 0.42,
-    height: 0.31,
-    sortY: 0.48,
+    left: 0.02,
+    top: 0.22,
+    width: 0.43,
+    height: 0.34,
+    sortY: 0.35,
   },
   {
     id: "slot_cabinet",
-    name: "影音收纳柜",
+    name: "书桌与电脑区",
     layer: "wall_back",
     source: require("../../assets/room_v2/slot_cabinet.png"),
-    left: 0.67,
-    top: 0.20,
-    width: 0.25,
-    height: 0.17,
-    sortY: 0.36,
+    left: 0.65,
+    top: 0.22,
+    width: 0.33,
+    height: 0.21,
+    sortY: 0.40,
   },
   {
     id: "slot_lamp",
-    name: "野口勇落地灯",
+    name: "右上落地灯",
     layer: "wall_back",
     source: require("../../assets/room_v2/slot_lamp.png"),
-    left: 0.84,
-    top: 0.24,
-    width: 0.125,
-    height: 0.16,
-    sortY: 0.39,
+    left: 0.85,
+    top: 0.26,
+    width: 0.13,
+    height: 0.24,
+    sortY: 0.45,
   },
   {
     id: "slot_mirror",
-    name: "波浪全身镜",
+    name: "右侧全身镜",
     layer: "wall_back",
     source: require("../../assets/room_v2/slot_mirror.png"),
-    left: 0.89,
-    top: 0.31,
+    left: 0.88,
+    top: 0.37,
     width: 0.11,
     height: 0.31,
     sortY: 0.60,
@@ -174,7 +180,12 @@ export const ROOM_SLOTS: RoomSlotSpec[] = [
   },
 ];
 
-export type CharacterAction = "idle" | "walk_1" | "walk_2" | "walk_3" | "walk_4" | "sit" | "wave" | "sleep";
+export type CharacterAction =
+  | "idle"
+  | "walk_1" | "walk_2" | "walk_3" | "walk_4"
+  | "walk_front_1" | "walk_front_2" | "walk_front_3" | "walk_front_4"
+  | "walk_back_1" | "walk_back_2" | "walk_back_3" | "walk_back_4"
+  | "sit" | "pajama" | "wave" | "sleep";
 
 export const BOY_SPRITES: Record<CharacterAction, RoomImage> = {
   idle: require("../../assets/room_v2/boy_idle.png"),
@@ -182,7 +193,16 @@ export const BOY_SPRITES: Record<CharacterAction, RoomImage> = {
   walk_2: require("../../assets/room_v2/boy_walk_2.png"),
   walk_3: require("../../assets/room_v2/boy_walk_3.png"),
   walk_4: require("../../assets/room_v2/boy_walk_4.png"),
+  walk_front_1: require("../../assets/room_v2/boy_walk_front_1.png"),
+  walk_front_2: require("../../assets/room_v2/boy_walk_front_2.png"),
+  walk_front_3: require("../../assets/room_v2/boy_walk_front_3.png"),
+  walk_front_4: require("../../assets/room_v2/boy_walk_front_4.png"),
+  walk_back_1: require("../../assets/room_v2/boy_walk_back_1.png"),
+  walk_back_2: require("../../assets/room_v2/boy_walk_back_2.png"),
+  walk_back_3: require("../../assets/room_v2/boy_walk_back_3.png"),
+  walk_back_4: require("../../assets/room_v2/boy_walk_back_4.png"),
   sit: require("../../assets/room_v2/boy_sit.png"),
+  pajama: require("../../assets/room_v2/boy_pajama.png"),
   wave: require("../../assets/room_v2/boy_wave.png"),
   sleep: require("../../assets/room_v2/boy_sleep.png"),
 };
@@ -193,7 +213,16 @@ export const GIRL_SPRITES: Record<CharacterAction, RoomImage> = {
   walk_2: require("../../assets/room_v2/girl_walk_2.png"),
   walk_3: require("../../assets/room_v2/girl_walk_3.png"),
   walk_4: require("../../assets/room_v2/girl_walk_4.png"),
+  walk_front_1: require("../../assets/room_v2/girl_idle.png"),
+  walk_front_2: require("../../assets/room_v2/girl_walk_front_2.png"),
+  walk_front_3: require("../../assets/room_v2/girl_idle.png"),
+  walk_front_4: require("../../assets/room_v2/girl_walk_front_4.png"),
+  walk_back_1: require("../../assets/room_v2/girl_walk_back_1.png"),
+  walk_back_2: require("../../assets/room_v2/girl_walk_back_2.png"),
+  walk_back_3: require("../../assets/room_v2/girl_walk_back_3.png"),
+  walk_back_4: require("../../assets/room_v2/girl_walk_back_4.png"),
   sit: require("../../assets/room_v2/girl_sit.png"),
+  pajama: require("../../assets/room_v2/girl_pajama.png"),
   wave: require("../../assets/room_v2/girl_wave.png"),
   sleep: require("../../assets/room_v2/girl_sleep.png"),
 };

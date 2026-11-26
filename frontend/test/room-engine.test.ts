@@ -37,20 +37,40 @@ test("sleep and seated phases stay anchored while a movement command uses walk s
     assert.deepEqual(actor.point, FURNITURE.bed[id].anchor);
   }
   engine.wake();
+  // Waking: sit up under the quilt, pause, then crossfade to standing. No pose slides off the bed.
+  let sawSitting = 0;
+  let sawCrossfade = 0;
   for (let frame = 0; frame < 180; frame++) {
-    const before = engine.snapshot().actors;
     engine.tick(16);
     for (const id of ["companion", "user"] as const) {
       const after = engine.snapshot().actors[id];
-      const point = before[id].point;
-      if (frame === 0) assert.equal(after.phase, "SIT");
       assert.notEqual(after.phase, "SLEEP");
-      if (after.point.ny < BED_FLOOR_EDGE) assert.notEqual(after.phase, "WALK");
-      assert.ok(Math.hypot((after.point.nx - point.nx) * .8, after.point.ny - point.ny) <= .004001);
+      assert.notEqual(after.phase, "WALK");
+      if (after.point.ny < BED_FLOOR_EDGE) {
+        assert.equal(after.phase, "SIT");
+        assert.equal(after.furniture, "bed");
+        assert.equal(after.point.nx, FURNITURE.bed[id].anchor.nx);
+        assert.ok(after.point.ny <= FURNITURE.bed[id].anchor.ny && after.point.ny > FURNITURE.bed[id].anchor.ny - .03);
+        if ((after.opacity ?? 1) === 1) sawSitting++;
+      } else {
+        assert.deepEqual(after.point, WAKE_POINTS[id]);
+        assert.equal(after.phase, "IDLE");
+        assert.equal(after.incoming, undefined);
+      }
+      if (after.incoming) {
+        sawCrossfade++;
+        assert.deepEqual(after.incoming.point, WAKE_POINTS[id]);
+        assert.equal(after.incoming.phase, "IDLE");
+        assert.ok(Math.abs((after.opacity ?? 1) + (after.incoming.opacity ?? 1) - 1) < 1e-9);
+      }
     }
   }
-  assert.deepEqual(engine.snapshot().actors.companion.point, WAKE_POINTS.companion);
-  assert.deepEqual(engine.snapshot().actors.user.point, WAKE_POINTS.user);
+  assert.ok(sawSitting >= 2 * 20, "both sit up and stay visible for a beat");
+  assert.ok(sawCrossfade >= 2 * 15, "the change of place is a crossfade, not a jump");
+  for (const id of ["companion", "user"] as const) {
+    assert.deepEqual(engine.snapshot().actors[id].point, WAKE_POINTS[id]);
+    assert.equal(engine.snapshot().actors[id].opacity ?? 1, 1);
+  }
   for (let frame = 0; frame < 300; frame++) engine.tick(16);
   engine.furniture("sofa");
   for (let frame = 0; frame < 300; frame++) engine.tick(16);
@@ -87,7 +107,7 @@ test("furniture rectangles block the feet margin and duo sprites clear the coffe
   for (const point of Object.values(DUO_POINTS)) assert.ok(findSafePath(start, point, true));
 });
 
-test("seated actors leave the sofa from their respective openings before a duo action", () => {
+test("seated actors fade to sofa exits before a duo action", () => {
   const engine = new RoomEngine();
   const settle = () => { for (let frame = 0; frame < 300; frame++) engine.tick(16); };
   engine.furniture("sofa");
@@ -100,9 +120,13 @@ test("seated actors leave the sofa from their respective openings before a duo a
   for (let frame = 0; frame < 15; frame++) {
     const previous = engine.snapshot().actors;
     engine.tick(16);
+    const current = engine.snapshot().actors;
     for (const id of ["companion", "user"] as const) {
-      const { point } = engine.snapshot().actors[id];
-      assert.ok(Math.hypot((point.nx - previous[id].point.nx) * .8, point.ny - previous[id].point.ny) <= .004001);
+      const moved = Math.hypot((current[id].point.nx - previous[id].point.nx) * .8, current[id].point.ny - previous[id].point.ny);
+      if (moved > .004001) {
+        assert.ok((current[id].opacity ?? 1) <= .2);
+        assert.deepEqual(current[id].point, FURNITURE.sofa[id].approach);
+      }
     }
   }
   settle();
@@ -111,7 +135,7 @@ test("seated actors leave the sofa from their respective openings before a duo a
   assert.deepEqual(engine.snapshot().actors.companion.point, DUO_POINTS.companion);
 });
 
-test("sofa entry and exit clear the coffee table and use walk frames until seated", () => {
+test("sofa entry and exit clear the coffee table without walking across sofa armrests", () => {
   const engine = new RoomEngine();
   const inTable = ({ nx, ny }: { nx: number; ny: number }) =>
     nx >= TABLE_SLOT.left - .016 && nx <= TABLE_SLOT.left + TABLE_SLOT.width + .016 &&
@@ -125,7 +149,7 @@ test("sofa entry and exit clear the coffee table and use walk frames until seate
       if (actor.furniture === "sofa" && actor.phase === "WALK") walkingAtSofa = true;
     }
   }
-  assert.equal(walkingAtSofa, true);
+  assert.equal(walkingAtSofa, false);
   assert.equal(engine.snapshot().actors.user.phase, "SIT");
 
   engine.floor({ nx: .59, ny: .84 });
@@ -158,4 +182,80 @@ test("straight floor retargets keep their travel direction and avoid an initial 
   assert.deepEqual(engine.snapshot().actors.user.point, current);
   assert.equal(engine.snapshot().actors.user.phase, "IDLE");
   assert.equal(findSafePath({ nx: .60, ny: .46 }, { nx: .60, ny: .61 }, true), null);
+});
+
+test("actors settle onto the sofa together in one fade, without sliding in a seated pose", () => {
+  const engine = new RoomEngine();
+  let sawPlacement = false;
+  engine.furniture("sofa");
+  for (let frame = 0; frame < 360; frame++) {
+    const before = engine.snapshot().actors;
+    engine.tick(16);
+    const after = engine.snapshot().actors;
+    assert.equal(after.user.phase === "SIT", after.companion.phase === "SIT");
+    if (after.user.phase !== "SIT" || before.user.phase === "SIT") continue;
+    sawPlacement = true;
+    for (const id of ["companion", "user"] as const) {
+      assert.ok((after[id].opacity ?? 1) <= .2);
+      assert.deepEqual(after[id].point, FURNITURE.sofa[id].anchor);
+    }
+  }
+  assert.equal(sawPlacement, true);
+});
+
+test("going to bed crossfades to sitting under the quilt, pauses, then lies down", () => {
+  const engine = new RoomEngine();
+  const seen = { crossfade: 0, sitting: 0 };
+  engine.furniture("bed");
+  for (let frame = 0; frame < 360; frame++) {
+    engine.tick(16);
+    const actors = engine.snapshot().actors;
+    // Once both have walked up, they settle in step.
+    if (actors.user.phase !== "WALK" && actors.companion.phase !== "WALK") assert.equal(actors.user.phase, actors.companion.phase);
+    for (const id of ["companion", "user"] as const) {
+      const actor = actors[id];
+      const pillow = FURNITURE.bed[id].anchor;
+      if (actor.incoming) {
+        seen.crossfade++;
+        assert.deepEqual(actor.point, FURNITURE.bed[id].approach);
+        assert.equal(actor.incoming.phase, "SIT");
+        assert.equal(actor.incoming.furniture, "bed");
+        assert.ok(Math.abs((actor.opacity ?? 1) + (actor.incoming.opacity ?? 1) - 1) < 1e-9);
+      }
+      if (actor.furniture !== "bed") continue;
+      assert.notEqual(actor.phase, "WALK");
+      assert.equal(actor.point.nx, pillow.nx);
+      assert.ok(actor.point.ny <= pillow.ny && actor.point.ny > pillow.ny - .03);
+      if (actor.phase === "SIT") seen.sitting++;
+      else assert.deepEqual(actor.point, pillow);
+    }
+  }
+  assert.ok(seen.crossfade >= 2 * 15, "the move onto the bed is a crossfade, not a jump");
+  assert.ok(seen.sitting >= 2 * 20, "both sit for a beat before lying down");
+  for (const id of ["companion", "user"] as const) {
+    assert.equal(engine.snapshot().actors[id].phase, "SLEEP");
+    assert.deepEqual(engine.snapshot().actors[id].point, FURNITURE.bed[id].anchor);
+  }
+});
+
+test("vertical walking changes facing direction before the next frame", () => {
+  const engine = new RoomEngine();
+  engine.floor({ nx: .60, ny: .43 });
+  assert.equal(engine.snapshot().actors.user.facingDir, "back");
+  for (let frame = 0; frame < 8; frame++) engine.tick(16);
+  engine.floor({ nx: .60, ny: .47 });
+  assert.equal(engine.snapshot().actors.user.facingDir, "front");
+});
+
+test("a companion's autonomous action animates locally without recording an owner action", () => {
+  const engine = new RoomEngine();
+  for (let frame = 0; frame < 1300; frame++) engine.tick(33);
+  assert.equal(engine.snapshot().duo, undefined);
+  let sawCompanionAction = false;
+  for (let frame = 0; frame < 1300; frame++) {
+    engine.tick(33, true);
+    assert.deepEqual(engine.takeStartedActions(), []);
+    if (engine.snapshot().duo?.initiator === "COMPANION") sawCompanionAction = true;
+  }
+  assert.equal(sawCompanionAction, true);
 });
