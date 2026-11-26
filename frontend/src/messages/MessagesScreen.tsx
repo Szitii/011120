@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, T
 import type { Chat } from "../../../contracts/chat";
 import type { ActorContext, CommunityNotification } from "../../../contracts/community";
 import { safeClientMessage } from "../adapters/real-api";
+import { formatChatAction } from "../chat/actions";
 import type { ChatClient } from "../chat/client";
 import { ActorLine, CommunityButton as Button, useCommunityStyles } from "../community/components";
 import { communityRequestKey, type CommunityClient } from "../community/client";
@@ -177,7 +178,7 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
             const title = chat.title ?? (chat.members.map(member => member.displayName).join("、") || "会话");
             const last = chat.lastMessage;
             const preview = last?.action
-              ? "小家互动"
+              ? formatChatAction(last.action, last.companionId)
               : last?.status === "SENT" && last.body
                 ? last.body
                 : "轻点开始聊聊";

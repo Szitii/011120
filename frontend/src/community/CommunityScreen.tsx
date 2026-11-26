@@ -322,6 +322,7 @@ export function CommunityScreen({
         data={posts}
         keyExtractor={post => post.id}
         renderItem={({ item: post }) => <ContentCard item={post}
+          resolveMedia={client.postMediaSource}
           onActor={() => openActor(post.author.id)}
           onMention={openActor}
           onLike={client.like ? () => toggleLike(post) : undefined}
@@ -493,6 +494,7 @@ export function CommunityScreen({
           <>
             <ContentCard
               item={data.value.post}
+              resolveMedia={client.postMediaSource}
               onActor={() => openActor(data.value.post.author.id)}
               onMention={openActor}
               onLike={client.like ? () => toggleLike(data.value.post) : undefined}
@@ -638,10 +640,22 @@ export function CommunityScreen({
                 disabled={busy}
                 onPress={() => {
                   const target = deleteTarget;
+                  const postMediaPaths = target.kind === "posts"
+                    ? (data?.type === "detail" && data.value.post.id === target.id
+                        ? data.value.post.media
+                        : posts.find(item => item.id === target.id)?.media)?.map(media => media.path) ?? []
+                    : [];
                   void mutate(
                     () => client.remove(viewer, target.kind, target.id, communityRequestKey()),
-                    { success: () => setDeleteTarget(undefined),
-                      nextPage: target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined },
+                    {
+                      success: () => {
+                        setDeleteTarget(undefined);
+                        for (const mediaPath of postMediaPaths) {
+                          void client.deletePostMedia?.(mediaPath).catch(() => undefined);
+                        }
+                      },
+                      nextPage: target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined,
+                    },
                   );
                 }}
               />

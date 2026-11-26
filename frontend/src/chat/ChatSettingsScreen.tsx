@@ -1,27 +1,31 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import type { ChatModelList, ChatSettings, VoiceList } from "../../../contracts/chat";
+import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import type { ChatModelList, ChatSettings, CompanionConnection, VoiceList } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { BottomSheet } from "../components/BottomSheet";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { CommunityButton } from "../community/components";
+import type { OwnerCompanionSummary } from "../contracts";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
+import { PersonaSettings } from "./PersonaSettings";
 import { VoicePicker } from "./VoicePicker";
 import { BUBBLE_SKINS, CHAT_BACKGROUNDS, loadChatTheme, saveChatTheme, type ChatThemePreference } from "../theme/chatThemes";
 import type { ChatClient } from "./client";
 
 const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"]] as const;
 const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
+const AUTO_MEMORY = [["OFF", "关"], ["SOMETIMES", "偶尔"], ["OFTEN", "经常"]] as const;
 const TIER = { ECONOMY: "经济", STANDARD: "均衡", PREMIUM: "高级" };
 
 export function ChatSettingsScreen({
   client,
   companionId,
+  companions = [],
   connectionKind,
   connectionsEnabled,
   groupSendEnabled,
@@ -34,6 +38,7 @@ export function ChatSettingsScreen({
 }: {
   client: ChatClient;
   companionId?: string;
+  companions?: OwnerCompanionSummary[];
   chatId?: string;
   ownerId?: string;
   connectionKind?: "key" | "external";
@@ -47,6 +52,7 @@ export function ChatSettingsScreen({
   const { ui } = useSkin();
   const s = useThemedStyles(createStyles);
   const [connectionMode, setConnectionMode] = useState<"key" | "external" | undefined>(connectionKind);
+  const [activeConnection, setActiveConnection] = useState<CompanionConnection>();
   const [form, setForm] = useState<ChatSettings>();
   const [voices, setVoices] = useState<VoiceList>();
   const [voiceDraft, setVoiceDraft] = useState<string | null>();
@@ -77,7 +83,8 @@ export function ChatSettingsScreen({
   const pending = useRef(false);
   const settingsRead = useRef(0);
   const voiceChanged = voiceDraft !== undefined;
-  const saveDisabled = busy || (voiceChanged && !voices?.available);
+  const titleLen = Array.from((form?.preferredUserTitle ?? "").trim()).length;
+  const saveDisabled = busy || (voiceChanged && !voices?.available) || titleLen > 20;
 
   const handleBack = useCallback(() => {
     if (pending.current || deletingRef.current) return;
@@ -128,7 +135,10 @@ export function ChatSettingsScreen({
     setBusy(true);
     setSaveNotice("");
     try {
-      const { voice: _savedVoice, ...settings } = form;
+      const { voice: _savedVoice, preferredUserTitle: rawTitle, ...rest } = form;
+      const settings = rawTitle === undefined
+        ? rest
+        : { ...rest, preferredUserTitle: rawTitle === null || rawTitle.trim() === "" ? null : rawTitle.trim() };
       const saved = await client.updateChatSettings(companionId, voiceDraft === undefined ? settings : { ...settings, voice: voiceDraft });
       if (read !== settingsRead.current) return;
       setForm(saved);
@@ -222,10 +232,12 @@ export function ChatSettingsScreen({
           <ConnectionSettings
             client={client}
             companionId={companionId}
+            companions={companions}
             mode={connectionMode}
             onModeChange={setConnectionMode}
             enabled={connectionsEnabled}
             onAvailabilityChanged={onAvailabilityChanged}
+            onConnectionChange={setActiveConnection}
           />
         )}
 
@@ -259,6 +271,11 @@ export function ChatSettingsScreen({
 
         {!connectionMode && companionId && (
           <>
+            <PersonaSettings
+              client={client}
+              companionId={companionId}
+              isExternal={activeConnection?.kind === "EXTERNAL"}
+            />
             {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
 
             {!form ? (
@@ -300,6 +317,42 @@ export function ChatSettingsScreen({
                     </View>
                   </View>
                 )}
+
+                <View style={s.card}>
+                  <View style={s.fieldHeaderRow}>
+                    <Text style={s.sectionTitle}>TA 怎么称呼你</Text>
+                    <Text style={[s.charCount, titleLen > 20 && s.errorText]}>{titleLen} / 20 字</Text>
+                  </View>
+                  <Text style={s.mutedText}>留空时默认使用你的社区名字（私聊和日记都会按此称呼你）。</Text>
+                  <TextInput
+                    accessibilityLabel="TA 怎么称呼你"
+                    maxLength={20}
+                    editable={!busy}
+                    value={form.preferredUserTitle ?? ""}
+                    placeholder="填写昵称或称呼（最多 20 字）"
+                    placeholderTextColor={ui.muted}
+                    onChangeText={value => setForm({ ...form, preferredUserTitle: value.replace(/[\r\n]+/g, "") })}
+                    style={s.textInput}
+                  />
+                </View>
+
+                <View style={s.card}>
+                  <Text style={s.sectionTitle}>自动记忆</Text>
+                  <Text style={s.mutedText}>
+                    TA 会自己记下聊天里重要的事，随时可以在长期记忆里查看和删除。偶尔为每 50 句，经常为每 10 句。
+                  </Text>
+                  <View style={s.pillRow}>
+                    {AUTO_MEMORY.map(([value, label]) => (
+                      <CommunityButton
+                        key={value}
+                        label={label}
+                        disabled={busy}
+                        selected={(form.autoMemory ?? "SOMETIMES") === value}
+                        onPress={() => setForm({ ...form, autoMemory: value })}
+                      />
+                    ))}
+                  </View>
+                </View>
 
                 {(
                   <View style={s.card}>
@@ -445,6 +498,19 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     gap: 10,
   },
   sectionTitle: { fontSize: 15, fontWeight: "700", color: ui.ink },
+  fieldHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  charCount: { fontSize: 12, color: ui.muted },
+  errorText: { color: ui.danger },
+  textInput: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: ui.line,
+    backgroundColor: ui.background[0],
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    fontSize: 14.5,
+    color: ui.ink,
+  },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   mutedText: { fontSize: 13, color: ui.muted, lineHeight: 19 },
   saveBar: {

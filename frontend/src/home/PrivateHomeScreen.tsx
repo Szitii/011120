@@ -1,8 +1,9 @@
 import { useThemedStyles, useSkin } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
-import { useRef, useState, type ComponentRef } from "react";
+import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { saveRoomCapture } from "../album/capture";
 import { addAlbumPhoto } from "../album/store";
 import { useHomeAction } from "../chat/useHomeAction";
@@ -41,7 +42,18 @@ export function PrivateHomeScreen({
 }) {
   const { ui } = useSkin();
   const styles = useThemedStyles(createStyles);
-  const submitAction = useHomeAction(chatClient, scope?.companionId, isActive);
+  const [externalAction, setExternalAction] = useState<{ key: number; action: CompanionAction } | null>(null);
+  const [companionSpeech, setCompanionSpeech] = useState<string | null>(null);
+  const speechTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => { if (speechTimer.current) clearTimeout(speechTimer.current); }, []);
+  const submitAction = useHomeAction(chatClient, scope?.companionId, isActive, {
+    onCompanionAction: action => setExternalAction(prev => ({ key: (prev?.key ?? 0) + 1, action })),
+    onCompanionSpeech: body => {
+      setCompanionSpeech(body);
+      if (speechTimer.current) clearTimeout(speechTimer.current);
+      speechTimer.current = setTimeout(() => setCompanionSpeech(null), 4500);
+    },
+  });
   const pendingCapture = useRef(false);
   const [capturing, setCapturing] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -91,6 +103,8 @@ export function PrivateHomeScreen({
         companionName={companionName}
         isCompanionView={isCompanion}
         isActive={isActive}
+        externalAction={externalAction}
+        companionSpeech={companionSpeech}
         onOpenDiary={openDiary}
         onAction={submitAction}
         onCapture={scope ? scene => void capture(scene) : undefined}

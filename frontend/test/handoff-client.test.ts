@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chatReadTarget, createChatClient } from "../src/chat/client.ts";
+import { formatChatAction } from "../src/chat/actions.ts";
+import { createCommunityClient } from "../src/community/client.ts";
 
 test("handoff requests use the owned chat and companion paths with the correct write payload", async () => {
   const calls: unknown[][] = [];
@@ -97,4 +99,49 @@ test("chat read position advances to the newest visible message, including faile
   assert.equal(chatReadTarget({ unreadCount: 2, readUpTo: "earlier" }, blockedReply), "blocked");
   assert.equal(chatReadTarget({ unreadCount: 1, readUpTo: "blocked" }, blockedReply), undefined);
   assert.equal(chatReadTarget({ unreadCount: 0 }, blockedReply), undefined);
+});
+
+test("chat action labels distinguish owner and companion initiators", () => {
+  assert.equal(formatChatAction("HUG", null), "你抱了抱 TA");
+  assert.equal(formatChatAction("HUG", "companion-1"), "TA 抱了抱你");
+  assert.equal(formatChatAction("PAT_HEAD", null), "你摸了摸 TA 的头");
+  assert.equal(formatChatAction("PAT_HEAD", "companion-1"), "TA 摸了摸你的头");
+});
+
+test("persona read/write and connection copy use the companion routes", async () => {
+  const calls: unknown[][] = [];
+  const client = createChatClient(async <T>(...args: unknown[]) => {
+    calls.push(args);
+    return {} as T;
+  });
+  await client.getPersona!("companion/a");
+  await client.savePersona!("companion/a", { version: 3, speakingStyle: "短句" });
+  await client.saveConnection!("companion/b", { copyFrom: "companion/a", consent: true });
+  assert.deepEqual(calls, [
+    ["GET", "/v0/companions/companion%2Fa/persona"],
+    ["PUT", "/v0/companions/companion%2Fa/persona", { version: 3, speakingStyle: "短句" }],
+    ["PUT", "/v0/companions/companion%2Fb/connection", { copyFrom: "companion/a", consent: true }],
+  ]);
+});
+
+test("community publish forwards media attachments alongside visibility and mentions", async () => {
+  const calls: unknown[][] = [];
+  const community = createCommunityClient(async <T>(...args: unknown[]) => {
+    calls.push(args);
+    return {} as T;
+  });
+  const media = [{ path: "actor-1/00000000-0000-4000-8000-000000000001.jpg", width: 800, height: 600 }];
+  await community.publish({ kind: "OWNER", id: "owner-1" }, "晚霞", "post-key", {
+    visibility: "FOLLOWERS",
+    mentions: ["actor-2"],
+    media,
+  });
+  assert.deepEqual(calls, [
+    [
+      "POST",
+      "/v0/community/posts?actorKind=OWNER&actorId=owner-1",
+      { body: "晚霞", visibility: "FOLLOWERS", mentions: ["actor-2"], media },
+      "post-key",
+    ],
+  ]);
 });

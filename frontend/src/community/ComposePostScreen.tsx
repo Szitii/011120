@@ -15,11 +15,57 @@ import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { communityRequestKey, type CommunityClient } from "./client";
 import { ActorLine, CommunityButton, POST_VISIBILITY_LABELS } from "./components";
+import {
+  preparePostImage,
+  randomUuidLower,
+  readMediaBytes,
+  type AllowedImageExt,
+  type AllowedImageMime,
+} from "./imagePrep";
 import { MAX_MENTIONS, MentionChips, MentionPicker, type Mention } from "./MentionPicker";
 
 const MAX_PHOTOS = 9;
 const VISIBILITIES = ["PUBLIC", "FOLLOWERS", "PRIVATE"] as const;
-type Draft = { text: string; key: string; photos: string[]; visibility: PostVisibility; mentions: Mention[] };
+type DraftPhoto = {
+  localPath: string;
+  contentType: AllowedImageMime;
+  ext: AllowedImageExt;
+  width?: number;
+  height?: number;
+  storagePath?: string;
+};
+type Draft = { text: string; key: string; photos: DraftPhoto[]; visibility: PostVisibility; mentions: Mention[] };
+
+function isLocalPhotoPath(value: unknown): value is string {
+  return typeof value === "string" && /^post-community-[a-z0-9-]+\.[a-z0-9]{1,8}$/.test(value);
+}
+
+function readDraftPhotos(value: unknown): DraftPhoto[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: DraftPhoto[] = [];
+  for (const item of value) {
+    if (isLocalPhotoPath(item) && !seen.has(item)) {
+      seen.add(item);
+      result.push({ localPath: item, contentType: "image/jpeg", ext: "jpg" });
+    } else if (item && typeof item === "object" && "localPath" in item && isLocalPhotoPath(item.localPath) && !seen.has(item.localPath)) {
+      seen.add(item.localPath);
+      const record = item as Record<string, unknown>;
+      const ext = record.ext === "png" || record.ext === "webp" ? record.ext : "jpg";
+      const contentType = record.contentType === "image/png" || record.contentType === "image/webp" ? record.contentType : "image/jpeg";
+      result.push({
+        localPath: item.localPath,
+        contentType,
+        ext,
+        width: typeof record.width === "number" ? record.width : undefined,
+        height: typeof record.height === "number" ? record.height : undefined,
+        storagePath: typeof record.storagePath === "string" ? record.storagePath : undefined,
+      });
+    }
+    if (result.length >= MAX_PHOTOS) break;
+  }
+  return result;
+}
 
 function hasDraftContent(draft?: Draft) {
   return Boolean(draft && (draft.text.trim() || draft.photos.length || draft.mentions.length || draft.visibility !== "PUBLIC"));
@@ -90,12 +136,11 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
       const saved: unknown = raw ? JSON.parse(raw) : null;
       if (saved && typeof saved === "object" && "text" in saved && "key" in saved &&
           typeof saved.text === "string" && typeof saved.key === "string") {
-        const paths = "photos" in saved && Array.isArray(saved.photos)
-          ? saved.photos.filter((path): path is string => typeof path === "string" && /^post-community-[a-z0-9-]+\.[a-z0-9]{1,8}$/.test(path)) : [];
+        const photos = "photos" in saved ? readDraftPhotos(saved.photos) : [];
         const rawVisibility = "visibility" in saved ? saved.visibility : undefined;
         const visibility = rawVisibility === undefined ? "PUBLIC"
           : VISIBILITIES.find(value => value === rawVisibility) ?? "PRIVATE";
-        setDraft({ text: saved.text, key: saved.key, photos: [...new Set(paths)].slice(0, MAX_PHOTOS),
+        setDraft({ text: saved.text, key: saved.key, photos,
           visibility, mentions: readMentions("mentions" in saved ? saved.mentions : undefined) });
       } else setDraft(empty());
     }).catch(() => {
@@ -137,7 +182,7 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
     picking.current = true;
     setBusy(true);
     setError("");
-    const added: string[] = [];
+    const added: DraftPhoto[] = [];
     try {
       if (camera && Platform.OS !== "web" && !(await ImagePicker.requestCameraPermissionsAsync()).granted) {
         if (alive.current) setError("请允许相机权限，或从相册选择。");
@@ -145,38 +190,63 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
       }
       const available = MAX_PHOTOS - photos.length;
       const result = camera
-        ? await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.85 })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsMultipleSelection: true, selectionLimit: available, quality: 0.85 });
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            quality: 0.72,
+            preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            allowsMultipleSelection: true,
+            selectionLimit: available,
+            quality: 0.72,
+            preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+          });
       if (!alive.current || result.canceled) return;
       for (const asset of result.assets.slice(0, available)) {
-        const extension = (asset.fileName?.split(".").at(-1) ?? asset.mimeType?.split("/").at(-1) ?? "").toLowerCase();
-        const suffix = /^[a-z0-9]{1,8}$/.test(extension) ? extension : "jpg";
-        const path = `post-${communityRequestKey()}.${suffix}`;
-        added.push(path);
-        await keepMedia(path, asset.uri);
+        const prepared = await preparePostImage(asset);
+        const localPath = `post-${communityRequestKey()}.${prepared.ext}`;
+        try {
+          await keepMedia(localPath, prepared.previewUri);
+        } finally {
+          prepared.revokePreview?.();
+        }
+        added.push({
+          localPath,
+          contentType: prepared.contentType,
+          ext: prepared.ext,
+          width: prepared.width,
+          height: prepared.height,
+        });
       }
-      if (!alive.current) { await Promise.allSettled(added.map(removeMedia)); return; }
+      if (!alive.current) { await Promise.allSettled(added.map(item => removeMedia(item.localPath))); return; }
       const next = { ...draft, photos: [...photos, ...added] };
       await persist(next);
       if (alive.current) setDraft(next);
-    } catch {
-      await Promise.allSettled(added.map(removeMedia));
-      if (alive.current) setError("照片没能存到本机草稿，请再试一次。");
+    } catch (err) {
+      await Promise.allSettled(added.map(item => removeMedia(item.localPath)));
+      if (alive.current) {
+        setError(err instanceof Error && err.message ? err.message : "照片没能存到本机草稿，请再试一次。");
+      }
     } finally {
       picking.current = false;
       if (alive.current) setBusy(false);
     }
   }
 
-  async function removePhoto(path: string) {
+  async function removePhoto(localPath: string) {
     if (!draft || pending.current || picking.current) return;
+    const target = photos.find(photo => photo.localPath === localPath);
     pending.current = true;
     setBusy(true);
     try {
-      const next = { ...draft, photos: photos.filter(photo => photo !== path) };
+      const next = { ...draft, photos: photos.filter(photo => photo.localPath !== localPath) };
       await persist(next);
       if (alive.current) setDraft(next);
-      await removeMedia(path).catch(() => undefined);
+      await removeMedia(localPath).catch(() => undefined);
+      if (target?.storagePath) {
+        await client.deletePostMedia?.(target.storagePath).catch(() => undefined);
+      }
     } catch { if (alive.current) setError("照片未移除，请重试。"); }
     finally { pending.current = false; if (alive.current) setBusy(false); }
   }
@@ -187,7 +257,12 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
     setBusy(true);
     try {
       await persist(keep ? draft : undefined);
-      if (!keep) await Promise.allSettled(photos.map(removeMedia));
+      if (!keep) {
+        await Promise.allSettled([
+          ...photos.map(photo => removeMedia(photo.localPath)),
+          ...photos.filter(photo => photo.storagePath).map(photo => client.deletePostMedia?.(photo.storagePath!)),
+        ]);
+      }
       if (alive.current) onBack();
     } catch {
       if (alive.current) setError("草稿未保存，请再试一次。");
@@ -198,26 +273,74 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
   }
 
   const length = Array.from(draft?.text.trim() ?? "").length;
-  const canPublish = !busy && !closing && photos.length === 0 && length >= 1 && length <= 4000;
+  const mediaUnsupported = photos.length > 0 && !client.uploadPostMedia;
+  const canPublish = !busy && !closing && !mediaUnsupported && length >= 1 && length <= 4000;
 
   async function publish() {
-    if (!draft || pending.current || picking.current || photos.length || length < 1 || length > 4000) return;
+    if (!draft || pending.current || picking.current || mediaUnsupported || length < 1 || length > 4000) return;
     pending.current = true;
     setBusy(true);
     setError("");
     try {
-      const post = await client.publish(viewer, draft.text, draft.key, {
-        visibility: draft.visibility,
-        mentions: draft.mentions.map(mention => mention.id),
+      let currentDraft = draft;
+      if (currentDraft.photos.length > 0) {
+        const upload = client.uploadPostMedia;
+        if (!upload) {
+          if (alive.current) setError("当前环境不支持上传图片。");
+          return;
+        }
+        const profile = author ?? await client.profile(viewer);
+        if (!alive.current) return;
+        const folder = profile.id.toLowerCase();
+        const uploadedPhotos: DraftPhoto[] = [];
+        for (const photo of currentDraft.photos) {
+          if (photo.storagePath) {
+            uploadedPhotos.push(photo);
+            continue;
+          }
+          const localUri = await findMedia(photo.localPath);
+          if (!localUri) throw new Error("草稿照片已失效，请移除后重新添加。");
+          let bytes: ArrayBuffer;
+          try {
+            bytes = await readMediaBytes(localUri);
+          } finally {
+            if (Platform.OS === "web") URL.revokeObjectURL(localUri);
+          }
+          const storagePath = `${folder}/${randomUuidLower()}.${photo.ext}`;
+          await upload(storagePath, bytes, photo.contentType);
+          uploadedPhotos.push({ ...photo, storagePath });
+          currentDraft = {
+            ...currentDraft,
+            photos: [...uploadedPhotos, ...currentDraft.photos.slice(uploadedPhotos.length)],
+          };
+          await persist(currentDraft).catch(() => undefined);
+          if (alive.current) setDraft(currentDraft);
+        }
+      }
+      const mediaInputs = currentDraft.photos.flatMap(photo => photo.storagePath ? [{
+        path: photo.storagePath,
+        ...(photo.width ? { width: photo.width } : {}),
+        ...(photo.height ? { height: photo.height } : {}),
+      }] : []);
+      const post = await client.publish(viewer, currentDraft.text, currentDraft.key, {
+        visibility: currentDraft.visibility,
+        mentions: currentDraft.mentions.map(mention => mention.id),
+        ...(mediaInputs.length > 0 ? { media: mediaInputs } : {}),
       });
-      if (draft.visibility !== "PUBLIC" && post.visibility !== draft.visibility) {
+      if (currentDraft.visibility !== "PUBLIC" && post.visibility !== currentDraft.visibility) {
         if (alive.current) setError("服务端返回的可见范围与你选择的不一致。请先核对动态，草稿已保留。");
         return;
       }
+      await Promise.allSettled(currentDraft.photos.map(photo => removeMedia(photo.localPath)));
       await persist().catch(() => undefined);
       if (alive.current) onPublished(post);
     } catch (problem) {
-      if (alive.current) setError(communityWriteMessage(problem, viewer.kind, "发帖"));
+      if (alive.current) {
+        const message = problem instanceof Error && !("status" in problem) && problem.message
+          ? problem.message
+          : communityWriteMessage(problem, viewer.kind, "发帖");
+        setError(message);
+      }
     } finally {
       pending.current = false;
       if (alive.current) setBusy(false);
@@ -285,14 +408,14 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
           )}
           {photos.length > 0 && <>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {photos.map((photo, index) => <View key={photo} style={{ position: "relative" }}>
-                <DraftPhotoPreview path={photo} />
+              {photos.map((photo, index) => <View key={photo.localPath} style={{ position: "relative" }}>
+                <DraftPhotoPreview path={photo.localPath} />
                 <Pressable accessibilityRole="button" accessibilityLabel={`移除第 ${index + 1} 张照片`}
                   disabled={busy || closing} style={{ position: "absolute", top: 1, right: 1, backgroundColor: ui.white, borderRadius: 14 }}
-                  onPress={() => void removePhoto(photo)}><Ionicons name="close-circle-outline" size={23} color={ui.ink} /></Pressable>
+                  onPress={() => void removePhoto(photo.localPath)}><Ionicons name="close-circle-outline" size={23} color={ui.ink} /></Pressable>
               </View>)}
             </View>
-            <Text style={s.noticeText}>照片仅保存在本机草稿；目前移除照片后才能发布文字动态。</Text>
+            {mediaUnsupported && <Text style={s.noticeText}>当前本地开发模式不支持上传图片到云端存储，请移除照片后发布。</Text>}
           </>}
           {draft && <MentionChips mentions={draft.mentions} disabled={busy || closing}
             onRemove={id => edit({ mentions: draft.mentions.filter(mention => mention.id !== id) })} />}

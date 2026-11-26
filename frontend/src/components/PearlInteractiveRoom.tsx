@@ -72,10 +72,12 @@ function spriteFor(frame: ActorFrame): CharacterAction {
   return frame.wave ? "wave" : "idle";
 }
 
-export function PearlInteractiveRoom({ companionName, isCompanionView, isActive = true, onAction, onOpenDiary, onCapture, capturing = false }: {
+export function PearlInteractiveRoom({ companionName, isCompanionView, isActive = true, externalAction, companionSpeech, onAction, onOpenDiary, onCapture, capturing = false }: {
   companionName: string;
   isCompanionView: boolean;
   isActive?: boolean;
+  externalAction?: { key: number; action: CompanionAction } | null;
+  companionSpeech?: string | null;
   onAction?: (action: CompanionAction) => void;
   onOpenDiary?: () => void;
   onCapture?: (scene: ComponentRef<typeof View>) => void;
@@ -97,8 +99,15 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
   });
   const actionRef = useRef(onAction);
   actionRef.current = onAction;
+  const lastExternalKey = useRef(0);
   const awake = isActive && appActive;
   const sleeping = Object.values(frame.actors).some(actor => actor.phase === "SLEEP");
+
+  useEffect(() => {
+    if (!externalAction || externalAction.key === lastExternalKey.current || !awake || !ready) return;
+    lastExternalKey.current = externalAction.key;
+    engine.action(externalAction.action, "COMPANION");
+  }, [awake, engine, externalAction, ready]);
 
   useEffect(() => {
     if (!awake || !ready) return;
@@ -175,6 +184,14 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
         {effect.type === "heart" ? <Ionicons name="heart" size={20} color={ui.affection} />
           : <View style={[styles.ripple, { borderColor: skin.colors.accent }]} />}
       </View>)}
+      {companionSpeech && <View pointerEvents="none" style={[styles.speechBubble, {
+        left: Math.max(12, Math.min(size.width - 188, size.width * companion.nx - 88)),
+        top: Math.max(12, size.height * companion.ny - 118),
+        backgroundColor: skin.colors.canvas,
+        borderColor: skin.colors.border,
+      }]}>
+        <Text numberOfLines={3} style={[styles.speechText, { color: skin.colors.ink }]}>{companionSpeech}</Text>
+      </View>}
     </View>
 
     {ready && awake && <>
@@ -241,6 +258,16 @@ const styles = StyleSheet.create({
   night: { zIndex: 950 },
   zzz: { position: "absolute", zIndex: 960, fontSize: 14, fontWeight: "700" },
   effect: { position: "absolute", zIndex: 970 },
+  speechBubble: {
+    position: "absolute",
+    zIndex: 965,
+    maxWidth: 176,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  speechText: { fontSize: 12, lineHeight: 16, fontWeight: "500" },
   ripple: { width: 28, height: 17, borderWidth: 1.5, borderRadius: 16 },
   hitLayer: { ...StyleSheet.absoluteFill, zIndex: 1000 },
   target: { zIndex: 1001 },

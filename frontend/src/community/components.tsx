@@ -1,8 +1,10 @@
 import { useThemedStyles, useSkin } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import type { CommunityActor, CommunityComment, CommunityPost, PostVisibility } from "../../../contracts/community.ts";
+import type { CommunityActor, CommunityComment, CommunityPost, PostMedia, PostVisibility } from "../../../contracts/community.ts";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
@@ -111,6 +113,114 @@ export function ActorLine({
   );
 }
 
+type MediaSource = { uri: string; headers: Record<string, string> };
+type MediaResolver = (path: string) => Promise<MediaSource | undefined>;
+
+function AuthPostImage({
+  media,
+  resolveMedia,
+  style,
+  contentFit = "cover",
+}: {
+  media: PostMedia;
+  resolveMedia?: MediaResolver;
+  style: Record<string, unknown>;
+  contentFit?: "cover" | "contain";
+}) {
+  const { ui } = useSkin();
+  const [source, setSource] = useState<MediaSource>();
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setFailed(false);
+    if (!resolveMedia) {
+      setFailed(true);
+      return () => { active = false; };
+    }
+    void resolveMedia(media.path).then(value => {
+      if (!active) return;
+      if (value) setSource(value);
+      else setFailed(true);
+    }).catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [media.path, resolveMedia]);
+
+  if (failed) {
+    return (
+      <View style={[style, { backgroundColor: ui.background[0], alignItems: "center", justifyContent: "center" }]}>
+        <Ionicons name="image-outline" size={20} color={ui.muted} />
+      </View>
+    );
+  }
+  if (!source) {
+    return <View style={[style, { backgroundColor: ui.background[0] }]} />;
+  }
+  return (
+    <Image
+      source={source}
+      accessibilityLabel={media.alt ?? "动态图片"}
+      contentFit={contentFit}
+      style={style}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function PostMediaGrid({ media, resolveMedia }: { media: PostMedia[]; resolveMedia?: MediaResolver }) {
+  const { ui } = useSkin();
+  const s = useCommunityStyles();
+  const [preview, setPreview] = useState<PostMedia>();
+  const images = media.filter(item => item.kind === "IMAGE").slice(0, 9);
+  if (images.length === 0) return null;
+
+  const single = images.length === 1 ? images[0] : undefined;
+  const singleRatio = single && single.width && single.height
+    ? Math.max(0.75, Math.min(1.8, single.width / single.height))
+    : 4 / 3;
+  const twoCol = images.length === 2 || images.length === 4;
+
+  return (
+    <>
+      {single ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={single.alt ?? "查看大图"} onPress={() => setPreview(single)}>
+          <AuthPostImage
+            media={single}
+            resolveMedia={resolveMedia}
+            style={{ width: "100%", aspectRatio: singleRatio, maxHeight: 320, borderRadius: 14, overflow: "hidden" }}
+          />
+        </Pressable>
+      ) : (
+        <View style={s.mediaGrid}>
+          {images.map((item, idx) => (
+            <Pressable
+              key={`${item.path}-${idx}`}
+              accessibilityRole="button"
+              accessibilityLabel={item.alt ?? `查看第 ${idx + 1} 张图片`}
+              onPress={() => setPreview(item)}
+              style={twoCol ? s.mediaTileTwo : s.mediaTileThree}
+            >
+              <AuthPostImage media={item} resolveMedia={resolveMedia} style={{ width: "100%", height: "100%" }} />
+            </Pressable>
+          ))}
+        </View>
+      )}
+      {preview && (
+        <Modal transparent animationType="fade" onRequestClose={() => setPreview(undefined)}>
+          <Pressable style={[s.mediaModal, { backgroundColor: ui.scrim }]} onPress={() => setPreview(undefined)}>
+            <AuthPostImage
+              media={preview}
+              resolveMedia={resolveMedia}
+              contentFit="contain"
+              style={{ width: "92%", height: "80%" }}
+            />
+          </Pressable>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 export function ContentCard({
   item,
   onActor,
@@ -121,6 +231,7 @@ export function ContentCard({
   onLike,
   likeDisabled,
   highlighted,
+  resolveMedia,
 }: {
   item: CommunityPost | CommunityComment;
   onActor: () => void;
@@ -131,6 +242,7 @@ export function ContentCard({
   onLike?: () => void;
   likeDisabled?: boolean;
   highlighted?: boolean;
+  resolveMedia?: MediaResolver;
 }) {
   const { ui } = useSkin();
   const communityStyles = useCommunityStyles();
@@ -146,6 +258,9 @@ export function ContentCard({
         <Text style={communityStyles.meta}>{POST_VISIBILITY_LABELS[item.visibility]}</Text>
       )}
       <Text selectable style={communityStyles.body}>{item.body}</Text>
+      {"media" in item && Array.isArray(item.media) && item.media.length > 0 && (
+        <PostMediaGrid media={item.media} resolveMedia={resolveMedia} />
+      )}
       {item.mentions && item.mentions.length > 0 && <View style={communityStyles.row}>
         {item.mentions.map(actor => (
           <Pressable key={actor.id} accessibilityRole="link" accessibilityLabel={`查看${actor.displayName}的主页（@${actor.handle}）`}
@@ -285,4 +400,8 @@ export const createCommunityStyles = (ui: UiPalette) => StyleSheet.create({
     color: ui.ink,
   },
   error: { color: ui.danger, fontSize: 13, lineHeight: 20 },
+  mediaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  mediaTileTwo: { width: "48.5%", aspectRatio: 1, borderRadius: 12, overflow: "hidden" },
+  mediaTileThree: { width: "31.8%", aspectRatio: 1, borderRadius: 12, overflow: "hidden" },
+  mediaModal: { flex: 1, alignItems: "center", justifyContent: "center", padding: 16 },
 });

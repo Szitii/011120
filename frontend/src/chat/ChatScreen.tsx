@@ -17,6 +17,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
+import { formatChatAction } from "./actions";
 import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
@@ -36,13 +37,6 @@ import {
 } from "../theme/chatThemes";
 
 const QUICK_EMOJIS = ["😊", "🥺", "❤️", "😂", "🫂", "✨", "👍", "🌙", "☕️", "🐶", "😭", "🫶"];
-
-const actionLabels = {
-  WAVE: "你向 TA 挥了挥手",
-  PAT_HEAD: "你摸了摸 TA 的头",
-  HUG: "你抱了抱 TA",
-  CUDDLE: "你和 TA 贴了贴",
-} satisfies Record<NonNullable<ChatMessage["action"]>, string>;
 
 const replyFailureMessages = {
   UNAVAILABLE: "即将推出",
@@ -504,7 +498,11 @@ export function ChatScreen({
         </View>
       ) : (
         <FlatList
-          data={messages.filter((item, index) => !item.action || !messages[index - 1]?.action)}
+          data={messages.filter((item, index) => {
+            if (!item.action || item.companionId !== null) return true;
+            const newer = messages[index - 1];
+            return !(newer?.action && newer.companionId === null);
+          })}
           inverted
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
@@ -519,7 +517,7 @@ export function ChatScreen({
             loadingOlder ? <ActivityIndicator size="small" color={ui.accent} style={{ marginVertical: 12 }} /> : undefined
           }
           renderItem={({ item }) => {
-            if (item.action) return <Text style={styles.actionEvent}>{actionLabels[item.action]}</Text>;
+            if (item.action) return <Text style={styles.actionEvent}>{formatChatAction(item.action, item.companionId)}</Text>;
             const isMine = item.companionId === null;
             const sender = chat?.members.find(member => member.companionId === item.companionId);
             const senderName = isMine ? ownerName : sender?.displayName ?? title;

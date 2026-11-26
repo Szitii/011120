@@ -142,16 +142,22 @@ function AppShell() {
 
   return <AccountGate config={config}>
     {(account, onSignOut) => <SignedInWorld key={account.generation}
-      baseUrl={config.baseUrl} account={account} onSignOut={onSignOut} />}
+      baseUrl={config.baseUrl} supabaseUrl={config.supabaseUrl} publishableKey={config.publishableKey}
+      account={account} onSignOut={onSignOut} />}
   </AccountGate>;
 }
 
-function SignedInWorld({ baseUrl, account, onSignOut }: {
+function SignedInWorld({ baseUrl, supabaseUrl, publishableKey, account, onSignOut }: {
   baseUrl: string;
+  supabaseUrl: string;
+  publishableKey: string;
   account: AccountBinding;
   onSignOut: () => void;
 }) {
-  const client = useMemo(() => ({ api: new RealApiAdapter({ baseUrl, session: account.tokens }) }), [baseUrl, account]);
+  const client = useMemo(
+    () => ({ api: new RealApiAdapter({ baseUrl, supabaseUrl, publishableKey, session: account.tokens }) }),
+    [baseUrl, supabaseUrl, publishableKey, account],
+  );
   return <WorldApp client={client} isMockMode={false} account={{ email: account.email, signOut: onSignOut }} />;
 }
 
@@ -806,7 +812,7 @@ function WorldApp({ client, account, isMockMode }: {
       )}
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
-        <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId, route.chatId])} client={client.api.chat} companionId={route.companionId} chatId={route.chatId} ownerId={ownerId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
+        <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId, route.chatId])} client={client.api.chat} companionId={route.companionId} companions={availableCompanions} chatId={route.chatId} ownerId={ownerId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
           onAvailabilityChanged={refreshFeatures} onBack={goBack}
           onConversationDeleted={route.chatId ? () => {
             refreshBadges();

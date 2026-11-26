@@ -29,8 +29,18 @@ export class ApiProblemError extends Error {
   readonly messageClass: string;
   readonly retryHint: string;
   readonly traceId: string;
+  readonly field?: string;
+  readonly reason?: string;
 
-  constructor(status: number, code: string, messageClass: string, retryHint: string, traceId: string) {
+  constructor(
+    status: number,
+    code: string,
+    messageClass: string,
+    retryHint: string,
+    traceId: string,
+    field?: string,
+    reason?: string,
+  ) {
     super(code);
     this.name = "ApiProblemError";
     this.status = status;
@@ -38,10 +48,20 @@ export class ApiProblemError extends Error {
     this.messageClass = messageClass;
     this.retryHint = retryHint;
     this.traceId = traceId;
+    this.field = field;
+    this.reason = reason;
   }
 }
 
-type RealApiConfig = { baseUrl: string } & ({ bearerToken: string } | { session: SessionTokenSource });
+type RealApiConfig = {
+  baseUrl: string;
+  supabaseUrl?: string;
+  publishableKey?: string;
+} & ({ bearerToken: string } | { session: SessionTokenSource });
+
+function encodeStoragePath(path: string): string {
+  return path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+}
 
 export function createCommandKey(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
@@ -57,9 +77,15 @@ export class RealApiAdapter implements ClientApi {
     this.config = config;
     this.diary = createDiaryClient((method, path, body) => method === "GET"
       ? this.get(path) : this.send(method, path, body));
+    const media = this.config.supabaseUrl && this.config.publishableKey ? {
+      uploadPostMedia: (path: string, bytes: ArrayBuffer, contentType: string) =>
+        this.uploadStorageObject(path, bytes, contentType),
+      deletePostMedia: (path: string) => this.deleteStorageObject(path),
+      postMediaSource: (path: string) => this.storageMediaSource(path),
+    } : undefined;
     this.community = createCommunityClient((method, path, body, key) => method === "GET"
       ? this.get(path)
-      : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}));
+      : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}), media);
     this.chat = createChatClient((method, path, body, key) => method === "GET"
       ? this.get(path)
       : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}), path => this.getAudio(path));
@@ -167,6 +193,75 @@ export class RealApiAdapter implements ClientApi {
     });
   }
 
+  private async storageMediaSource(path: string): Promise<{ uri: string; headers: Record<string, string> } | undefined> {
+    if (!this.config.supabaseUrl || !this.config.publishableKey) return undefined;
+    const token = await this.getAccessToken();
+    return {
+      uri: `${this.config.supabaseUrl.replace(/\/$/, "")}/storage/v1/object/authenticated/media/${encodeStoragePath(path)}`,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: this.config.publishableKey,
+      },
+    };
+  }
+
+  private async uploadStorageObject(path: string, bytes: ArrayBuffer, contentType: string): Promise<void> {
+    await this.storageRequest("POST", path, {
+      headers: { "Content-Type": contentType },
+      body: bytes,
+    });
+  }
+
+  private async deleteStorageObject(path: string): Promise<void> {
+    await this.storageRequest("DELETE", path);
+  }
+
+  private async storageRequest(
+    method: "POST" | "DELETE",
+    path: string,
+    init: { headers?: Record<string, string>; body?: ArrayBuffer } = {},
+  ): Promise<void> {
+    const { supabaseUrl, publishableKey } = this.config;
+    if (!supabaseUrl || !publishableKey) throw new Error("Storage configuration unavailable.");
+    const session = "session" in this.config ? this.config.session : undefined;
+    const signal = session?.signal;
+    const ensureCurrent = () => {
+      if (signal?.aborted) throw new Error("Account session changed.");
+    };
+    const url = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/media/${encodeStoragePath(path)}`;
+    const send = async (token: string) => {
+      ensureCurrent();
+      const response = await fetch(url, {
+        method,
+        signal,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: publishableKey,
+          ...init.headers,
+        },
+        ...(init.body === undefined ? {} : { body: init.body }),
+      });
+      const payload = response.ok ? undefined : await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+      ensureCurrent();
+      return { response, payload };
+    };
+    let token = await this.getAccessToken();
+    let result = await send(token);
+    if (session && result.response.status === 401) {
+      token = await session.refreshToken(token);
+      result = await send(token);
+      if (result.response.status === 401) session.rejectToken(token);
+    }
+    if (!result.response.ok) {
+      const code = String(result.payload?.error ?? result.payload?.code ?? "STORAGE_ERROR");
+      throw new ApiProblemError(result.response.status, code, "INTERNAL", "DO_NOT_RETRY", "storage");
+    }
+  }
+
+  private getAccessToken(): Promise<string> {
+    return "bearerToken" in this.config ? Promise.resolve(this.config.bearerToken) : this.config.session.getToken();
+  }
+
   private async request<T>(method: string, path: string, body?: unknown,
     extraHeaders: Record<string, string> = {}, read?: (response: Response) => Promise<T>,
   ): Promise<T> {
@@ -215,6 +310,8 @@ export class RealApiAdapter implements ClientApi {
         String(result.payload?.messageClass ?? "INTERNAL"),
         String(result.payload?.retryHint ?? "DO_NOT_RETRY"),
         String(result.payload?.traceId ?? "unknown"),
+        typeof result.payload?.field === "string" ? result.payload.field : undefined,
+        typeof result.payload?.reason === "string" ? result.payload.reason : undefined,
       );
     }
     return read ? result.data as T : result.payload as T;
