@@ -169,14 +169,14 @@ nav a svg{width:22px;height:22px;flex:none;padding:4px;border-radius:6px;color:#
 nav a.on svg{background:rgba(255,255,255,.22)!important}
 nav .badge{margin-left:auto;min-width:20px;padding:0 6px;border-radius:980px;background:#ff3b30;color:#fff;font-size:12px;font-weight:600;line-height:20px;text-align:center}
 nav a.on .badge{background:#fff;color:var(--blue)}form.read{margin:0;flex-wrap:nowrap}form.read input{min-width:120px;flex:1}
-main{flex:1;min-width:0;max-width:1120px;margin:0 auto;padding:36px 40px 80px}
+main{flex:1;min-width:0;max-width:1240px;margin:0 auto;padding:26px 32px 64px}
 @media (max-width:860px){.shell{display:block}
 aside{position:sticky;z-index:5;width:auto;height:auto;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
 aside .brand{padding:4px 6px;font-size:15px;white-space:nowrap}nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}nav p{display:none}
 nav a{white-space:nowrap;padding:6px 10px}nav a svg{display:none}main{padding:20px 16px 60px}}
-.head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 16px;margin:0 0 24px}
-h1{font-size:32px;line-height:1.15;font-weight:700;letter-spacing:-.025em;margin:0}
-h2{font-size:17px;font-weight:600;letter-spacing:-.015em;margin:0 0 14px}main>h2{font-size:20px;margin:36px 0 12px}
+.head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 16px;margin:0 0 16px}
+h1{font-size:24px;line-height:1.2;font-weight:700;letter-spacing:-.02em;margin:0}
+h2{font-size:15px;font-weight:600;letter-spacing:-.01em;margin:0 0 10px}main>h2{font-size:17px;margin:26px 0 10px}
 h2 .links{font-weight:400;font-size:13px;margin-left:8px}
 p{margin:10px 0}
 .tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;color:var(--sub);font-size:13px}.tools form,.tools form.act{margin:0;gap:8px}.tools input[type=month]{padding:5px 10px}
@@ -185,14 +185,14 @@ border:0;border-radius:980px;background:var(--fill2);color:var(--text);cursor:po
 .btn:hover,button:hover{filter:brightness(.95);text-decoration:none}.btn:active,button:active{filter:brightness(.88)}
 form.act button,.primary{background:var(--blue);color:#fff}form.act button.danger,button.danger{background:var(--red);color:#fff}
 .btn.on{background:var(--blue-soft);color:var(--blue)}.tools form.act button{background:var(--fill2);color:var(--text)}
-section.panel{background:var(--card);border-radius:18px;padding:22px 24px;margin:20px 0;box-shadow:var(--shadow)}
-.card{background:var(--card);border-radius:16px;padding:18px 20px;margin:14px 0;box-shadow:var(--shadow)}
+section.panel{background:var(--card);border-radius:12px;padding:16px 18px;margin:14px 0;box-shadow:var(--shadow)}
+.card{background:var(--card);border-radius:12px;padding:14px 16px;margin:12px 0;box-shadow:var(--shadow)}
 .panel .card{background:var(--fill);box-shadow:none}
 .scroll{overflow-x:auto;margin:0 -4px;padding:0 4px}table{border-collapse:collapse;width:100%}
-th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+th,td{border-bottom:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top;font-size:14px}
 th{color:var(--sub);font-weight:500;font-size:12px;white-space:nowrap;border-bottom-color:var(--line)}
 tr:last-child td{border-bottom:0}tr:hover td{background:var(--fill)}
-main>table,main>.scroll>table{background:var(--card);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
+main>table,main>.scroll>table{background:var(--card);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}td:first-child{white-space:nowrap}
 blockquote{margin:10px 0;padding:12px 16px;background:var(--fill);border-radius:12px;white-space:pre-wrap;word-break:break-word}
 form.act{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0 4px}
@@ -231,6 +231,9 @@ box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;anim
 .msg pre{margin:0;padding:9px 14px;border-radius:18px;background:var(--fill2);line-height:1.45}
 .msg .muted{font-size:11px;margin:2px 12px 0}.msg.me{align-self:flex-end;align-items:flex-end}.msg.me pre{background:var(--blue);color:#fff}
 .msg.me pre .muted{color:rgba(255,255,255,.8)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));background:var(--card);border-radius:12px;box-shadow:var(--shadow);margin:0 0 14px;overflow:hidden}
+.kpis>div{display:flex;flex-direction:column;padding:10px 16px;border-left:1px solid var(--line);margin-left:-1px}.kpis .muted{font-size:12px}.kpis .muted:first-child{white-space:nowrap}
+.kpis b{font-size:22px;font-weight:600;line-height:1.3;font-variant-numeric:tabular-nums}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:0 0 20px}.cards .card{margin:0}
 .spend{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:20px 40px;margin:0 0 20px}.spend .big{font-size:44px;letter-spacing:-.03em}
 .spend .today{border-left:1px solid rgba(255,255,255,.15);padding-left:32px}.mid{font-size:26px;font-weight:600;margin:4px 0;font-variant-numeric:tabular-nums}
@@ -517,8 +520,8 @@ export function modelsPage(zone: string, models: Models, catalog: readonly Catal
   const ownOn = (scope: string, key: string) => !models.switches.some(s => s.scope === scope && s.key === key && !s.enabled);
   const gift = w.welcomeCredits > 0 ? w.welcomeCredits : 1000;
   return page("模型与额度", "/models", html`
-${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>模型</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
-${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td><td>${catalog.filter(m => m.provider === v.key).map(m => m.name).join("、")}</td>
+${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
+${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td>
 <td>${v.serverKey === null ? html`<span class="tag bad">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
     ? html`<span class="muted">看不到:${v.serverKey.why}</span>` : html`<span class="tag">已设置</span> <span class="muted">更新于 ${time(zone, v.serverKey.at)}</span>`}</td>
 <td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
@@ -538,9 +541,10 @@ ${panel("功能开关", html`<div class="scroll"><table><tr><th>功能</th><th>�
 <tr><td>${toggle("/models/feature", f.enabled, word(FEATURES, f.key), back, hidden("key", f.key), word(FEATURES, f.key))}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>
 <p class="muted">点一下就生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>`)}
 ${panel("每个家机每天的免费额度", html`
-<p>${w.enabled ? html`<span class="tag">积分钱包开着,现在不限</span> 主人用积分付钱,家机每天用多少都可以(全平台每天花费上限照样管着)。钱包关掉后恢复:` : "现在:"}每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
-${edit("修改额度", act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
-<label>金额(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(q.dailyCostMinor / 100).toString()}"></label>`))}`)}
+<p>${w.enabled ? html`<span class="tag">积分钱包开着,现在不限</span> 钱包关掉后:` : ""}每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}</p>
+${edit("改", act("/models/quota", "保存", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
+<label>金额(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(q.dailyCostMinor / 100).toString()}"></label>
+<span class="muted">明天北京时间 8 点起生效</span>`))}`)}
 ${panel("新人送积分", html`
 <div>${toggle("/models/welcome", w.welcomeCredits > 0, "新人送积分", back, hidden("welcome", gift),
     w.welcomeCredits > 0 ? `开:每个新主人第一次用钱包时送 ${count(w.welcomeCredits)} 积分(只送一次)` : "关:新主人不送积分")}${
@@ -577,7 +581,7 @@ function niceMax(max: number): number {
 /** Lines over days (or months), one y axis. Up to four series are also named at their line's end. */
 function lineChart(labels: readonly string[], series: readonly Series[], format: (n: number) => string, label: (d: string) => string, whole = false): Safe {
   if (labels.length === 0 || series.length === 0) return html`<p class="muted">还没有数据。</p>`;
-  const named = series.length <= 4, W = 1000, H = 240, L = 64, R = named ? 110 : 16, T = 12, B = 28;
+  const named = series.length <= 4, W = 1000, H = 180, L = 64, R = named ? 110 : 16, T = 12, B = 28;
   // Counts get whole-number ticks: the top is a multiple of the four steps.
   const top = niceMax(Math.max(0, ...series.flatMap(s => s.values))), max = whole ? Math.max(4, Math.ceil(top / 4) * 4) : top;
   const span = W - L - R, step = labels.length > 1 ? span / (labels.length - 1) : span;
@@ -847,15 +851,14 @@ export function statsPage(now: Date, a: Activity): string {
   const labels = days.map(d => d.day);
   const line = (name: string, slot: number, k: keyof Omit<ActivityDay, "day">) => ({ name, color: SLOTS[slot]!, values: days.map(d => d[k]) });
   const tools = html`<form method="get" action="/stats" class="act"><input type="month" name="month" value="${a.month}" max="${now.toISOString().slice(0, 7)}" required><button>看这个月</button></form>`;
-  const card = (label: string, value: string, note: string) => html`<div class="card"><div class="muted">${label}</div><div class="big">${value}</div><div class="muted">${note}</div></div>`;
+  const kpi = (label: string, value: string, note = "") => html`<div><span class="muted">${label}</span><b>${value}</b>${note === "" ? "" : html`<span class="muted">${note}</span>`}</div>`;
   return page(`运营数据 · ${a.month}`, "/stats", html`
-<div class="cards">
-${card("主人", count(a.owners), "现在的账号数,不含已删除")}
-${card("家机", count(a.companions), "不含已删除")}
-${card(thisMonth ? "本月聊天的人" : "这个月聊天的人", count(a.chatters), `新注册 ${count(sum("newOwners"))} 人`)}
-${today === undefined ? "" : card("今天聊天的人", count(today.chatters), `主人发 ${count(today.ownerMessages)} 条 · 家机回 ${count(today.replies)} 条`)}
-${card("消息", count(sum("ownerMessages") + sum("replies")), `主人发 ${count(sum("ownerMessages"))} · 家机回 ${count(sum("replies"))}${sum("failed") > 0 ? ` · 失败 ${count(sum("failed"))}` : ""}`)}
-${card("积分消耗", count(sum("creditsSpent")), "钱包开着时,模型调用扣的积分")}
+<div class="kpis">
+${kpi("主人", count(a.owners))}${kpi("家机", count(a.companions))}
+${kpi(thisMonth ? "本月聊天的人" : "这个月聊天的人", count(a.chatters))}${kpi("新注册", count(sum("newOwners")))}
+${today === undefined ? "" : kpi("今天聊天的人", count(today.chatters), `主人 ${count(today.ownerMessages)} · 家机 ${count(today.replies)} 条`)}
+${kpi("消息", count(sum("ownerMessages") + sum("replies")), `主人 ${count(sum("ownerMessages"))} · 家机 ${count(sum("replies"))}${sum("failed") > 0 ? ` · 失败 ${count(sum("failed"))}` : ""}`)}
+${kpi("积分消耗", count(sum("creditsSpent")))}
 </div>
 ${days.length === 0 ? html`<p class="muted">这个月还没有任何使用。</p>` : html`${panel("每天的人", lineChart(labels, [line("聊天的人", 0, "chatters"), line("新注册", 1, "newOwners")], count, d => d.slice(5), true))}
 ${panel("每天的消息", lineChart(labels, [line("主人发的", 0, "ownerMessages"), line("家机回的", 1, "replies")], count, d => d.slice(5), true))}
@@ -868,7 +871,7 @@ ${[...days].reverse().map(d => html`<tr><td>${d.day}</td><td class="num">${count
 <td class="num">${count(d.ownerMessages)}</td><td class="num">${count(d.replies)}</td><td class="num">${count(d.failed)}</td><td class="num">${count(d.voiceIn)}</td>
 <td class="num">${count(d.voiceOut)}</td><td class="num">${count(d.posts)}</td><td class="num">${count(d.aiPosts)}</td><td class="num">${count(d.comments)}</td>
 <td class="num">${count(d.creditsSpent)}</td></tr>`)}</table></div></details>`)}`}
-<p class="muted">按 UTC 日期,只有数量,不含内容。“聊天的人”= 那天至少发过一条消息的主人。</p>`,
+<p class="muted">按 UTC 日期,只有数量,不含内容。主人和家机是现在的数,不含已删除;“聊天的人”= 那天至少发过一条消息的主人;积分消耗 = 钱包开着时模型调用扣的积分。</p>`,
   false, bar(tools));
 }
 

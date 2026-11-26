@@ -380,7 +380,7 @@ it("shows each model company: whether the API server has its key, and its balanc
   const page = (await (await start({}, undefined, fly, { vendors, fetch: get })).send("/models")).body;
   assert.deepEqual(asked, [["https://api.machines.dev/v1/apps/the-api/secrets", "Bearer fly-ro"], ["https://api.deepseek.com/user/balance", "Bearer sk-console"]],
     "only names of the API server's secrets; the balance with the console's own copy of the key");
-  assert.match(page, /<td>claude<\/td><td>Big、Small<\/td>\s*<td><span class="tag">已设置<\/span> <span class="muted">更新于 2026\/11\/25 08:00:00/);
+  assert.match(page, /<td>claude<\/td>\s*<td><span class="tag">已设置<\/span> <span class="muted">更新于 2026\/11\/25 08:00:00/);
   assert.match(page, /<td><span class="tag bad">没有<\/span> <span class="muted">OTHER_KEY<\/span><\/td>/);
   assert.match(page, /这家没有查余额的接口,去它的控制台看。/);
   assert.match(page, /<b>¥110\.00<\/b> <span class="tag bad">余额不够,调用会失败<\/span> <span class="muted">\(其中赠送 ¥10\.00\)/);
@@ -698,9 +698,9 @@ it("shows how much the App is used, and the database and the servers", async () 
   const stats = await send("/stats");
   assert.deepEqual(calls, [["activity", "2026-11-01"]]);
   assert.match(stats.body, /<a href="\/stats" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>运营数据<\/a>/);
-  assert.match(stats.body, /本月聊天的人<\/div><div class="big">12<\/div><div class="muted">新注册 3 人/);
-  assert.match(stats.body, /今天聊天的人<\/div><div class="big">3<\/div><div class="muted">主人发 20 条 · 家机回 18 条/);
-  assert.match(stats.body, /消息<\/div><div class="big">57<\/div><div class="muted">主人发 30 · 家机回 27 · 失败 3/);
+  assert.match(stats.body, /本月聊天的人<\/span><b>12<\/b><\/div>\s*<div><span class="muted">新注册<\/span><b>3<\/b>/);
+  assert.match(stats.body, /今天聊天的人<\/span><b>3<\/b><span class="muted">主人 20 · 家机 18 条<\/span>/);
+  assert.match(stats.body, /消息<\/span><b>57<\/b><span class="muted">主人 30 · 家机 27 · 失败 3/);
   assert.match(stats.body, /<title>2026-11-23\n聊天的人:3\n新注册:2<\/title>/);
   assert.ok(!stats.body.includes("2026-11-21"), "the days before anyone used the App are left out");
   const past = await (await start({ activity: { ...activity, month: "2026-10", days: [unused("2026-10-01")] } })).send("/stats?month=2026-10");
