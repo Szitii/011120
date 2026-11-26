@@ -517,8 +517,8 @@ export function modelsPage(zone: string, models: Models, catalog: readonly Catal
   const ownOn = (scope: string, key: string) => !models.switches.some(s => s.scope === scope && s.key === key && !s.enabled);
   const gift = w.welcomeCredits > 0 ? w.welcomeCredits : 1000;
   return page("模型与额度", "/models", html`
-${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>模型</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
-${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td><td>${catalog.filter(m => m.provider === v.key).map(m => m.name).join("、")}</td>
+${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
+${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td>
 <td>${v.serverKey === null ? html`<span class="tag bad">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
     ? html`<span class="muted">看不到:${v.serverKey.why}</span>` : html`<span class="tag">已设置</span> <span class="muted">更新于 ${time(zone, v.serverKey.at)}</span>`}</td>
 <td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
@@ -538,9 +538,10 @@ ${panel("功能开关", html`<div class="scroll"><table><tr><th>功能</th><th>�
 <tr><td>${toggle("/models/feature", f.enabled, word(FEATURES, f.key), back, hidden("key", f.key), word(FEATURES, f.key))}</td><td>${time(zone, f.updatedAt)}</td></tr>`)}</table></div>
 <p class="muted">点一下就生效。群聊关掉后:不能新建;已有群聊只能看和删除,不能发消息。单聊不受影响。</p>`)}
 ${panel("每个家机每天的免费额度", html`
-<p>${w.enabled ? html`<span class="tag">积分钱包开着,现在不限</span> 主人用积分付钱,家机每天用多少都可以(全平台每天花费上限照样管着)。钱包关掉后恢复:` : "现在:"}每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}。改动只对之后新建的额度生效(每天 UTC 0 点,即北京时间 8 点新建)。</p>
-${edit("修改额度", act("/models/quota", "修改额度", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
-<label>金额(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(q.dailyCostMinor / 100).toString()}"></label>`))}`)}
+<p>${w.enabled ? html`<span class="tag">积分钱包开着,现在不限</span> 钱包关掉后:` : ""}每天 ${q.dailyCalls} 次调用、${money(q.dailyCostMinor, q.currency)}</p>
+${edit("改", act("/models/quota", "保存", back, html`<label>次数 <input name="calls" type="number" min="0" max="100000" required value="${q.dailyCalls}"></label>
+<label>金额(美元)<input name="dollars" required inputmode="decimal" size="6" value="${(q.dailyCostMinor / 100).toString()}"></label>
+<span class="muted">明天北京时间 8 点起生效</span>`))}`)}
 ${panel("新人送积分", html`
 <div>${toggle("/models/welcome", w.welcomeCredits > 0, "新人送积分", back, hidden("welcome", gift),
     w.welcomeCredits > 0 ? `开:每个新主人第一次用钱包时送 ${count(w.welcomeCredits)} 积分(只送一次)` : "关:新主人不送积分")}${

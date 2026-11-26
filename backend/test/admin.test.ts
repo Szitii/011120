@@ -380,7 +380,7 @@ it("shows each model company: whether the API server has its key, and its balanc
   const page = (await (await start({}, undefined, fly, { vendors, fetch: get })).send("/models")).body;
   assert.deepEqual(asked, [["https://api.machines.dev/v1/apps/the-api/secrets", "Bearer fly-ro"], ["https://api.deepseek.com/user/balance", "Bearer sk-console"]],
     "only names of the API server's secrets; the balance with the console's own copy of the key");
-  assert.match(page, /<td>claude<\/td><td>Big、Small<\/td>\s*<td><span class="tag">已设置<\/span> <span class="muted">更新于 2026\/11\/25 08:00:00/);
+  assert.match(page, /<td>claude<\/td>\s*<td><span class="tag">已设置<\/span> <span class="muted">更新于 2026\/11\/25 08:00:00/);
   assert.match(page, /<td><span class="tag bad">没有<\/span> <span class="muted">OTHER_KEY<\/span><\/td>/);
   assert.match(page, /这家没有查余额的接口,去它的控制台看。/);
   assert.match(page, /<b>¥110\.00<\/b> <span class="tag bad">余额不够,调用会失败<\/span> <span class="muted">\(其中赠送 ¥10\.00\)/);
