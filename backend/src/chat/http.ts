@@ -24,6 +24,7 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET    /v0/export                                  a copy of everything of the Owner's (5 an hour)
  *   GET    /v0/persona-templates                       ready-made characters to start a Companion from
  *   GET    /v0/companions/{id}/skills                  the skills on offer and its own
  *   PUT    /v0/companions/{id}/skills/{skillId}        { enabled }  switch an official skill on or off
@@ -311,6 +312,7 @@ export async function handleChatRequest(
   const remindersRoute = path[1] === "companions" && path[3] === "reminders" && (path.length === 4 || path.length === 5);
   const worldRoute = path[1] === "companions" && path[3] === "world-entries" && (path.length === 4 || path.length === 5);
   const templatesRoute = path[1] === "persona-templates" && path.length === 2;
+  const exportRoute = path[1] === "export" && path.length === 2;
   const skillsRoute = path[1] === "companions" && ((path[3] === "skills" && (path.length === 4 || path.length === 5))
     || (path[3] === "own-skills" && (path.length === 4 || path.length === 5)));
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
@@ -321,7 +323,7 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute,
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute, exportRoute,
     personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
@@ -468,6 +470,12 @@ export async function handleChatRequest(
     return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
   }
   if (templatesRoute) return method === "GET" ? response(200, await port.personaTemplates()) : notFound();
+  if (exportRoute) {
+    if (method !== "GET") return notFound();
+    const copy = await port.exportAccount();
+    // Already JSON, and possibly large: it goes out as the bytes it is.
+    return copy === null ? response(429, { code: "EXPORT_LIMIT" }) : response(200, Buffer.from(copy, "utf8"));
+  }
   if (skillsRoute) {
     const companionId = id(path[2]);
     if (path[3] === "skills") {
