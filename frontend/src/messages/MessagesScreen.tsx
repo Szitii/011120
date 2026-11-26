@@ -595,11 +595,10 @@ function CommunityNotices({ client, viewer, visible, onOpen, onRead }: {
   const load = useCallback((cursor?: string) => client.notifications(viewer, cursor), [client, viewer.kind, viewer.id]);
   const acknowledge = async (note: CommunityNotification) => {
     await client.readNotification(viewer, note.id, communityRequestKey());
-    onRead();
     return { ...note, readAt: new Date().toISOString() };
   };
 
-  return <NoticeList load={load} acknowledge={acknowledge} visible={visible}
+  return <NoticeList load={load} acknowledge={acknowledge} onRead={onRead} visible={visible}
     onOpen={note => onOpen(note.postId ? { type: "detail", id: note.postId, commentId: note.commentId ?? undefined }
       : { type: "profile", id: note.actor.id })}
     renderSummary={note => <ActorLine actor={note.actor} subtitle={communityNoticeLabel(note)} />}
@@ -624,22 +623,21 @@ function OwnerNotices({ api, visible, onOpen, onRead, companions }: {
   type Cursor = NonNullable<LifeEventInboxCollection["nextCursor"]>;
   const load = useCallback((cursor?: Cursor) => api.lifeEventInbox(cursor), [api]);
   return <NoticeList load={load} acknowledge={async (item: LifeEventInboxItem) => {
-    const value = await api.acknowledgeLifeEvent(item.id);
-    onRead();
-    return value;
-  }} visible={visible} onOpen={onOpen} renderSummary={item => {
+    return api.acknowledgeLifeEvent(item.id);
+  }} onRead={onRead} visible={visible} onOpen={onOpen} renderSummary={item => {
     const isDraft = item.kind === "AGENT_DRAFT" || item.linkedObject?.type === "AGENT_DRAFT";
     const name = isDraft ? companions.find(c => c.companionId === item.companionId)?.displayName : undefined;
     return <Text style={s.author}>{name && !item.title.startsWith(name) ? `${name} · ${item.title}` : item.title}</Text>;
   }} />;
 }
 
-function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ load, acknowledge, renderSummary, visible, onOpen }: {
+function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ load, acknowledge, renderSummary, visible, onOpen, onRead }: {
   load: (cursor?: Cursor) => Promise<{ items: T[]; nextCursor: Cursor | null }>;
   acknowledge: (item: T) => Promise<T>;
   renderSummary: (item: T) => ReactNode;
   visible: boolean;
   onOpen: (item: T) => void;
+  onRead: () => void;
 }) {
   const { ui } = useSkin();
   const s = useCommunityStyles();
@@ -647,6 +645,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
   const [items, setItems] = useState<T[]>();
   const [cursor, setCursor] = useState<Cursor | null>(null);
   const [busy, setBusy] = useState(false);
+  const [markingAll, setMarkingAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const mounted = useRef(false);
@@ -667,6 +666,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
       pending.current = false;
       if (mounted.current) {
         setBusy(false);
+        setMarkingAll(false);
         setRefreshing(false);
       }
     }
@@ -698,10 +698,33 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
     return run(async () => {
       if (open && openAllowed.current) onOpen(item);
       const next = item.readAt ? item : await acknowledge(item);
+      if (!item.readAt) onRead();
       if (!mounted.current) return;
       setItems(current => current?.map(value => value.id === item.id ? next : value));
     });
   }
+
+  function markAllRead() {
+    const unreadItems = items?.filter(item => !item.readAt) ?? [];
+    if (unreadItems.length === 0 || pending.current) return;
+    setMarkingAll(true);
+    return run(async () => {
+      let acknowledged = false;
+      try {
+        for (const target of unreadItems) {
+          if (!mounted.current) break;
+          const confirmed = await acknowledge(target);
+          acknowledged = true;
+          if (!mounted.current) break;
+          setItems(current => current?.map(value => value.id === target.id ? confirmed : value));
+        }
+      } finally {
+        if (acknowledged) onRead();
+      }
+    });
+  }
+
+  const unreadCount = items ? items.reduce((sum, item) => sum + (item.readAt ? 0 : 1), 0) : 0;
 
   return (
     <ScrollView
@@ -719,6 +742,19 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
         />
       }
     >
+      {items && items.length > 0 && (
+        <View style={styles.noticeToolbar}>
+          <Text style={s.meta}>
+            {unreadCount > 0 ? `${unreadCount} 条未读` : "当前列表均已读"}
+          </Text>
+          <Button
+            label={markingAll ? "正在标记…" : "标记已加载通知为已读"}
+            accessibilityLabel="标记已加载通知为已读"
+            disabled={busy || unreadCount === 0}
+            onPress={() => void markAllRead()}
+          />
+        </View>
+      )}
       {error !== "" && <Text accessibilityRole="alert" style={styles.errorText}>{error}</Text>}
       {!items && !error && <ActivityIndicator accessibilityLabel="正在读取通知" color={ui.accent} style={{ marginVertical: 20 }} />}
       {items?.length === 0 && <Text style={styles.emptyText}>暂时没有通知，下滑可刷新。</Text>}
@@ -772,6 +808,12 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     gap: 8,
     paddingHorizontal: CHROME.screenInset,
     paddingBottom: 10,
+  },
+  noticeToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
   },
   content: {
     paddingHorizontal: CHROME.screenInset,
