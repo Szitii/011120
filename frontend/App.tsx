@@ -183,6 +183,7 @@ function WorldApp({ client, account, isMockMode }: {
   const [chatDrafts] = useState(() => createChatDraftStore());
   const [nav, setNav] = useState<NavigationState>(initialNavigationState);
   const [identity, setIdentity] = useState<LoadState<ActiveIdentityContext>>({ kind: "loading" });
+  const [identityRevision, setIdentityRevision] = useState(0);
   const [world, setWorld] = useState<LoadState<WorldCollection>>({ kind: "idle" });
   const [encounterResult, setEncounterResult] = useState<{ key: string; state: LoadState<EncounterDetail> }>();
   const [profileResult, setProfileResult] = useState<{ key: string; state: LoadState<CompanionProfile> }>();
@@ -316,7 +317,9 @@ function WorldApp({ client, account, isMockMode }: {
     return () => { current = false; };
   }, [appActive, viewerKey, nav.rootTab, badgeRevision, client.api]);
   const badgeData = badgeState?.key === viewerKey ? badgeState.data : undefined;
-  const communityUnread = badgeData?.community.find(row => row.actorId === identityId)?.unread ?? 0;
+  const communityUnread = Array.isArray(badgeData?.community)
+    ? badgeData.community.find(row => row?.actorId === identityId)?.unread ?? 0
+    : 0;
   const unread = communityUnread + (ownerId ? (badgeData?.chats ?? 0) + (badgeData?.ownerInbox ?? 0) : 0);
   const feedbackUnread = ownerId ? (badgeData?.feedback ?? 0) : 0;
   const profileKey = profileId ? `${viewerKey}:${profileId}` : undefined;
@@ -350,7 +353,7 @@ function WorldApp({ client, account, isMockMode }: {
       ownerCompanionsRequest.current++;
       cache.purgeViewerSensitive();
     };
-  }, [client]);
+  }, [client, identityRevision]);
 
   useEffect(() => {
     if (identity.kind !== "success") return;
@@ -740,6 +743,22 @@ function WorldApp({ client, account, isMockMode }: {
   const isMoment = route.type === "encounter" && momentMode && encounter.kind === "success";
   const currentKind = identityValue?.activeSubject.kind ?? "OWNER";
   const isSampleCompanion = currentKind !== "OWNER";
+
+  if (!identityValue) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar style={skin.isDark ? "light" : "dark"} />
+        {identity.kind === "error" ? (
+          <ErrorState
+            title={identity.title}
+            retry={identity.retry}
+            onRetry={() => setIdentityRevision(value => value + 1)}
+            onSignOut={account?.signOut}
+          />
+        ) : <Loading />}
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: skin.colors.canvas }]}>
@@ -1918,18 +1937,25 @@ function ErrorState({
   title,
   retry,
   onRetry,
+  onSignOut,
 }: {
   title: string;
   retry: boolean;
   onRetry: () => void;
+  onSignOut?: () => void;
 }) {
   const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.center}>
-      <Text style={styles.centerTitle}>{title}</Text>
+      <Text accessibilityRole="alert" style={styles.centerTitle}>{title}</Text>
       {retry && (
-        <Pressable style={styles.secondaryPill} onPress={onRetry}>
+        <Pressable accessibilityRole="button" style={styles.secondaryPill} onPress={onRetry}>
           <Text style={styles.secondaryPillText}>重试</Text>
+        </Pressable>
+      )}
+      {onSignOut && (
+        <Pressable accessibilityRole="button" style={styles.secondaryPill} onPress={onSignOut}>
+          <Text style={styles.secondaryPillText}>退出登录</Text>
         </Pressable>
       )}
     </View>
