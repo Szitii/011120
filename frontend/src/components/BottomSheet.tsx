@@ -1,25 +1,29 @@
 import React from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 
 export function BottomSheet({
   visible,
   title,
   badge,
+  avoidKeyboard = false,
   onClose,
   children,
 }: {
   visible: boolean;
   title?: string;
   badge?: string;
+  avoidKeyboard?: boolean;
   onClose: () => void;
   children: React.ReactNode;
 }) {
   const { skin, ui } = useSkin();
   const styles = useThemedStyles(createStyles);
+  const Backdrop = avoidKeyboard && Platform.OS === "ios" ? KeyboardAvoidingView : View;
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={[styles.backdrop, { backgroundColor: ui.scrim }]}>
+      <Backdrop behavior={Backdrop === KeyboardAvoidingView ? "padding" : undefined}
+        style={[styles.backdrop, { backgroundColor: ui.scrim }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessible={false} />
         <View style={[styles.panel, { backgroundColor: ui.background[0], borderColor: skin.colors.border }]}>
           <View style={[styles.handle, { backgroundColor: skin.colors.border }]} />
@@ -38,7 +42,7 @@ export function BottomSheet({
             <Text style={{ color: skin.colors.ink }}>关闭</Text>
           </Pressable>
         </View>
-      </View>
+      </Backdrop>
     </Modal>
   );
 }
