@@ -507,7 +507,14 @@ export interface CompanionPersona {
  * CompanionPersona. 409 too when changed more than 30 times in an hour.
  */
 export type PersonaInput = { version: number } & Partial<Pick<CompanionPersona,
-  "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations" | "dialogueExamples">>;
+  "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations">>;
+
+/**
+ * PUT persona takes the example dialogue too (示例对话, up to 1500 characters, "" takes it out). It
+ * is a type of its own so that an app written against PersonaInput's six fields keeps compiling
+ * until it shows this one.
+ */
+export type PersonaWithExamplesInput = PersonaInput & Partial<Pick<CompanionPersona, "dialogueExamples">>;
 
 /**
  * 422 from PUT persona: one field holds something that may not be kept, and nothing was saved.
