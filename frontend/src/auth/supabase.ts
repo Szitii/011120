@@ -1,5 +1,5 @@
 import "react-native-url-polyfill/auto";
-import { AuthClient, isAuthRetryableFetchError } from "@supabase/auth-js";
+import { AuthClient, AuthRetryableFetchError, isAuthRetryableFetchError } from "@supabase/auth-js";
 import * as SecureStore from "expo-secure-store";
 import { AppState, Platform } from "react-native";
 import { AccountSession } from "./account-session.ts";
@@ -48,6 +48,36 @@ export function createSupabaseAccount(config: SupabaseConfig) {
       return { data: { user }, error };
     },
     resetPasswordForEmail: email => emailAuth().resetPasswordForEmail(email),
+    updateUser: async (attributes, accessToken, signal) => {
+      // AuthClient.updateUser reads mutable session storage again and saves the
+      // result. Use the same Auth endpoint with the caller's captured session.
+      const response = await fetch(new URL("/auth/v1/user", project).toString(), {
+        method: "PUT",
+        redirect: "error",
+        signal,
+        headers: {
+          ...options.headers,
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "X-Supabase-Api-Version": "2024-01-01",
+        },
+        body: JSON.stringify(attributes),
+      }).catch(() => { throw new AuthRetryableFetchError("Authentication service unavailable", 0); });
+      if ([502, 503, 504].includes(response.status)) {
+        throw new AuthRetryableFetchError("Authentication service unavailable", response.status);
+      }
+      const value = await response.json().catch(() => undefined);
+      if (!response.ok) {
+        return { data: { user: null }, error: {
+          status: response.status,
+          code: value?.code ?? value?.error_code,
+          message: value?.msg ?? value?.message,
+        } };
+      }
+      const payload = value?.user ?? value;
+      const user = typeof payload?.id === "string" ? { id: payload.id } : null;
+      return { data: { user }, error: null };
+    },
     signOut: options => auth.signOut(options),
   }, isAuthRetryableFetchError);
 
@@ -72,5 +102,6 @@ export function createSupabaseAccount(config: SupabaseConfig) {
     observe,
     signUp: (email: string, password: string) => session.signUp(email, password),
     resetPasswordForEmail: (email: string) => session.resetPasswordForEmail(email),
+    updatePassword: (password: string) => session.updatePassword(password),
   };
 }

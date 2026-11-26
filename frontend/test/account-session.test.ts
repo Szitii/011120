@@ -274,3 +274,61 @@ test("self-service operations do not start while another account is signed in", 
   assert.equal((await session.resetPasswordForEmail("alice@example.test")).ok, false);
   assert.equal(await binding(session).tokens.getToken(), "bob");
 });
+
+test("updatePassword requires an active session, validates length, and calls updateUser", async () => {
+  const signedOut = fixture();
+  signedOut.driver.updateUser = async () => assert.fail("must not update password when signed out");
+  assert.equal((await signedOut.session.updatePassword("new-secret")).ok, false);
+
+  const { session, driver } = fixture(account("alice"));
+  const active = binding(session);
+  const updates: { password: string }[] = [];
+  driver.updateUser = async attributes => {
+    updates.push(attributes);
+    return { data: { user: { id: "alice", email: "alice@example.test" } }, error: null };
+  };
+
+  assert.equal((await active.updatePassword("12345")).ok, false);
+  assert.equal(updates.length, 0);
+
+  const okResult = await active.updatePassword("new-secret");
+  assert.deepEqual(okResult, { ok: true, message: "密码已更新。" });
+  assert.deepEqual(updates, [{ password: "new-secret" }]);
+
+  driver.updateUser = async () => ({
+    data: { user: null },
+    error: { code: "same_password", status: 422 },
+  });
+  assert.deepEqual(await active.updatePassword("new-secret"), {
+    ok: false,
+    message: "新密码不能与原密码相同。",
+  });
+
+  await session.signOut();
+  assert.deepEqual(await active.updatePassword("another-secret"), {
+    ok: false,
+    message: "登录已过期，请重新登录。",
+  });
+});
+
+test("a pending password change stays bound to the original account", async () => {
+  const { session, emit, driver } = fixture(account("alice"));
+  const old = binding(session);
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  driver.updateUser = async (_attributes, token, signal) => {
+    assert.equal(token, "alice");
+    assert.equal(signal, old.tokens.signal);
+    started.resolve();
+    await release.promise;
+    assert.equal(signal.aborted, true);
+    return { data: { user: { id: "alice" } }, error: null };
+  };
+
+  const pending = old.updatePassword("fixture-password");
+  await started.promise;
+  emit("SIGNED_IN", account("bob"));
+  release.resolve();
+  assert.equal((await pending).ok, false);
+  assert.equal(await binding(session).tokens.getToken(), "bob");
+});

@@ -1,6 +1,4 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { WalletBalance } from "./src/wallet/WalletBalance";
-import type { ChatClient } from "./src/chat/client";
 import { createChatDraftStore } from "./src/chat/draftStore";
 import type { Badges, PlatformFeatures } from "../contracts/chat";
 import { useAppIsActive } from "./src/state/useAppIsActive";
@@ -30,7 +28,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { createClientBootstrap, type ClientBootstrap } from "./src/adapters";
 import { ApiProblemError, RealApiAdapter, safeClientMessage } from "./src/adapters/real-api";
 import { AccountGate } from "./src/auth/AccountGate";
-import type { AccountBinding } from "./src/auth/account-session";
+import type { AccountBinding, SelfServiceResult } from "./src/auth/account-session";
 import type { CommunityPost, CommunityProfile } from "../contracts/community";
 import { AuthPostImage, CommunityButton, SecondaryHeading } from "./src/community/components";
 import { ChatSettingsScreen } from "./src/chat/ChatSettingsScreen";
@@ -73,7 +71,7 @@ import {
   type Route,
   type CommunityTarget,
 } from "./src/state/navigation";
-import { SkinProvider, useSkin, TEXT_SIZES } from "./src/theme/SkinProvider";
+import { SkinProvider, useSkin } from "./src/theme/SkinProvider";
 import { CHROME, RADIUS } from "./src/theme/layoutTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
@@ -84,10 +82,10 @@ import { PrivateHomeScreen } from "./src/home/PrivateHomeScreen";
 import { MessagesScreen } from "./src/messages/MessagesScreen";
 import { AlbumScreen } from "./src/album/AlbumScreen";
 import { addAlbumQuote } from "./src/album/store";
-import { BottomSheet } from "./src/components/BottomSheet";
-import { GlassChatBubble } from "./src/components/GlassChatBubble";
 import { DiaryScreen } from "./src/diary/DiaryScreen";
 import { ChatScreen } from "./src/chat/ChatScreen";
+import { LegalScreen } from "./src/settings/LegalScreen";
+import { SettingsScreen } from "./src/settings/SettingsScreen";
 
 type LoadState<T> =
   | { kind: "idle" | "loading" }
@@ -161,13 +159,23 @@ function SignedInWorld({ baseUrl, supabaseUrl, publishableKey, account, onSignOu
     () => ({ api: new RealApiAdapter({ baseUrl, supabaseUrl, publishableKey, session: account.tokens }) }),
     [baseUrl, supabaseUrl, publishableKey, account],
   );
-  return <WorldApp client={client} isMockMode={false} account={{ email: account.email, signOut: onSignOut }} />;
+  return (
+    <WorldApp
+      client={client}
+      isMockMode={false}
+      account={{ email: account.email, signOut: onSignOut, updatePassword: account.updatePassword }}
+    />
+  );
 }
 
 function WorldApp({ client, account, isMockMode }: {
   client: ClientBootstrap;
   isMockMode: boolean;
-  account?: { email?: string; signOut: () => void };
+  account?: {
+    email?: string;
+    signOut: () => void;
+    updatePassword?: (password: string) => Promise<SelfServiceResult>;
+  };
 }) {
   const styles = useThemedStyles(createStyles);
   const { skin, ui } = useSkin();
@@ -184,7 +192,6 @@ function WorldApp({ client, account, isMockMode }: {
   const [momentMode, setMomentMode] = useState(false);
   const [identitySwitchPending, setIdentitySwitchPending] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [mySettingsOpen, setMySettingsOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const [communityRevision, setCommunityRevision] = useState(0);
   const invalidateCommunity = useCallback(() => setCommunityRevision(value => value + 1), []);
@@ -751,7 +758,7 @@ function WorldApp({ client, account, isMockMode }: {
           identityLoading={identity.kind === "loading"}
           onBack={goBack}
           onIdentity={() => setSwitcherOpen(true)}
-          onOpenSettings={() => setMySettingsOpen(true)}
+          onOpenSettings={() => setNav(current => pushRoute(current, { type: "settings" }))}
         />
       )}
 
@@ -1131,20 +1138,31 @@ function WorldApp({ client, account, isMockMode }: {
         onCompanion={(item) => void switchCompanionFromUi(item)}
       />
 
-      <AppSettingsSheet
-        visible={mySettingsOpen}
-        isSampleCompanion={isSampleCompanion}
-        account={account}
-        walletClient={ownerId ? client.api.chat : undefined}
-        onClose={() => setMySettingsOpen(false)}
-        onBlocks={viewer && client.api.community ? () => openCommunity({ type: "blocks" }) : undefined}
-        onBringCompanion={() => setNav((current) => pushRoute(current, { type: "bring-companion" }))}
-        onAgentSettings={
-          agentViewer && client.api.community
-            ? () => setNav((current) => pushRoute(current, { type: "agent-settings" }))
-            : undefined
-        }
-      />
+      {route.type === "settings" && (
+        <SettingsScreen
+          account={account}
+          ownerName={identityLabel(identityValue, ownerNickname)}
+          avatar={activeAvatar}
+          isCompanion={isSampleCompanion}
+          walletClient={ownerId ? client.api.chat : undefined}
+          onSwitchIdentity={() => setSwitcherOpen(true)}
+          onBlocks={viewer && client.api.community ? () => openCommunity({ type: "blocks" }) : undefined}
+          onBringCompanion={isSampleCompanion
+            ? undefined
+            : () => setNav(current => pushRoute(current, { type: "bring-companion" }))}
+          onAgentSettings={agentViewer && client.api.community
+            ? () => setNav(current => pushRoute(current, { type: "agent-settings" }))
+            : undefined}
+          onOpenFeedback={ownerId && client.api.chat?.listFeedback
+            ? () => setNav(current => pushRoute(current, { type: "feedback" }))
+            : undefined}
+          onOpenLegal={doc => setNav(current => pushRoute(current, { type: "legal", doc }))}
+        />
+      )}
+
+      {route.type === "legal" && (
+        <LegalScreen doc={route.doc} />
+      )}
     </SafeAreaView>
   );
 }
@@ -1794,144 +1812,6 @@ function MyScreen({
   );
 }
 
-function AppSettingsSheet({
-  visible,
-  isSampleCompanion,
-  account,
-  walletClient,
-  onClose,
-  onBringCompanion,
-  onBlocks,
-  onAgentSettings,
-}: {
-  visible: boolean;
-  walletClient?: ChatClient;
-  isSampleCompanion: boolean;
-  account?: { email?: string; signOut: () => void };
-  onClose: () => void;
-  onBringCompanion: () => void;
-  onBlocks?: () => void;
-  onAgentSettings?: () => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  const { skin, ui, setSkinById, availableSkins, textSize, setTextSize } = useSkin();
-  const [colorModalOpen, setColorModalOpen] = useState(false);
-  const defaultSkin = skin.id === "default";
-  const ink = defaultSkin ? ui.ink : skin.colors.ink;
-  const muted = defaultSkin ? ui.muted : skin.colors.inkSub;
-
-  return (
-    <>
-      <BottomSheet visible={visible} title="设置" onClose={onClose}>
-        {visible && walletClient?.wallet && <WalletBalance client={walletClient} />}
-        <View style={[styles.cleanCardGroup, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
-          {onAgentSettings && (
-            <Pressable
-              accessibilityRole="button"
-              style={styles.cleanRow}
-              onPress={() => {
-                onClose();
-                onAgentSettings();
-              }}
-            >
-              <Text style={[styles.cleanRowTitle, { color: ink }]}>互动与活动设置</Text>
-              <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
-            </Pressable>
-          )}
-          {onBlocks && <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={() => { onClose(); onBlocks(); }}>
-            <Text style={[styles.cleanRowTitle, { color: ink }]}>屏蔽管理</Text>
-            <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
-          </Pressable>}
-          {!isSampleCompanion && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="添加陪伴成员"
-              style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
-              onPress={() => {
-                onClose();
-                onBringCompanion();
-              }}
-            >
-              <View style={styles.cleanRowLeft}>
-                <Ionicons name="add-circle-outline" size={20} color={skin.colors.ink} />
-                <Text style={[styles.cleanRowTitle, { color: ink }]}>添加陪伴成员</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
-            </Pressable>
-          )}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="基础外观配色"
-            style={[styles.cleanRow, { borderBottomColor: skin.colors.border }]}
-            onPress={() => {
-              onClose();
-              setColorModalOpen(true);
-            }}
-          >
-            <View style={styles.cleanRowLeft}>
-              <Ionicons name="color-palette-outline" size={20} color={skin.glass.iconTint} />
-              <Text style={[styles.cleanRowTitle, { color: ink }]}>基础外观配色</Text>
-            </View>
-            <View style={styles.cleanRowRight}>
-              <Text style={[styles.cleanRowValue, { color: muted }]}>{skin.name}</Text>
-              <Ionicons name="chevron-forward" size={16} color={skin.colors.inkMute} />
-            </View>
-          </Pressable>
-          {account && (
-            <Pressable accessibilityRole="button" style={styles.cleanRow} onPress={account.signOut}>
-              <View style={styles.cleanRowLeft}>
-                <Text style={[styles.cleanRowTitle, { color: ink }]}>退出登录或切换账号</Text>
-                {account.email ? <Text style={[styles.cleanRowValue, { color: muted }]}>{account.email}</Text> : null}
-              </View>
-            </Pressable>
-          )}
-        </View>
-      </BottomSheet>
-
-      <BottomSheet visible={colorModalOpen} title="基础外观" onClose={() => setColorModalOpen(false)}>
-        <Text style={[styles.heroBio, { color: muted }]}>字体大小</Text>
-        <View style={[styles.skinPickerRow, { flexWrap: "wrap" }]}>
-          {(Object.keys(TEXT_SIZES) as Array<keyof typeof TEXT_SIZES>).map(size => (
-            <Pressable key={size} accessibilityRole="radio" accessibilityState={{ selected: size === textSize }}
-              onPress={() => setTextSize(size)} style={[styles.skinPill, {
-                backgroundColor: size === textSize ? skin.colors.accent : skin.colors.surface, borderColor: skin.colors.border,
-              }]}>
-              <Text style={[styles.skinPillText, { color: size === textSize ? skin.colors.accentFg : ink }]}>{TEXT_SIZES[size]}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <Text style={[styles.heroBio, { color: muted }]}>聊天样式预览</Text>
-        <View style={[styles.skinPreviewBox, { backgroundColor: skin.colors.surface, borderColor: skin.colors.border }]}>
-          <GlassChatBubble senderRole="ai" text="看你昨晚说肩颈酸，把靠枕换软了。" />
-          <GlassChatBubble senderRole="human" text="收到啦，今晚早点回来。" />
-        </View>
-        <View style={styles.skinPickerRow}>
-          {availableSkins.map((preset) => {
-            const active = preset.id === skin.id;
-            return (
-              <Pressable
-                key={preset.id}
-                onPress={() => setSkinById(preset.id)}
-                style={[
-                  styles.skinPill,
-                  {
-                    backgroundColor: active ? skin.colors.accent : skin.colors.surface,
-                    borderColor: skin.colors.border,
-                  },
-                ]}
-              >
-                <Text style={[styles.skinPillText, { color: active ? skin.colors.accentFg : skin.colors.ink }]}>
-                  {preset.name}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </BottomSheet>
-    </>
-  );
-}
-
 function IdentitySwitcher({
   visible,
   identity,
@@ -2253,59 +2133,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   centerBody: { maxWidth: 360, fontSize: 14, lineHeight: 21, color: ui.muted, textAlign: "center" },
   tinyMuted: { fontSize: 11, lineHeight: 17, color: ui.placeholder },
   disabled: { opacity: 0.38 },
-  skinPreviewBox: {
-    borderRadius: 22,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 18,
-  },
-  skinPickerRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 12,
-  },
-  skinPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  skinPillText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  cleanCardGroup: {
-    borderRadius: 18,
-    borderWidth: 1,
-    overflow: "hidden",
-    marginTop: 14,
-  },
-  cleanRow: {
-    minHeight: 52,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  cleanRowLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  cleanRowRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  cleanRowTitle: {
-    fontSize: 15,
-    fontWeight: "500",
-  },
-  cleanRowValue: {
-    fontSize: 13,
-  },
   headerIconBtn: {
     width: 44,
     height: 44,

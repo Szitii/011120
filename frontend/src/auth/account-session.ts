@@ -8,6 +8,7 @@ export interface SessionTokenSource {
 type Session = { access_token: string; user: { id: string; email?: string } };
 type SessionResult = { data: { session: Session | null }; error: unknown };
 type SignUpResult = { data: { user: { id: string } | null }; error: unknown };
+type UpdateUserResult = { data: { user: { id: string; email?: string } | null }; error: unknown };
 
 export interface AuthDriver {
   onAuthStateChange(listener: (event: string, session: Session | null) => void): {
@@ -18,6 +19,7 @@ export interface AuthDriver {
   signInWithPassword(credentials: { email: string; password: string }): Promise<SessionResult>;
   signUp?(credentials: { email: string; password: string }): Promise<SignUpResult>;
   resetPasswordForEmail?(email: string): Promise<{ data: unknown; error: unknown }>;
+  updateUser?(attributes: { password: string }, accessToken: string, signal: AbortSignal): Promise<UpdateUserResult>;
   signOut(options: { scope: "local" }): Promise<{ error: unknown }>;
 }
 
@@ -29,6 +31,7 @@ export type AccountBinding = {
   readonly generation: number;
   readonly email?: string;
   readonly tokens: SessionTokenSource;
+  readonly updatePassword: (password: string) => Promise<SelfServiceResult>;
 };
 
 export type AccountView =
@@ -108,12 +111,37 @@ function readableResetError(error: unknown, isRetryable: (err: unknown) => boole
   return "找回密码请求未完成，请稍后重试。";
 }
 
+function readableUpdatePasswordError(error: unknown, isRetryable: (err: unknown) => boolean): string {
+  if (isRetryable(error)) return "暂时无法连接认证服务，请检查网络后重试。";
+  const { status, code, message } = authErrorInfo(error);
+  if (code === "same_password" || message.includes("different from the old password")) {
+    return "新密码不能与原密码相同。";
+  }
+  if (code === "weak_password" || message.includes("password should be")) {
+    return "密码强度不足，请使用更长或包含字母与数字的密码。";
+  }
+  if (code === "reauthentication_needed" || message.includes("reauthentication")) {
+    return "当前登录状态需重新验证，请退出后重新登录再试。";
+  }
+  if (status === 401 || status === 403 || code === "session_not_found") {
+    return EXPIRED;
+  }
+  if (status === 429 || code === "over_request_rate_limit" || message.includes("rate limit")) {
+    return "操作过于频繁，请稍后再试。";
+  }
+  if (status === 400 || status === 422) {
+    return "密码修改未完成，请检查密码长度与格式后重试。";
+  }
+  return "密码修改未完成，请稍后重试。";
+}
+
 export class AccountSession {
   #view: AccountView = { kind: "restoring" };
   #listeners = new Set<() => void>();
   #binding?: { userId: string; accessToken: string; abort: AbortController };
   #generation = 0;
   #selfServicePending = false;
+  #passwordUpdatePending = false;
   readonly #auth: AuthDriver;
   readonly #isRetryable: (error: unknown) => boolean;
 
@@ -237,6 +265,72 @@ export class AccountSession {
     this.#set({ kind: "logout-error", message: "无法清除这台设备的登录会话，请重试退出。" });
   }
 
+  async updatePassword(password: string): Promise<SelfServiceResult> {
+    if (this.#view.kind !== "signed-in" || !this.#binding) {
+      return { ok: false, message: EXPIRED };
+    }
+    return this.#updatePasswordForBinding(this.#binding, password);
+  }
+
+  async #updatePasswordForBinding(
+    binding: { userId: string; accessToken: string; abort: AbortController },
+    password: string,
+  ): Promise<SelfServiceResult> {
+    if (this.#view.kind !== "signed-in" || this.#binding !== binding || binding.abort.signal.aborted) {
+      return { ok: false, message: EXPIRED };
+    }
+    if (this.#passwordUpdatePending) {
+      return { ok: false, message: "正在提交修改，请稍候。" };
+    }
+    if (password.length < 6) {
+      return { ok: false, message: "密码至少需要 6 位字符。" };
+    }
+    if (!this.#auth.updateUser) {
+      return { ok: false, message: "当前环境暂不支持修改密码。" };
+    }
+
+    this.#passwordUpdatePending = true;
+    try {
+      const current = await this.#auth.getSession();
+      if (binding.abort.signal.aborted || this.#binding !== binding) {
+        return { ok: false, message: EXPIRED };
+      }
+      if (current.error && this.#isRetryable(current.error)) {
+        return { ok: false, message: "暂时无法连接认证服务，请检查网络后重试。" };
+      }
+      if (!current.data.session || current.error) {
+        void this.signOut(EXPIRED);
+        return { ok: false, message: EXPIRED };
+      }
+      if (current.data.session.user.id !== binding.userId) {
+        this.#accept(current.data.session);
+        return { ok: false, message: EXPIRED };
+      }
+      const { access_token: accessToken } = current.data.session;
+      binding.accessToken = accessToken;
+
+      const { data, error } = await this.#auth.updateUser({ password }, accessToken, binding.abort.signal);
+      if (binding.abort.signal.aborted || this.#binding !== binding) {
+        return { ok: false, message: EXPIRED };
+      }
+      if (error) throw error;
+      return data.user?.id === binding.userId
+        ? { ok: true, message: "密码已更新。" }
+        : { ok: false, message: "密码修改未完成，请稍后重试。" };
+    } catch (error) {
+      if (binding.abort.signal.aborted || this.#binding !== binding) {
+        return { ok: false, message: EXPIRED };
+      }
+      const { status, code } = authErrorInfo(error);
+      if (status === 401 || code === "session_not_found") {
+        void this.signOut(EXPIRED);
+      }
+      return { ok: false, message: readableUpdatePasswordError(error, this.#isRetryable) };
+    } finally {
+      this.#passwordUpdatePending = false;
+    }
+  }
+
   #set(view: AccountView) {
     this.#view = view;
     for (const listener of this.#listeners) listener();
@@ -301,6 +395,7 @@ export class AccountSession {
       generation: ++this.#generation,
       email: session.user.email,
       tokens,
+      updatePassword: password => this.#updatePasswordForBinding(binding, password),
     } });
   }
 }
