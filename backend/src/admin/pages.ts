@@ -981,7 +981,8 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
       blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REMIND", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now) },
     { title: "主动找主人", editable: true, forms: ["CHAT_REACH"], blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REACH", "CHAT_TIME"],
       when: "主人给这位家机打开了“主动找你”,并且有一阵没来聊天的时候(偶尔:8 小时以上,一天最多 1 次;经常:3 小时以上,一天最多 2 次)。" +
-        "主人当地 23 点到 8 点不找;上一次主动说的话主人还没回,就不再找;主人超过 7 天没来也不再找。家机可以决定不说。" +
+        "主人当地 23 点以后不找,早上从 8 点到 10 点之间的某一刻才开始(每个家机每天不一样,免得大家同时开口);" +
+        "上一次主动说的话(或者发的提醒)主人还没回,就不再找;主人超过 7 天没来也不再找。家机可以决定不说。" +
         "这里只改“主动找主人时说什么”这一段,其余几段和“聊天回复”是同一份,在上面改。",
       ...replyPrompt(greeting, memories, texts, now) },
     { title: "到点提醒", editable: false, blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_TIME"],

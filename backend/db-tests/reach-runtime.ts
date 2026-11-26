@@ -75,17 +75,21 @@ try {
   const age = (chatId: string, hours: number) => pool.query(`update companion_private.chat_messages set
     created_at = created_at - make_interval(hours => $2), shown_at = shown_at - make_interval(hours => $2),
     typing_at = typing_at - make_interval(hours => $2) where chat_id = $1`, [chatId, hours]);
-  /** A turn of the Companion's own, `hoursAgo`: SENT with a body, or PASSED (it decided to say nothing). */
-  const ownTurn = async (chatId: string, hoursAgo: number, status: "SENT" | "PASSED" = "SENT") => (await pool.query(
-    `insert into companion_private.chat_messages(chat_id, companion_id, body, status, reply_to, optional, created_at, shown_at)
-     values ($1, $2, $3, $4, 'SELF', true, now() - make_interval(mins => $5), now() - make_interval(mins => $5)) returning id`,
-    [chatId, A.companion, status === "SENT" ? "在吗" : null, status, Math.round(hoursAgo * 60)])).rows[0].id as string;
+  /**
+   * A turn of the Companion's own (or one that delivered a reminder), `hoursAgo`: SENT with a body,
+   * PASSED (it decided to say nothing), or PENDING (queued and never written).
+   */
+  const ownTurn = async (chatId: string, hoursAgo: number, status: "SENT" | "PASSED" | "PENDING" = "SENT", kind: "SELF" | "REMINDER" = "SELF") =>
+    (await pool.query(`insert into companion_private.chat_messages(chat_id, companion_id, body, status, reply_to, optional, created_at, shown_at)
+     values ($1, $2, $3, $4, $6, true, now() - make_interval(mins => $5), case when $4 = 'PENDING' then null else now() - make_interval(mins => $5) end) returning id`,
+    [chatId, A.companion, status === "SENT" ? "在吗" : null, status, Math.round(hoursAgo * 60), kind])).rows[0].id as string;
   const forget = (id: string) => pool.query("delete from companion_private.chat_messages where id = $1", [id]);
   const waiting = async () => (await call<ReminderList>(0, `companions/${A.companion}/reminders`)).data.items;
   const reminderRows = async () => (await pool.query(
     "select note, status from companion_private.chat_reminders where companion_id = $1 order by created_at, id", [A.companion])).rows as { note: string; status: string }[];
-  const dueList = async (platform: boolean) =>
-    (await server.query<{ payload: { companionId: string; subject: string }[] }>("select public.chat_reach_due(10, $1) as payload", [platform])).rows[0]!.payload;
+  /** Who the scheduler would write for now: `reminders` true for due reminders, false for writing first. */
+  const dueList = async (platform: boolean, reminders = false) => (await server.query<{ payload: { companionId: string; subject: string }[] }>(
+    `select public.${reminders ? "chat_reminder_due" : "chat_reach_due"}(10, $1) as payload`, [platform])).rows[0]!.payload;
   const says = (...lines: string[]): ChatModel => ({ reply: async () => ({ messages: lines }) });
 
   // ---- the setting and the switch ----
@@ -116,10 +120,19 @@ try {
   await pool.query("delete from companion_private.chat_messages where chat_id = $1", [chat.id]);
   await ownerSays(chat.id, "又来了");
   await age(chat.id, 7);
-  for (const [hour, may] of [[3, false], [6, false], [23, false], [9, true], [21, true], [12, true]] as const) {
+  for (const [hour, may] of [[3, false], [6, false], [23, false], [10, true], [21, true], [12, true]] as const) {
     await ownerClock(hour);
     assert.equal(await due("OFTEN"), may, `at ${hour} o'clock for the Owner`);
   }
+  // Between 8 and 10 the day starts at a minute of this chat's own, another one every day.
+  for (const hour of [8, 9]) {
+    const zone = await ownerClock(hour);
+    const morning = (await pool.query(`select extract(hour from l) * 60 + extract(minute from l) as now,
+        480 + ((hashtext($1::text || l::date::text) & 2147483647) % 120) as starts from (select now() at time zone $2 as l) t`, [chat.id, zone])).rows[0];
+    assert.ok(morning.starts >= 480 && morning.starts < 600);
+    assert.equal(await due("OFTEN"), Number(morning.now) >= morning.starts, `at ${hour}, with the day starting at minute ${morning.starts}`);
+  }
+  await ownerClock(12);
   const pending = (await pool.query(`insert into companion_private.chat_messages(chat_id, companion_id, status, reply_to, optional)
     values ($1, $2, 'PENDING', 'OWNER', true) returning id`, [chat.id, A.companion])).rows[0].id as string;
   assert.equal(await due("OFTEN"), false, "something is waiting to be answered");
@@ -127,6 +140,12 @@ try {
   const unanswered = await ownTurn(chat.id, 1);
   assert.equal(await due("OFTEN"), false, "it already wrote and the Owner has not answered: no second message");
   await forget(unanswered);
+  const reminded = await ownTurn(chat.id, 1, "SENT", "REMINDER");
+  assert.equal(await due("OFTEN"), false, "nor after a reminder the Owner has not answered");
+  await forget(reminded);
+  const answeredReminder = await ownTurn(chat.id, 9, "SENT", "REMINDER");
+  assert.equal(await due("OFTEN"), true, "a reminder from before the Owner's last message is no attempt of its own");
+  await forget(answeredReminder);
   const tried = await ownTurn(chat.id, 1, "PASSED");
   assert.equal(await due("OFTEN"), false, "it decided to say nothing an hour ago: not asked again so soon");
   await pool.query("update companion_private.chat_messages set created_at = now() - interval '4 hours', shown_at = now() - interval '4 hours' where id = $1", [tried]);
@@ -155,13 +174,20 @@ try {
   await age(chat.id, 7);
   assert.deepEqual(await dueList(true), [{ companionId: A.companion, subject: A.subject }]);
   assert.deepEqual(await dueList(false), [], "without a platform model, only Companions on the Owner's own key or agent write first");
+  assert.deepEqual(await dueList(true, true), [], "no reminder is due");
   const replies = new ChatReplies(devChatModel);
-  const scheduler = new BackgroundScheduler({ server, portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
-    due: "chat_reach_due", what: "message of its own", platform: true, write: (id, port) => replies.reachOut(id, port) });
+  const schedule = (due: "chat_reach_due" | "chat_reminder_due") => new BackgroundScheduler({ server,
+    portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
+    due, what: "message of its own", platform: true, write: (id, port) => replies.reachOut(id, port) });
+  const scheduler = schedule("chat_reach_due"), reminderScheduler = schedule("chat_reminder_due");
+  // A turn of its own that was queued four hours ago and never written (the server stopped): let go, and a new one is queued.
+  const abandoned = await ownTurn(chat.id, 4, "PENDING");
+  assert.equal(await due("OFTEN"), true, "it does not stand in the way");
   assert.equal(await scheduler.round(), 1);
   let page = await settle(chat.id);
   assert.deepEqual([page.items[0]!.body, page.items[0]!.companionId, page.items[0]!.reach, page.items[0]!.reminder, page.items[1]!.reach],
     ["（开发环境假回复）SampleCompanion主动来找你了", A.companion, "GREETING", null, null], "an ordinary message of the Companion, marked as its own initiative");
+  assert.equal((await pool.query("select status from companion_private.chat_messages where id = $1", [abandoned])).rows[0].status, "PASSED");
   assert.equal(await scheduler.round(), 0, "one message left unanswered is where it stops");
   assert.equal(await replies.reachOut(A.companion, portA), "NOT_DUE");
   await assert.rejects(new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).reachBegin(A.companion), { code: "NOT_FOUND" });
@@ -195,6 +221,10 @@ try {
     [["收到：「我回来了」", null], ["（开发环境假回复）我是SampleCompanion", null], ["我回来了", null]]);
   const dropped = await pool.query("select status from companion_private.chat_messages where chat_id = $1 and reply_to = 'SELF' order by created_at desc limit 1", [chat.id]);
   assert.equal(dropped.rows[0].status, "PASSED");
+  // One that waited more than ten minutes is not written late, whenever the chat is next looked at.
+  const stale = await ownTurn(chat.id, 0.2, "PENDING");
+  assert.equal(await replies.drain(chat.id, portA), 0);
+  assert.equal((await pool.query("select status from companion_private.chat_messages where id = $1", [stale])).rows[0].status, "PASSED");
   passed("the scheduler finds who is due and the Companion writes, says nothing, or yields to the Owner; the call is booked");
 
   // ---- reminders: set in a reply, delivered at their time ----
@@ -210,12 +240,13 @@ try {
   assert.equal((await call(1, `companions/${A.companion}/reminders/${promised.reminder!.id}`, "DELETE")).status, 404, "another Owner's Companion");
   assert.equal(await replies.reachOut(A.companion, portA), "NOT_DUE", "not yet");
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [promised.reminder!.id]);
-  assert.deepEqual(await dueList(false), [{ companionId: A.companion, subject: A.subject }], "a reminder needs no model");
-  assert.equal(await scheduler.round(), 1);
+  assert.deepEqual([await dueList(false, true), await dueList(true)], [[{ companionId: A.companion, subject: A.subject }], []],
+    "a reminder needs no model, and is not the business of the scheduler for writing first");
+  assert.equal(await reminderScheduler.round(), 1);
   page = await settle(chat.id);
   assert.deepEqual([page.items[0]!.body, page.items[0]!.reach], ["（开发环境假回复）到时间啦：开发环境的假提醒", "REMINDER"]);
   assert.deepEqual([await waiting(), await reminderRows()], [[], [{ note: "开发环境的假提醒", status: "SENT" }]]);
-  assert.equal(await scheduler.round(), 0);
+  assert.equal(await reminderScheduler.round(), 0);
   // A reply through any model sets one the same way; with no model at all it is still delivered, in plain words.
   const inHours = (hours: number) => localStamp(new Date(Date.now() + hours * 3_600_000), zoneAtNight);
   const answer = async (...lines: string[]) => {
@@ -262,7 +293,7 @@ try {
   assert.deepEqual((await call(0, `companions/${A.companion}/reminders/${mine.id}`, "DELETE")).data, { deleted: true });
   assert.equal((await call(0, `companions/${A.companion}/reminders/${mine.id}`, "DELETE")).status, 404, "only once");
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [mine.id]);
-  assert.deepEqual(await dueList(true), [], "a cancelled reminder is not delivered");
+  assert.deepEqual(await dueList(true, true), [], "a cancelled reminder is not delivered");
   // Cancelled while its turn is already queued: the turn is dropped.
   page = await answer("好", `[提醒:${inHours(1)} 排上了又取消]`);
   const late = page.items[0]!.reminder!;
@@ -276,12 +307,12 @@ try {
   page = await answer("好", `[提醒:${inHours(1)} 服务器停过一下]`);
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [page.items[0]!.reminder!.id]);
   assert.deepEqual(await portA.reachBegin(A.companion), { status: "QUEUED", chatId: chat.id, kind: "REMINDER" });
-  assert.deepEqual(await dueList(false), [{ companionId: A.companion, subject: A.subject }], "still due: nobody is writing it");
+  assert.deepEqual(await dueList(false, true), [{ companionId: A.companion, subject: A.subject }], "still due: nobody is writing it");
   const stuck = (await portA.claim(chat.id))!;
   assert.deepEqual([stuck.replyTo, stuck.reach], ["REMINDER", { kind: "REMINDER", note: "服务器停过一下", dueAt: (await waiting())[0]!.dueAt }]);
-  assert.deepEqual(await dueList(false), [], "someone is writing it now");
+  assert.deepEqual(await dueList(false, true), [], "someone is writing it now");
   await pool.query("update companion_private.chat_messages set claimed_at = now() - interval '3 minutes' where id = $1", [stuck.replyId]);
-  assert.equal(await scheduler.round(), 1);
+  assert.equal(await reminderScheduler.round(), 1);
   assert.equal((await settle(chat.id)).items[0]!.body, "（开发环境假回复）到时间啦：服务器停过一下");
   // Due while the chat waits for another reply: next round. Due for more than a day: given up.
   page = await answer("好", `[提醒:${inHours(1)} 等一等]`);
@@ -289,17 +320,23 @@ try {
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [patient.id]);
   await portA.send(chat.id, "先回我这句", [], keyHash());
   assert.deepEqual(await portA.reachBegin(A.companion), { status: "BUSY" });
-  assert.equal(await replies.drain(chat.id, portA), 1);
-  assert.equal(await replies.reachOut(A.companion, portA), "QUEUED");
+  // Nobody wrote that reply for two minutes (the server stopped): the scheduler writes it, and then the reminder.
+  await pool.query("update companion_private.chat_messages set created_at = created_at - interval '3 minutes' where chat_id = $1 and status = 'PENDING'", [chat.id]);
+  assert.equal(await reminderScheduler.round(), 1);
+  assert.equal((await settle(chat.id)).items[0]!.body, "收到：「先回我这句」", "the Owner's message got its answer");
+  assert.equal(await reminderScheduler.round(), 1);
   assert.equal((await settle(chat.id)).items[0]!.body, "（开发环境假回复）到时间啦：等一等");
   page = await answer("好", `[提醒:${inHours(1)} 错过了]`);
-  await pool.query("update companion_private.chat_reminders set due_at = now() - interval '25 hours' where id = $1", [page.items[0]!.reminder!.id]);
+  const missed = page.items[0]!;
+  await pool.query("update companion_private.chat_reminders set due_at = now() - interval '25 hours' where id = $1", [missed.reminder!.id]);
+  assert.deepEqual([await waiting(), (await settle(chat.id)).items.find(m => m.id === missed.id)!.reminder!.status], [[], "MISSED"],
+    "more than a day late reads as missed, whether or not the scheduler has been by");
   assert.deepEqual([await replies.reachOut(A.companion, portA), (await reminderRows()).at(-1)], ["NOT_DUE", { note: "错过了", status: "MISSED" }]);
   // The operators' switch stops both: nothing is delivered, set or written first, and the app is told.
   page = await answer("好", `[提醒:${inHours(1)} 开关关了]`);
   await pool.query("update companion_private.chat_reminders set due_at = now() - interval '1 minute' where id = $1", [page.items[0]!.reminder!.id]);
   await pool.query("update companion_private.feature_switches set enabled = false where key = 'COMPANION_REACH'");
-  assert.deepEqual([await dueList(true), await portA.reachBegin(A.companion)], [[], { status: "OFF" }]);
+  assert.deepEqual([await dueList(true), await dueList(true, true), await portA.reachBegin(A.companion)], [[], [], { status: "OFF" }]);
   assert.equal((await call<PlatformFeatures>(0, "features")).data.companionReach, false);
   page = await ownerSays(chat.id, "再提醒我一次");
   assert.ok(page.items.slice(0, 3).every(m => m.reminder === null), "while it is off no reminder is set");
@@ -319,7 +356,8 @@ try {
     await direct.query("begin");
     await direct.query("set local role authenticated");
     await direct.query("select set_config('request.jwt.claim.sub', $1, true)", [A.subject]);
-    for (const sql of ["select * from companion_private.chat_reminders", `select public.chat_reach_begin('${A.companion}')`, "select public.chat_reach_due(10, true)"]) {
+    for (const sql of ["select * from companion_private.chat_reminders", `select public.chat_reach_begin('${A.companion}')`, "select public.chat_reach_due(10, true)",
+      "select public.chat_reminder_due(10, true)"]) {
       await direct.query("savepoint s");
       await assert.rejects(direct.query(sql), /permission denied/, sql);
       await direct.query("rollback to savepoint s");
