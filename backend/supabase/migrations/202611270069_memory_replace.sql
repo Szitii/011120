@@ -15,7 +15,23 @@ alter table companion_private.schema_migrations enable row level security;
 alter table companion_private.schema_migrations force row level security;
 revoke all on companion_private.schema_migrations from public, anon, authenticated;
 
--- Part 2: a Companion's own notes can take the place of older ones.
+-- Part 2: the Owner's Companion, locked for writing into it.
+--
+-- Functions that add to a Companion (a memory, and from the next migrations on a world book entry,
+-- a skill) lock its row first, so two of them cannot both count "one below the limit". A deletion
+-- holds the same lock: this waits for it, and then finds the Companion gone instead of writing a
+-- row into it that nothing would ever list or remove.
+create function companion_private.locked_companion(p_companion uuid)
+returns uuid language plpgsql security definer set search_path='' as $$
+declare c uuid := companion_private.owned_companion(p_companion);
+begin
+  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
+  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
+  return c;
+end $$;
+revoke all on function companion_private.locked_companion(uuid) from public, anon, authenticated;
+
+-- Part 3: a Companion's own notes can take the place of older ones.
 --
 -- 自动记忆 only ever added. When the Owner changed jobs, the Companion ended up remembering both
 -- the old job and the new one. Now the model taking notes sees what the Companion already
@@ -90,7 +106,7 @@ begin
     raise exception using errcode='22023', message='invalid memories';
   end if;
   -- The Companion before its notes, the order memory_add takes them in (it counts under this lock).
-  perform 1 from public.companions where id = companion_private.owned_companion(p_companion) for no key update;
+  perform companion_private.locked_companion(p_companion);
   a := companion_private.memory_notes_for(p_companion);
   if a.claim_id is null or a.claim_id is distinct from p_claim then
     return jsonb_build_object('accepted', false, 'added', 0, 'replaced', 0);

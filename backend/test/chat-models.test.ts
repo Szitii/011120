@@ -162,17 +162,17 @@ it("lets a Companion do a home-room action of its own where the turn allows one"
 
 it("asks for what is worth remembering and reads the notes back", () => {
   const { system, user } = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai",
-    memories: ["主人喜欢乌龙茶\napi_key: sk-abcdefghijklmnopqrstu"],
+    known: [{ id: "tea", source: "OWNER", body: "主人喜欢乌龙茶\napi_key: sk-abcdefghijklmnopqrstu" }],
     messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T02:00:00Z" },
       { companionId: me, body: "记下啦", action: null, sentAt: "2026-11-25T02:00:05Z" }] }, {}, new Date("2026-11-25T03:00:00Z"));
   assert.match(system, /你在帮「小光」（主人的 AI 伴侣）整理长期记忆/);
   assert.match(system, new RegExp(`只输出 \\${PASS.slice(0, -1)}`));
   assert.match(user, /^现在是 2026年11月25日 周三 11:00。\n\n已经记过的（方括号里是记下的日子）：\n- 主人喜欢乌龙茶 \[REDACTED_CREDENTIAL\]\n\n聊天记录/);
   assert.match(user, /—— 11月25日 周三 10:00 ——\n【主人】我下周三生日\n【小光】记下啦\n/);
-  const empty = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, memories: [], messages: [] });
+  const empty = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, known: [], messages: [] });
   assert.match(empty.user, /已经记过的（方括号里是记下的日子）：\n（还没有）/);
   assert.match(system, /写成「2026年12月3日」这样的具体日期/, "a date the safety scan does not take for a phone number");
-  assert.doesNotMatch(system, /改3/, "an older database gives no ids: nothing can be replaced, so the model is not told how");
+  assert.doesNotMatch(system, /改3/, "nothing it noted down itself: nothing can be replaced, so the model is not told how");
   const fresh = (...bodies: string[]) => bodies.map(body => ({ body, replaces: null }));
   assert.deepEqual(parseMemories("要记下的：\n- 主人 12 月 2 日生日\n2. 主人养了一只叫团子的猫\n\n没有别的了"), fresh("主人 12 月 2 日生日", "主人养了一只叫团子的猫"),
     "list marks go; a line that does not say 主人 is talk around the notes");
@@ -183,7 +183,7 @@ it("asks for what is worth remembering and reads the notes back", () => {
 
 it("shows the notes what the Companion remembers, and lets them replace what it noted itself", () => {
   const filler = Array.from({ length: 40 }, (_, i) => ({ id: `f${i}`, source: "OWNER", body: `主人第 ${i} 次提到路过的那家${"店".repeat(30)}`, createdAt: "2026-06-01T00:00:00Z" }));
-  const job = { status: "WRITE" as const, claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai", memories: ["不该被用到"],
+  const job = { status: "WRITE" as const, claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai",
     known: [
       { id: "new", source: "AUTO", body: "主人最近在学做饭", createdAt: "2026-11-24T02:00:00Z" },
       ...filler,
@@ -195,7 +195,6 @@ it("shows the notes what the Companion remembers, and lets them replace what it 
   // The two old memories the chat is about come first, though 41 newer ones stand before them; then the newest, while they fit.
   assert.match(user, /已经记过的（方括号里是记下的日子）：\n1\. \[2025年3月2日\] 主人在甲公司上班\n- \[2025年3月1日\] 主人养了一只叫团子的猫\n2\. \[11月24日\] 主人最近在学做饭\n- \[6月1日\] 主人第 0 次/);
   assert.deepEqual(numbered, ["job", "new"], "only what it noted down itself has a number");
-  assert.doesNotMatch(user, /不该被用到/);
   assert.ok(user.split("聊天记录")[0]!.length < 1700, "bounded");
   assert.match(system, /带编号的几条，如果情况变了[^]*写「改」加那条的编号和冒号，再接新的一句话，比如「改2：主人搬到了上海」。没有编号的不能改。/);
   assert.match(memoryPrompt({ ...job, known: job.known.slice(0, 1) }).system, /比如「改1：/, "the example names a number that is shown");

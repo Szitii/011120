@@ -17,7 +17,7 @@ const turn: ChatClaim = { chatId: "chat", replyId: "reply", claimId: "claim", re
   history: [{ companionId: null, body: "在吗", action: null, mentions: [], sentAt: "2026-11-26T02:00:00Z" }] };
 const diary: DiaryJob = { status: "WRITE", entryId: "e", claimId: "c", companion, messages: [], posts: [] };
 const post: PostJob = { status: "WRITE", runId: "r", claimId: "c", companion, localTime: "11/26 10:00", own: [], others: [] };
-const memory: MemoryJob = { status: "WRITE", claimId: "c", companion, messages: [], memories: [] };
+const memory: MemoryJob = { status: "WRITE", claimId: "c", companion, messages: [], known: [] };
 
 it("keeps the built-in wording in step with what the server reads back", () => {
   const text = (key: string) => promptBlock(key)!.text;

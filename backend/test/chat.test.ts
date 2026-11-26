@@ -447,7 +447,7 @@ it("writes queued replies through the model and the safety scan", async () => {
   };
   assert.deepEqual([await asked(turn({ direct: true })), await asked(turn()), await asked(turn({ direct: true }), model(new Error("down")))],
     [1, 0, 0], "one-to-one, and it answered");
-  const job: MemoryJob = { status: "WRITE", claimId: "c", companion: turn().companion, memories: [],
+  const job: MemoryJob = { status: "WRITE", claimId: "c", companion: turn().companion, known: [],
     messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T10:00:00Z" }] };
   const traces: unknown[] = [];
   const note = async (chosen: ChatModel | undefined, start: MemoryStart = job, accepted = true) => {

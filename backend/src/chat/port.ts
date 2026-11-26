@@ -94,10 +94,8 @@ export interface MemoryJob {
   companion: Pick<ChatClaim["companion"], "companionId" | "displayName">;
   /** The chat since the last time, oldest first; companionId null is the Owner. */
   messages: { companionId: string | null; body: string; action: null; sentAt: string }[];
-  /** What it already remembers, newest first: the newest 60, as text. */
-  memories: string[];
-  /** Every memory it has (at most 200), newest first; left out by an older database, and then nothing can be replaced. */
-  known?: KnownMemory[];
+  /** Every memory it has (at most 200), newest first. */
+  known: KnownMemory[];
   timeZone?: ChatClaim["timeZone"];
 }
 
