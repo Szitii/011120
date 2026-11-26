@@ -224,6 +224,9 @@ it("finds the words of a text and the memories that share them", () => {
   assert.deepEqual(related(memories, "下周又要去成都，想喝乌龙茶").map(m => m.body), ["主人喜欢喝乌龙茶", "主人在成都出差过"], "the most shared first");
   assert.deepEqual(related(memories, "我喜欢你"), [], "a word most memories have says nothing");
   assert.deepEqual(related([{ body: "主人的生日是2026年12月3日" }, { body: "主人怕黑" }], "我昨晚12点才睡"), [], "a number is no word");
+  // A memory's words are kept between calls; when more than are kept went by, the answers are the same.
+  related(Array.from({ length: 2100 }, (_, i) => ({ body: `主人第 ${i} 次去了编号 ${i} 的车站` })), "车站");
+  assert.deepEqual(related(memories, "团子今天又把花瓶打碎了").map(m => m.body), ["主人养了一只叫团子的猫"]);
   // A name in 8 of 150 memories still brings them back; in all of them it says nothing.
   const many = Array.from({ length: 150 }, (_, i) => ({ body: i < 8 ? `主人带团子去了第 ${i} 家医院` : `主人第 ${i} 天的心情不错` }));
   assert.equal(related(many, "团子最近好吗").length, 8);
