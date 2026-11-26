@@ -531,6 +531,13 @@ try {
   assert.equal((await web("/kit/template/delete", why("Console template gone", { id: made.id }))).status, 303);
   assert.equal((await web("/kit/skill/delete", why("Console skill gone", { id: added.id }))).status, 303);
   assert.deepEqual([(await kit()).templates.length, (await kit()).skills.length], [4, 4]);
+  assert.deepEqual((await pool.query(`select operator, action, reason, detail->'before'->>'body' as was, detail->>'body' as body
+    from companion_private.admin_log where action in ('SKILL_SET', 'SKILL_DELETE') order by id desc limit 3`)).rows.reverse(), [
+    { operator: "admin_test_one", action: "SKILL_SET", reason: "Console skill", was: null, body: "主人说花了多少钱时记下来。" },
+    { operator: "admin_test_one", action: "SKILL_SET", reason: "Console skill off", was: "主人说花了多少钱时记下来。", body: "只记大额的。" },
+    { operator: "admin_test_one", action: "SKILL_DELETE", reason: "Console skill gone", was: "只记大额的。", body: null },
+  ], "every change is logged with what it was before");
+  assert.ok((await web("/log")).body.includes("保存技能") && (await web("/log")).body.includes("删除人设模板"));
   // Back on the shelf, a skill is on again for the Companions that had it, except one that filled its five places meanwhile.
   const [shelved, ...others] = (await pool.query<{ id: string; title: string; summary: string; body: string; position: number }>(
     "select id, title, summary, body, position from companion_private.skills order by position, title")).rows;
@@ -547,13 +554,6 @@ try {
     "never six on: the full one has it off, the other has it back");
   await pool.query("delete from companion_private.companion_skills where companion_id in ($1, $2)", [full, roomy]);
   await pool.query("delete from companion_private.own_skills where companion_id = $1", [full]);
-  assert.deepEqual((await pool.query(`select operator, action, reason, detail->'before'->>'body' as was, detail->>'body' as body
-    from companion_private.admin_log where action in ('SKILL_SET', 'SKILL_DELETE') order by id desc limit 3`)).rows.reverse(), [
-    { operator: "admin_test_one", action: "SKILL_SET", reason: "Console skill", was: null, body: "主人说花了多少钱时记下来。" },
-    { operator: "admin_test_one", action: "SKILL_SET", reason: "Console skill off", was: "主人说花了多少钱时记下来。", body: "只记大额的。" },
-    { operator: "admin_test_one", action: "SKILL_DELETE", reason: "Console skill gone", was: "只记大额的。", body: null },
-  ], "every change is logged with what it was before");
-  assert.ok((await web("/log")).body.includes("保存技能") && (await web("/log")).body.includes("删除人设模板"));
   passed("operators add, shelve, reword and delete templates and official skills in the console, each with a reason and a before in the log");
 
   {
