@@ -206,7 +206,7 @@ it("writes a diary through a platform model: booked as a diary entry, with the d
   const notes: MemoryJob = { status: "WRITE", claimId: "c", companion: job().companion, messages: long, memories: Array.from({ length: 60 }, () => "记".repeat(400)) };
   const lines: CallModel = async model => { called.push(model.model); return { text: "- 主人怕黑\n- 主人周三生日", inputTokens: 500, outputTokens: 20, refused: false, cutOff: false }; };
   called.length = 0;
-  assert.deepEqual(await new PlatformChatModel(catalog, lines).memory(notes, { port: notesPort(), signal }), { memories: ["主人怕黑", "主人周三生日"] });
+  assert.deepEqual(await new PlatformChatModel(catalog, lines).memory(notes, { port: notesPort(), signal }), { memories: [{ body: "主人怕黑", replaces: null }, { body: "主人周三生日", replaces: null }] });
   assert.deepEqual([called, noted.map(b => [b.model, b.outputTokens, b.inputTokens < 8000])], [["claude-small"], [["claude-small", 300, true]]]);
   assert.deepEqual(await new PlatformChatModel(catalog, lines).memory(notes, { port: notesPort({ decision: "QUOTA" }), signal }), { failed: "QUOTA" });
   assert.deepEqual(await new PlatformChatModel(catalog, refusing).memory(notes, { port: notesPort(), signal }), { refused: true });

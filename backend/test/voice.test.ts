@@ -170,7 +170,7 @@ it("says the marked messages in the Companion's voice and keeps the rest as text
   const { speaker, said } = recordingSpeaker();
   const traces: ReplyTrace[] = [];
   const replies = new ChatReplies(says("[语音:开心]你回来啦", "今天做了什么？", "[语音]抱抱"), undefined, new Voices(catalog, speaker),
-    undefined, trace => traces.push(trace));
+    undefined, trace => { if (trace.event === "chat_reply") traces.push(trace); });
   const { port, finished, used } = replyPort(turn("warm"));
   assert.equal(await replies.drain(chatId, port), 1);
   const [{ modelMs, speechMs, ...traced }] = traces as [ReplyTrace];
@@ -187,7 +187,7 @@ it("falls back to text when a voice message cannot be made", async () => {
   const run = async (model: ChatModel, claim: ChatClaim, speaker: Speaker | undefined, left = 60, timeoutMs?: number) => {
     const { port, finished } = replyPort(claim, left);
     const voices = speaker === undefined ? undefined : new Voices(catalog, speaker);
-    await new ChatReplies(model, undefined, voices, timeoutMs, trace => { why = trace.voice; }).drain(chatId, port);
+    await new ChatReplies(model, undefined, voices, timeoutMs, trace => { if (trace.event === "chat_reply") why = trace.voice; }).drain(chatId, port);
     return finished[0]!;
   };
   // Why each message of the last reply was or was not a voice message, as the trace says it.
@@ -241,7 +241,7 @@ it("falls back to text when a voice message cannot be made", async () => {
   const lost = async (finish: () => Promise<boolean>, model?: ChatModel) => {
     const { port } = replyPort(turn("warm"));
     (port as unknown as { finish: () => Promise<boolean> }).finish = finish;
-    await new ChatReplies(model, undefined, new Voices(catalog, speaker), undefined, trace => traces.push(trace)).drain(chatId, port).catch(() => undefined);
+    await new ChatReplies(model, undefined, new Voices(catalog, speaker), undefined, trace => { if (trace.event === "chat_reply") traces.push(trace); }).drain(chatId, port).catch(() => undefined);
     const { outcome, voice, stored } = traces.at(-1)!;
     return [outcome, voice, stored];
   };

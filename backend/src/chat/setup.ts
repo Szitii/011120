@@ -26,6 +26,7 @@ export function chatFromEnvironment(mode: "stage1-mobile-dev" | "supabase-auth",
   // Who can write diaries in the background: the platform's models, Owners' own keys and agents, or nobody.
   const background = platform !== undefined || box !== undefined ? { platform: platform !== undefined } : undefined;
   // One line per turn in the server's log (see ReplyTrace): what to read when a reply came as text.
+  // And one per attempt at noting memories down (MemoryTrace).
   const replies = (model: ChatModel | undefined) =>
     new ChatReplies(model, undefined, voices, undefined, trace => console.log(JSON.stringify(trace)));
   if (box === undefined) return { catalog, replies: replies(fallback), background };

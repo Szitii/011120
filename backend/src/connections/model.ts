@@ -172,8 +172,9 @@ export class ConnectedChatModel implements ChatModel {
     if (stored === null) return this.#platform?.memory ? this.#platform.memory(job, context) : { failed: "UNAVAILABLE" };
     if (stored === "DISABLED") return { failed: "DISABLED" };
     if (stored.kind === "EXTERNAL") return { memories: [] };
-    const result = await complete(this.#post, stored, this.#box.open(stored.secret, id), toMessages(memoryPrompt(job, await textsOf(context.port))), MEMORY_TOKENS, context.signal);
-    return result.refused ? { refused: true } : { memories: parseMemories(result.text) };
+    const prompt = memoryPrompt(job, await textsOf(context.port));
+    const result = await complete(this.#post, stored, this.#box.open(stored.secret, id), toMessages(prompt), MEMORY_TOKENS, context.signal);
+    return result.refused ? { refused: true } : { memories: parseMemories(result.text, prompt.numbered) };
   }
 
   /** One call for a diary entry or a post through the Owner's key or agent; null without a connection. */

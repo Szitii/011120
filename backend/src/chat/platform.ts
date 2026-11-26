@@ -10,7 +10,7 @@
  */
 import type { CatalogModel, ChatCatalog } from "./models.ts";
 import { PRICING_VERSION } from "./models.ts";
-import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob, ReservationDecision } from "./port.ts";
+import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob, Remembered, ReservationDecision } from "./port.ts";
 import { decisionPrompt, diaryPrompt, memoryPrompt, parseDecision, parseMemories, parsePost, parseReply, postPrompt, replyPrompt } from "./prompt.ts";
 import { usablePromptTexts, type PromptTexts } from "./prompt-texts.ts";
 import type { CallModel, ModelResult } from "./providers.ts";
@@ -30,10 +30,11 @@ type Failed = { failed: "DISABLED" | "QUOTA" };
 /** Books one call in the ledger, for a chat turn or a diary entry. */
 type Book = (booking: Booking) => Promise<ReservationDecision>;
 
-/** The Companion's memories, newest first (the Owner's list; this runs as the Owner). */
-export async function memoriesOf(port: ChatPort, companionId: string): Promise<string[]> {
-  const list = await port.memories(companionId) as { items?: { body?: unknown }[] };
-  return (list.items ?? []).flatMap(memory => (typeof memory.body === "string" ? [memory.body] : []));
+/** The Companion's memories, newest first, each with when it was noted down (the Owner's list; this runs as the Owner). */
+export async function memoriesOf(port: ChatPort, companionId: string): Promise<Remembered[]> {
+  const list = await port.memories(companionId) as { items?: { body?: unknown; createdAt?: unknown }[] };
+  return (list.items ?? []).flatMap(memory => (typeof memory.body !== "string" ? []
+    : [{ body: memory.body, createdAt: typeof memory.createdAt === "string" ? memory.createdAt : undefined }]));
 }
 
 /**
@@ -100,7 +101,7 @@ export class PlatformChatModel implements ChatModel {
     const prompt = memoryPrompt(job, await textsOf(port));
     const result = await this.#withFallback(model, m => this.#run(port, book, m, prompt, MEMORY_TOKENS, signal, MEMORY_INPUT_TOKENS));
     if ("failed" in result) return result;
-    return result.refused ? { refused: true } : { memories: parseMemories(result.text) };
+    return result.refused ? { refused: true } : { memories: parseMemories(result.text, prompt.numbered) };
   }
 
   /** One booked call for a diary entry or a post, with the Companion's model or the default. */

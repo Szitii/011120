@@ -9,13 +9,14 @@
  * touches the chat picks it up again.
  *
  * After the replies of a one-to-one chat the Companion may note down what is worth remembering
- * (remember); the database decides whether the Owner asked for it and enough was said.
+ * (remember); the database decides whether the Owner asked for it and enough was said. A note
+ * may take the place of an older memory of its own that no longer holds.
  */
 import { ACTION_TEXT, MAX_NOTES, answersAction, splitAction, splitVoice } from "./prompt.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { DiaryWriteResult } from "../../../contracts/chat.ts";
-import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryStart, PostJob, PostOutcome, PostStart } from "./port.ts";
+import type { ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, PostJob, PostOutcome, PostStart } from "./port.ts";
 import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
@@ -35,8 +36,8 @@ export type DiaryAnswer = { text: string } | { refused: true } | { failed: "UNAV
 /** A community post the model wrote on its own; `pass` when it had nothing to say. */
 export type PostAnswer = DiaryAnswer | { pass: true };
 
-/** What the model found worth remembering: 0 to 2 sentences. */
-export type MemoryAnswer = { memories: string[] } | Exclude<DiaryAnswer, { text: string }>;
+/** What the model found worth remembering: 0 to 2 sentences, each new or in place of an older memory. */
+export type MemoryAnswer = { memories: MemoryNote[] } | Exclude<DiaryAnswer, { text: string }>;
 
 /**
  * Why one message of a reply is, or is not, a voice message. SPOKEN: a clip was made. NO_VOICE: the
@@ -66,6 +67,21 @@ export interface ReplyTrace {
   speechMs: number;
   voice: VoiceResult[];
   stored: boolean;
+}
+
+/**
+ * One line per attempt at noting memories down, so "why does it remember this, and why not that?"
+ * has somewhere to start: how it ended, how many sentences the model gave and the scan let through
+ * (`kept`), and how many of them became a new memory or took the place of an older one. Never the
+ * sentences themselves.
+ */
+export interface MemoryTrace {
+  event: "chat_memory";
+  companionId: string;
+  outcome: "DONE" | "FAILED";
+  kept: number;
+  added: number;
+  replaced: number;
 }
 
 /**
@@ -137,7 +153,7 @@ export const devChatModel: ChatModel = {
   },
   async memory(job) {
     const last = job.messages.findLast(message => message.companionId === null)?.body ?? "";
-    return { memories: [`（开发环境假记忆）主人说过：「${preview(last)}」`] };
+    return { memories: [{ body: `（开发环境假记忆）主人说过：「${preview(last)}」`, replaces: null }] };
   },
 };
 
@@ -153,16 +169,17 @@ export class ChatReplies {
   readonly #timeoutMs: number;
   readonly #voices: Voices | undefined;
   readonly #speechTimeoutMs: number;
-  readonly #trace: (trace: ReplyTrace) => void;
+  readonly #trace: (trace: ReplyTrace | MemoryTrace) => void;
   readonly #safety = new SafetyPipeline();
   readonly #running = new Set<string>();
 
   /**
    * Without a model, turns that must answer end as FAILED / UNAVAILABLE ("coming soon"); optional ones stay quiet.
-   * Without `voices` (or a speaker in it), every reply is text. `trace` gets one record per turn.
+   * Without `voices` (or a speaker in it), every reply is text. `trace` gets one record per turn,
+   * and one per attempt at noting memories down.
    */
   constructor(model?: ChatModel, timeoutMs = MODEL_TIMEOUT_MS, voices?: Voices, speechTimeoutMs = SPEECH_TIMEOUT_MS,
-    trace: (trace: ReplyTrace) => void = () => undefined) {
+    trace: (trace: ReplyTrace | MemoryTrace) => void = () => undefined) {
     this.#model = model;
     this.#timeoutMs = timeoutMs;
     this.#voices = voices;
@@ -221,11 +238,18 @@ export class ChatReplies {
    * safety scan as its other words. Returns how it ended, or why nothing started. Never throws.
    */
   async remember(companionId: string, port: ChatPort): Promise<"DONE" | "FAILED" | Exclude<MemoryStart["status"], "WRITE">> {
+    const trace: MemoryTrace = { event: "chat_memory", companionId, outcome: "FAILED", kept: 0, added: 0, replaced: 0 };
     try {
       const job = await port.memoryBegin(companionId);
       if (job.status !== "WRITE") return job.status;
-      const notes = await this.#notes(job, port);
-      return await port.memoryFinish(companionId, job.claimId, notes) && notes !== null ? "DONE" : "FAILED";
+      try {
+        const notes = await this.#notes(job, port);
+        const stored = await port.memoryFinish(companionId, job.claimId, notes);
+        if (stored.accepted && notes !== null) Object.assign(trace, { outcome: "DONE", kept: notes.length, added: stored.added, replaced: stored.replaced });
+      } finally {
+        this.#trace(trace);
+      }
+      return trace.outcome;
     } catch {
       return "FAILED";
     }
@@ -235,15 +259,15 @@ export class ChatReplies {
    * The sentences to keep (maybe none), or null when the attempt failed. One the scan would change
    * is not kept, and a chat the provider refuses to read is not read again.
    */
-  async #notes(job: MemoryJob, port: ChatPort): Promise<string[] | null> {
+  async #notes(job: MemoryJob, port: ChatPort): Promise<MemoryNote[] | null> {
     const model = this.#model;
     if (model?.memory === undefined) return null;
     try {
       const result = await this.#timed(signal => model.memory!(job, { port, signal }));
       if ("failed" in result) return null;
       if ("refused" in result) return [];
-      return result.memories.map(text => text.trim())
-        .filter(text => text.length > 0 && this.#safety.scanOutput(text).decision === "ALLOW").slice(0, MAX_NOTES);
+      return result.memories.map(note => ({ ...note, body: note.body.trim() }))
+        .filter(note => note.body.length > 0 && this.#safety.scanOutput(note.body).decision === "ALLOW").slice(0, MAX_NOTES);
     } catch {
       return null;
     }

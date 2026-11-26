@@ -14,7 +14,9 @@ fly deploy --ha=false
 
 **家机为什么只回了文字**：每轮回复在日志里留一行 `{"event":"chat_reply",...}`（只有编号、渠道、耗时和结果，没有正文）。用 `fly logs -a companion-social-api | grep chat_reply` 找到那一轮的 `replyId`，看 `voice`：每条消息一个结果。`SPOKEN` 已合成；`NO_VOICE` 主人没选音色；`VOICE_UNAVAILABLE` 选的音色这台服务器合成不了（音色表里没有，或没有语音密钥）；`NO_MARK` 模型自己选了打字；`MERGED` 超过三行被并成一条；`REDACTED` 安全扫描改过；`TOO_LONG` 超过 120 字；`OVER_LIMIT` 今天的语音条数用完；`LIMIT_UNKNOWN` 没查到剩余条数；`SPEECH_TIMEOUT`、`SPEECH_FAILED_…` 是语音供应商超时或失败（后面是它的状态码）。`stored` 为 false 而 `voice` 里有 `SPOKEN`：合成了但回复没存下来。`channel` 是 PLATFORM、BYOK 或 EXTERNAL。
 
-**新迁移**：数据库里没有"已执行迁移"记录表，按文件名顺序手动执行新增的文件。线上已执行到 `202611250057_auto_posts_agent_drafts.sql`（2026-11-25）；每次执行后更新这一行。
+**家机这次记了什么**：每次提炼长期记忆在日志里留一行 `{"event":"chat_memory",...}`（没有记忆的内容）。`outcome` 是 `DONE` 或 `FAILED`；`kept` 是模型给出、并通过安全扫描的句数；`added` 是新增的条数，`replaced` 是替换掉旧记忆的条数。`kept` 比 `added + replaced` 多，说明有一句和已有的记忆一字不差，或者 200 条满了放不下。没到次数、主人关了自动记忆时不留这一行。
+
+**新迁移**：从 `202611270069` 起，每个迁移执行完会把自己的文件名写进 `companion_private.schema_migrations`，部署脚本靠这张表判断执行过没有；更早的迁移没有记录，按文件名顺序手动执行新增的文件。线上已执行到 `202611250057_auto_posts_agent_drafts.sql`（2026-11-25）；每次执行后更新这一行。
 
 ```sh
 psql "$ADMIN_DB" -v ON_ERROR_STOP=1 -f backend/supabase/migrations/<新文件>.sql

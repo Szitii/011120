@@ -3,7 +3,7 @@ import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type {
-  AgentScope, Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, MemoryStart, PostOutcome, PostStart, ReservationDecision,
+  AgentScope, Booking, ChatClaim, ChatOutcome, ChatPort, ChatReservation, DiaryStart, MemoryNote, MemoryStart, PostOutcome, PostStart, ReservationDecision,
 } from "./port.ts";
 import type { Clip } from "./voices.ts";
 
@@ -268,9 +268,11 @@ export class PostgresChatAdapter implements ChatPort {
     ]) as ReservationDecision;
   }
 
-  async memoryFinish(companionId: string, claimId: string, bodies: string[] | null): Promise<boolean> {
-    const payload = await this.#object("select public.memory_auto_finish($1,$2,$3::text[]) as payload", [companionId, claimId, bodies]);
-    return (payload as { accepted?: unknown }).accepted === true;
+  async memoryFinish(companionId: string, claimId: string, notes: readonly MemoryNote[] | null): Promise<{ accepted: boolean; added: number; replaced: number }> {
+    const payload = await this.#object("select public.memory_auto_finish($1,$2,$3::text[],$4::uuid[]) as payload",
+      [companionId, claimId, notes?.map(note => note.body) ?? null, notes?.map(note => note.replaces) ?? null]) as Record<string, unknown>;
+    const count = (value: unknown): number => (typeof value === "number" ? value : 0);
+    return { accepted: payload.accepted === true, added: count(payload.added), replaced: count(payload.replaced) };
   }
 
   async #object(sql: string, values: readonly unknown[]): Promise<unknown> {

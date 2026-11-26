@@ -4,7 +4,7 @@ import { handleChatRequest } from "../src/chat/http.ts";
 import { sha256 } from "../src/companion-import/canonical.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { ChatReplies, devChatModel, type ChatModel } from "../src/chat/replies.ts";
-import type { ChatClaim, ChatOutcome, ChatPort, MemoryJob, MemoryStart } from "../src/chat/port.ts";
+import type { ChatClaim, ChatOutcome, ChatPort, MemoryJob, MemoryNote, MemoryStart } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
 import { PostgresPersistenceError, type SqlExecutor } from "../src/persistence/postgres/types.ts";
@@ -84,7 +84,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     postFinish: async () => null,
     memoryBegin: async (...args) => { calls.push(["memoryBegin", ...args]); return { status: "OFF" }; },
     memoryReserve: async () => ({ decision: "STALE" }),
-    memoryFinish: async (...args) => { calls.push(["memoryFinish", ...args]); return true; },
+    memoryFinish: async (...args) => { calls.push(["memoryFinish", ...args]); return { accepted: true, added: 0, replaced: 0 }; },
     voiceLeft: async () => ({ companion: 0, owner: 0 }),
     voiceUsed: async (...args) => { calls.push(["voiceUsed", ...args]); },
     sendVoice: async (...args) => { calls.push(["sendVoice", ...args]); return { message: {}, typing: [], replying }; },
@@ -449,25 +449,40 @@ it("writes queued replies through the model and the safety scan", async () => {
     [1, 0, 0], "one-to-one, and it answered");
   const job: MemoryJob = { status: "WRITE", claimId: "c", companion: turn().companion, memories: [],
     messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T10:00:00Z" }] };
+  const traces: unknown[] = [];
   const note = async (chosen: ChatModel | undefined, start: MemoryStart = job, accepted = true) => {
     const kept: unknown[] = [];
-    const port = { ...fakePort().port, memoryBegin: async () => start,
-      memoryFinish: async (...args: unknown[]) => { kept.push(args[2]); return accepted; } } as ChatPort;
-    return [await new ChatReplies(chosen).remember(companion, port), ...kept];
+    const port = { ...fakePort().port, memoryBegin: async () => start, memoryFinish: async (_id: string, _claim: string, handed: readonly MemoryNote[] | null) => {
+      kept.push(handed?.map(note => (note.replaces === null ? note.body : [note.body, note.replaces])) ?? null);
+      return { accepted, added: handed?.filter(note => note.replaces === null).length ?? 0, replaced: handed?.filter(note => note.replaces !== null).length ?? 0 };
+    } } as ChatPort;
+    return [await new ChatReplies(chosen, undefined, undefined, undefined, trace => traces.push(trace)).remember(companion, port), ...kept];
   };
+  const fresh = (...bodies: string[]): MemoryNote[] => bodies.map(body => ({ body, replaces: null }));
   const notes = (memory: NonNullable<ChatModel["memory"]>): ChatModel => ({ reply: async () => ({ pass: true }), memory });
   assert.deepEqual(await note(devChatModel), ["DONE", ["（开发环境假记忆）主人说过：「我下周三生日」"]]);
-  assert.deepEqual(await note(notes(async () => ({ memories: [" 主人下周三生日 ", "", "主人的密码是 password: hunter2", "主人电话 13800138000", "三", "四"] }))),
+  assert.deepEqual(traces, [{ event: "chat_memory", companionId: companion, outcome: "DONE", kept: 1, added: 1, replaced: 0 }], "one line per attempt, without the sentences");
+  assert.deepEqual(await note(notes(async () => ({ memories: fresh(" 主人下周三生日 ", "", "主人的密码是 password: hunter2", "主人电话 13800138000", "三", "四") }))),
     ["DONE", ["主人下周三生日", "三"]], "trimmed; what the safety scan would block or change is not kept; two at most");
+  traces.length = 0;
+  assert.deepEqual(await note(notes(async () => ({ memories: [{ body: "主人换到乙公司上班了", replaces: "old-memory" }, ...fresh("主人怕黑")] }))),
+    ["DONE", [["主人换到乙公司上班了", "old-memory"], "主人怕黑"]], "a sentence in place of an older memory names it");
+  assert.deepEqual(traces, [{ event: "chat_memory", companionId: companion, outcome: "DONE", kept: 2, added: 1, replaced: 1 }]);
   assert.deepEqual(await note(notes(async () => ({ memories: [] }))), ["DONE", []], "nothing worth remembering still counts as read");
   assert.deepEqual(await note(notes(async () => ({ refused: true }))), ["DONE", []], "a chat the provider will not read is not read again");
+  traces.length = 0;
   assert.deepEqual(await note(notes(async () => ({ failed: "QUOTA" }))), ["FAILED", null]);
+  assert.deepEqual(traces, [{ event: "chat_memory", companionId: companion, outcome: "FAILED", kept: 0, added: 0, replaced: 0 }]);
   assert.deepEqual(await note(notes(async () => { throw new Error("down"); })), ["FAILED", null]);
   assert.deepEqual(await note(undefined), ["FAILED", null], "no model takes notes");
   assert.deepEqual(await note(devChatModel, job, false), ["FAILED", ["（开发环境假记忆）主人说过：「我下周三生日」"]], "given up meanwhile");
+  traces.length = 0;
   assert.deepEqual(await note(devChatModel, { status: "NOT_DUE" }), ["NOT_DUE"]);
+  assert.deepEqual(traces, [], "nothing was attempted: no line");
   const broken = { ...fakePort().port, memoryBegin: async () => { throw new Error("db down"); } } as ChatPort;
   assert.equal(await new ChatReplies(devChatModel).remember(companion, broken), "FAILED", "never throws");
+  const lost = { ...fakePort().port, memoryBegin: async () => job, memoryFinish: async () => { throw new Error("db down"); } } as ChatPort;
+  assert.equal(await new ChatReplies(devChatModel).remember(companion, lost), "FAILED", "nor when the notes cannot be stored");
   // kick: the same, in the background.
   const background = fakePort([turn({ direct: true })]);
   const done = new Promise<void>(resolve => { background.port.memoryBegin = async () => { resolve(); return { status: "OFF" }; }; });
@@ -561,11 +576,14 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   rows = [{ payload: { decision: "RESERVED", transactionId: "tx" } }];
   await adapter.memoryReserve(companion, "c", { provider: "p", model: "m", pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3 });
   assert.deepEqual(seen.at(-1)![1], [companion, "c", "p", "m", "v", 1, 2, 3, "c"]);
-  rows = [{ payload: { accepted: true, added: 1 } }];
-  assert.equal(await adapter.memoryFinish(companion, "c", ["主人喜欢乌龙茶"]), true);
-  assert.deepEqual(seen.at(-1)![1], [companion, "c", ["主人喜欢乌龙茶"]]);
-  rows = [{ payload: { accepted: false, added: 0 } }];
-  assert.equal(await adapter.memoryFinish(companion, "c", null), false);
+  rows = [{ payload: { accepted: true, added: 1, replaced: 1 } }];
+  assert.deepEqual(await adapter.memoryFinish(companion, "c", [{ body: "主人喜欢乌龙茶", replaces: null }, { body: "主人搬到了杭州", replaces: messageId }]),
+    { accepted: true, added: 1, replaced: 1 });
+  assert.deepEqual(seen.at(-1), ["select public.memory_auto_finish($1,$2,$3::text[],$4::uuid[]) as payload",
+    [companion, "c", ["主人喜欢乌龙茶", "主人搬到了杭州"], [null, messageId]]]);
+  rows = [{ payload: { accepted: false } }];
+  assert.deepEqual(await adapter.memoryFinish(companion, "c", null), { accepted: false, added: 0, replaced: 0 }, "an older database counts nothing");
+  assert.deepEqual(seen.at(-1)![1], [companion, "c", null, null]);
   rows = [{ payload: null }];
   assert.equal(await adapter.claim(chatId), null);
   await assert.rejects(adapter.list(), { code: "DATABASE_ERROR" });
