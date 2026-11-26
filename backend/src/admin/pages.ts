@@ -249,8 +249,8 @@ box-shadow:0 8px 32px rgba(0,0,0,.18);border-radius:980px;padding:10px 20px;anim
 box-shadow:0 1px 3px rgba(0,0,0,.12)}.seg .btn:hover{filter:none;background:var(--fill)}.seg .btn.on:hover{background:var(--card)}
 svg.chart{width:100%;height:auto;display:block;color:var(--ink)}svg.chart text{font-size:12px;fill:var(--faint)}svg.chart text.end{fill:var(--text);font-size:13px}
 svg.chart .grid{stroke:var(--line);stroke-dasharray:4 3}svg.chart .frame{fill:none;stroke:var(--faint)}svg.chart rect.hit{fill:transparent}svg.chart rect.hit:hover{fill:var(--line)}
-.legend i{border-radius:1px}.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--sub);margin:0 0 8px}
-.legend i,.vhead i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:0;margin-right:6px}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--sub);margin:0 0 8px}
+.legend i,.vhead i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:0;margin-right:6px}.legend i{border-radius:1px}
 .links a{margin-right:16px}.vendors{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin:6px 0 14px}.vendors .card{margin:0}.vendor .big{font-size:22px;margin:2px 0 4px}
 .vhead,.mhead{display:flex;justify-content:space-between;gap:8px}table.lines{table-layout:fixed}table.lines td{padding:4px 0;border-bottom:1px solid var(--line)}
 table.lines td:first-child{white-space:normal;word-break:break-word}table.lines td.num{width:88px}table.lines .muted{display:block;font-size:12px}
