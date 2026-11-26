@@ -11,8 +11,12 @@ export interface ModelRequest {
   readonly user: string;
   readonly maxTokens: number;
   readonly signal: AbortSignal;
-  /** Let the model search the web for this answer, if it is a model that can (CatalogModel.options.webTools). */
-  readonly web?: boolean;
+  /**
+   * Let the model search the web for this answer, if it is a model that can (CatalogModel.options.webTools).
+   * `without`: the same prompt minus the lines that say it can search, sent in its place when the
+   * provider will not take the tool, so the model is never told of a web it does not have.
+   */
+  readonly web?: { readonly without: { readonly system: string; readonly user: string } };
 }
 
 export interface ModelResult {
@@ -69,13 +73,14 @@ const DEEPSEEK_WEB_TOOLS = [{ type: "deepseek_web_search" }];
 
 async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiKey: string, model: CatalogModel,
   request: ModelRequest): Promise<ModelResult> {
-  const web = request.web === true && model.options?.webTools === "deepseek";
+  const web = request.web !== undefined && model.options?.webTools === "deepseek";
   const post = (tools: boolean) => fetcher(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
       model: model.model,
-      messages: [{ role: "system", content: request.system }, { role: "user", content: request.user }],
+      messages: [{ role: "system", content: (web && !tools ? request.web!.without : request).system },
+        { role: "user", content: (web && !tools ? request.web!.without : request).user }],
       [model.options?.maxTokensParam ?? "max_tokens"]: request.maxTokens,
       // DeepSeek thinks by default; a chat reply does not need it (slower, and the thinking is paid output).
       ...(model.options?.thinking === "disabled" ? { thinking: { type: "disabled" } } : {}),

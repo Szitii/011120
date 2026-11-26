@@ -64,6 +64,8 @@ export type VoiceResult = "SPOKEN" | "NO_VOICE" | "VOICE_UNAVAILABLE" | "NO_MARK
  * provider's own words. `stored` false with a SPOKEN message: the clip was made but the reply was
  * not saved. `web`: OFF when the model was not offered the web; else how many searches it ran, or
  * REFUSED when the provider would not take the tool and the reply was written without.
+ * `webTokens`: for a reply that was offered the web, the input tokens it was billed, which hold
+ * what the searches brought back (16,000 are booked for a reply; a searched one may come back with more).
  */
 export interface ReplyTrace {
   event: "chat_reply";
@@ -78,6 +80,7 @@ export interface ReplyTrace {
   voice: VoiceResult[];
   stored: boolean;
   web: number | "REFUSED" | "OFF";
+  webTokens?: number;
 }
 
 /**
@@ -98,11 +101,12 @@ export interface MemoryTrace {
 /**
  * Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on.
  * A model that answers through the Owner's own key or agent says so with `via`, for the trace;
- * one that was offered the web says with `searched` how many searches it ran (or that it was refused).
+ * one that was offered the web says with `searched` how many searches it ran (or that it was refused)
+ * and how many input tokens the answer was billed.
  */
 export interface ChatModel {
   reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void;
-    searched?: (searches: number | "REFUSED") => void }): Promise<Answer>;
+    searched?: (searches: number | "REFUSED", inputTokens: number) => void }): Promise<Answer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
   /** Writes a community post of its own; without it, such posts fail. */
@@ -436,7 +440,7 @@ export class ChatReplies {
     try {
       const started = Date.now();
       const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; },
-        searched: searches => { trace.web = searches; } }))
+        searched: (searches, inputTokens) => { trace.web = searches; trace.webTokens = inputTokens; } }))
         .finally(() => { trace.modelMs = Date.now() - started; });
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];
