@@ -1903,8 +1903,10 @@ select public.test_assert(
 -- A Companion writing first and its reminders: queued and delivered by the API server alone; the Owner reads and cancels.
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_reach_due(integer,boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_reminder_due(integer,boolean)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_reach_begin(uuid)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_reach_due(integer,boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_reminder_due(integer,boolean)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_reach_begin(uuid)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_reminder_list(uuid)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_reminder_cancel(uuid,uuid)'::regprocedure, 'EXECUTE')

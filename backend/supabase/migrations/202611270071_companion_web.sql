@@ -47,8 +47,9 @@ begin
       select * into r from companion_private.chat_reminders where turn_id = m.id and status = 'WAITING';
     end if;
     exit when m.attempts < 3 and companion_private.chat_companion_ok(c.owner_id, m.companion_id)
-      and not (m.reply_to = 'SELF' and exists(select 1 from companion_private.chat_messages h
-        where h.chat_id = c.id and h.companion_id is null and h.status = 'SENT' and h.created_at > m.created_at))
+      and not (m.reply_to = 'SELF' and (m.created_at < now() - interval '10 minutes'
+        or exists(select 1 from companion_private.chat_messages h
+          where h.chat_id = c.id and h.companion_id is null and h.status = 'SENT' and h.created_at > m.created_at)))
       and not (m.reply_to = 'REMINDER' and r.id is null);
     if m.optional then
       update companion_private.chat_messages set status = 'PASSED', shown_at = now(), typing_at = null, claim_id = null,
@@ -88,7 +89,7 @@ begin
     'reminders', case when reach then coalesce((select jsonb_agg(jsonb_build_object('id', q.id, 'dueAt', q.due_at, 'note', q.note)
         order by q.due_at, q.id)
       from (select * from companion_private.chat_reminders w where w.companion_id = m.companion_id and w.status = 'WAITING'
-        and w.turn_id is null order by w.due_at, w.id limit 20) q), '[]') else '[]'::jsonb end)
+        and w.turn_id is null and w.due_at > now() - interval '24 hours' order by w.due_at, w.id limit 20) q), '[]') else '[]'::jsonb end)
     || companion_private.chat_owner_context(c.owner_id, m.companion_id);
 end $$;
 

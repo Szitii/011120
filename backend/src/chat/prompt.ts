@@ -89,12 +89,13 @@ export const answersAction = (turn: ChatClaim): boolean => turn.direct && turn.o
 
 /**
  * How a Companion sets a reminder in a reply, and cancels one: [提醒:2026-11-27 08:00 叫主人起床]
- * and [取消提醒:1] (the number is the reminder's place in the list it was shown). Any other mark
- * that starts with 提醒 is taken out and does nothing.
+ * and [取消提醒:1] (the number is the reminder's place in the list it was shown). A mark that
+ * starts like one of these (提醒 and a digit, or 取消提醒) but cannot be read is taken out and does
+ * nothing. Other words in brackets that happen to begin with 提醒 are the Companion's own and stay.
  */
-const REMIND_MARK = /[[【]\s*提醒\s*[:：]\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T]+(\d{1,2})[:：](\d{2})\s*([^\]】]*)[\]】]/g;
+const REMIND_MARK = /[[【]\s*提醒\s*[:：]\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T]+(\d{1,2})[:：](\d{2})(?:[:：]\d{2})?\s*([^\]】]*)[\]】]/g;
 const CANCEL_MARK = /[[【]\s*取消提醒\s*[:：]?\s*(\d{1,2})\s*[\]】]/g;
-const OTHER_REMIND_MARK = /[[【]\s*(?:取消)?提醒[^\]】]*[\]】]/g;
+const OTHER_REMIND_MARK = /[[【]\s*(?:取消提醒|提醒\s*[:：]\s*\d)[^\]】]*[\]】]/g;
 /** A reminder's note is at most this long (the database's limit). */
 const REMINDER_NOTE_CHARS = 100;
 

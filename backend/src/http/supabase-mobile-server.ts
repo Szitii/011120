@@ -28,9 +28,12 @@ async function main() {
     DIARY_SCHEDULER_MINUTES: diaryMinutes = "5",
     // How often Companions that post on their own are checked; 0 turns that off.
     AUTO_POST_SCHEDULER_MINUTES: postMinutes = "5",
-    // How often reminders and Companions that write first are checked; 0 turns both off.
-    // Every minute, so a reminder is at most a minute late.
-    REACH_SCHEDULER_MINUTES: reachMinutes = "1",
+    // How often due reminders are looked for: every minute, so a reminder is about a minute late at most.
+    // 0 stops delivering them while Companions can still set them: to stop reminders, use the operators'
+    // switch in the admin console instead.
+    REMINDER_SCHEDULER_MINUTES: reminderMinutes = "1",
+    // How often Companions that may write first are looked for; 0 turns that off.
+    REACH_SCHEDULER_MINUTES: reachMinutes = "5",
   } = process.env;
   if (!connectionString || !supabaseUrl || !publishableKey) {
     throw new Error("Set DATABASE_URL, SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.");
@@ -43,7 +46,7 @@ async function main() {
   const chat = chatFromEnvironment("supabase-auth");
   const server = createSupabaseMobileHttpServer({ pool, supabaseUrl, publishableKey, chat });
   // Diaries and community posts written in the background, each on its own timer.
-  const background = (due: "diary_due" | "agent_auto_due" | "chat_reach_due", what: string, minutes: string,
+  const background = (due: "diary_due" | "agent_auto_due" | "chat_reminder_due" | "chat_reach_due", what: string, minutes: string,
     write: (companionId: string, port: ChatPort) => Promise<unknown>) => {
     const every = Number(minutes);
     if (chat.background === undefined || !Number.isFinite(every) || every <= 0) return () => undefined;
@@ -54,8 +57,9 @@ async function main() {
   };
   const stopDiaries = background("diary_due", "diary", diaryMinutes, (id, port) => chat.replies.writeDiary(id, port));
   const stopPosts = background("agent_auto_due", "community post", postMinutes, (id, port) => chat.replies.writePost(id, port));
+  const stopReminders = background("chat_reminder_due", "reminder", reminderMinutes, (id, port) => chat.replies.reachOut(id, port));
   const stopReach = background("chat_reach_due", "message of its own", reachMinutes, (id, port) => chat.replies.reachOut(id, port));
-  const shutdown = () => { stopDiaries(); stopPosts(); stopReach(); server.close(() => { void pool.end(); }); };
+  const shutdown = () => { stopDiaries(); stopPosts(); stopReminders(); stopReach(); server.close(() => { void pool.end(); }); };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
   await new Promise<void>((resolve, reject) => {

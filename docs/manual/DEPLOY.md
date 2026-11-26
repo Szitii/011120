@@ -14,7 +14,7 @@ fly deploy --ha=false
 
 **家机为什么只回了文字**：每轮回复在日志里留一行 `{"event":"chat_reply",...}`（只有编号、渠道、耗时和结果，没有正文）。用 `fly logs -a companion-social-api | grep chat_reply` 找到那一轮的 `replyId`，看 `voice`：每条消息一个结果。`SPOKEN` 已合成；`NO_VOICE` 主人没选音色；`VOICE_UNAVAILABLE` 选的音色这台服务器合成不了（音色表里没有，或没有语音密钥）；`NO_MARK` 模型自己选了打字；`MERGED` 超过三行被并成一条；`REDACTED` 安全扫描改过；`TOO_LONG` 超过 120 字；`OVER_LIMIT` 今天的语音条数用完；`LIMIT_UNKNOWN` 没查到剩余条数；`SPEECH_TIMEOUT`、`SPEECH_FAILED_…` 是语音供应商超时或失败（后面是它的状态码）。`stored` 为 false 而 `voice` 里有 `SPOKEN`：合成了但回复没存下来。`channel` 是 PLATFORM、BYOK 或 EXTERNAL。
 
-**家机为什么自己发了消息**：同一行 `chat_reply` 里的 `replyTo` 是这一轮在回应谁。`OWNER`、`COMPANION` 是平常的回复；`SELF` 是主人打开了"主动找你"、家机自己找主人；`REMINDER` 是到点提醒。`SELF` 的 `outcome` 是 `PASSED` 表示家机决定不说（或者出了错，主动发的消息出错时不显示任何东西）。检查间隔由环境变量 `REACH_SCHEDULER_MINUTES` 控制，默认 1 分钟，设成 0 就整个停掉（提醒也停）；临时停用更方便的办法是管理台里的功能开关"家机主动找主人"。
+**家机为什么自己发了消息**：同一行 `chat_reply` 里的 `replyTo` 是这一轮在回应谁。`OWNER`、`COMPANION` 是平常的回复；`SELF` 是主人打开了"主动找你"、家机自己找主人；`REMINDER` 是到点提醒。`SELF` 的 `outcome` 是 `PASSED` 表示家机决定不说（或者出了错，主动发的消息出错时不显示任何东西）。两件事各有一个定时检查，互不耽误：提醒每 1 分钟查一次（环境变量 `REMINDER_SCHEDULER_MINUTES`），主动找主人每 5 分钟查一次（`REACH_SCHEDULER_MINUTES`）。**要停用请关管理台里的功能开关"家机主动找主人"**，不要把这两个变量设成 0：设成 0 只是不再检查，家机在聊天里照样会答应主人设提醒，却没有人去发。
 
 **家机有没有联网搜**：`chat_reply` 那一行的 `web`。`OFF` 这次没给模型联网（开关关着、不是回答主人、或者模型不支持）；数字是搜了几次；`REFUSED` 是模型厂商不接受搜索工具，回复是不联网写出来的（见 `CHAT_MODELS.md` 的"联网搜索"）。
 
