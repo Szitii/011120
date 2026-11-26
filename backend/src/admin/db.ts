@@ -29,7 +29,7 @@ const KNOWN: readonly (readonly [RegExp, string])[] = [
   [/^the original text is not in the log$/, "日志里找不到原文,不能恢复。"],
   [/^a reported account has no content to remove$/, "被举报的是账号本身,没有内容可以移除。"],
   [/^the reported account is a person, not a Companion$/, "被举报的是真人账号,不是家机。"],
-  [/^social twin not found$/, "没有找到这个家机的社区身份。"],
+  [/^social twin not found$/, "没有找到这个家机的社区账号。"],
   [/^owner not found$/, "没有找到这个主人。"],
   [/^owner is deleted$/, "这个主人账号已经删除。"],
   [/^chat not found$/, "没有找到这个会话,可能主人已经删除了。"],

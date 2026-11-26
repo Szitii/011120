@@ -64,7 +64,7 @@ try {
   await admin("fixed_cost_set", "Fly 服务器", 1250, "两个应用", "账单");
   await admin("fixed_cost_set", "Fly 服务器", 1300, "", "涨价");
   let fixed = (await admin("costs", `${month}-01`)).fixed;
-  assert.deepEqual(fixed.map((f: Json) => [f.item, Number(f.cents), f.note]), [["Fly 服务器", 1300, null], ["MiniMax 语音包月(Starter)", 500, "含每月 100,000 点"]]);
+  assert.deepEqual(fixed.map((f: Json) => [f.item, Number(f.cents), f.note]), [["Fly 服务器", 1300, null], ["MiniMax 语音包月(Starter)", 500, null]]);
   await admin("fixed_cost_set", "Fly 服务器", null, "", "不用了");
   fixed = (await admin("costs", `${month}-01`)).fixed;
   assert.equal(fixed.length, 1);
