@@ -60,3 +60,17 @@ test("community subroutes pop back to the exact prior profile or notification ta
   assert.deepEqual(popRoute(author), detail);
   assert.deepEqual(popRoute(detail), messages);
 });
+
+test("legal routes push from settings and pop back to settings while preserving rootTab", () => {
+  const my = selectTab(initialNavigationState(), "my");
+  const settings = pushRoute(my, { type: "settings" });
+  const terms = pushRoute(settings, { type: "legal", doc: "terms" });
+  assert.equal(terms.rootTab, "my");
+  assert.deepEqual(terms.stack.at(-1), { type: "legal", doc: "terms" });
+  assert.deepEqual(popRoute(terms), settings);
+
+  const privacy = pushRoute(settings, { type: "legal", doc: "privacy" });
+  assert.deepEqual(privacy.stack.at(-1), { type: "legal", doc: "privacy" });
+  assert.deepEqual(popRoute(privacy), settings);
+  assert.deepEqual(popRoute(settings), my);
+});
