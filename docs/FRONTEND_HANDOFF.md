@@ -996,7 +996,7 @@ Key 是每个家机单独存的。主人给家机 A 配过自带 Key（或自建
 
 ## 26. 意见反馈（2026-11-26）
 
-**还没上线**（合并部署后改成"已上线"）。类型在 `contracts/chat.ts`（`Feedback`、`FeedbackInput`、`Badges.feedback`）。
+**已上线**（2026-11-26，接口可以直接用；App 里的界面还没做）。类型在 `contracts/chat.ts`（`Feedback`、`FeedbackInput`、`Badges.feedback`）。
 
 主人在 App 里写意见，我们在管理后台回复，主人在 App 里看到回复。一条反馈就是一段对话：主人的第一句，然后是我们的回复和主人的追问，按时间排。
 
