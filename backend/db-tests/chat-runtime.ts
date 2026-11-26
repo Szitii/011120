@@ -587,7 +587,7 @@ try {
   let noted: MemoryJob | undefined;
   const watching = new ChatReplies({ reply: async () => ({ pass: true }), memory: async job => { noted = job; return { memories: newNotes("主人周三生日", "主人怕黑", "第三条") }; } });
   assert.equal(await watching.remember(second, portA), "DONE");
-  assert.deepEqual([noted!.messages.length, noted!.messages.at(-1)!.body, noted!.memories[0], noted!.companion.displayName, noted!.timeZone],
+  assert.deepEqual([noted!.messages.length, noted!.messages.at(-1)!.body, noted!.known[0]!.body, noted!.companion.displayName, noted!.timeZone],
     [10, "记忆测试 1", "（开发环境假记忆）主人说过：「记忆测试 10」", "SecondCompanion", "Asia/Shanghai"], "only what was said since, and what it already remembers");
   assert.deepEqual((await memories()).map(m => `${m.source} ${m.body}`).sort(),
     ["AUTO 主人周三生日", "AUTO 主人怕黑", "AUTO （开发环境假记忆）主人说过：「记忆测试 10」"], "two at most");
@@ -817,25 +817,30 @@ try {
   assert.equal((await putSettings(A.companion, { replyRules: Array.from({ length: 11 }, () => ({ pattern: "a" })) })).status, 400, "ten at most");
   await assert.rejects(pool.query("update companion_private.chat_settings set reply_rules = $1 where companion_id = $2",
     [JSON.stringify(Array.from({ length: 11 }, () => ({ pattern: "a", flags: "g", replacement: "", enabled: true }))), A.companion]), /check constraint/, "the database holds the limit too");
-  // And the shape, for a list that does not come through the API server (the function is the app user's to call).
-  const appUser = await pool.connect();
-  try {
-    await appUser.query("begin");
-    await appUser.query("set local role authenticated");
-    await appUser.query("select set_config('request.jwt.claim.sub', $1, true)", [A.subject]);
-    const revision = (await call<ChatSettings>(0, `companions/${A.companion}/chat-settings`)).data.revision;
-    const whole = { pattern: "a", flags: "g", replacement: "", enabled: true };
-    for (const bad of [[null], [5], [[]], [{ pattern: "a" }], [{ ...whole, pattern: 5 }], [{ ...whole, pattern: "" }], [{ ...whole, pattern: "a".repeat(201) }], [{ ...whole, flags: "y" }],
-      [{ ...whole, replacement: "b".repeat(201) }], [{ ...whole, enabled: "yes" }], [{ ...whole, code: "x" }], { pattern: "a" }, "x"]) {
-      await appUser.query("savepoint s");
-      await assert.rejects(appUser.query("select public.chat_update_settings($1, 'NORMAL', 'NORMAL', null, null, $2, null, null, null, $3)", [A.companion, revision, JSON.stringify(bad)]),
-        /check constraint/, JSON.stringify(bad).slice(0, 50));
-      await appUser.query("rollback to savepoint s");
+  // A list that does not come through the API server (the function is the app user's to call) is kept
+  // within the same limits of size, and whatever is in it never breaks a reply: what is not a rule is passed over.
+  const storeDirectly = async (list: unknown) => {
+    const now = (await call<ChatSettings>(0, `companions/${A.companion}/chat-settings`)).data;
+    const appUser = await pool.connect();
+    try {
+      await appUser.query("begin");
+      await appUser.query("set local role authenticated");
+      await appUser.query("select set_config('request.jwt.claim.sub', $1, true)", [A.subject]);
+      await appUser.query("select public.chat_update_settings($1, $2, $3, $4, $5, $6, null, null, null, $7)",
+        [A.companion, now.groupActivity, now.companionInteraction, now.model, now.voice, now.revision, JSON.stringify(list)]);
+      await appUser.query("commit");
+    } catch (error) {
+      await appUser.query("rollback");
+      throw error;
+    } finally {
+      appUser.release();
     }
-  } finally {
-    await appUser.query("rollback");
-    appUser.release();
+  };
+  for (const tooMuch of [Array(11).fill(null), [{ pattern: "a".repeat(30_000) }], { pattern: "a" }, "x"]) {
+    await assert.rejects(storeDirectly(tooMuch), /check constraint/, JSON.stringify(tooMuch).slice(0, 40));
   }
+  await storeDirectly([null, 5, { pattern: "(" }, { pattern: "收到", flags: "g", replacement: "听到了", enabled: true }, { pattern: "听到了", replacement: "$`" }]);
+  assert.equal((await voiceReply("乱七八糟的规则")).at(-1)!.body, "听到了：「乱七八糟的规则」", "the one that is a rule runs; the reply is written all the same");
   assert.deepEqual((await putSettings(A.companion, { replyRules: [] })).data.replyRules, []);
   assert.equal((await voiceReply("规则去掉了")).at(0)!.body, "（开发环境假回复）我是SampleCompanion");
   passed("reply rules: kept with the settings, run in order over each message, refused when they cannot be used");

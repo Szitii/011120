@@ -485,7 +485,7 @@ it("writes queued replies through the model and the safety scan", async () => {
   // A Companion's own home-room action: only where the turn allows one; its mark never reaches the text.
   const act = async (claim: ChatClaim, messages: string[]) => {
     const sent: unknown[][] = [];
-    const port = { ...fakePort([claim]).port, finish: async (...args: unknown[]) => { sent.push(args.slice(2)); return true; } } as ChatPort;
+    const port = { ...fakePort([claim]).port, finish: async (...args: unknown[]) => { sent.push(args.slice(2, args.findLastIndex(arg => arg !== undefined) + 1)); return true; } } as ChatPort;
     await new ChatReplies(model({ messages })).drain(chatId, port);
     return sent[0];
   };
@@ -509,7 +509,7 @@ it("writes queued replies through the model and the safety scan", async () => {
   };
   assert.deepEqual([await asked(turn({ direct: true })), await asked(turn()), await asked(turn({ direct: true }), model(new Error("down")))],
     [1, 0, 0], "one-to-one, and it answered");
-  const job: MemoryJob = { status: "WRITE", claimId: "c", companion: turn().companion, memories: [],
+  const job: MemoryJob = { status: "WRITE", claimId: "c", companion: turn().companion, known: [],
     messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T10:00:00Z" }] };
   const traces: unknown[] = [];
   const note = async (chosen: ChatModel | undefined, start: MemoryStart = job, accepted = true) => {
@@ -567,17 +567,17 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   // The marks, as the server reads them.
   const waiting = [{ id: "r1" }, { id: "r2" }];
   assert.deepEqual(splitReminders(["好，明早叫你", "[提醒:2026-11-27 8:00 叫主人起床]"], waiting),
-    { messages: ["好，明早叫你", ""], reminders: { set: { at: "2026-11-27 08:00", note: "叫主人起床" } } });
-  assert.deepEqual(splitReminders(["那就不叫了 [取消提醒:2]【取消提醒：2】[取消提醒:9]"], waiting), { messages: ["那就不叫了"], reminders: { cancel: ["r2"] } },
+    { messages: ["好，明早叫你", ""], set: { at: "2026-11-27 08:00", note: "叫主人起床" }, cancel: [] });
+  assert.deepEqual(splitReminders(["那就不叫了 [取消提醒:2]【取消提醒：2】[取消提醒:9]"], waiting), { messages: ["那就不叫了"], set: undefined, cancel: ["r2"] },
     "by its number in the list it was shown; a number that is not there cancels nothing");
   assert.deepEqual(splitReminders(["【提醒：2026/1/5 07：30 吃药】再设一个 [提醒:2026-01-06 07:30 第二个不算]"]),
-    { messages: ["再设一个"], reminders: { set: { at: "2026-01-05 07:30", note: "吃药" } } }, "the first one; other brackets and separators");
+    { messages: ["再设一个"], set: { at: "2026-01-05 07:30", note: "吃药" }, cancel: [] }, "the first one; other brackets and separators");
   assert.deepEqual(splitReminders(["[提醒:2026-11-27 8点 起床]嗯", "[提醒:2026-11-27 08:00]", "[取消提醒:第一个]", "普通的话"]),
-    { messages: ["嗯", "", "", "普通的话"], reminders: undefined }, "a mark that starts like ours but cannot be read, or has no note, is taken out and sets nothing");
-  assert.deepEqual(splitReminders(["【提醒：今天降温，记得加衣】", "[提醒事项] 买牛奶"]), { messages: ["【提醒：今天降温，记得加衣】", "[提醒事项] 买牛奶"], reminders: undefined },
+    { messages: ["嗯", "", "", "普通的话"], set: undefined, cancel: [] }, "a mark that starts like ours but cannot be read, or has no note, is taken out and sets nothing");
+  assert.deepEqual(splitReminders(["【提醒：今天降温，记得加衣】", "[提醒事项] 买牛奶"]), { messages: ["【提醒：今天降温，记得加衣】", "[提醒事项] 买牛奶"], set: undefined, cancel: [] },
     "its own words in brackets stay");
-  assert.deepEqual(splitReminders(["[提醒:2026-11-27 08:00:30 起床]"]).reminders, { set: { at: "2026-11-27 08:00", note: "起床" } }, "seconds are not part of the note");
-  assert.equal(Array.from(splitReminders([`[提醒:2026-11-27 08:00 ${"长".repeat(150)}]`]).reminders!.set!.note).length, 100);
+  assert.deepEqual(splitReminders(["[提醒:2026-11-27 08:00:30 起床]"]).set, { at: "2026-11-27 08:00", note: "起床" }, "seconds are not part of the note");
+  assert.equal(Array.from(splitReminders([`[提醒:2026-11-27 08:00 ${"长".repeat(150)}]`]).set!.note).length, 100);
   assert.equal(localStamp(new Date("2026-11-26T16:30:00Z"), "Asia/Shanghai"), "2026-11-27 00:30");
   assert.equal(localStamp(new Date("2026-11-26T16:30:00Z"), "Not/AZone"), "2026-11-27 00:30", "an unknown zone reads as Asia/Shanghai");
   assert.equal(localStamp(new Date("2026-11-26T16:30:00Z")), "2026-11-27 00:30");
@@ -605,7 +605,7 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   assert.equal((await run(says("[提醒:2026-11-28 08:00 叫主人起床]"), direct())).outcome, "ERROR", "a reply that is only a mark says nothing");
 
   // Delivering a reminder: the model's words, or plain ones when it has none. Never nothing, never an error.
-  const due = direct({ replyTo: "REMINDER", optional: true, reach: { kind: "REMINDER", note: "交报告", dueAt: "2026-11-26T01:00:00Z" } });
+  const due = direct({ replyTo: "REMINDER", optional: true, canRemind: false, reach: { kind: "REMINDER", note: "交报告", dueAt: "2026-11-26T01:00:00Z" } });
   assert.deepEqual(await run(says("该交报告啦"), due).then(r => [r.outcome, r.bodies, r.trace.replyTo]), ["SENT", ["该交报告啦"], "REMINDER"]);
   for (const broken of [undefined, says(), model(new Error("down")), model({ failed: "QUOTA" }), model({ refused: true }), model({ pass: true })]) {
     assert.deepEqual(await run(broken, due).then(r => [r.outcome, r.bodies]), ["SENT", ["提醒你：交报告"]]);
@@ -620,7 +620,7 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   assert.deepEqual(acted, ["SENT", ["提醒你：交报告"], "HUG"]);
 
   // Writing first: it may say something or nothing; whatever goes wrong, nothing is shown.
-  const away = direct({ replyTo: "SELF", optional: true, reach: { kind: "GREETING" } });
+  const away = direct({ replyTo: "SELF", optional: true, canRemind: false, reach: { kind: "GREETING" } });
   assert.deepEqual(await run(says("在忙吗"), away).then(r => [r.outcome, r.bodies, r.trace.replyTo]), ["SENT", ["在忙吗"], "SELF"]);
   for (const quiet of [undefined, model({ pass: true }), model(new Error("down")), model({ failed: "DISABLED" }), model({ refused: true }),
     says("我的密码是 password: hunter2hunter2")]) {
