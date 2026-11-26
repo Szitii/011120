@@ -38,6 +38,12 @@ export interface CatalogModel {
     readonly fallbacks?: boolean;
     /** openai-compatible: some newer models want max_completion_tokens. */
     readonly maxTokensParam?: "max_tokens" | "max_completion_tokens";
+    /**
+     * The model can search the web by itself when a request declares the provider's own tool for it.
+     * "deepseek": the server tool `deepseek_web_search` of DeepSeek's chat API (searching runs on
+     * DeepSeek's side and is not billed; what it reads is billed as input tokens).
+     */
+    readonly webTools?: "deepseek";
   };
 }
 
@@ -75,6 +81,9 @@ function check(file: CatalogFile): CatalogFile {
     if (!["ECONOMY", "STANDARD", "PREMIUM"].includes(model.tier)) fail(`model ${model.id} has an unknown tier.`);
     if (!(model.inputPerMTok >= 0) || !(model.outputPerMTok >= 0)) fail(`model ${model.id} needs prices.`);
     if (typeof model.enabled !== "boolean") fail(`model ${model.id} needs enabled.`);
+    if (model.options?.webTools !== undefined && (model.options.webTools !== "deepseek" || file.providers[model.provider]!.kind !== "openai-compatible")) {
+      fail(`model ${model.id} has webTools its provider cannot serve.`);
+    }
   }
   if (!ids.has(file.defaultModel)) fail("defaultModel is not in models.");
   if (file.decisionModel !== null && !ids.has(file.decisionModel)) fail("decisionModel is not in models (use null for none).");

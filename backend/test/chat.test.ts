@@ -588,6 +588,10 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   assert.deepEqual((await run(devChatModel, direct({ history: ownerSays("取消提醒吧") }))).reminders, { cancel: ["r1"] });
   assert.equal((await run(devChatModel, direct({ canRemind: false, history: ownerSays("提醒我") }))).reminders, undefined);
 
+  // A model that was offered the web says how many searches it ran; the turn's line keeps it.
+  const searcher: ChatModel = { reply: async (_turn, { searched }) => { searched?.(2); return { messages: ["查到了"] }; } };
+  assert.deepEqual([(await run(searcher, direct())).trace.web, (await run(says("好"), direct())).trace.web], [2, "OFF"]);
+
   // The scheduler's entry: the database says whether a turn was queued; only then is the chat written.
   const idle = fakePort([away]);
   assert.equal(await new ChatReplies(devChatModel).reachOut(companion, idle.port), "NOT_DUE");

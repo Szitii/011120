@@ -57,6 +57,7 @@ export const FEATURES: Readonly<Record<string, string>> = {
   COMMUNITY_NEW_NOTICES: "社区的点赞通知和 @提及通知（新版 App 上线后再开）",
   COMPANION_ACTIONS: "家机在私聊里主动做小家动作，比如抱抱主人（新版 App 上线后再开）",
   VOICE_INPUT: "主人发语音（语音转文字的账户充值后再开；关着时 App 不显示按住说话）",
+  COMPANION_WEB: "家机联网搜索（只有平台的 DeepSeek Flash 能搜；模型自己决定搜不搜，搜了的回复会贵一些，先开一小段时间看花费）",
   COMPANION_REACH: "家机主动找主人：主人打开了“主动找你”的家机会自己发消息，主人让它到点提醒的会按时提醒（关掉后两样都停，已设的提醒留着）",
 };
 export interface Spend {
@@ -978,7 +979,7 @@ function promptViews(zone: string, now: Date, texts: PromptTexts): PromptView[] 
   return [
     { title: "聊天回复", when: "主人发来消息、家机要回复的时候。平台的模型和主人自带 Key 的模型都用这一份。" +
       "记忆多到放不下(约 3000 字)时,更早的记忆里和眼下聊的事有关的几条,会另外附在聊天记录前面。", editable: true,
-      blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REMIND", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now) },
+      blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REMIND", "CHAT_WEB", "CHAT_TIME"], ...replyPrompt(turn, memories, texts, now, true) },
     { title: "主动找主人", editable: true, forms: ["CHAT_REACH"], blocks: ["CHAT_STYLE", "CHAT_VOICE", "CHAT_ACTION", "CHAT_REACH", "CHAT_TIME"],
       when: "主人给这位家机打开了“主动找你”,并且有一阵没来聊天的时候(偶尔:8 小时以上,一天最多 1 次;经常:3 小时以上,一天最多 2 次)。" +
         "主人当地 23 点到 8 点不找;上一次主动说的话主人还没回,就不再找;主人超过 7 天没来也不再找。家机可以决定不说。" +

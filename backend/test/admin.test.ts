@@ -755,7 +755,7 @@ it("shows what the models are told, and rewords a block only when the wording ca
   const page = await send("/prompts");
   assert.deepEqual(calls, [["prompts"]]);
   assert.match(page.body, /<a href="\/prompts" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>提示词<\/a>/);
-  assert.match(page.body, /现在有 0 \/ 9 段改过/);
+  assert.match(page.body, /现在有 0 \/ 10 段改过/);
   // Each prompt whole: the fixed lines, and every block in its place with a form.
   for (const title of ["聊天回复", "主动找主人", "到点提醒", "写日记", "发社区动态", "自动记忆", "主人自己接的 agent(自建家机)", "群聊里要不要开口"]) {
     assert.ok(page.body.includes(`<h2>${title}</h2>`), title);
@@ -769,7 +769,8 @@ it("shows what the models are told, and rewords a block only when the wording ca
   assert.match(page.body, /必须保留「\[语音\]」。/);
   assert.match(page.body, /<pre class="fixed">- 写到主人时用「\(示例\)称呼」这个称呼。\n- 语气真诚温和/);
   assert.match(page.body, /现在是 2026年11月23日 周一 12:00。/, "the material is written for now, on the console's clock");
-  assert.equal(page.body.split('action="/prompts/set"').length - 1, 9, "one form per block, none to go back to wording that was never changed");
+  assert.equal(page.body.split('action="/prompts/set"').length - 1, 10, "one form per block, none to go back to wording that was never changed");
+  assert.match(page.body, /<b>可以改:什么时候联网查<\/b><span class="tag">内置文字<\/span>\s*<pre>- 你可以联网搜索。/);
   assert.equal(page.body.split('<b>可以改:什么时候发语音</b>').length - 1, 4,
     "the voice rules are shown again where it writes first, where it reminds, and where an Owner's own agent gets them");
   assert.match(page.body, /<textarea name="body" required maxlength="1000" rows="4">- 聊天记录里「—— ——」中间的是时间/);
@@ -778,7 +779,7 @@ it("shows what the models are told, and rewords a block only when the wording ca
   const saved = { CHAT_TIME: { body: `- 看看几点了。${NASTY}`, updatedAt: AT }, CHAT_VOICE: { body: "- 多发语音。", updatedAt: AT }, OLD_KEY: { body: "x", updatedAt: AT } };
   const edited = (await (await start({ prompts: saved })).send("/prompts?ok=1")).body;
   assert.match(edited, /操作已完成/);
-  assert.match(edited, /现在有 2 \/ 9 段改过/);
+  assert.match(edited, /现在有 2 \/ 10 段改过/);
   assert.match(edited, /<b>可以改:怎么看待时间<\/b><span class="tag">已修改 · 2026\/11\/23 08:00:00<\/span>\s*<pre>- 看看几点了。&lt;script&gt;/);
   assert.ok(!edited.includes("<script>alert"));
   assert.match(edited, /<div class="own off"><b>可以改:什么时候发语音<\/b><span class="tag bad">改过的文字用不了,现在用的是内置文字<\/span>\s*<pre>- 你也可以发语音/);

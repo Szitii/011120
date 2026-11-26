@@ -43,7 +43,7 @@ it("keeps the built-in wording in step with what the server reads back", () => {
 it("puts every block into the prompt it belongs to, built in or reworded", () => {
   const own: PromptTexts = { CHAT_STYLE: "- 说话慢一点。", CHAT_VOICE: "- 想发语音就写 [语音]。", CHAT_ACTION: "- 想抱就写 [动作:抱抱]。",
     CHAT_TIME: "- 看看几点了。", DIARY_STYLE: "- 写短一点。", POST_STYLE: "- 写一句话。", MEMORY_WHAT: "- 只记生日。",
-    CHAT_REMIND: "- 要提醒就写 [提醒:2026-01-01 08:00 事情]。", CHAT_REACH: "- 想到什么就说一句。" };
+    CHAT_REMIND: "- 要提醒就写 [提醒:2026-01-01 08:00 事情]。", CHAT_REACH: "- 想到什么就说一句。", CHAT_WEB: "- 不知道就去搜。" };
   const prompts: [key: keyof PromptTexts, built: string, reworded: string][] = [
     ["CHAT_STYLE", replyPrompt(turn).system, replyPrompt(turn, [], own).system],
     ["CHAT_VOICE", replyPrompt(turn).system, replyPrompt(turn, [], own).system],
@@ -52,6 +52,7 @@ it("puts every block into the prompt it belongs to, built in or reworded", () =>
     ["CHAT_REMIND", replyPrompt(reminding).system, replyPrompt(reminding, [], own).system],
     ["CHAT_REMIND", agentMessages(reminding)[0]!.content, agentMessages(reminding, own)[0]!.content],
     ["CHAT_REACH", replyPrompt(greeting).system, replyPrompt(greeting, [], own).system],
+    ["CHAT_WEB", replyPrompt(turn, [], {}, undefined, true).system, replyPrompt(turn, [], own, undefined, true).system],
     ["CHAT_VOICE", agentMessages(turn)[0]!.content, agentMessages(turn, own)[0]!.content],
     ["CHAT_ACTION", agentMessages(turn)[0]!.content, agentMessages(turn, own)[0]!.content],
     ["DIARY_STYLE", diaryPrompt(diary).system, diaryPrompt(diary, [], own).system],
@@ -75,6 +76,7 @@ it("puts every block into the prompt it belongs to, built in or reworded", () =>
   // A Companion without a voice, or one that may not act, is not told about either, reworded or not.
   const plain = replyPrompt({ ...turn, canAct: false, companion: { ...companion, settings: { ...companion.settings, voice: null } } }, [], own).system;
   assert.doesNotMatch(plain, /语音|动作/);
+  assert.doesNotMatch(replyPrompt(turn, [], own).system, /搜/, "nor is a reply that cannot search told about the web");
   assert.deepEqual(promptLines({ CHAT_TIME: "a\nb" }, "CHAT_TIME"), ["a", "b"]);
 });
 

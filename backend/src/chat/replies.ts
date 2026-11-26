@@ -62,7 +62,8 @@ export type VoiceResult = "SPOKEN" | "NO_VOICE" | "VOICE_UNAVAILABLE" | "NO_MARK
  * reminder), the channel, how long the model and the speech took, how the turn ended, and why
  * each message is or is not a voice message. Never what was said, a memory, a key, audio or a
  * provider's own words. `stored` false with a SPOKEN message: the clip was made but the reply was
- * not saved.
+ * not saved. `web`: OFF when the model was not offered the web; else how many searches it ran, or
+ * REFUSED when the provider would not take the tool and the reply was written without.
  */
 export interface ReplyTrace {
   event: "chat_reply";
@@ -76,6 +77,7 @@ export interface ReplyTrace {
   speechMs: number;
   voice: VoiceResult[];
   stored: boolean;
+  web: number | "REFUSED" | "OFF";
 }
 
 /**
@@ -95,10 +97,12 @@ export interface MemoryTrace {
 
 /**
  * Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on.
- * A model that answers through the Owner's own key or agent says so with `via`, for the trace.
+ * A model that answers through the Owner's own key or agent says so with `via`, for the trace;
+ * one that was offered the web says with `searched` how many searches it ran (or that it was refused).
  */
 export interface ChatModel {
-  reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void }): Promise<Answer>;
+  reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void;
+    searched?: (searches: number | "REFUSED") => void }): Promise<Answer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
   /** Writes a community post of its own; without it, such posts fail. */
@@ -227,7 +231,7 @@ export class ChatReplies {
       const turn = speakable(claim, this.#voices);
       const trace: ReplyTrace = {
         event: "chat_reply", chatId: turn.chatId, replyId: turn.replyId, companionId: turn.companion.companionId, replyTo: turn.replyTo,
-        channel: "PLATFORM", outcome: "ERROR", modelMs: 0, speechMs: 0, voice: [], stored: false,
+        channel: "PLATFORM", outcome: "ERROR", modelMs: 0, speechMs: 0, voice: [], stored: false, web: "OFF",
       };
       const silent = turn.companion.settings.voice ? null : claim.companion.settings.voice ? "VOICE_UNAVAILABLE" : "NO_VOICE";
       const [outcome, bodies, clips, action, reminders] = await this.#answer(turn, port, trace, silent);
@@ -427,7 +431,8 @@ export class ChatReplies {
     if (model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
     try {
       const started = Date.now();
-      const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; } }))
+      const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; },
+        searched: searches => { trace.web = searches; } }))
         .finally(() => { trace.modelMs = Date.now() - started; });
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];
