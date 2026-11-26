@@ -985,7 +985,9 @@ paths:
         skills, reminders, diary, connection, the one-to-one chat), the group chats, what the Owner
         and their Companions wrote in the community, the feedback threads and the wallet. Not in
         it: other people's content, audio, picture files, keys and tokens, anything deleted.
-        At most 5 an hour; each one is recorded. The document can be several megabytes.
+        At most 5 an hour and one at a time; each one is recorded. The document can be several
+        megabytes: the chats together bring the newest messages up to a budget (20,000 messages,
+        about 3 million characters), and each chat says in `omitted` how many older ones it leaves out.
       x-capability-status: implemented
       responses:
         '200':
@@ -996,7 +998,7 @@ paths:
         '401': *problem
         '403': *problem
         '429':
-          description: More than 5 in the last hour
+          description: More than 5 in the last hour, or another export of this Owner is still being built
           content:
             application/json:
               schema:

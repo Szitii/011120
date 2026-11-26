@@ -858,6 +858,12 @@ try {
   assert.equal((await call(0, `companions/${A.companion}/memories`, "POST", { body: "导出里要有这条记忆" })).status, 201);
   assert.equal((await call(0, `companions/${A.companion}/world-entries`, "POST", { keys: ["导出"], body: "导出里要有这条设定" })).status, 201);
   assert.equal((await call(0, `companions/${A.companion}/own-skills`, "POST", { title: "导出", body: "导出里要有这个技能" })).status, 201);
+  // It follows the other Owner's Companion, whose identity has since been taken out of the community.
+  const [twinA, twinB] = ["00000000-0000-0000-0000-0000000005a1", "00000000-0000-0000-0000-0000000005b1"];
+  const twinStatus = (await pool.query<{ id: string; status: string }>("select id, status from public.social_twins where id in ($1, $2)", [twinA, twinB])).rows;
+  const setTwin = (id: string, status: string) => pool.query("update public.social_twins set status = $2 where id = $1", [id, status]);
+  await pool.query("insert into public.community_follows(actor_id, target_id) values ($1, $2)", [actorA, actorB]);
+  await setTwin(twinB, "SUSPENDED");
   const official = (await call<CompanionSkills>(0, `companions/${A.companion}/skills`)).data.official[0]!;
   assert.equal((await call(0, `companions/${A.companion}/skills/${official.id}`, "PUT", { enabled: true })).status, 200);
 
@@ -881,16 +887,19 @@ try {
     && mine.chat!.messages.some(m => m.companionId === null && m.body === "规则去掉了"));
   assert.ok(mine.chat!.messages.every((m, i, all) => i === 0 || all[i - 1]!.at <= m.at), "oldest first");
   assert.equal(mine.chat!.omitted, 0);
-  // A very long chat brings its newest messages and says how many older ones it leaves out.
+  // Past the budget a chat brings its messages from a moment on and says how many older ones it leaves out.
+  const from = mine.chat!.messages.at(-3)!.at, late = mine.chat!.messages.filter(m => m.at >= from).map(m => m.id);
   const newest = (await pool.query<{ payload: { messages: { id: string }[]; omitted: number } }>(
-    "select companion_private.export_messages($1, 3) as payload", [mine.chat!.id])).rows[0]!.payload;
-  assert.deepEqual([newest.messages.map(m => m.id), newest.omitted], [mine.chat!.messages.slice(-3).map(m => m.id), shown.n - 3]);
+    "select companion_private.export_messages($1, $2::timestamptz) as payload", [mine.chat!.id, from])).rows[0]!.payload;
+  assert.deepEqual([newest.messages.map(m => m.id), newest.omitted, late.length < shown.n], [late, shown.n - late.length, true]);
   assert.deepEqual([other.connection.kind, other.connection.keyHint], ["BYOK", "leak"], "how it is connected, with the hint the app shows");
   assert.ok(copy.groupChats.length > 0 && copy.groupChats.every(g => g.members.length >= 2 && Array.isArray(g.messages) && g.omitted === 0));
   const twin = copy.community.find(c => c.profile.id === actorA)!;
   assert.deepEqual(twin.posts.map(p => p.body).filter(body => body.includes("导出") || body.includes("删掉")), ["导出里要有这条动态"]);
-  assert.equal(typeof copy.wallet.enabled, "boolean");
+  assert.deepEqual([typeof copy.wallet.enabled, copy.wallet.entriesOmitted, copy.wallet.entries.some(e => "note" in e)], ["boolean", 0, false],
+    "the wallet's entries, without the note an operator may have written on one");
   assert.ok(Array.isArray(copy.wallet.entries) && Array.isArray(copy.feedback));
+  assert.deepEqual(twin.following, [], "a followed identity the app no longer shows is not in the copy either");
   for (const never of ["只有另一位主人能看见的话", "另一位主人的家机发的动态", "删掉的动态不在导出里", "v1.exportkey.mustnotleak.x", tokenHash, B.owner, B.companion, actorB, "secret\"", "key_hash"]) {
     assert.ok(!text.includes(never), `not in the copy: ${never.slice(0, 24)}`);
   }
@@ -898,8 +907,26 @@ try {
   const others = JSON.stringify((await call<AccountExport>(1, "export")).data);
   assert.ok(others.includes("只有另一位主人能看见的话") && !others.includes("导出里要有这条记忆") && !others.includes(A.companion));
   assert.equal((await fetch(`${bases[0]}/v0/export`)).status, 401);
+  // Back in the community, the followed identity is in the copy as the app shows it; an identity of the Owner's own that is taken out is not.
+  await setTwin(twinB, twinStatus.find(t => t.id === twinB)!.status);
+  const visible = (await pool.query<{ ok: boolean }>("select companion_private.community_visible($1, $2) as ok", [actorB, actorA])).rows[0]!.ok;
+  const laterCopy = (await call<AccountExport>(0, "export")).data;
+  assert.equal(laterCopy.community.find(c => c.profile.id === actorA)!.following.some(f => f.id === actorB), visible);
+  await setTwin(twinA, "SUSPENDED");
+  const third = (await call<AccountExport>(0, "export")).data;
+  assert.equal(third.community.some(c => c.profile.id === actorA), false, "the list of identities is the app's own");
+  await setTwin(twinA, twinStatus.find(t => t.id === twinA)!.status);
+  // One at a time: while one is being built, another is refused at once, and does not count.
+  const busy = await pool.connect();
+  try {
+    await busy.query("select pg_advisory_lock(hashtextextended('account_export:' || $1::text, 0))", [A.owner]);
+    assert.deepEqual((await call<{ code: string }>(0, "export")).data, { code: "EXPORT_LIMIT" });
+  } finally {
+    await busy.query("select pg_advisory_unlock_all()");
+    busy.release();
+  }
   // Five an hour, each one in the audit log; an old one no longer counts.
-  for (let i = 2; i <= 5; i += 1) assert.equal((await call(0, "export")).status, 200, `export ${i}`);
+  for (let i = 4; i <= 5; i += 1) assert.equal((await call(0, "export")).status, 200, `export ${i}`);
   const limited = await call<{ code: string }>(0, "export");
   assert.deepEqual([limited.status, limited.data], [429, { code: "EXPORT_LIMIT" }]);
   assert.equal((await pool.query("select count(*)::int as n from public.audit_events where owner_id = $1 and action = 'ACCOUNT_EXPORT'", [A.owner])).rows[0].n, 5);
@@ -917,6 +944,7 @@ try {
   await aroundTheGuard(`update public.audit_events set occurred_at = now() - interval '61 minutes'
     where id = (select id from public.audit_events where owner_id = $1 and action = 'ACCOUNT_EXPORT' order by occurred_at limit 1)`, [A.owner]);
   assert.equal((await call(0, "export")).status, 200);
+  await pool.query("delete from public.community_follows where actor_id = $1 and target_id = $2", [actorA, actorB]);
   await pool.query("delete from companion_private.chats where id = $1", [theirChat]);
   await pool.query("delete from companion_private.companion_connections where companion_id = $1", [second]);
   await pool.query("delete from public.community_posts where body in ('另一位主人的家机发的动态', '导出里要有这条动态', '删掉的动态不在导出里')");

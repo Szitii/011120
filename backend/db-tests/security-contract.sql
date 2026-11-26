@@ -1948,7 +1948,7 @@ select public.test_assert(
   has_function_privilege('authenticated', 'public.account_export()'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.account_export()'::regprocedure, 'EXECUTE')
   and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
-    where has_function_privilege(r.role, 'companion_private.export_messages(uuid,integer)'::regprocedure, 'EXECUTE')),
+    where has_function_privilege(r.role, 'companion_private.export_messages(uuid,timestamptz)'::regprocedure, 'EXECUTE')),
   'an Owner exports their own data; a chat''s messages cannot be read by id'
 );
 select public.test_assert(
