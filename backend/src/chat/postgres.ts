@@ -110,6 +110,18 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.memory_delete($1,$2) as payload", [companionId, memoryId]);
   }
 
+  worldEntries(companionId: string): Promise<unknown> {
+    return this.#object("select public.world_list($1) as payload", [companionId]);
+  }
+
+  saveWorldEntry(companionId: string, entryId: string | null, keys: readonly string[], body: string, enabled: boolean): Promise<unknown> {
+    return this.#object("select public.world_save($1,$2,$3::text[],$4,$5) as payload", [companionId, entryId, keys, body, enabled]);
+  }
+
+  deleteWorldEntry(companionId: string, entryId: string): Promise<unknown> {
+    return this.#object("select public.world_delete($1,$2) as payload", [companionId, entryId]);
+  }
+
   connectionView(companionId: string): Promise<unknown> {
     return this.#object("select public.connection_get($1) as payload", [companionId]);
   }
@@ -145,10 +157,10 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   saveSettings(companionId: string, settings: ChatSettings): Promise<unknown> {
-    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8,$9) as payload",
+    return this.#object("select public.chat_update_settings($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) as payload",
       [companionId, settings.groupActivity, settings.companionInteraction, settings.model, settings.voice ?? null,
         settings.revision, settings.preferredUserTitle === undefined ? null : settings.preferredUserTitle ?? "", settings.autoMemory ?? null,
-        settings.proactive ?? null]);
+        settings.proactive ?? null, settings.replyRules === undefined ? null : JSON.stringify(settings.replyRules)]);
   }
 
   async claim(chatId: string): Promise<ChatClaim | null> {

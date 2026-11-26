@@ -52,7 +52,7 @@ it("puts every block into the prompt it belongs to, built in or reworded", () =>
     ["CHAT_REMIND", replyPrompt(reminding).system, replyPrompt(reminding, [], own).system],
     ["CHAT_REMIND", agentMessages(reminding)[0]!.content, agentMessages(reminding, own)[0]!.content],
     ["CHAT_REACH", replyPrompt(greeting).system, replyPrompt(greeting, [], own).system],
-    ["CHAT_WEB", replyPrompt(turn, [], {}, undefined, true).system, replyPrompt(turn, [], own, undefined, true).system],
+    ["CHAT_WEB", replyPrompt(turn, [], {}, undefined, { web: true }).system, replyPrompt(turn, [], own, undefined, { web: true }).system],
     ["CHAT_VOICE", agentMessages(turn)[0]!.content, agentMessages(turn, own)[0]!.content],
     ["CHAT_ACTION", agentMessages(turn)[0]!.content, agentMessages(turn, own)[0]!.content],
     ["DIARY_STYLE", diaryPrompt(diary).system, diaryPrompt(diary, [], own).system],

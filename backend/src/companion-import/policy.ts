@@ -2,7 +2,7 @@ import { contentHash } from "./canonical.ts";
 import type { FindingSeverity, FindingType, ImportFinding } from "./types.ts";
 
 export const IMPORT_POLICY_VERSION = "companion-import-policy/0.1.0";
-export const IMPORT_PARSER_VERSION = "character-card-json/0.2.0";
+export const IMPORT_PARSER_VERSION = "character-card-json/0.3.0";
 export const MAX_IMPORT_BYTES = 256 * 1024;
 export const MAX_DEPTH = 12;
 export const MAX_NODES = 10_000;
@@ -12,15 +12,23 @@ export const MAX_DISPLAY_NAME_LENGTH = 200;
 /** Memories offered by a card (our `memories` field): at most this many, each at most this many characters. */
 export const MAX_MEMORIES = 50;
 export const MAX_MEMORY_LENGTH = 500;
+/** A card's example dialogue (`mes_example`) is offered cut to this many characters. */
+export const MAX_EXAMPLE_LENGTH = 1500;
+/**
+ * World book entries offered by a card (`character_book.entries`): at most this many; each text cut
+ * to this many characters; up to 8 trigger words of up to 40 characters each.
+ */
+export const MAX_WORLD_ENTRIES = 50;
+export const MAX_WORLD_BODY_LENGTH = 1000;
+export const MAX_WORLD_KEYS = 8;
+export const MAX_WORLD_KEY_LENGTH = 40;
 
 export const PROMPT_ONLY_FIELDS = new Set([
   "system_prompt",
   "post_history_instructions",
   "first_mes",
-  "mes_example",
   "scenario",
   "creator_notes",
-  "character_book",
   "alternate_greetings",
   "extensions",
 ]);
@@ -33,6 +41,8 @@ export const KNOWN_CARD_FIELDS = new Set([
   "character_version",
   "tags",
   "memories",
+  "mes_example",
+  "character_book",
   ...PROMPT_ONLY_FIELDS,
 ]);
 

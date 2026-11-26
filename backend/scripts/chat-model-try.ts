@@ -32,7 +32,7 @@ const turn: ChatClaim = {
 };
 const now = new Date();
 const searches = web && model.options?.webTools !== undefined;
-const { system, user } = replyPrompt(turn, [], {}, now, searches);
+const { system, user } = replyPrompt(turn, [], {}, now, { web: searches });
 const started = Date.now();
 const result = await createModelCaller(catalog)(model, { system, user, maxTokens: 2000, signal: AbortSignal.timeout(90_000),
   ...(searches ? { web: { without: replyPrompt(turn, [], {}, now) } } : {}) });

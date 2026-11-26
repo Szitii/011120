@@ -17,6 +17,7 @@
  * database decides; such a turn is written like any other.
  */
 import { ACTION_TEXT, MAX_NOTES, answersAction, localStamp, splitAction, splitReminders, splitVoice } from "./prompt.ts";
+import { applyRules } from "./reply-rules.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { DiaryWriteResult } from "../../../contracts/chat.ts";
@@ -451,7 +452,12 @@ export class ChatReplies {
       const set = turn.canRemind && reminded.set !== undefined && this.#safety.scanOutput(reminded.set.note).decision === "ALLOW" ? reminded.set : undefined;
       const reminders: ReminderChange | undefined = set === undefined && cancel.length === 0 ? undefined
         : { ...(set && { set }), ...(cancel.length > 0 && { cancel }) };
-      const marked = reminded.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
+      const spoken = reminded.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
+      // The Owner's own rules over what it says (正则替换). Rules that would leave nothing of the reply are not followed.
+      const rules = turn.companion.settings.replyRules;
+      const after = applyRules(spoken.map(part => part.text), rules);
+      const ruled = spoken.map((part, i) => ({ ...part, text: after[i]!.trim() })).filter(part => part.text.length > 0);
+      const marked = ruled.length > 0 ? ruled : spoken;
       const parts = marked.map(part => part.text);
       const messages = parts.length <= MAX_MESSAGES ? parts
         : [...parts.slice(0, MAX_MESSAGES - 1), parts.slice(MAX_MESSAGES - 1).join("\n")];

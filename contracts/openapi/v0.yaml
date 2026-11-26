@@ -106,6 +106,10 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories
   /companions/{companionId}/memories/{memoryId}:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories~1{memoryId}
+  /companions/{companionId}/world-entries:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1world-entries
+  /companions/{companionId}/world-entries/{entryId}:
+    $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1world-entries~1{entryId}
   /companions/{companionId}/reminders:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1reminders
   /companions/{companionId}/reminders/{reminderId}:
@@ -871,11 +875,16 @@ components:
         field:
           type: string
           description: |
-            An identity field (displayName, identitySummary, personaTraits, ...) or `memory`: one entry of
-            the card's `memories` list (strings, at most 50, each at most 500 characters). Approved memory
-            candidates become the Companion's memories (GET /v0/companions/{id}/memories), not identity fields.
+            An identity field (displayName, identitySummary, personaTraits, dialogueExamples, ...), or
+            `memory`: one entry of the card's `memories` list (strings, at most 50, each at most 500
+            characters), or `worldEntry`: one entry of the card's `character_book` (at most 50).
+            Approved memory candidates become the Companion's memories (GET /v0/companions/{id}/memories)
+            and approved worldEntry candidates its world book (GET /v0/companions/{id}/world-entries),
+            not identity fields. `dialogueExamples` comes from the card's `mes_example`, cut to 1500 characters.
         value:
-          description: The text. Absent when the candidate cannot be approved (blocked text is never sent back).
+          description: |
+            The text; for a worldEntry candidate an object {keys, body} (up to 8 trigger words, the text
+            cut to 1000 characters). Absent when the candidate cannot be approved (blocked text is never sent back).
         sourcePath: { type: string }
         sourceTrust: { const: EXTERNAL_UNTRUSTED }
         approvable: { type: boolean }

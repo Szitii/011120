@@ -11,9 +11,14 @@ import {
   makeFinding,
   MAX_DEPTH,
   MAX_DISPLAY_NAME_LENGTH,
+  MAX_EXAMPLE_LENGTH,
   MAX_IMPORT_BYTES,
   MAX_MEMORIES,
   MAX_MEMORY_LENGTH,
+  MAX_WORLD_BODY_LENGTH,
+  MAX_WORLD_ENTRIES,
+  MAX_WORLD_KEY_LENGTH,
+  MAX_WORLD_KEYS,
   MAX_NODES,
   MAX_STRING_LENGTH,
   MAX_TOTAL_STRING_LENGTH,
@@ -89,6 +94,22 @@ function requirePlainObject(value: unknown): Record<string, unknown> {
     throw new ImportPolicyError("IMPORT_ROOT_NOT_OBJECT", "A character-card import must be a JSON object.");
   }
   return value as Record<string, unknown>;
+}
+
+/** `text` cut to `max` characters, never inside a character (a character is at most two units, so only that much is looked at). */
+const cutTo = (text: string, max: number): string => Array.from(text.slice(0, 2 * max)).slice(0, max).join("").trim();
+
+/**
+ * A card's example dialogue as we keep it: the `<START>` lines that separate examples are blank
+ * lines, and the placeholders for the character and the user are the Companion's name and 主人.
+ * The name is put in as it is written: a `$` in it means nothing, and it is no longer than a name
+ * may be, so the text grows by no more than that for each placeholder.
+ */
+function exampleDialogue(text: string, name: string): string {
+  const shown = cutTo(name, MAX_DISPLAY_NAME_LENGTH);
+  return text.replace(/\r\n?/g, "\n").replace(/^[ \t]*<START>[ \t]*$/gim, "")
+    .replace(/\{\{char\}\}|<BOT>/gi, () => shown).replace(/\{\{user\}\}|<USER>/gi, "主人")
+    .replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function candidate(
@@ -219,10 +240,63 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
       addFinding(path, "PROMPT_DIRECTIVE", "INFO", "EXCLUDED", value, "Legacy prompt metadata excluded");
     }
 
-    const isIdentityCandidateSource = field === "name" || field === "description" || field === "personality" || field === "memories";
-    scanStrings(value, path, isIdentityCandidateSource ? "CANDIDATE_BLOCKED" : "EXCLUDED");
+    const isIdentityCandidateSource = field === "name" || field === "description" || field === "personality" || field === "memories"
+      || field === "mes_example";
+    // The world book is scanned entry by entry below: only an entry's own words block that entry.
+    if (field !== "character_book") scanStrings(value, path, isIdentityCandidateSource ? "CANDIDATE_BLOCKED" : "EXCLUDED");
     if (field === "name" && typeof value === "string" && value.trim().length > MAX_DISPLAY_NAME_LENGTH) {
       addFinding(path, "FIELD_CONSTRAINT", "BLOCK", "CANDIDATE_BLOCKED", value, "Display name exceeds 200 characters");
+    }
+  }
+
+  // The card's world book (`character_book`): each usable entry is offered on its own, like a memory.
+  // An entry needs trigger words and a text, and must not be switched off in the card. Everything
+  // else in the book (its name, comments, positions, extensions) is not used.
+  const worldCandidates: IdentityCandidate[] = [];
+  const book = data.character_book;
+  if (book !== undefined) {
+    const bookPath = `${prefix}.character_book`;
+    const fields = book !== null && typeof book === "object" && !Array.isArray(book) ? book as Record<string, unknown> : undefined;
+    if (fields === undefined || !Array.isArray(fields.entries)) {
+      scanStrings(book, bookPath, "EXCLUDED");
+      addFinding(bookPath, "FIELD_CONSTRAINT", "WARNING", "EXCLUDED", book, "character_book needs a list of entries");
+    } else {
+      for (const [key, nested] of Object.entries(fields)) if (key !== "entries") scanStrings(nested, `${bookPath}.${key}`, "EXCLUDED");
+      fields.entries.forEach((entry, index) => {
+        const path = `${bookPath}.entries[${index}]`;
+        const item = entry !== null && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : {};
+        for (const [key, nested] of Object.entries(item)) if (key !== "keys" && key !== "content") scanStrings(nested, `${path}.${key}`, "EXCLUDED");
+        // A trigger word is one line of plain text, as when the Owner types one: control characters in it are spaces.
+        const words = Array.isArray(item.keys)
+          ? item.keys.flatMap((key) => (typeof key === "string" ? [key.replace(/[\p{Cc}\u2028\u2029\s]+/gu, " ").trim()] : [])) : [];
+        const keys = words.filter((word, at) => word !== "" && words.findIndex((other) => other.toLowerCase() === word.toLowerCase()) === at);
+        const text = typeof item.content === "string" ? item.content.trim() : "";
+        if (keys.length === 0 || text === "" || item.enabled === false) {
+          scanStrings([item.keys, item.content], path, "EXCLUDED");
+          addFinding(path, "FIELD_CONSTRAINT", "WARNING", "EXCLUDED", entry, "Not a usable world book entry (it needs keys and content, and must not be switched off)");
+          return;
+        }
+        if (worldCandidates.length >= MAX_WORLD_ENTRIES) {
+          scanStrings([item.keys, item.content], path, "EXCLUDED");
+          addFinding(path, "FIELD_CONSTRAINT", "WARNING", "EXCLUDED", entry, `Only the first ${MAX_WORLD_ENTRIES} world book entries are offered`);
+          return;
+        }
+        const before = findings.length;
+        scanStrings(item.keys, `${path}.keys`);
+        scanStrings(item.content, `${path}.content`);
+        const blockedBy = findings.slice(before).map((finding) => finding.id);
+        if (keys.some((key) => Array.from(key).length > MAX_WORLD_KEY_LENGTH)) {
+          blockedBy.push(addFinding(`${path}.keys`, "FIELD_CONSTRAINT", "BLOCK", "CANDIDATE_BLOCKED", item.keys, `A trigger word exceeds ${MAX_WORLD_KEY_LENGTH} characters`));
+        }
+        if (keys.length > MAX_WORLD_KEYS) {
+          addFinding(`${path}.keys`, "FIELD_CONSTRAINT", "INFO", "OWNER_REVIEW", item.keys, `Only the first ${MAX_WORLD_KEYS} trigger words are kept`);
+        }
+        if (Array.from(text).length > MAX_WORLD_BODY_LENGTH) {
+          addFinding(`${path}.content`, "FIELD_CONSTRAINT", "INFO", "OWNER_REVIEW", item.content, `Cut to ${MAX_WORLD_BODY_LENGTH} characters`);
+        }
+        worldCandidates.push(candidate(`candidate-world-${index + 1}`, "worldEntry",
+          Object.freeze({ keys: Object.freeze(keys.slice(0, MAX_WORLD_KEYS)), body: cutTo(text, MAX_WORLD_BODY_LENGTH) }), path, blockedBy));
+      });
     }
   }
 
@@ -276,7 +350,29 @@ export function parseCharacterCard(payload: Uint8Array): ParseResult {
   if (!candidates.some((entry) => entry.field === "displayName")) {
     throw new ImportPolicyError("IMPORT_NAME_REQUIRED", "A non-empty character name is required.");
   }
-  candidates.push(...memoryCandidates);
+  // The card's example dialogue (`mes_example`): offered as the persona's 示例对话, cut to what the models are told.
+  const example = data.mes_example;
+  if (typeof example === "string") {
+    const path = `${prefix}.mes_example`;
+    const whole = exampleDialogue(example, (data.name as string).trim());
+    const kept = cutTo(whole, MAX_EXAMPLE_LENGTH);
+    if (kept !== whole) {
+      addFinding(path, "FIELD_CONSTRAINT", "INFO", "OWNER_REVIEW", example, `Cut to ${MAX_EXAMPLE_LENGTH} characters`);
+    }
+    if (kept !== "") {
+      let blockedBy = (findingIdsByPath.get(path) ?? []).filter((id) => blockingIds.has(id));
+      if (blockedBy.length === 0) {
+        // Nothing wrong with it as the card has it. But what is kept is not what the card has: the
+        // name is put in and the <START> lines are taken out, and that can make an instruction or a
+        // link out of two harmless halves. So it is scanned once more, as it is kept.
+        const before = findings.length;
+        scanStrings(kept, path);
+        blockedBy = findings.slice(before).map((finding) => finding.id);
+      }
+      candidates.push(candidate("candidate-dialogueExamples", "dialogueExamples", kept, path, blockedBy));
+    }
+  }
+  candidates.push(...memoryCandidates, ...worldCandidates);
 
   return Object.freeze({
     sourceFormat: isV2 ? "CHARACTER_CARD_JSON_V2" : "LEGACY_CHARACTER_JSON",

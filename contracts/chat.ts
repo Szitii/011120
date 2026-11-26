@@ -238,7 +238,67 @@ export interface ChatSettings {
    * Always sent; on PUT, leaving it out keeps the current one.
    */
   proactive?: "OFF" | "SOMETIMES" | "OFTEN";
+  /**
+   * 正则替换: up to 10 rules run, in order, over every message the Companion says in chat (not the
+   * diary, not posts), before it is shown. Always sent ([] when there are none); on PUT, leaving it
+   * out keeps the current list and [] clears it. 400: more than 10, an unknown field, or a pattern
+   * that is empty, longer than 200 characters or not a valid regular expression.
+   */
+  replyRules?: ReplyRule[];
   revision: number;
+}
+
+/** One 正则替换 rule: every match of `pattern` in a message becomes `replacement`. */
+export interface ReplyRule {
+  /** A JavaScript regular expression, 1 to 200 characters, e.g. "（[^）]*）" (anything in full-width brackets). */
+  pattern: string;
+  /** Any of g i m s u, each once. Default "g": every match (without g, only the first). */
+  flags?: string;
+  /** What takes the match's place, up to 200 characters; $1 is the first group. Default "": the match is removed. */
+  replacement?: string;
+  /** Default true. A rule that is off is kept but not run. */
+  enabled?: boolean;
+}
+
+/**
+ * 世界书: one piece of background a Companion knows ("小白：主人养的猫，三岁，怕打雷"). It is told
+ * to the model only while one of its `keys` appears in the last few messages of the conversation.
+ * GET /v0/companions/{id}/world-entries; at most 100 per Companion.
+ */
+export interface WorldEntry {
+  id: string;
+  /** 1 to 8 trigger words, each 1 to 40 characters; matched anywhere in the text, whatever the case. */
+  keys: string[];
+  /** 1 to 1000 characters. */
+  body: string;
+  /** false: kept but never told to the model. */
+  enabled: boolean;
+  /** IMPORT: approved from a card's world book. OWNER: written by hand. */
+  source: "IMPORT" | "OWNER";
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** GET /v0/companions/{id}/world-entries: every entry, in the order they were written. */
+export interface WorldEntryList {
+  items: WorldEntry[];
+}
+
+/** POST (a new entry) and PUT (the whole entry rewritten) of a world entry. `enabled` left out: true. */
+export interface WorldEntryInput {
+  keys: string[];
+  body: string;
+  enabled?: boolean;
+}
+
+/**
+ * 422 from POST or PUT of a world entry: the text may not be kept, for the same reasons as a persona
+ * text (it is sent to the model). `field` says which part.
+ */
+export interface WorldEntryRefusal {
+  code: "WORLD_ENTRY_REFUSED";
+  field: "keys" | "body";
+  reason: PersonaRefusal["reason"];
 }
 
 /** One voice the Owner can pick for a Companion (GET /v0/voices). Hear it at GET /v0/voices/{id}/sample. */
@@ -377,6 +437,11 @@ export interface CompanionPersona {
   boundaries: string;
   /** 向往 */
   aspirations: string;
+  /**
+   * 示例对话: a few lines that show how the Companion speaks (line breaks kept), up to 1500
+   * characters. The model learns the tone from them, not the content. Always sent ("" when there is none).
+   */
+  dialogueExamples: string;
 }
 
 /**
@@ -388,6 +453,13 @@ export type PersonaInput = { version: number } & Partial<Pick<CompanionPersona,
   "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations">>;
 
 /**
+ * PUT persona takes the example dialogue too (示例对话, up to 1500 characters, "" takes it out). It
+ * is a type of its own so that an app written against PersonaInput's six fields keeps compiling
+ * until it shows this one.
+ */
+export type PersonaWithExamplesInput = PersonaInput & Partial<Pick<CompanionPersona, "dialogueExamples">>;
+
+/**
  * 422 from PUT persona: one field holds something that may not be kept, and nothing was saved.
  * CREDENTIAL: a key or password. PRIVATE_DATA: an e-mail address or a phone number (a long run of
  * digits, a date written like 2026-12-03 too). INSTRUCTION: text that reads as an order to the
@@ -395,7 +467,7 @@ export type PersonaInput = { version: number } & Partial<Pick<CompanionPersona,
  */
 export interface PersonaRefusal {
   code: "PERSONA_REFUSED";
-  field: "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations";
+  field: "identitySummary" | "personaTraits" | "speakingStyle" | "values" | "boundaries" | "aspirations" | "dialogueExamples";
   reason: "CREDENTIAL" | "PRIVATE_DATA" | "INSTRUCTION" | "LINK";
 }
 

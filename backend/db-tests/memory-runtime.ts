@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool } from "../src/persistence/postgres/index.ts";
-import type { CompanionMemory, CompanionPersona, MemoryList, PersonaRefusal } from "../../contracts/chat.ts";
+import type { CompanionMemory, CompanionPersona, MemoryList, PersonaRefusal, WorldEntry, WorldEntryList, WorldEntryRefusal } from "../../contracts/chat.ts";
 
 // Long-term memories (migration 0047): added by hand or approved one by one from an imported card.
 const connectionString = process.env.DATABASE_URL;
@@ -112,6 +112,72 @@ try {
     forged.release();
   }
   passed("the Owner reads and rewrites a persona: a new version each time, scanned first, the name and other Owners' Companions untouched");
+
+  // ---- 示例对话 and 世界书: from a card, and by hand ----
+  const rich = { spec: "chara_card_v2", data: { name: "Lore", description: "Knows the town.",
+    mes_example: "<START>\n{{user}}: 回来了\n{{char}}: 你可算回来了",
+    character_book: { entries: [
+      { keys: ["小白", "猫"], content: "小白是镇上的猫" }, { keys: ["钟楼"], content: "钟楼每天六点敲钟" }, { keys: ["密钥"], content: "api_key: sk-abcdefghijklmnop1234" }] } } };
+  const lore = (await call<Review>(0, "companion-imports", "POST", rich)).data;
+  assert.deepEqual(lore.draft.candidates.filter(c => c.field === "dialogueExamples" || c.field === "worldEntry").map(c => [c.id, c.approvable, c.value]), [
+    ["candidate-dialogueExamples", true, "主人: 回来了\nLore: 你可算回来了"],
+    ["candidate-world-1", true, { keys: ["小白", "猫"], body: "小白是镇上的猫" }], ["candidate-world-2", true, { keys: ["钟楼"], body: "钟楼每天六点敲钟" }],
+    ["candidate-world-3", false, undefined]], "a blocked entry's text is never sent back");
+  assert.equal((await call(0, `companion-imports/${lore.id}/approve`, "POST", { approvedCandidateIds: ["candidate-displayName", "candidate-world-3"] })).status, 400);
+  const loreId = (await call<{ companionId: string }>(0, `companion-imports/${lore.id}/approve`, "POST",
+    { approvedCandidateIds: ["candidate-displayName", "candidate-dialogueExamples", "candidate-world-2"] })).data.companionId;
+  const book = `companions/${loreId}/world-entries`;
+  const entries = async () => (await call<WorldEntryList>(0, book)).data.items;
+  assert.deepEqual((await entries()).map(e => [e.keys, e.body, e.enabled, e.source]), [[["钟楼"], "钟楼每天六点敲钟", true, "IMPORT"]], "only the approved entry");
+  // The same card approved into a Companion again: an entry it already has word for word is not added twice.
+  const approveRich = async (ids: string[], companionId?: string) => call<{ companionId: string }>(0,
+    `companion-imports/${(await call<Review>(0, "companion-imports", "POST", rich)).data.id}/approve`, "POST", { approvedCandidateIds: ids, ...(companionId ? { companionId } : {}) });
+  const twiceId = (await approveRich(["candidate-displayName", "candidate-world-2"])).data.companionId;
+  assert.equal((await approveRich(["candidate-displayName", "candidate-world-1", "candidate-world-2"], twiceId)).status, 201);
+  assert.deepEqual((await call<WorldEntryList>(0, `companions/${twiceId}/world-entries`)).data.items.map(e => e.body), ["钟楼每天六点敲钟", "小白是镇上的猫"]);
+  assert.equal((await call(0, `companions/${twiceId}`, "DELETE")).status, 200);
+  const spoken = (await call<CompanionPersona>(0, `companions/${loreId}/persona`)).data;
+  assert.deepEqual([spoken.version, spoken.dialogueExamples, spoken.identitySummary], [1, "主人: 回来了\nLore: 你可算回来了", ""], "the example dialogue is part of the persona");
+  const reworded = await call<CompanionPersona>(0, `companions/${loreId}/persona`, "PUT", { version: 1, dialogueExamples: " 主人：回来了\nLore：哼，才想起我 " });
+  assert.deepEqual([reworded.status, reworded.data.version, reworded.data.dialogueExamples], [200, 2, "主人：回来了\nLore：哼，才想起我"]);
+  assert.equal((await call(0, `companions/${loreId}/persona`, "PUT", { version: 2, dialogueExamples: "例".repeat(1501) })).status, 400);
+  assert.equal((await call<CompanionPersona>(0, `companions/${loreId}/persona`, "PUT", { version: 2, dialogueExamples: "" })).data.dialogueExamples, "");
+
+  const made = await call<WorldEntry>(0, book, "POST", { keys: [" 小白 ", "猫", "小白"], body: " 小白怕打雷 " });
+  assert.deepEqual([made.status, made.data.keys, made.data.body, made.data.enabled, made.data.source], [201, ["小白", "猫"], "小白怕打雷", true, "OWNER"]);
+  assert.equal((await call<WorldEntry>(0, book, "POST", { keys: ["小白", "猫"], body: "小白怕打雷" })).data.id, made.data.id, "the same entry again adds nothing");
+  const rewritten = await call<WorldEntry>(0, `${book}/${made.data.id}`, "PUT", { keys: ["小白"], body: "小白怕打雷，也怕吸尘器", enabled: false });
+  assert.deepEqual([rewritten.status, rewritten.data.keys, rewritten.data.body, rewritten.data.enabled], [200, ["小白"], "小白怕打雷，也怕吸尘器", false]);
+  assert.deepEqual((await entries()).map(e => e.body), ["钟楼每天六点敲钟", "小白怕打雷，也怕吸尘器"], "in the order they were written");
+  const refusedEntry = await call<WorldEntryRefusal>(0, book, "POST", { keys: ["电话"], body: "打 13800138000" });
+  assert.deepEqual([refusedEntry.status, refusedEntry.data], [422, { code: "WORLD_ENTRY_REFUSED", field: "body", reason: "PRIVATE_DATA" }]);
+  assert.equal((await call(0, book, "POST", { keys: [], body: "没有触发词" })).status, 400);
+  for (const [who, path, method, body] of [[1, book, "GET", undefined], [1, book, "POST", { keys: ["a"], body: "偷偷加" }],
+    [1, `${book}/${made.data.id}`, "PUT", { keys: ["a"], body: "偷偷改" }], [1, `${book}/${made.data.id}`, "DELETE", undefined],
+    [0, `companions/${A.companion}/world-entries/${made.data.id}`, "DELETE", undefined], [0, `${book}/${randomUUID()}`, "PUT", { keys: ["a"], body: "不存在" }]] as const) {
+    assert.equal((await call(who, path, method, body)).status, 404, `${method} ${path}`);
+  }
+  assert.equal((await pool.query("select count(*)::int n from public.audit_events where companion_id = $1 and action = 'WORLD_ENTRY_SAVE'", [loreId])).rows[0]!.n, 2);
+  assert.deepEqual((await call(0, `${book}/${made.data.id}`, "DELETE")).data, { deleted: true });
+  await pool.query(`insert into companion_private.world_entries(companion_id, keys, body, source)
+    select $1, array['词' || i], '设定 ' || i, 'OWNER' from generate_series(1, 99) i`, [loreId]);
+  assert.equal((await call(0, book, "POST", { keys: ["多"], body: "第 101 条" })).status, 409, "at most 100");
+  const forgedEntry = await pool.connect();
+  try {
+    await forgedEntry.query("begin");
+    await forgedEntry.query("set local role authenticated");
+    await forgedEntry.query(`select set_config('request.jwt.claim.sub', $1, true)`, [A.subject]);
+    await forgedEntry.query("savepoint s");
+    await assert.rejects(forgedEntry.query("select public.world_save($1, null, array['a'], 'no scan', true)", [loreId]), /permission denied/);
+    await forgedEntry.query("rollback to savepoint s");
+    await assert.rejects(forgedEntry.query("select * from companion_private.world_entries"), /permission denied/);
+  } finally {
+    await forgedEntry.query("rollback");
+    forgedEntry.release();
+  }
+  assert.equal((await call(0, `companions/${loreId}`, "DELETE")).status, 200);
+  assert.equal((await pool.query("select count(*)::int n from companion_private.world_entries where companion_id = $1", [loreId])).rows[0]!.n, 0);
+  passed("example dialogue and the world book: offered by a card, approved one by one, rewritten by the Owner after a scan, Owner-scoped, 100 entries at most");
 
   // ---- delete and the limit ----
   assert.deepEqual((await call(0, `${path}/${added.data.id}`, "DELETE")).data, { deleted: true });

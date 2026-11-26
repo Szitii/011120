@@ -24,6 +24,8 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET|POST /v0/companions/{id}/world-entries         its world book; { keys, body, enabled? } adds an entry
+ *   PUT|DELETE /v0/companions/{id}/world-entries/{entryId}  rewrite or delete one
  *   GET    /v0/companions/{id}/reminders               the reminders it still has to deliver
  *   DELETE /v0/companions/{id}/reminders/{reminderId}  cancel one
  *   GET|PUT /v0/companions/{id}/persona                who it is and how it talks, as the Owner wrote it
@@ -43,7 +45,7 @@
  * while replies are on the way, the replies are written in the background (see replies.ts).
  */
 import { sha256 } from "../companion-import/canonical.ts";
-import { hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
+import { MAX_WORLD_BODY_LENGTH, MAX_WORLD_KEY_LENGTH, MAX_WORLD_KEYS, hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
 import type { ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
@@ -51,8 +53,9 @@ import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
-import type { CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal } from "../../../contracts/chat.ts";
-import { PERSONA_CHARS, PERSONA_KEYS, personaTexts, type PersonaKey } from "./prompt.ts";
+import type { CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, WorldEntryRefusal } from "../../../contracts/chat.ts";
+import { PERSONA_KEYS, personaLimit, personaTexts, type PersonaKey } from "./prompt.ts";
+import { checkRules } from "./reply-rules.ts";
 import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
 import { RECORDING_TYPES, type Heard, type RecordingType, type Voices } from "./voices.ts";
@@ -102,18 +105,25 @@ function personaRefusal(text: string): PersonaRefusal["reason"] | null {
     : hasPii(text) ? "PRIVATE_DATA" : null;
 }
 
-/** PUT persona: the version the Owner was looking at, and at least one field (a text of up to 600 characters, "" takes it out). */
+/** PUT persona: the version the Owner was looking at, and at least one field (a text of up to 600 characters, 1500 for the example dialogue; "" takes it out). */
 function personaInput(request: MvpHttpRequest): { version: number; fields: Partial<Record<PersonaKey, string>> } {
   const input = body(request, ["version", ...PERSONA_KEYS]);
   const fields: Partial<Record<PersonaKey, string>> = {};
   for (const key of PERSONA_KEYS) {
     const value = input[key];
     if (value === undefined) continue;
-    if (typeof value !== "string" || Array.from(value.trim()).length > PERSONA_CHARS) return invalid();
+    if (typeof value !== "string" || Array.from(value.trim()).length > personaLimit(key)) return invalid();
     fields[key] = value.trim();
   }
   if (!Number.isSafeInteger(input.version) || (input.version as number) < 1 || Object.keys(fields).length === 0) return invalid();
   return { version: input.version as number, fields };
+}
+
+/** A world book entry as sent: 1 to 8 trigger words of 1 to 40 characters on one line, and a text of 1 to 1000 characters. */
+function worldEntry(request: MvpHttpRequest): { keys: string[]; body: string; enabled: boolean } {
+  const { keys, body: entry, enabled } = body(request, ["keys", "body", "enabled"]);
+  if (!Array.isArray(keys) || keys.length < 1 || keys.length > MAX_WORLD_KEYS || !(enabled === undefined || typeof enabled === "boolean")) return invalid();
+  return { keys: keys.map(key => line(key, MAX_WORLD_KEY_LENGTH)), body: text(entry, MAX_WORLD_BODY_LENGTH), enabled: enabled !== false };
 }
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
@@ -130,15 +140,22 @@ function text(value: unknown, max: number): string {
   return length >= 1 && length <= max ? trimmed : invalid();
 }
 
+/** The same, on one line: no control characters. */
+function line(value: unknown, max: number): string {
+  const trimmed = text(value, max);
+  return /[\p{Cc}\u2028\u2029]/u.test(trimmed) ? invalid() : trimmed;
+}
+
 /**
- * Every setting is required but `voice`, `preferredUserTitle`, `autoMemory` and `proactive`, which
- * keep their current value when left out. `model` is null (platform default) or an id from the catalog;
+ * Every setting is required but `voice`, `preferredUserTitle`, `autoMemory`, `proactive` and `replyRules`,
+ * which keep their current value when left out. `model` is null (platform default) or an id from the catalog;
  * `voice` is null (text only) or an id from the voice catalog; `preferredUserTitle` is null or
  * empty (the default) or 1 to 20 characters on one line.
  */
 function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined, voices: Voices | undefined): ChatSettings {
-  const { groupActivity, companionInteraction, model, voice, preferredUserTitle: title, autoMemory, proactive, revision } =
-    body(request, ["groupActivity", "companionInteraction", "model", "voice", "preferredUserTitle", "autoMemory", "proactive", "revision"]);
+  const { groupActivity, companionInteraction, model, voice, preferredUserTitle: title, autoMemory, proactive, replyRules, revision } =
+    body(request, ["groupActivity", "companionInteraction", "model", "voice", "preferredUserTitle", "autoMemory", "proactive", "replyRules", "revision"]);
+  const rules = replyRules === undefined ? undefined : checkRules(replyRules);
   if (!["QUIET", "NORMAL", "ACTIVE"].includes(groupActivity as string)
     || !["NONE", "RARE", "NORMAL", "LIVELY"].includes(companionInteraction as string)
     || !(model === null || (typeof model === "string" && catalog?.has(model)))
@@ -147,11 +164,13 @@ function settings(request: MvpHttpRequest, catalog: ChatCatalog | undefined, voi
       && !/[\p{Cc}\u2028\u2029]/u.test(title.trim())))
     || !(autoMemory === undefined || ["OFF", "SOMETIMES", "OFTEN"].includes(autoMemory as string))
     || !(proactive === undefined || ["OFF", "SOMETIMES", "OFTEN"].includes(proactive as string))
+    || rules === null
     || !Number.isInteger(revision) || (revision as number) < 1 || (revision as number) > 2147483647) return invalid();
   return {
     groupActivity, companionInteraction, model, ...(voice === undefined ? {} : { voice }),
     ...(title === undefined ? {} : { preferredUserTitle: (title as string | null)?.trim() || null }),
-    ...(autoMemory === undefined ? {} : { autoMemory }), ...(proactive === undefined ? {} : { proactive }), revision,
+    ...(autoMemory === undefined ? {} : { autoMemory }), ...(proactive === undefined ? {} : { proactive }),
+    ...(rules === undefined ? {} : { replyRules: rules }), revision,
   } as ChatSettings;
 }
 
@@ -276,6 +295,7 @@ export async function handleChatRequest(
   const feedbackRoute = path[1] === "feedback" && (path.length === 2 || (path.length === 4 && ["messages", "read"].includes(path[3]!)));
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
   const remindersRoute = path[1] === "companions" && path[3] === "reminders" && (path.length === 4 || path.length === 5);
+  const worldRoute = path[1] === "companions" && path[3] === "world-entries" && (path.length === 4 || path.length === 5);
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
@@ -284,8 +304,8 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, personaRoute, connectionRoute, voicesRoute,
-    agentKeysRoute].includes(true);
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, personaRoute, connectionRoute,
+    voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
@@ -429,6 +449,20 @@ export async function handleChatRequest(
     const memory = text(body(request, ["body"]).body, 500);
     if (hasCredential(memory)) return invalid();
     return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
+  }
+  if (worldRoute) {
+    const companionId = id(path[2]);
+    if (path.length === 4 && method === "GET") return response(200, await port.worldEntries(companionId));
+    if (path.length === 5 && method === "DELETE") return response(200, await port.deleteWorldEntry(companionId, id(path[4])));
+    if (!(path.length === 4 && method === "POST") && !(path.length === 5 && method === "PUT")) return notFound();
+    const entryId = path.length === 5 ? id(path[4]) : null;
+    const entry = worldEntry(request);
+    // An entry is sent to the model like a persona text: the same scan, on the words and on the text.
+    for (const [field, text] of [["keys", entry.keys.join("\n")], ["body", entry.body]] as const) {
+      const reason = personaRefusal(text);
+      if (reason !== null) return response(422, { code: "WORLD_ENTRY_REFUSED", field, reason } satisfies WorldEntryRefusal);
+    }
+    return response(entryId === null ? 201 : 200, await port.saveWorldEntry(companionId, entryId, entry.keys, entry.body, entry.enabled));
   }
   if (remindersRoute) {
     const companionId = id(path[2]);
