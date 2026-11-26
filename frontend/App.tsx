@@ -827,6 +827,8 @@ function WorldApp({ client, account, isMockMode }: {
             api={client.api}
             viewer={viewer}
             chatClient={canUseChat ? client.api.chat : undefined}
+            ownerId={ownerId}
+            draftStore={canUseChat ? chatDrafts : undefined}
             companions={ownerCompanions.kind === "success" ? ownerCompanions.value.items : []}
             visible={messagesVisible}
             onChat={chat => openFromTab("messages", {

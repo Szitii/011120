@@ -10,6 +10,10 @@ export type ChatDraft = {
  */
 export interface ChatDraftStore {
   read(key: string | undefined): ChatDraft;
+  /**
+   * Read-only lookup by accountId and chatId without changing existing key-based APIs.
+   */
+  readByChatId(accountId: string | undefined, chatId: string | undefined): ChatDraft;
   write(key: string | undefined, draft: ChatDraft): void;
   clear(key: string | undefined): void;
   /**
@@ -18,6 +22,7 @@ export interface ChatDraftStore {
    * the text the owner just typed; otherwise the resolved draft is kept.
    */
   adopt(from: string | undefined, to: string | undefined): ChatDraft;
+  subscribe?(listener: () => void): () => void;
 }
 
 const emptyDraft = (): ChatDraft => ({ text: "", mentions: [] });
@@ -34,6 +39,11 @@ export function chatDraftKey(
 
 export function createChatDraftStore(): ChatDraftStore {
   const drafts = new Map<string, ChatDraft>();
+  const listeners = new Set<() => void>();
+
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
 
   const read = (key: string | undefined): ChatDraft => {
     if (!key) return emptyDraft();
@@ -41,20 +51,39 @@ export function createChatDraftStore(): ChatDraftStore {
     return value ? { text: value.text, mentions: [...value.mentions] } : emptyDraft();
   };
 
-  const write = (key: string | undefined, draft: ChatDraft) => {
-    if (!key) return;
+  const readByChatId = (accountId: string | undefined, chatId: string | undefined): ChatDraft => {
+    if (!accountId || !chatId) return emptyDraft();
+    return read(chatDraftKey(accountId, { chatId }));
+  };
+
+  const setEntry = (key: string, draft: ChatDraft): boolean => {
     if (draft.text === "" && draft.mentions.length === 0) {
-      drafts.delete(key);
-      return;
+      return drafts.delete(key);
+    }
+    const prev = drafts.get(key);
+    if (
+      prev &&
+      prev.text === draft.text &&
+      prev.mentions.length === draft.mentions.length &&
+      prev.mentions.every((id, index) => id === draft.mentions[index])
+    ) {
+      return false;
     }
     drafts.set(key, { text: draft.text, mentions: [...draft.mentions] });
+    return true;
+  };
+
+  const write = (key: string | undefined, draft: ChatDraft) => {
+    if (!key) return;
+    if (setEntry(key, draft)) notify();
   };
 
   return {
     read,
+    readByChatId,
     write,
     clear: key => {
-      if (key) drafts.delete(key);
+      if (key && drafts.delete(key)) notify();
     },
     adopt: (from, to) => {
       if (!to || !from || from === to) return read(to ?? from);
@@ -62,9 +91,16 @@ export function createChatDraftStore(): ChatDraftStore {
       const chosen = provisional.text !== "" || provisional.mentions.length > 0
         ? provisional
         : read(to);
-      drafts.delete(from);
-      write(to, chosen);
+      const removed = drafts.delete(from);
+      const updated = setEntry(to, chosen);
+      if (removed || updated) notify();
       return read(to);
+    },
+    subscribe: listener => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
   };
 }

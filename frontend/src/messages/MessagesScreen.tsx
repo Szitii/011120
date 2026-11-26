@@ -1,19 +1,95 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ActivityIndicator, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat } from "../../../contracts/chat";
 import type { ActorContext, CommunityNotification } from "../../../contracts/community";
 import { safeClientMessage } from "../adapters/real-api";
 import { formatChatAction } from "../chat/actions";
 import type { ChatClient } from "../chat/client";
+import type { ChatDraftStore } from "../chat/draftStore";
 import { ActorLine, CommunityButton as Button, useCommunityStyles } from "../community/components";
 import { communityRequestKey, type CommunityClient } from "../community/client";
 import { PixelAvatar } from "../components/PixelAvatar";
+import { BottomSheet } from "../components/BottomSheet";
 import type { ClientApi, LifeEventInboxCollection, LifeEventInboxItem, OwnerCompanionSummary } from "../contracts";
 import type { CommunityTarget } from "../state/navigation";
 import { useAppIsActive } from "../state/useAppIsActive";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
+
+export interface ChatLocalPreference {
+  pinned?: boolean;
+  muted?: boolean;
+}
+
+export type ChatPreferenceMap = Record<string, ChatLocalPreference>;
+
+const EMPTY_CHAT_PREFERENCES: ChatPreferenceMap = {};
+const PICKER_MAX_SCREEN_FRACTION = 0.55;
+// The list unmounts when switching to notifications. Drain its writes before the next read.
+let chatPreferenceWrites = Promise.resolve();
+
+export function chatPrefsStorageKey(ownerId: string): string {
+  return `companion:chat-prefs:v1:${ownerId}`;
+}
+
+export function parseChatPreferences(raw: string | null): ChatPreferenceMap {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const record = (
+      "items" in parsed && parsed.items && typeof parsed.items === "object" && !Array.isArray(parsed.items)
+        ? parsed.items
+        : parsed
+    ) as Record<string, unknown>;
+    const next: ChatPreferenceMap = {};
+    for (const [chatId, value] of Object.entries(record)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const entry = value as Record<string, unknown>;
+      const pinned = entry.pinned === true;
+      const muted = entry.muted === true;
+      if (pinned || muted) {
+        next[chatId] = { pinned, muted };
+      }
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+export function serializeChatPreferences(prefs: ChatPreferenceMap): string {
+  const cleaned: ChatPreferenceMap = {};
+  for (const [chatId, pref] of Object.entries(prefs)) {
+    if (pref.pinned || pref.muted) {
+      cleaned[chatId] = { pinned: Boolean(pref.pinned), muted: Boolean(pref.muted) };
+    }
+  }
+  return JSON.stringify({ schemaVersion: 1, items: cleaned });
+}
+
+export function filterAndSortChats(
+  chats: readonly Chat[],
+  query: string,
+  prefs: ChatPreferenceMap,
+): Chat[] {
+  const normalized = query.trim().toLowerCase();
+  const filtered = normalized === ""
+    ? [...chats]
+    : chats.filter(chat => {
+        const title = (chat.title ?? "").toLowerCase();
+        if (title.includes(normalized)) return true;
+        return chat.members.some(member => member.displayName.toLowerCase().includes(normalized));
+      });
+  return filtered.sort((a, b) => {
+    const aPinned = prefs[a.id]?.pinned === true ? 1 : 0;
+    const bPinned = prefs[b.id]?.pinned === true ? 1 : 0;
+    return bPinned - aPinned;
+  });
+}
 
 function formatShortTime(iso?: string | null): string {
   if (!iso) return "";
@@ -38,10 +114,12 @@ function formatShortTime(iso?: string | null): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-export function MessagesScreen({ api, viewer, chatClient, companions, visible, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup, onCommunityTarget, onLife, onRead }: {
+export function MessagesScreen({ api, viewer, chatClient, ownerId, draftStore, companions, visible, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup, onCommunityTarget, onLife, onRead }: {
   api: ClientApi;
   viewer: ActorContext;
   chatClient?: ChatClient;
+  ownerId?: string;
+  draftStore?: ChatDraftStore;
   companions: OwnerCompanionSummary[];
   visible: boolean;
   onChat: (chat: Chat) => void;
@@ -94,6 +172,8 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
       {section === "chats" && chatClient && (
         <ConversationList
           client={chatClient}
+          ownerId={ownerId}
+          draftStore={draftStore}
           companions={companions}
           active={active}
           onChat={onChat}
@@ -114,8 +194,10 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   );
 }
 
-function ConversationList({ client, companions, active, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup }: {
+function ConversationList({ client, ownerId, draftStore, companions, active, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup }: {
   client: ChatClient;
+  ownerId?: string;
+  draftStore?: ChatDraftStore;
   companions: OwnerCompanionSummary[];
   active: boolean;
   onChat: (chat: Chat) => void;
@@ -130,6 +212,68 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [prefs, setPrefs] = useState<ChatPreferenceMap>(EMPTY_CHAT_PREFERENCES);
+  const [menuChat, setMenuChat] = useState<Chat | null>(null);
+  const [, bumpDraftRevision] = useState(0);
+  const prefsRef = useRef<ChatPreferenceMap | undefined>(undefined);
+  const [prefsReady, setPrefsReady] = useState(false);
+  const [prefsReadFailed, setPrefsReadFailed] = useState(false);
+  const [prefsSaveFailed, setPrefsSaveFailed] = useState(false);
+  const [prefsRetry, setPrefsRetry] = useState(0);
+  const prefsKey = ownerId ? chatPrefsStorageKey(ownerId) : undefined;
+  const { height: windowHeight } = useWindowDimensions();
+
+  useEffect(() => {
+    prefsRef.current = undefined;
+    setPrefs(EMPTY_CHAT_PREFERENCES);
+    setPrefsReady(false);
+    setPrefsReadFailed(false);
+    setPrefsSaveFailed(false);
+    if (!prefsKey) return;
+    let current = true;
+    void chatPreferenceWrites.then(() => AsyncStorage.getItem(prefsKey)).then(raw => {
+      if (!current) return;
+      const loaded = parseChatPreferences(raw);
+      prefsRef.current = loaded;
+      setPrefs(loaded);
+      setPrefsReady(true);
+    }).catch(() => { if (current) setPrefsReadFailed(true); });
+    return () => { current = false; };
+  }, [prefsKey, prefsRetry]);
+
+  useEffect(() => {
+    if (!active || !draftStore?.subscribe) return;
+    return draftStore.subscribe(() => {
+      bumpDraftRevision(value => value + 1);
+    });
+  }, [active, draftStore]);
+
+  const saveChatPrefs = useCallback((next: ChatPreferenceMap) => {
+    if (!prefsKey) return;
+    setPrefsSaveFailed(false);
+    const serialized = serializeChatPreferences(next);
+    const isEmpty = Object.keys(next).length === 0;
+    chatPreferenceWrites = chatPreferenceWrites
+      .then(() => isEmpty ? AsyncStorage.removeItem(prefsKey) : AsyncStorage.setItem(prefsKey, serialized))
+      .catch(() => { if (prefsRef.current === next) setPrefsSaveFailed(true); });
+  }, [prefsKey]);
+
+  const updateChatPref = useCallback((chatId: string, patch: Partial<ChatLocalPreference>) => {
+    const current = prefsRef.current;
+    if (!current) return;
+
+    const prev = current[chatId];
+    const pinned = patch.pinned ?? prev?.pinned ?? false;
+    const muted = patch.muted ?? prev?.muted ?? false;
+    const next: ChatPreferenceMap = { ...current };
+    if (pinned || muted) next[chatId] = { pinned, muted };
+    else delete next[chatId];
+    prefsRef.current = next;
+    setPrefs(next);
+    saveChatPrefs(next);
+  }, [saveChatPrefs]);
 
   useEffect(() => {
     if (!active) return;
@@ -149,13 +293,21 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
     return () => { current = false; };
   }, [client, active, reload]);
 
-  const linked = new Set(items?.filter(chat => chat.direct).flatMap(chat => chat.members.map(member => member.companionId)));
-  const available = items ? companions.filter(companion => !linked.has(companion.companionId)) : [];
+  const visibleChats = useMemo(
+    () => (items ? filterAndSortChats(items, searchQuery, prefs) : undefined),
+    [items, searchQuery, prefs],
+  );
+  const trimmedQuery = searchQuery.trim();
+  const menuTitle = menuChat
+    ? menuChat.title ?? (menuChat.members.map(member => member.displayName).join("、") || "会话")
+    : "";
+  const menuPref = menuChat ? prefs[menuChat.id] : undefined;
 
   return (
     <ScrollView
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -167,42 +319,90 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
         />
       }
     >
-      {onCreateGroup && companions.length >= 2 && (
+      <View style={styles.searchBar}>
+        <Ionicons name="search-outline" size={16} color={ui.muted} />
+        <TextInput
+          accessibilityLabel="搜索会话"
+          placeholder="搜索会话标题或成员"
+          placeholderTextColor={ui.placeholder}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          returnKeyType="search"
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={styles.searchInput}
+        />
+        {searchQuery !== "" && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="清空搜索"
+            onPress={() => setSearchQuery("")}
+            hitSlop={8}
+          >
+            <Ionicons name="close-circle" size={16} color={ui.muted} />
+          </Pressable>
+        )}
+      </View>
+
+      {companions.length > 0 && (
         <View style={styles.groupActionRow}>
-          <Button label="新建群聊" primary onPress={onCreateGroup} />
+          <Button label="发起对话" onPress={() => { Keyboard.dismiss(); setPickerOpen(true); }} />
+          {onCreateGroup && companions.length >= 2 && (
+            <Button label="新建群聊" primary onPress={onCreateGroup} />
+          )}
         </View>
       )}
       {error !== "" && <Text accessibilityRole="alert" style={styles.errorText}>{error}</Text>}
+      {prefsSaveFailed && <View>
+        <Text accessibilityRole="alert" style={styles.errorText}>会话偏好暂未保存。</Text>
+        <Button label="重试保存" onPress={() => { if (prefsRef.current) saveChatPrefs(prefsRef.current); }} />
+      </View>}
       {!items && !error && loading && <ActivityIndicator accessibilityLabel="正在读取会话" color={ui.accent} style={{ marginVertical: 20 }} />}
 
-      {items && items.length > 0 && (
+      {visibleChats && visibleChats.length > 0 && (
         <View style={styles.listCard}>
-          {items.map((chat, index) => {
+          {visibleChats.map((chat, index) => {
             const title = chat.title ?? (chat.members.map(member => member.displayName).join("、") || "会话");
             const last = chat.lastMessage;
-            const preview = last?.action
+            const draft = draftStore?.readByChatId(ownerId, chat.id);
+            const draftPreviewText = draft ? draft.text.replace(/\s+/g, " ").trim() : "";
+            const hasDraft = Boolean(draft && (draftPreviewText !== "" || draft.mentions.length > 0));
+            const fallbackPreview = last?.action
               ? formatChatAction(last.action, last.companionId)
               : last?.status === "SENT" && last.body
                 ? last.body
                 : "轻点开始聊聊";
             const timeStr = formatShortTime(last?.sentAt ?? chat.activeAt);
+            const pref = prefs[chat.id];
+            const isPinned = pref?.pinned === true;
+            const isMuted = pref?.muted === true;
             const hasUnread = Boolean(chat.unreadCount && chat.unreadCount > 0);
             const member = chat.direct ? chat.members[0] : undefined;
             const openChat = () => onChat(chat);
+            const openMenu = () => { Keyboard.dismiss(); setMenuChat(chat); };
             const openProfile = member && onOpenCompanionProfile
               ? () => onOpenCompanionProfile(member.companionId, chat.id)
               : undefined;
             return (
-              <View key={chat.id} style={[styles.chatRow, index < items.length - 1 && styles.chatRowDivider]}>
+              <View
+                key={chat.id}
+                style={[
+                  styles.chatRow,
+                  isPinned && styles.chatRowPinned,
+                  index < visibleChats.length - 1 && styles.chatRowDivider,
+                ]}
+              >
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={openProfile ? `查看 ${title} 的主页` : `打开 ${title} 的会话`}
                   onPress={openProfile ?? openChat}
+                  onLongPress={openMenu}
+                  delayLongPress={320}
                   style={styles.avatarWrap}
                   hitSlop={4}
                 >
                   <PixelAvatar name={title} role="companion" uri={member?.avatar} size={46} />
-                  {hasUnread && <View style={styles.unreadDot} />}
+                  {hasUnread && <View style={[styles.unreadDot, isMuted && styles.unreadDotMuted]} />}
                 </Pressable>
                 <View style={styles.chatMain}>
                   <View style={styles.chatHeaderRow}>
@@ -210,29 +410,71 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
                       accessibilityRole="button"
                       accessibilityLabel={openProfile ? `查看 ${title} 的主页` : `打开 ${title} 的会话`}
                       onPress={openProfile ?? openChat}
+                      onLongPress={openMenu}
+                      delayLongPress={320}
                       style={styles.chatTitlePress}
                     >
-                      <Text style={styles.chatTitle} numberOfLines={1}>
-                        {title}{chat.direct ? "" : " · 群聊"}
-                      </Text>
+                      <View style={styles.chatTitleWrap}>
+                        {isPinned && (
+                          <Ionicons
+                            name="pin-outline"
+                            size={13}
+                            color={ui.accentInk}
+                            accessibilityLabel="已置顶"
+                            style={styles.pinIcon}
+                          />
+                        )}
+                        <Text style={styles.chatTitle} numberOfLines={1}>
+                          {title}{chat.direct ? "" : " · 群聊"}
+                        </Text>
+                      </View>
                     </Pressable>
                     {!!timeStr && (
-                      <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${title} 的会话`} onPress={openChat}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`打开 ${title} 的会话`}
+                        onPress={openChat}
+                        onLongPress={openMenu}
+                        delayLongPress={320}
+                      >
                         <Text style={styles.chatTime}>{timeStr}</Text>
                       </Pressable>
                     )}
                   </View>
-                  <Pressable accessibilityRole="button" accessibilityLabel={`打开 ${title} 的会话`} onPress={openChat}
-                    style={({ pressed }) => pressed && styles.chatMainPressed}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`打开 ${title} 的会话`}
+                    onPress={openChat}
+                    onLongPress={openMenu}
+                    delayLongPress={320}
+                    style={({ pressed }) => pressed && styles.chatMainPressed}
+                  >
                     <View style={styles.chatFooterRow}>
-                      <Text style={styles.chatPreview} numberOfLines={1}>{preview}</Text>
-                      {hasUnread && (
-                        <View style={styles.unreadPill}>
-                          <Text style={styles.unreadCount}>
-                            {(chat.unreadCount ?? 0) > 99 ? "99+" : chat.unreadCount}
-                          </Text>
-                        </View>
+                      {hasDraft ? (
+                        <Text style={styles.chatPreview} numberOfLines={1}>
+                          <Text style={styles.draftTag}>[草稿] </Text>
+                          {draftPreviewText || "已提及成员"}
+                        </Text>
+                      ) : (
+                        <Text style={styles.chatPreview} numberOfLines={1}>{fallbackPreview}</Text>
                       )}
+                      <View style={styles.chatFooterRight}>
+                        {isMuted && (
+                          <Ionicons
+                            name="notifications-off-outline"
+                            size={14}
+                            color={ui.muted}
+                            accessibilityLabel="已免打扰"
+                          />
+                        )}
+                        {hasUnread && (
+                          <View style={[styles.unreadPill, isMuted && styles.unreadPillMuted]}>
+                            <Text style={[styles.unreadCount, isMuted && styles.unreadCountMuted]}>
+                              {(chat.unreadCount ?? 0) > 99 ? "99+" : chat.unreadCount}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
                     </View>
                   </Pressable>
                 </View>
@@ -242,47 +484,107 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onO
         </View>
       )}
 
-      {available.length > 0 && (
-        <View style={styles.startSection}>
-          <Text style={styles.sectionHint}>开始新对话</Text>
-          <View style={styles.listCard}>
-            {available.map((companion, index) => {
-              const startChat = () => onStartChat(companion);
-              const openProfile = onOpenCompanionProfile ? () => onOpenCompanionProfile(companion.companionId) : undefined;
-              return (
-                <View key={companion.companionId} style={[styles.chatRow, index < available.length - 1 && styles.chatRowDivider]}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={openProfile ? `查看 ${companion.displayName} 的主页` : `与 ${companion.displayName} 开始对话`}
-                    onPress={openProfile ?? startChat}
-                    hitSlop={4}
-                  >
-                    <PixelAvatar name={companion.displayName} role="companion" uri={companion.avatar} size={44} />
-                  </Pressable>
-                  <View style={styles.chatMain}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={openProfile ? `查看 ${companion.displayName} 的主页` : `与 ${companion.displayName} 开始对话`}
-                      onPress={openProfile ?? startChat}
-                      style={styles.chatTitlePress}
-                    >
-                      <Text style={styles.chatTitle} numberOfLines={1}>{companion.displayName}</Text>
-                    </Pressable>
-                    <Pressable accessibilityRole="button" accessibilityLabel={`与 ${companion.displayName} 开始对话`} onPress={startChat}
-                      style={({ pressed }) => pressed && styles.chatMainPressed}>
-                      <Text style={styles.chatPreview}>发第一条消息打个招呼</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        </View>
+      {items && items.length > 0 && visibleChats?.length === 0 && trimmedQuery !== "" && (
+        <Text style={styles.emptyText}>未找到匹配的会话。</Text>
       )}
 
-      {items?.length === 0 && available.length === 0 && (
-        <Text style={styles.emptyText}>还没有会话，下滑可刷新。</Text>
+      {items?.length === 0 && (
+        <Text style={styles.emptyText}>
+          {trimmedQuery !== ""
+            ? "暂无可搜索的会话。"
+            : companions.length > 0
+              ? "还没有会话，点「发起对话」开始。"
+              : "还没有会话，下滑可刷新。"}
+        </Text>
       )}
+
+      <BottomSheet
+        visible={menuChat !== null}
+        title={menuTitle}
+        onClose={() => setMenuChat(null)}
+      >
+        {menuChat && !prefsReady && (
+          prefsReadFailed
+            ? <Button label="重新加载会话偏好" onPress={() => setPrefsRetry(value => value + 1)} />
+            : <Text style={styles.menuFootnote}>{prefsKey ? "正在读取会话偏好…" : "当前账号无法保存会话偏好。"}</Text>
+        )}
+        {menuChat && prefsReady && (
+          <View style={styles.menuList}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={menuPref?.pinned ? "取消置顶" : "置顶会话"}
+              onPress={() => {
+                updateChatPref(menuChat.id, { pinned: !menuPref?.pinned });
+                setMenuChat(null);
+              }}
+              style={({ pressed }) => [styles.menuRow, pressed && styles.chatMainPressed]}
+            >
+              <Ionicons name="pin-outline" size={18} color={ui.accentInk} />
+              <Text style={styles.menuLabel}>{menuPref?.pinned ? "取消置顶" : "置顶会话"}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={menuPref?.muted ? "取消免打扰" : "设为免打扰"}
+              onPress={() => {
+                updateChatPref(menuChat.id, { muted: !menuPref?.muted });
+                setMenuChat(null);
+              }}
+              style={({ pressed }) => [styles.menuRow, pressed && styles.chatMainPressed]}
+            >
+              <Ionicons
+                name={menuPref?.muted ? "notifications-outline" : "notifications-off-outline"}
+                size={18}
+                color={ui.accentInk}
+              />
+              <Text style={styles.menuLabel}>{menuPref?.muted ? "取消免打扰" : "设为免打扰"}</Text>
+            </Pressable>
+            <Text style={styles.menuFootnote}>设置仅保存在当前设备。免打扰会淡化会话未读提示。</Text>
+          </View>
+        )}
+      </BottomSheet>
+
+      <BottomSheet visible={pickerOpen} title="发起新对话" onClose={() => setPickerOpen(false)}>
+        <ScrollView style={{ maxHeight: Math.round(windowHeight * PICKER_MAX_SCREEN_FRACTION) }}
+          contentContainerStyle={styles.pickerList} keyboardShouldPersistTaps="handled">
+          {companions.map(companion => {
+            const openCompanionProfile = onOpenCompanionProfile
+              ? () => {
+                  setPickerOpen(false);
+                  onOpenCompanionProfile(companion.companionId);
+                }
+              : undefined;
+            const existingChat = items?.find(chat => chat.direct
+              && chat.members.some(member => member.companionId === companion.companionId));
+            const openConversation = () => {
+              setPickerOpen(false);
+              if (existingChat) onChat(existingChat);
+              else onStartChat(companion);
+            };
+            return (
+              <View key={companion.companionId} style={styles.pickerRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={openCompanionProfile ? `查看 ${companion.displayName} 的主页` : `与 ${companion.displayName} 开始对话`}
+                  onPress={openCompanionProfile ?? openConversation}
+                  hitSlop={4}
+                >
+                  <PixelAvatar name={companion.displayName} role="companion" uri={companion.avatar} size={40} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={existingChat ? `继续与 ${companion.displayName} 的对话` : `与 ${companion.displayName} 开始新对话`}
+                  onPress={openConversation}
+                  style={({ pressed }) => [styles.pickerMain, pressed && styles.chatMainPressed]}
+                >
+                  <Text style={styles.pickerName} numberOfLines={1}>{companion.displayName}</Text>
+                  <Text style={styles.pickerMeta}>{existingChat ? "已有会话，继续聊" : "还没有会话，发第一条消息"}</Text>
+                </Pressable>
+                <Ionicons name="chevron-forward" size={15} color={ui.muted} />
+              </View>
+            );
+          })}
+        </ScrollView>
+      </BottomSheet>
     </ScrollView>
   );
 }
@@ -476,7 +778,24 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     paddingBottom: CHROME.scrollBottomClearance + 16,
     gap: 12,
   },
-  groupActionRow: { flexDirection: "row", justifyContent: "flex-end" },
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: ui.line,
+    backgroundColor: ui.white,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 8,
+    fontSize: 14,
+    color: ui.ink,
+  },
+  groupActionRow: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
   listCard: {
     borderRadius: 24,
     borderWidth: 1,
@@ -490,6 +809,9 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     gap: 12,
+  },
+  chatRowPinned: {
+    backgroundColor: ui.background[0],
   },
   chatRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -508,15 +830,26 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderWidth: 2,
     borderColor: ui.white,
   },
+  unreadDotMuted: {
+    backgroundColor: ui.muted,
+  },
   chatMain: { flex: 1, gap: 4 },
   chatTitlePress: { flex: 1 },
+  chatTitleWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  pinIcon: {
+    transform: [{ rotate: "35deg" }],
+  },
   chatHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
   },
-  chatTitle: { fontSize: 15.5, fontWeight: "700", color: ui.ink },
+  chatTitle: { fontSize: 15.5, fontWeight: "700", color: ui.ink, flexShrink: 1 },
   chatTime: { fontSize: 12, color: ui.muted },
   chatFooterRow: {
     flexDirection: "row",
@@ -524,7 +857,13 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     justifyContent: "space-between",
     gap: 8,
   },
+  chatFooterRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   chatPreview: { fontSize: 13.5, color: ui.muted, flex: 1 },
+  draftTag: { color: ui.accentInk, fontWeight: "600" },
   unreadPill: {
     minWidth: 18,
     height: 18,
@@ -534,9 +873,38 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  unreadPillMuted: {
+    backgroundColor: ui.accentWash,
+  },
   unreadCount: { fontSize: 10.5, fontWeight: "700", color: ui.onAccent },
-  startSection: { gap: 8, marginTop: 4 },
-  sectionHint: { fontSize: 12.5, fontWeight: "600", color: ui.muted, paddingLeft: 4 },
+  unreadCountMuted: { color: ui.muted },
+  menuList: { gap: 8 },
+  menuRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: ui.white,
+    borderWidth: 1,
+    borderColor: ui.line,
+  },
+  menuLabel: { fontSize: 15, fontWeight: "600", color: ui.ink },
+  menuFootnote: { fontSize: 12, color: ui.muted, textAlign: "center", paddingTop: 2 },
+  pickerList: { gap: 8 },
+  pickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: ui.background[0],
+  },
+  pickerMain: { flex: 1, gap: 2 },
+  pickerName: { fontSize: 15, fontWeight: "600", color: ui.ink },
+  pickerMeta: { fontSize: 12, color: ui.muted },
   emptyText: { fontSize: 13.5, color: ui.muted, textAlign: "center", paddingVertical: 32 },
   errorText: { fontSize: 13, color: ui.danger, textAlign: "center" },
 });

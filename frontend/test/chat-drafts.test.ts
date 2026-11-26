@@ -76,4 +76,33 @@ describe("in-memory chat drafts", () => {
     store.clear(key);
     assert.deepEqual(store.read(key), { text: "", mentions: [] });
   });
+
+  it("queries drafts by accountId and chatId via readByChatId without mutating state", () => {
+    const store = createChatDraftStore();
+    let notifications = 0;
+    const unsubscribe = store.subscribe?.(() => { notifications += 1; });
+
+    const aliceChat = chatDraftKey("owner-a", { chatId: "chat-42" });
+    const aliceCompanionOnly = chatDraftKey("owner-a", { companionId: "comp-1" });
+    assert.ok(aliceChat && aliceCompanionOnly);
+
+    store.write(aliceChat, { text: "草稿内容", mentions: ["comp-1"] });
+    store.write(aliceCompanionOnly, { text: "临时草稿", mentions: [] });
+
+    const queried = store.readByChatId("owner-a", "chat-42");
+    assert.deepEqual(queried, { text: "草稿内容", mentions: ["comp-1"] });
+    // Mutating returned object must not mutate stored draft.
+    queried.mentions.push("comp-2");
+    assert.deepEqual(store.readByChatId("owner-a", "chat-42"), { text: "草稿内容", mentions: ["comp-1"] });
+
+    assert.deepEqual(store.readByChatId("owner-b", "chat-42"), { text: "", mentions: [] });
+    assert.deepEqual(store.readByChatId(undefined, "chat-42"), { text: "", mentions: [] });
+    assert.deepEqual(store.readByChatId("owner-a", undefined), { text: "", mentions: [] });
+
+    const beforeClear = notifications;
+    store.clear(aliceChat);
+    assert.equal(notifications, beforeClear + 1);
+    assert.deepEqual(store.readByChatId("owner-a", "chat-42"), { text: "", mentions: [] });
+    unsubscribe?.();
+  });
 });
