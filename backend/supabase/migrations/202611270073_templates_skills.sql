@@ -119,13 +119,10 @@ end $$;
 -- Switches an official skill on or off for the Companion. A sixth one on is refused.
 create function public.skill_set(p_companion uuid, p_skill uuid, p_enabled boolean)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
+declare c uuid := companion_private.locked_companion(p_companion); -- first, so two requests cannot both count 4
+  o uuid := companion_private.chat_owner();
 begin
   if p_enabled is null then raise exception using errcode='22023', message='invalid skill'; end if;
-  -- The Companion first, so two requests cannot both count 4; and a save that waited for a deletion
-  -- under way finds the Companion gone instead of writing into it.
-  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
-  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   if not exists(select 1 from companion_private.skills where id = p_skill and enabled) then
     raise exception using errcode='P0001', message='skill not found';
   end if;
@@ -147,26 +144,24 @@ end $$;
 -- rewritten. Switching one on as the sixth is refused.
 create function public.own_skill_save(p_companion uuid, p_skill uuid, p_title text, p_body text, p_enabled boolean)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
+declare c uuid := companion_private.locked_companion(p_companion); o uuid := companion_private.chat_owner();
   s companion_private.own_skills%rowtype; v_title text := btrim(p_title); v_body text := btrim(p_body, E' \t\r\n'); was_on boolean := false;
 begin
   if v_title is null or v_title !~ '\S' or char_length(v_title) > 20 or v_title ~ '[[:cntrl:]]'
     or v_body is null or v_body !~ '\S' or char_length(v_body) > 600 or p_enabled is null then
     raise exception using errcode='22023', message='invalid skill';
   end if;
-  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
-  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   if p_skill is not null then
     select * into s from companion_private.own_skills where id = p_skill and companion_id = c;
     if not found then raise exception using errcode='P0001', message='skill not found'; end if;
     was_on := s.enabled;
-  elsif exists(select 1 from companion_private.own_skills where companion_id = c and title = v_title and body = v_body) then
+  else
     -- The same skill sent again (a retry): the one that is there, and nothing new.
-    select * into s from companion_private.own_skills where companion_id = c and title = v_title and body = v_body
-      order by created_at, id limit 1;
-    return companion_private.own_skill_json(s);
-  elsif (select count(*) from companion_private.own_skills where companion_id = c) >= 10 then
-    raise exception using errcode='55000', message='own skill limit reached';
+    select * into s from companion_private.own_skills where companion_id = c and title = v_title and body = v_body limit 1;
+    if found then return companion_private.own_skill_json(s); end if;
+    if (select count(*) from companion_private.own_skills where companion_id = c) >= 10 then
+      raise exception using errcode='55000', message='own skill limit reached';
+    end if;
   end if;
   if p_enabled and not was_on and companion_private.skills_on(c) >= 5 then
     raise exception using errcode='55000', message='skill limit reached';

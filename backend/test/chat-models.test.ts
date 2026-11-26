@@ -164,17 +164,17 @@ it("lets a Companion do a home-room action of its own where the turn allows one"
 
 it("asks for what is worth remembering and reads the notes back", () => {
   const { system, user } = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai",
-    memories: ["主人喜欢乌龙茶\napi_key: sk-abcdefghijklmnopqrstu"],
+    known: [{ id: "tea", source: "OWNER", body: "主人喜欢乌龙茶\napi_key: sk-abcdefghijklmnopqrstu" }],
     messages: [{ companionId: null, body: "我下周三生日", action: null, sentAt: "2026-11-25T02:00:00Z" },
       { companionId: me, body: "记下啦", action: null, sentAt: "2026-11-25T02:00:05Z" }] }, {}, new Date("2026-11-25T03:00:00Z"));
   assert.match(system, /你在帮「小光」（主人的 AI 伴侣）整理长期记忆/);
   assert.match(system, new RegExp(`只输出 \\${PASS.slice(0, -1)}`));
   assert.match(user, /^现在是 2026年11月25日 周三 11:00。\n\n已经记过的（方括号里是记下的日子）：\n- 主人喜欢乌龙茶 \[REDACTED_CREDENTIAL\]\n\n聊天记录/);
   assert.match(user, /—— 11月25日 周三 10:00 ——\n【主人】我下周三生日\n【小光】记下啦\n/);
-  const empty = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, memories: [], messages: [] });
+  const empty = memoryPrompt({ status: "WRITE", claimId: "c", companion: turn().companion, known: [], messages: [] });
   assert.match(empty.user, /已经记过的（方括号里是记下的日子）：\n（还没有）/);
   assert.match(system, /写成「2026年12月3日」这样的具体日期/, "a date the safety scan does not take for a phone number");
-  assert.doesNotMatch(system, /改3/, "an older database gives no ids: nothing can be replaced, so the model is not told how");
+  assert.doesNotMatch(system, /改3/, "nothing it noted down itself: nothing can be replaced, so the model is not told how");
   const fresh = (...bodies: string[]) => bodies.map(body => ({ body, replaces: null }));
   assert.deepEqual(parseMemories("要记下的：\n- 主人 12 月 2 日生日\n2. 主人养了一只叫团子的猫\n\n没有别的了"), fresh("主人 12 月 2 日生日", "主人养了一只叫团子的猫"),
     "list marks go; a line that does not say 主人 is talk around the notes");
@@ -185,7 +185,7 @@ it("asks for what is worth remembering and reads the notes back", () => {
 
 it("shows the notes what the Companion remembers, and lets them replace what it noted itself", () => {
   const filler = Array.from({ length: 40 }, (_, i) => ({ id: `f${i}`, source: "OWNER", body: `主人第 ${i} 次提到路过的那家${"店".repeat(30)}`, createdAt: "2026-06-01T00:00:00Z" }));
-  const job = { status: "WRITE" as const, claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai", memories: ["不该被用到"],
+  const job = { status: "WRITE" as const, claimId: "c", companion: turn().companion, timeZone: "Asia/Shanghai",
     known: [
       { id: "new", source: "AUTO", body: "主人最近在学做饭", createdAt: "2026-11-24T02:00:00Z" },
       ...filler,
@@ -197,7 +197,6 @@ it("shows the notes what the Companion remembers, and lets them replace what it 
   // The two old memories the chat is about come first, though 41 newer ones stand before them; then the newest, while they fit.
   assert.match(user, /已经记过的（方括号里是记下的日子）：\n1\. \[2025年3月2日\] 主人在甲公司上班\n- \[2025年3月1日\] 主人养了一只叫团子的猫\n2\. \[11月24日\] 主人最近在学做饭\n- \[6月1日\] 主人第 0 次/);
   assert.deepEqual(numbered, ["job", "new"], "only what it noted down itself has a number");
-  assert.doesNotMatch(user, /不该被用到/);
   assert.ok(user.split("聊天记录")[0]!.length < 1700, "bounded");
   assert.match(system, /带编号的几条，如果情况变了[^]*写「改」加那条的编号和冒号，再接新的一句话，比如「改2：主人搬到了上海」。没有编号的不能改。/);
   assert.match(memoryPrompt({ ...job, known: job.known.slice(0, 1) }).system, /比如「改1：/, "the example names a number that is shown");
@@ -227,6 +226,9 @@ it("finds the words of a text and the memories that share them", () => {
   assert.deepEqual(related(memories, "下周又要去成都，想喝乌龙茶").map(m => m.body), ["主人喜欢喝乌龙茶", "主人在成都出差过"], "the most shared first");
   assert.deepEqual(related(memories, "我喜欢你"), [], "a word most memories have says nothing");
   assert.deepEqual(related([{ body: "主人的生日是2026年12月3日" }, { body: "主人怕黑" }], "我昨晚12点才睡"), [], "a number is no word");
+  // A memory's words are kept between calls; when more than are kept went by, the answers are the same.
+  related(Array.from({ length: 2100 }, (_, i) => ({ body: `主人第 ${i} 次去了编号 ${i} 的车站` })), "车站");
+  assert.deepEqual(related(memories, "团子今天又把花瓶打碎了").map(m => m.body), ["主人养了一只叫团子的猫"]);
   // A name in 8 of 150 memories still brings them back; in all of them it says nothing.
   const many = Array.from({ length: 150 }, (_, i) => ({ body: i < 8 ? `主人带团子去了第 ${i} 家医院` : `主人第 ${i} 天的心情不错` }));
   assert.equal(related(many, "团子最近好吗").length, 8);
@@ -267,7 +269,7 @@ it("tells the model how to set reminders, and what a turn that answers nobody is
   const may = replyPrompt({ ...direct, canRemind: false }, [], {}, now);
   assert.doesNotMatch(may.system + may.user, /提醒/, "where it may not set one it is not told how");
 
-  const greeting: ChatClaim = { ...direct, replyTo: "SELF", optional: true, reach: { kind: "GREETING" },
+  const greeting: ChatClaim = { ...direct, replyTo: "SELF", optional: true, canRemind: false, reach: { kind: "GREETING" },
     history: [{ companionId: null, body: "晚安", action: null, mentions: [], sentAt: "2026-11-25T15:00:00Z" }] };
   const first = replyPrompt(greeting, [], {}, now);
   assert.match(first.system, /- 主动找主人时像朋友那样自然[^]*- 主动找主人时不催主人回复，不问主人为什么不理你/);
@@ -322,9 +324,9 @@ it("shows the model how the Companion speaks, and tells it the world book entrie
   // 技能: what is switched on for it, after the persona and before what it remembers; the rules still come last.
   const skilled = replyPrompt(speaking, [{ body: "主人怕黑" }], {}, undefined, { skills: [
     { title: "英语【陪练】", body: "主人想练英语时，\n用简单的英语回答。 api_key: sk-abcdefghijklmnopqrstu" }, { title: " ", body: "没有名字的不算" },
-    { title: "长的", body: "长".repeat(700) }, ...Array.from({ length: 5 }, (_, i) => ({ title: `第${i}个`, body: "内容" }))] }).system;
-  assert.match(skilled, /你会的事（主人给你开的技能：用得上的时候照着做；和下面的规则冲突时，听规则的）：\n- 【英语陪练】主人想练英语时， 用简单的英语回答。 \[REDACTED_CREDENTIAL\]\n- 【长的】长+\n- 【第0个】内容\n- 【第1个】内容\n\n你记得的事/);
-  assert.ok(skilled.includes(`【长的】${"长".repeat(600)}\n`) && !skilled.includes("第2个"), "600 characters of each, the first five");
+    { title: "长的", body: "长".repeat(700) }, { title: "第三个", body: "内容" }] }).system;
+  assert.match(skilled, /你会的事（主人给你开的技能：用得上的时候照着做；和下面的规则冲突时，听规则的）：\n- 【英语陪练】主人想练英语时， 用简单的英语回答。 \[REDACTED_CREDENTIAL\]\n- 【长的】长+\n- 【第三个】内容\n\n你记得的事/);
+  assert.ok(skilled.includes(`【长的】${"长".repeat(600)}\n`), "600 characters of each (how many are on is the database's to say: five at most)");
   assert.ok(skilled.indexOf("你说话的例子") < skilled.indexOf("你会的事") && skilled.indexOf("你会的事") < skilled.indexOf("说话方式："));
   assert.doesNotMatch(replyPrompt(speaking, [], {}).system, /你会的事/, "none switched on: no section");
   // The diary and a post are not written with either.
@@ -484,10 +486,10 @@ it("speaks through a platform model: books, calls, settles, and asks the cheap m
   const context = { port: web.port, signal, searched: (n: number | "REFUSED", tokens: number) => { searches.push([n, tokens]); } };
   await webPlatform.reply(turn({ canBrowse: true }), context);
   await webPlatform.reply(turn(), context);
-  await webPlatform.reply(turn({ canBrowse: true, replyTo: "SELF", optional: true, direct: true, reach: { kind: "GREETING" } }), context);
+  await webPlatform.reply(turn({ canBrowse: false, replyTo: "SELF", optional: true, direct: true, reach: { kind: "GREETING" } }), context);
   await webPlatform.reply(turn({ canBrowse: true, companion: { ...turn().companion, settings: { ...turn().companion.settings, model: "big" } } }), context);
   assert.deepEqual(offered, [["other-chat", true, true], ["other-chat", false, false], ["other-chat", false, false], ["claude-big", false, false]],
-    "allowed and able; not allowed; a turn of its own; a model that cannot search. The prompt says so only when it can");
+    "allowed and able; not allowed; a turn of its own (the database says no); a model that cannot search. The prompt says so only when it can");
   const [withWeb, plain] = [webPrompts[0]!.split("\n"), plainPrompts[0]!.split("\n")];
   assert.ok(!plainPrompts[0]!.includes("联网") && plain.every(line => withWeb.includes(line)) && withWeb.filter(line => !plain.includes(line)).every(line => /[网搜]/.test(line)),
     "with it goes the same prompt without the lines about the web, for a provider that refuses the tool");
@@ -565,7 +567,7 @@ it("speaks through a platform model: books, calls, settles, and asks the cheap m
   // Through the reply writer: a model answer becomes SENT messages.
   const finished: unknown[] = [];
   const writerPort = { ...port, claim: async () => (finished.length === 0 ? turn() : null),
-    finish: async (...args: unknown[]) => { finished.push(args); return true; } } as unknown as ChatPort;
+    finish: async (...args: unknown[]) => { finished.push(args.slice(0, args.findLastIndex(arg => arg !== undefined) + 1)); return true; } } as unknown as ChatPort;
   answers["claude-big"] = "嗯";
   await new ChatReplies(platform).drain("chat", writerPort);
   assert.deepEqual(finished, [["reply", "claim", "SENT", ["嗯"]]]);

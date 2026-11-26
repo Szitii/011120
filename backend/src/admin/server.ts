@@ -18,7 +18,7 @@ import { vendorStatus, type VendorKey } from "./vendors.ts";
 import { promptBlock, promptTextRefusal, tidyPromptText } from "../chat/prompt-texts.ts";
 import { parseCharacterCard } from "../companion-import/parser.ts";
 import { hasActiveContent, hasCredential } from "../companion-import/policy.ts";
-import { skillLine } from "../chat/prompt.ts";
+import { SKILL_CHARS, skillLine } from "../chat/prompt.ts";
 import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
 import { withPending, feedbackPage, type FeedbackQueue, chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
@@ -282,7 +282,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
           ...(text("personality") === "" ? {} : { personality: text("personality") }), ...(text("example") === "" ? {} : { mes_example: text("example") }) } };
         const parsed = parseCharacterCard(new TextEncoder().encode(JSON.stringify(card)));
         // With the name put in for every {{char}} the example must still fit, or it would arrive cut off.
-        if (parsed.findings.some(finding => finding.safePreview?.startsWith("Cut to"))) {
+        if (parsed.findings.some(finding => finding.type === "FIELD_CONSTRAINT" && finding.sourcePath === "$.data.mes_example")) {
           throw new AdminRefusal("示例对话把 {{char}} 换成默认名字以后超过了 1500 字,主人导入时会被截断。请缩短一些再保存。");
         }
         const blocked = parsed.draft.candidates.filter(candidate => !candidate.approvable);
@@ -292,7 +292,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
         }
         await db.call("template_set", ...shared, text("name"), text("description"), text("personality"), text("example"), ...tail);
       } else {
-        if (length("body") < 1 || length("body") > 600) throw new AdminRefusal("技能内容要填,最多 600 字。");
+        if (length("body") < 1 || length("body") > SKILL_CHARS) throw new AdminRefusal(`技能内容要填,最多 ${SKILL_CHARS} 字。`);
         if (hasCredential(text("body")) || hasActiveContent(text("body"))) throw new AdminRefusal("技能内容里不能有密钥或网址。");
         if (skillLine(text("title"), text("body")) === null) throw new AdminRefusal("名称里除了【】还要有别的字,不然这个技能不会发给模型。");
         await db.call("skill_set", ...shared, text("body"), ...tail);

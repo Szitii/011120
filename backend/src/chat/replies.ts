@@ -245,11 +245,7 @@ export class ChatReplies {
       const final = (outcome === "ERROR" && answersAction(turn)) || (outcome !== "SENT" && turn.reach) ? "PASSED" : outcome;
       trace.outcome = final;
       try {
-        // Text-only replies call finish as before; clips, an action and reminders go along only when there are some.
-        trace.stored = await (reminders !== undefined ? port.finish(turn.replyId, turn.claimId, final, bodies, clips, action, reminders)
-          : action !== undefined ? port.finish(turn.replyId, turn.claimId, final, bodies, clips, action)
-          : clips === undefined ? port.finish(turn.replyId, turn.claimId, final, bodies)
-          : port.finish(turn.replyId, turn.claimId, final, bodies, clips));
+        trace.stored = await port.finish(turn.replyId, turn.claimId, final, bodies, clips, action, reminders);
       } finally {
         this.#trace(trace);
       }
@@ -429,10 +425,9 @@ export class ChatReplies {
     if (turn.reach?.kind !== "REMINDER") return answered;
     // A reminder is delivered whatever happened to the model (none, switched off, out of budget, a
     // refusal, an answer that could not be used): in plain words. Its note passed the scan when it was set.
-    const [outcome, bodies, , action] = answered;
-    if (outcome !== "SENT") return ["SENT", [plainReminder(turn.reach.note)]];
     // An action and not a word (it hugged the Owner and said nothing): the action stays, and the words are added.
-    return bodies !== null && bodies.length > 0 ? answered : ["SENT", [plainReminder(turn.reach.note)], undefined, action];
+    const [, bodies, , action] = answered;
+    return bodies?.length ? answered : ["SENT", [plainReminder(turn.reach.note)], undefined, action];
   }
 
   async #write(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
@@ -453,10 +448,10 @@ export class ChatReplies {
       // The same for reminders: set and cancelled only while it answers the Owner where it may, and
       // a note the safety scan would stop or change is not kept as a reminder.
       const reminded = splitReminders(acted.messages, turn.reminders);
-      const asked = turn.canRemind && turn.replyTo === "OWNER" ? reminded.reminders : undefined;
-      const { set, ...other } = asked ?? {};
-      const reminders = asked === undefined || set === undefined || this.#safety.scanOutput(set.note).decision === "ALLOW" ? asked
-        : other.cancel === undefined ? undefined : other;
+      const cancel = turn.canRemind ? reminded.cancel : [];
+      const set = turn.canRemind && reminded.set !== undefined && this.#safety.scanOutput(reminded.set.note).decision === "ALLOW" ? reminded.set : undefined;
+      const reminders: ReminderChange | undefined = set === undefined && cancel.length === 0 ? undefined
+        : { ...(set && { set }), ...(cancel.length > 0 && { cancel }) };
       const spoken = reminded.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
       // The Owner's own rules over what it says (正则替换). Rules that would leave nothing of the reply are not followed.
       const rules = turn.companion.settings.replyRules;

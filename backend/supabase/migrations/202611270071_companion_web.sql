@@ -18,7 +18,7 @@ alter table companion_private.feature_switches add constraint feature_switches_k
     'COMPANION_WEB'));
 insert into companion_private.feature_switches(key, enabled) values ('COMPANION_WEB', false);
 
--- As in 0070, plus canBrowse: the operators let Companions search the web.
+-- As in 0070, plus canBrowse: the operators let Companions search the web, and this turn answers the Owner.
 create or replace function public.chat_claim(p_chat uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare c companion_private.chats%rowtype; m companion_private.chat_messages%rowtype; claim uuid := gen_random_uuid();
@@ -63,7 +63,7 @@ begin
   end loop;
   update companion_private.chat_messages set claim_id = claim, claimed_at = now(), attempts = attempts + 1, compute_tx = null
     where id = m.id;
-  reach := c.direct_companion_id is not null and companion_private.feature_on('COMPANION_REACH');
+  reach := m.reply_to = 'OWNER' and c.direct_companion_id is not null and companion_private.feature_on('COMPANION_REACH');
   return jsonb_build_object('chatId', c.id, 'replyId', m.id, 'claimId', claim, 'replyTo', m.reply_to,
     'optional', m.optional, 'direct', c.direct_companion_id is not null,
     'companion', companion_private.chat_companion_json(m.companion_id)
@@ -85,7 +85,7 @@ begin
     'reach', case m.reply_to when 'SELF' then jsonb_build_object('kind', 'GREETING')
       when 'REMINDER' then jsonb_build_object('kind', 'REMINDER', 'note', r.note, 'dueAt', r.due_at) end,
     'canRemind', reach,
-    'canBrowse', companion_private.feature_on('COMPANION_WEB'),
+    'canBrowse', m.reply_to = 'OWNER' and companion_private.feature_on('COMPANION_WEB'),
     'reminders', case when reach then coalesce((select jsonb_agg(jsonb_build_object('id', q.id, 'dueAt', q.due_at, 'note', q.note)
         order by q.due_at, q.id)
       from (select * from companion_private.chat_reminders w where w.companion_id = m.companion_id and w.status = 'WAITING'
