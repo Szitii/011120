@@ -88,7 +88,12 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
   const [engine] = useState(() => new RoomEngine());
   const [frame, setFrame] = useState(() => engine.snapshot());
   const [size, setSize] = useState<Size>({ width: 344, height: 430 });
-  const [night, setNight] = useState(false);
+  // 深色外观默认使用夜间光线；右上角的日/月按钮作为一次性手动覆盖。
+  const [nightOverride, setNightOverride] = useState<boolean | null>(null);
+  const night = nightOverride ?? skin.isDark;
+  useEffect(() => {
+    setNightOverride(null);
+  }, [skin.isDark]);
   const [menu, setMenu] = useState(false);
   const [ready, setReady] = useState(false);
   const scene = useRef<ComponentRef<typeof View>>(null);
@@ -227,7 +232,7 @@ export function PearlInteractiveRoom({ companionName, isCompanionView, isActive 
         disabled={!awake || !ready || capturing} onPress={() => { if (scene.current) onCapture(scene.current); }}>
         <LiquidGlassSurface glass><View style={styles.icon}><Ionicons name="camera-outline" size={19} color={labelColor} /></View></LiquidGlassSurface>
       </Pressable>}
-      <Pressable accessibilityRole="button" accessibilityLabel="切换昼夜光线" onPress={() => setNight(value => !value)}>
+      <Pressable accessibilityRole="button" accessibilityLabel="切换昼夜光线" onPress={() => setNightOverride(!night)}>
         <LiquidGlassSurface glass tint={night ? "dark" : "light"}>
           <View style={styles.icon}><Ionicons name={night ? "moon" : "sunny-outline"} size={17} color={labelColor} /></View>
         </LiquidGlassSurface>
