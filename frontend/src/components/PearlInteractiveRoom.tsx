@@ -68,7 +68,7 @@ function spriteFor(frame: ActorFrame): CharacterAction {
     return WALK[frame.step];
   }
   if (frame.phase === "SLEEP") return "sleep";
-  if (frame.phase === "SIT") return "sit";
+  if (frame.phase === "SIT") return frame.furniture === "bed" ? "pajama" : "sit";
   return frame.wave ? "wave" : "idle";
 }
 

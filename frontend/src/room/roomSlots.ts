@@ -185,7 +185,7 @@ export type CharacterAction =
   | "walk_1" | "walk_2" | "walk_3" | "walk_4"
   | "walk_front_1" | "walk_front_2" | "walk_front_3" | "walk_front_4"
   | "walk_back_1" | "walk_back_2" | "walk_back_3" | "walk_back_4"
-  | "sit" | "wave" | "sleep";
+  | "sit" | "pajama" | "wave" | "sleep";
 
 export const BOY_SPRITES: Record<CharacterAction, RoomImage> = {
   idle: require("../../assets/room_v2/boy_idle.png"),
@@ -202,6 +202,7 @@ export const BOY_SPRITES: Record<CharacterAction, RoomImage> = {
   walk_back_3: require("../../assets/room_v2/boy_walk_back_3.png"),
   walk_back_4: require("../../assets/room_v2/boy_walk_back_4.png"),
   sit: require("../../assets/room_v2/boy_sit.png"),
+  pajama: require("../../assets/room_v2/boy_pajama.png"),
   wave: require("../../assets/room_v2/boy_wave.png"),
   sleep: require("../../assets/room_v2/boy_sleep.png"),
 };
@@ -221,6 +222,7 @@ export const GIRL_SPRITES: Record<CharacterAction, RoomImage> = {
   walk_back_3: require("../../assets/room_v2/girl_walk_back_3.png"),
   walk_back_4: require("../../assets/room_v2/girl_walk_back_4.png"),
   sit: require("../../assets/room_v2/girl_sit.png"),
+  pajama: require("../../assets/room_v2/girl_pajama.png"),
   wave: require("../../assets/room_v2/girl_wave.png"),
   sleep: require("../../assets/room_v2/girl_sleep.png"),
 };
