@@ -193,8 +193,12 @@ export interface ChatPort {
   deleteMemory(companionId: string, memoryId: string): Promise<unknown>;
   /** The persona templates on offer ({ items }). */
   personaTemplates(): Promise<unknown>;
-  /** Everything of the Owner's as one document (AccountExport), or { limited: true } past 5 an hour. Each one is audited. */
-  exportAccount(): Promise<unknown>;
+  /**
+   * Everything of the Owner's as one document (AccountExport), as the JSON text it is sent as: it can
+   * be megabytes and only passes through. Null past 5 an hour, or while another one of theirs is
+   * being built. Each one is audited.
+   */
+  exportAccount(): Promise<string | null>;
   /** The official skills on offer with whether the Companion has each on, and its own skills ({ maxEnabled, official, own }). */
   skills(companionId: string): Promise<unknown>;
   /** Switches an official skill on or off for the Companion; returns skills(). */

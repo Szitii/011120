@@ -472,8 +472,9 @@ export async function handleChatRequest(
   if (templatesRoute) return method === "GET" ? response(200, await port.personaTemplates()) : notFound();
   if (exportRoute) {
     if (method !== "GET") return notFound();
-    const copy = await port.exportAccount() as { limited?: unknown };
-    return copy.limited === true ? response(429, { code: "EXPORT_LIMIT" }) : response(200, copy);
+    const copy = await port.exportAccount();
+    // Already JSON, and possibly large: it goes out as the bytes it is.
+    return copy === null ? response(429, { code: "EXPORT_LIMIT" }) : response(200, Buffer.from(copy, "utf8"));
   }
   if (skillsRoute) {
     const companionId = id(path[2]);

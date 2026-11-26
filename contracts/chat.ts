@@ -590,10 +590,14 @@ export interface ConnectionSaveResult {
  * Not in it: what other people wrote, audio (a voice message is its words, with `voice` true),
  * picture files (a post names its pictures by `path`), keys and tokens, and anything deleted.
  *
- * At most 5 an hour: after that 429 with { code: "EXPORT_LIMIT" }. The document can be several
- * megabytes for an Owner who has chatted a lot; show progress and write it straight to a file.
- * A chat brings its newest 10,000 messages; `omitted` is how many older ones are left out (0 for
- * almost everyone). Those can still be read in the chat itself.
+ * Not in it either: what operators wrote (the note on a wallet adjustment), cancelled reminders,
+ * identities the app no longer lists, and followed profiles the app would no longer show.
+ *
+ * At most 5 an hour and one at a time: otherwise 429 with { code: "EXPORT_LIMIT" }. The document
+ * can be several megabytes for an Owner who has chatted a lot; show progress and write it straight
+ * to a file. The chats together bring the newest messages up to a budget (20,000 messages and about
+ * 3 million characters); `omitted` on each chat is how many older ones are left out (0 for almost
+ * everyone). Those can still be read in the chat itself. The wallet brings its newest 2,000 entries.
  */
 export interface AccountExport {
   format: "011120-export/1";
@@ -605,7 +609,7 @@ export interface AccountExport {
   /** One for the Owner's own community identity and one for each Companion that has one. */
   community: ExportedCommunity[];
   feedback: Feedback[];
-  wallet: Wallet & { entries: ExportedWalletEntry[] };
+  wallet: Wallet & { entries: ExportedWalletEntry[]; entriesOmitted: number };
 }
 
 export interface ExportedCompanion {
@@ -666,5 +670,4 @@ export interface ExportedWalletEntry {
   companionId: string | null;
   freeCredits: number;
   paidCredits: number;
-  note: string | null;
 }

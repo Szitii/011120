@@ -114,8 +114,11 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.persona_template_list() as payload", []);
   }
 
-  exportAccount(): Promise<unknown> {
-    return this.#object("select public.account_export() as payload", []);
+  async exportAccount(): Promise<string | null> {
+    // As text, so the document is never taken apart and put together again here.
+    const payload = await this.#payload("select public.account_export()::text as payload", []);
+    if (payload !== null && typeof payload !== "string") throw new PostgresPersistenceError("DATABASE_ERROR", "Invalid chat response.");
+    return payload;
   }
 
   skills(companionId: string): Promise<unknown> {

@@ -78,7 +78,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     reminders: async (...args) => { calls.push(["reminders", ...args]); return { items: [] }; },
     cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },
     personaTemplates: async () => { calls.push(["personaTemplates"]); return { items: [] }; },
-    exportAccount: async () => { calls.push(["exportAccount"]); return { format: "011120-export/1", companions: [] }; },
+    exportAccount: async () => { calls.push(["exportAccount"]); return '{"format": "011120-export/1", "companions": ["小光"]}'; },
     skills: async (...args) => { calls.push(["skills", ...args]); return { maxEnabled: 5, official: [], own: [] }; },
     setSkill: async (...args) => { calls.push(["setSkill", ...args]); return { maxEnabled: 5, official: [], own: [] }; },
     saveOwnSkill: async (...args) => { calls.push(["saveOwnSkill", ...args]); return { id: "s1" }; },
@@ -394,8 +394,10 @@ it("routes persona templates and skills: an Owner's own skill is scanned like a 
 it("routes the export: the Owner's copy, or 429 past the limit", async () => {
   const { port, calls } = fakePort();
   const copy = await handleChatRequest(request("export"), session(port), "trace", replies);
-  assert.deepEqual([copy!.status, copy!.body, copy!.headers["cache-control"]], [200, { format: "011120-export/1", companions: [] }, "no-store"]);
-  port.exportAccount = async () => ({ limited: true });
+  assert.ok(copy!.body instanceof Uint8Array, "passed on as the bytes it is, never taken apart");
+  assert.deepEqual([copy!.status, JSON.parse(Buffer.from(copy!.body as Uint8Array).toString("utf8")), copy!.headers["content-type"], copy!.headers["cache-control"]],
+    [200, { format: "011120-export/1", companions: ["小光"] }, "application/json", "no-store"]);
+  port.exportAccount = async () => null;
   const limited = await handleChatRequest(request("export"), session(port), "trace", replies);
   assert.deepEqual([limited!.status, limited!.body], [429, { code: "EXPORT_LIMIT" }]);
   assert.deepEqual(calls, [["exportAccount"]]);
@@ -825,8 +827,13 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(seen.at(-1), ["select public.world_list($1) as payload", [companion]]);
   await adapter.personaTemplates();
   assert.deepEqual(seen.at(-1), ["select public.persona_template_list() as payload", []]);
-  await adapter.exportAccount();
-  assert.deepEqual(seen.at(-1), ["select public.account_export() as payload", []]);
+  rows = [{ payload: '{"format": "011120-export/1"}' }];
+  assert.equal(await adapter.exportAccount(), '{"format": "011120-export/1"}');
+  assert.deepEqual(seen.at(-1), ["select public.account_export()::text as payload", []], "as text: the document only passes through");
+  rows = [{ payload: null }];
+  assert.equal(await adapter.exportAccount(), null, "past the limit");
+  rows = [{ payload: { ok: true } }];
+  await assert.rejects(adapter.exportAccount(), (error: unknown) => error instanceof PostgresPersistenceError && error.code === "DATABASE_ERROR");
   await adapter.skills(companion);
   assert.deepEqual(seen.at(-1), ["select public.skill_list($1) as payload", [companion]]);
   await adapter.setSkill(companion, messageId, true);
