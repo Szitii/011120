@@ -671,17 +671,54 @@ it("checks an Owner's reply rules and runs them under a time limit", () => {
     [{ pattern: "a", replacement: 1 }], [{ pattern: "a", enabled: "yes" }], [{ pattern: "a", code: "x" }], [{ pattern: 5 }]]) {
     assert.equal(checkRules(bad), null, JSON.stringify(bad)?.slice(0, 60));
   }
-  assert.equal(applyRules("你好（笑）呀（挥手）", [{ pattern: "（[^）]*）", flags: "g", replacement: "" }]), "你好呀");
-  assert.equal(applyRules("aXbxc", [{ pattern: "x", flags: "i", replacement: "-" }, { pattern: "(b)", flags: "g", replacement: "[$1]" }]), "a-[b]xc", "in order; without g only the first match");
-  assert.equal(applyRules("abc", undefined), "abc");
-  assert.equal(applyRules("abc", [{ pattern: "b", enabled: false, replacement: "" }, { pattern: "c" }]), "ab", "no flags and no replacement read as g and nothing");
+  for (const bad of [[{ pattern: "a", replacement: "$`" }], [{ pattern: "a", replacement: "x$'" }], [{ pattern: "a\0" }], [{ pattern: "a", replacement: "\ud83d" }], [{ pattern: "\udc00" }]]) {
+    assert.equal(checkRules(bad), null, `not kept: ${JSON.stringify(bad)}`);
+  }
+  assert.deepEqual(checkRules([{ pattern: "a", replacement: "$$'$$`" }])![0]!.replacement, "$$'$$`", "a dollar sign as text is not the text around the match");
+
+  const one = (text: string, rules: unknown, budget?: number): string => applyRules([text], rules, budget)[0]!;
+  assert.equal(one("你好（笑）呀（挥手）", [{ pattern: "（[^）]*）", flags: "g", replacement: "" }]), "你好呀");
+  assert.equal(one("aXbxc", [{ pattern: "x", flags: "i", replacement: "-" }, { pattern: "(b)", flags: "g", replacement: "[$1]" }]), "a-[b]xc", "in order; without g only the first match");
+  assert.deepEqual(applyRules(["abc", "b"], undefined), ["abc", "b"]);
+  assert.equal(one("abc", [{ pattern: "b", enabled: false, replacement: "" }, { pattern: "c" }]), "ab", "no flags and no replacement read as g and nothing");
+  assert.deepEqual(applyRules(["（笑）好", "呀（挥手）", "（点头）"], [{ pattern: "（[^）]*）" }]), ["好", "呀", ""], "every message of the reply");
+  // A replacement is written the way String.replace writes it.
+  for (const [text, pattern, replacement] of [["2026-11-27", "(\\d+)-(\\d+)-(\\d+)", "$3/$2/$1 [$&] $$1 $4 $0 $10 $<x>"], ["ab", "(?<first>a)(b)?", "<$<first>|$<none>|$2|$02>"],
+    ["abc", "(a)|(x)", "[$2]"], ["a.b", "\\.", "$"], ["小光：你好", "^(.+?)：", "【$1】"], ["abcdefghijkl", "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)", "$12$11$10$1"]] as const) {
+    assert.equal(one(text, [{ pattern, flags: "g", replacement }]), text.replace(new RegExp(pattern, "g"), replacement), `${pattern} -> ${replacement}`);
+  }
+  assert.equal(one("ab", [{ pattern: "b", replacement: "[$`|$']" }]), "ab", "a rule asking for the text around the match is not a rule (it could not be saved either)");
+  // What got into the list another way does not break the reply: what is not a rule is passed over.
+  assert.equal(one("abc", [null, 5, "x", { pattern: 7 }, { pattern: "(" }, { pattern: "b", flags: "zz" }, { pattern: "c", replacement: "!" }]), "ab!");
+  assert.equal(one("abc", { pattern: "b" }), "abc");
+  assert.equal(one("abc", Array(12).fill({ pattern: "$", flags: "", replacement: "!" })), `abc${"!".repeat(10)}`, "ten rules at most");
+
   // A pattern that would run forever on this text is cut off, and the text goes on unchanged to the next rule.
-  const started = Date.now();
-  assert.equal(applyRules(`${"a".repeat(40)}!`, [{ pattern: "(a+)+$", flags: "g", replacement: "" }, { pattern: "!", flags: "g", replacement: "?" }], 30), `${"a".repeat(40)}?`);
-  assert.ok(Date.now() - started < 2000, "within its time limit");
-  assert.equal(applyRules("ab", [{ pattern: "", flags: "g", replacement: "x".repeat(200) }, { pattern: "(", flags: "g", replacement: "" }]), `${"x".repeat(200)}a${"x".repeat(200)}b${"x".repeat(200)}`,
-    "a rule that stopped compiling is skipped");
-  assert.equal(applyRules("a".repeat(2000), [{ pattern: "a", flags: "g", replacement: "bbb" }]), "a".repeat(2000), "a rule may not blow a message up");
+  const slow = { pattern: "(a+)+$", flags: "g", replacement: "" };
+  let started = performance.now();
+  assert.equal(one(`${"a".repeat(40)}!`, [slow, { pattern: "!", flags: "g", replacement: "?" }], 80), `${"a".repeat(40)}?`);
+  assert.ok(performance.now() - started < 1000, "within its time limit");
+  // All the rules of a reply share one limit, however many rules and lines there are.
+  started = performance.now();
+  const lines = Array.from({ length: 12 }, () => `${"a".repeat(40)}!`);
+  assert.deepEqual(applyRules(lines, Array(10).fill(slow), 60), lines);
+  assert.ok(performance.now() - started < 1000, `ten slow rules over twelve lines took ${Math.round(performance.now() - started)} ms`);
+  assert.equal(one(`${"a".repeat(40)}!`, [slow, slow, { pattern: "!", replacement: "?" }], 40), `${"a".repeat(40)}!`, "no time left: the rules that are left are not run");
+  // A rule may not blow a reply up, and is stopped while it tries (not after the text was built).
+  assert.equal(one("ab", [{ pattern: "(?:)", flags: "g", replacement: "x".repeat(200) }]), `${"x".repeat(200)}a${"x".repeat(200)}b${"x".repeat(200)}`);
+  assert.equal(one("a".repeat(2000), [{ pattern: "a", flags: "g", replacement: "bbb" }]), "a".repeat(2000), "more than 4000 characters added: skipped");
+  const before = process.memoryUsage().rss;
+  started = performance.now();
+  const long = "家".repeat(2000);
+  assert.equal(one(long, [{ pattern: "(?=(.*))", flags: "gs", replacement: "$1".repeat(66) }, { pattern: "(.+)", flags: "gs", replacement: "$&".repeat(100) }, { pattern: "^家", replacement: "国" }]), `国${"家".repeat(1999)}`);
+  assert.ok(process.memoryUsage().rss - before < 50_000_000 && performance.now() - started < 1000, "neither memory nor time");
+  // Rules are for chat-sized replies: anything else is left as it is, at no cost.
+  const cut = [{ pattern: "a", replacement: "" }];
+  assert.deepEqual(applyRules(Array(13).fill("a"), cut), Array(13).fill("a"));
+  assert.equal(one("a".repeat(6001), cut), "a".repeat(6001));
+  started = performance.now();
+  applyRules(Array.from({ length: 12_000 }, () => `${"a".repeat(40)}!`), Array(10).fill(slow));
+  assert.ok(performance.now() - started < 100, "what an agent sent back at full size is not run through the rules");
 });
 
 it("runs one background writer per chat and never throws from kick", async () => {

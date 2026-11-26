@@ -129,6 +129,13 @@ try {
   const book = `companions/${loreId}/world-entries`;
   const entries = async () => (await call<WorldEntryList>(0, book)).data.items;
   assert.deepEqual((await entries()).map(e => [e.keys, e.body, e.enabled, e.source]), [[["钟楼"], "钟楼每天六点敲钟", true, "IMPORT"]], "only the approved entry");
+  // The same card approved into a Companion again: an entry it already has word for word is not added twice.
+  const approveRich = async (ids: string[], companionId?: string) => call<{ companionId: string }>(0,
+    `companion-imports/${(await call<Review>(0, "companion-imports", "POST", rich)).data.id}/approve`, "POST", { approvedCandidateIds: ids, ...(companionId ? { companionId } : {}) });
+  const twiceId = (await approveRich(["candidate-displayName", "candidate-world-2"])).data.companionId;
+  assert.equal((await approveRich(["candidate-displayName", "candidate-world-1", "candidate-world-2"], twiceId)).status, 201);
+  assert.deepEqual((await call<WorldEntryList>(0, `companions/${twiceId}/world-entries`)).data.items.map(e => e.body), ["钟楼每天六点敲钟", "小白是镇上的猫"]);
+  assert.equal((await call(0, `companions/${twiceId}`, "DELETE")).status, 200);
   const spoken = (await call<CompanionPersona>(0, `companions/${loreId}/persona`)).data;
   assert.deepEqual([spoken.version, spoken.dialogueExamples, spoken.identitySummary], [1, "主人: 回来了\nLore: 你可算回来了", ""], "the example dialogue is part of the persona");
   const reworded = await call<CompanionPersona>(0, `companions/${loreId}/persona`, "PUT", { version: 1, dialogueExamples: " 主人：回来了\nLore：哼，才想起我 " });

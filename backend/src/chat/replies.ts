@@ -460,7 +460,8 @@ export class ChatReplies {
       const spoken = reminded.messages.map(message => splitVoice(message.trim())).filter(part => part.text.length > 0);
       // The Owner's own rules over what it says (正则替换). Rules that would leave nothing of the reply are not followed.
       const rules = turn.companion.settings.replyRules;
-      const ruled = spoken.map(part => ({ ...part, text: applyRules(part.text, rules).trim() })).filter(part => part.text.length > 0);
+      const after = applyRules(spoken.map(part => part.text), rules);
+      const ruled = spoken.map((part, i) => ({ ...part, text: after[i]!.trim() })).filter(part => part.text.length > 0);
       const marked = ruled.length > 0 ? ruled : spoken;
       const parts = marked.map(part => part.text);
       const messages = parts.length <= MAX_MESSAGES ? parts
