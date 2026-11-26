@@ -206,3 +206,71 @@ test("an in-flight voice response is discarded after sign-out", async t => {
   delayed.resolve(new Response(new Uint8Array([1]), { headers: { "Content-Type": "audio/mpeg" } }));
   await assert.rejects(request, /session changed/);
 });
+
+test("registration validates credentials and leaves the normal login session signed out", async () => {
+  const { session, driver } = fixture();
+  const submitted: { email: string; password: string }[] = [];
+  driver.signUp = async credentials => {
+    submitted.push(credentials);
+    return { data: { user: { id: "new-user" } }, error: null };
+  };
+
+  assert.equal((await session.signUp("invalid", "fixture")).ok, false);
+  assert.equal((await session.signUp("new@example.test", "short")).ok, false);
+  assert.equal((await session.signUp(" new@example.test ", "fixture")).ok, true);
+  assert.deepEqual(submitted, [{ email: "new@example.test", password: "fixture" }]);
+  assert.equal(session.snapshot().kind, "signed-out");
+  assert.equal((await driver.getSession()).data.session, null);
+});
+
+test("registration and recovery do not disclose whether an email exists", async () => {
+  const { session, driver } = fixture();
+  driver.signUp = async () => ({ data: { user: { id: "fixture-user" } }, error: null });
+  const registration = await session.signUp("known@example.test", "fixture");
+  driver.signUp = async () => ({ data: { user: null }, error: { code: "user_already_exists", status: 422 } });
+  assert.deepEqual(await session.signUp("known@example.test", "fixture"), registration);
+
+  driver.resetPasswordForEmail = async email => {
+    assert.equal(email, "known@example.test");
+    return { data: {}, error: null };
+  };
+  const recovery = await session.resetPasswordForEmail(" known@example.test ");
+  driver.resetPasswordForEmail = async () => ({ data: null, error: { code: "user_not_found", status: 404 } });
+  assert.deepEqual(await session.resetPasswordForEmail("unknown@example.test"), recovery);
+  assert.equal(session.snapshot().kind, "signed-out");
+});
+
+test("self-service requests cannot race each other or a sign-in", async () => {
+  const { session, driver } = fixture();
+  const requested = Promise.withResolvers<Awaited<ReturnType<NonNullable<AuthDriver["signUp"]>>>>();
+  driver.signUp = () => requested.promise;
+  let recoveries = 0;
+  driver.resetPasswordForEmail = async () => {
+    recoveries++;
+    return { data: null, error: { message: "fixture upstream detail", status: 429 } };
+  };
+
+  const registration = session.signUp("alice@example.test", "fixture");
+  assert.equal((await session.resetPasswordForEmail("alice@example.test")).ok, false);
+  assert.equal((await session.signUp("bob@example.test", "fixture")).ok, false);
+  await session.signIn("bob@example.test", "fixture");
+  assert.equal(session.snapshot().kind, "signed-out");
+  assert.equal(recoveries, 0);
+
+  requested.resolve({ data: { user: { id: "alice" } }, error: null });
+  assert.equal((await registration).ok, true);
+  assert.deepEqual(await session.resetPasswordForEmail("alice@example.test"), {
+    ok: false, message: "邮件发送过于频繁，请稍后再试。",
+  });
+  await session.signIn("bob@example.test", "fixture");
+  assert.equal(await binding(session).tokens.getToken(), "bob");
+});
+
+test("self-service operations do not start while another account is signed in", async () => {
+  const { session, driver } = fixture(account("bob"));
+  driver.signUp = async () => assert.fail("registration must not contact auth while signed in");
+  driver.resetPasswordForEmail = async () => assert.fail("recovery must not contact auth while signed in");
+  assert.equal((await session.signUp("alice@example.test", "fixture")).ok, false);
+  assert.equal((await session.resetPasswordForEmail("alice@example.test")).ok, false);
+  assert.equal(await binding(session).tokens.getToken(), "bob");
+});

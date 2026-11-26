@@ -7,6 +7,7 @@ export interface SessionTokenSource {
 
 type Session = { access_token: string; user: { id: string; email?: string } };
 type SessionResult = { data: { session: Session | null }; error: unknown };
+type SignUpResult = { data: { user: { id: string } | null }; error: unknown };
 
 export interface AuthDriver {
   onAuthStateChange(listener: (event: string, session: Session | null) => void): {
@@ -15,8 +16,14 @@ export interface AuthDriver {
   getSession(): Promise<SessionResult>;
   refreshSession(): Promise<SessionResult>;
   signInWithPassword(credentials: { email: string; password: string }): Promise<SessionResult>;
+  signUp?(credentials: { email: string; password: string }): Promise<SignUpResult>;
+  resetPasswordForEmail?(email: string): Promise<{ data: unknown; error: unknown }>;
   signOut(options: { scope: "local" }): Promise<{ error: unknown }>;
 }
+
+export type SelfServiceResult =
+  | { ok: true; message: string }
+  | { ok: false; message: string };
 
 export type AccountBinding = {
   readonly generation: number;
@@ -31,12 +38,82 @@ export type AccountView =
   | { kind: "signed-in"; account: AccountBinding };
 
 const EXPIRED = "登录已过期，请重新登录。";
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SIGN_UP_NOTICE = "请查收邮箱验证邮件（含垃圾箱）。如果邮箱已经验证，可以直接返回登录。";
+const RECOVERY_NOTICE = "如果该邮箱已注册，请查收密码重置邮件（含垃圾箱）。";
+
+function authErrorInfo(error: unknown): { status?: number; code?: string; message: string } {
+  if (!error || typeof error !== "object") return { message: "" };
+  const record = error as Record<string, unknown>;
+  return {
+    status: typeof record.status === "number" ? record.status : undefined,
+    code: typeof record.code === "string" ? record.code : undefined,
+    message: typeof record.message === "string" ? record.message.toLowerCase() : "",
+  };
+}
+
+function readableSignInError(error: unknown, isRetryable: (err: unknown) => boolean): string {
+  if (isRetryable(error)) return "暂时无法连接登录服务，请重试。";
+  const { status, code, message } = authErrorInfo(error);
+  if (code === "email_not_confirmed" || message.includes("email not confirmed")) {
+    return "邮箱尚未完成验证，请先查收验证邮件后再登录。";
+  }
+  if (status === 429 || code === "over_request_rate_limit" || message.includes("rate limit")) {
+    return "操作过于频繁，请稍后再试。";
+  }
+  if (status === 400 || status === 401 || status === 403 || status === 422) {
+    return "登录失败。请检查邮箱和密码。";
+  }
+  return "登录未完成，请重试。";
+}
+
+function isExistingAccount(error: unknown): boolean {
+  const { code, message } = authErrorInfo(error);
+  return code === "user_already_exists" || code === "email_exists" || message.includes("already registered");
+}
+
+function readableSignUpError(error: unknown, isRetryable: (err: unknown) => boolean): string {
+  if (isRetryable(error)) return "暂时无法连接认证服务，请检查网络后重试。";
+  const { status, code, message } = authErrorInfo(error);
+  if (code === "weak_password" || message.includes("password should be")) {
+    return "密码强度不足，请使用更长或包含字母与数字的密码。";
+  }
+  if (code === "email_address_invalid" || code === "validation_failed" || message.includes("invalid email")) {
+    return "邮箱格式不正确，请检查后重试。";
+  }
+  if (code === "signup_disabled" || code === "email_provider_disabled" || message.includes("signups not allowed")) {
+    return "当前暂未开放自助注册，请稍后再试。";
+  }
+  if (status === 429 || code === "over_email_send_rate_limit" || code === "over_request_rate_limit" || message.includes("rate limit")) {
+    return "发送过于频繁，请稍后再试。";
+  }
+  if (status === 400 || status === 422) {
+    return "注册未完成，请检查邮箱格式与密码长度后重试。";
+  }
+  return "注册未完成，请稍后重试。";
+}
+
+function readableResetError(error: unknown, isRetryable: (err: unknown) => boolean): string {
+  if (isRetryable(error)) return "暂时无法连接认证服务，请检查网络后重试。";
+  const { status, code, message } = authErrorInfo(error);
+  if (code === "email_address_invalid" || code === "validation_failed" || message.includes("invalid email")) {
+    return "邮箱格式不正确，请检查后重试。";
+  }
+  if (status === 429 || code === "over_email_send_rate_limit" || code === "over_request_rate_limit" || message.includes("rate limit") || message.includes("security purposes")) {
+    return "邮件发送过于频繁，请稍后再试。";
+  }
+  if (status === 400 || status === 422) {
+    return "未能发送重置邮件，请检查邮箱地址后重试。";
+  }
+  return "找回密码请求未完成，请稍后重试。";
+}
 
 export class AccountSession {
   #view: AccountView = { kind: "restoring" };
   #listeners = new Set<() => void>();
   #binding?: { userId: string; accessToken: string; abort: AbortController };
   #generation = 0;
+  #selfServicePending = false;
   readonly #auth: AuthDriver;
   readonly #isRetryable: (error: unknown) => boolean;
 
@@ -63,7 +140,7 @@ export class AccountSession {
   }
 
   async signIn(email: string, password: string) {
-    if (this.#view.kind !== "signed-out") return;
+    if (this.#view.kind !== "signed-out" || this.#selfServicePending) return;
     this.#set({ kind: "signing-in" });
     try {
       const { data, error } = await this.#auth.signInWithPassword({ email: email.trim(), password });
@@ -74,14 +151,65 @@ export class AccountSession {
       }
       this.#release("登录未完成，请重试。");
     } catch (error) {
-      if (this.#isRetryable(error)) {
-        this.#release("暂时无法连接登录服务，请重试。");
-      } else if (error && typeof error === "object" && "status" in error
-        && (error.status === 400 || error.status === 401 || error.status === 403 || error.status === 422)) {
-        this.#release("登录失败。请检查内测邮箱和密码。");
-      } else {
-        this.#release("登录未完成，请重试。");
-      }
+      this.#release(readableSignInError(error, this.#isRetryable));
+    }
+  }
+
+  async signUp(email: string, password: string): Promise<SelfServiceResult> {
+    if (this.#view.kind !== "signed-out" || this.#selfServicePending) {
+      return { ok: false, message: "当前状态无法注册，请稍后再试。" };
+    }
+    const normalizedEmail = email.trim();
+    if (!EMAIL_PATTERN.test(normalizedEmail)) {
+      return { ok: false, message: "请输入有效的邮箱地址。" };
+    }
+    if (password.length < 6) {
+      return { ok: false, message: "密码至少需要 6 位字符。" };
+    }
+    if (!this.#auth.signUp) {
+      return { ok: false, message: "当前环境暂不支持自助注册。" };
+    }
+
+    this.#selfServicePending = true;
+    try {
+      const { data, error } = await this.#auth.signUp({ email: normalizedEmail, password });
+      if (error) throw error;
+      return data.user
+        ? { ok: true, message: SIGN_UP_NOTICE }
+        : { ok: false, message: "注册未完成，请稍后重试。" };
+    } catch (error) {
+      return isExistingAccount(error)
+        ? { ok: true, message: SIGN_UP_NOTICE }
+        : { ok: false, message: readableSignUpError(error, this.#isRetryable) };
+    } finally {
+      this.#selfServicePending = false;
+    }
+  }
+
+  async resetPasswordForEmail(email: string): Promise<SelfServiceResult> {
+    if (this.#view.kind !== "signed-out" || this.#selfServicePending) {
+      return { ok: false, message: "当前状态无法发起找回，请稍后再试。" };
+    }
+    const normalizedEmail = email.trim();
+    if (!EMAIL_PATTERN.test(normalizedEmail)) {
+      return { ok: false, message: "请输入有效的邮箱地址。" };
+    }
+    if (!this.#auth.resetPasswordForEmail) {
+      return { ok: false, message: "当前环境暂不支持找回密码。" };
+    }
+
+    this.#selfServicePending = true;
+    try {
+      const { error } = await this.#auth.resetPasswordForEmail(normalizedEmail);
+      if (error) throw error;
+      return { ok: true, message: RECOVERY_NOTICE };
+    } catch (error) {
+      const { code, message } = authErrorInfo(error);
+      return code === "user_not_found" || message.includes("user not found")
+        ? { ok: true, message: RECOVERY_NOTICE }
+        : { ok: false, message: readableResetError(error, this.#isRetryable) };
+    } finally {
+      this.#selfServicePending = false;
     }
   }
 
