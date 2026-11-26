@@ -85,15 +85,16 @@ const main = async (): Promise<void> => {
   });
   // Reminders and Companions that write first, checked every 20 seconds so the app can be built
   // against them: a message that says 提醒 sets a reminder for one to two minutes later (the fake replies).
-  const stopReach = new BackgroundScheduler({
+  const reach = (due: "chat_reminder_due" | "chat_reach_due", what: string) => new BackgroundScheduler({
     server: new PgOwnerExecutor(pool, null),
     portFor: subject => new PostgresChatAdapter(new PgOwnerExecutor(pool, subject)),
-    due: "chat_reach_due", what: "message of its own", platform: true,
+    due, what, platform: true,
     write: (companionId, port) => chat.replies.reachOut(companionId, port),
   }).start(20_000);
+  const stops = [reach("chat_reminder_due", "reminder"), reach("chat_reach_due", "message of its own")];
 
   // Close the pool only after the last request has finished.
-  const shutdown = (): void => { stopReach(); server.close(() => { void pool.end(); }); };
+  const shutdown = (): void => { stops.forEach(stop => stop()); server.close(() => { void pool.end(); }); };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 

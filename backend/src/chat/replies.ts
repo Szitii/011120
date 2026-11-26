@@ -422,9 +422,13 @@ export class ChatReplies {
   /** `silent`: why this Companion has no voice messages now, or null when it has a voice. */
   async #answer(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
     const answered = await this.#write(turn, port, trace, silent);
+    if (turn.reach?.kind !== "REMINDER") return answered;
     // A reminder is delivered whatever happened to the model (none, switched off, out of budget, a
     // refusal, an answer that could not be used): in plain words. Its note passed the scan when it was set.
-    return answered[0] !== "SENT" && turn.reach?.kind === "REMINDER" ? ["SENT", [plainReminder(turn.reach.note)]] : answered;
+    const [outcome, bodies, , action] = answered;
+    if (outcome !== "SENT") return ["SENT", [plainReminder(turn.reach.note)]];
+    // An action and not a word (it hugged the Owner and said nothing): the action stays, and the words are added.
+    return bodies !== null && bodies.length > 0 ? answered : ["SENT", [plainReminder(turn.reach.note)], undefined, action];
   }
 
   async #write(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {

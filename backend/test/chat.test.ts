@@ -572,8 +572,11 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
     "by its number in the list it was shown; a number that is not there cancels nothing");
   assert.deepEqual(splitReminders(["【提醒：2026/1/5 07：30 吃药】再设一个 [提醒:2026-01-06 07:30 第二个不算]"]),
     { messages: ["再设一个"], reminders: { set: { at: "2026-01-05 07:30", note: "吃药" } } }, "the first one; other brackets and separators");
-  assert.deepEqual(splitReminders(["[提醒:明天早上 叫我]嗯", "[提醒:2026-11-27 08:00]", "普通的话"]), { messages: ["嗯", "", "普通的话"], reminders: undefined },
-    "a mark without a readable time or without a note is taken out and sets nothing");
+  assert.deepEqual(splitReminders(["[提醒:2026-11-27 8点 起床]嗯", "[提醒:2026-11-27 08:00]", "[取消提醒:第一个]", "普通的话"]),
+    { messages: ["嗯", "", "", "普通的话"], reminders: undefined }, "a mark that starts like ours but cannot be read, or has no note, is taken out and sets nothing");
+  assert.deepEqual(splitReminders(["【提醒：今天降温，记得加衣】", "[提醒事项] 买牛奶"]), { messages: ["【提醒：今天降温，记得加衣】", "[提醒事项] 买牛奶"], reminders: undefined },
+    "its own words in brackets stay");
+  assert.deepEqual(splitReminders(["[提醒:2026-11-27 08:00:30 起床]"]).reminders, { set: { at: "2026-11-27 08:00", note: "起床" } }, "seconds are not part of the note");
   assert.equal(Array.from(splitReminders([`[提醒:2026-11-27 08:00 ${"长".repeat(150)}]`]).reminders!.set!.note).length, 100);
   assert.equal(localStamp(new Date("2026-11-26T16:30:00Z"), "Asia/Shanghai"), "2026-11-27 00:30");
   assert.equal(localStamp(new Date("2026-11-26T16:30:00Z"), "Not/AZone"), "2026-11-27 00:30", "an unknown zone reads as Asia/Shanghai");
@@ -609,6 +612,12 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   }
   assert.deepEqual(await run(says("好的 [提醒:2026-11-28 08:00 再提醒一次]"), due).then(r => [r.bodies, r.reminders]), [["好的"], undefined],
     "it sets nothing while it delivers one");
+  // An action and not a word: the action is kept and the reminder is still said.
+  const hug = fakePort([{ ...due, canAct: true }]);
+  const acted: unknown[] = [];
+  hug.port.finish = async (_reply, _claim, outcome, bodies, _clips, action) => { acted.push(outcome, bodies, action); return true; };
+  await new ChatReplies(says("[动作:抱抱]")).drain(chatId, hug.port);
+  assert.deepEqual(acted, ["SENT", ["提醒你：交报告"], "HUG"]);
 
   // Writing first: it may say something or nothing; whatever goes wrong, nothing is shown.
   const away = direct({ replyTo: "SELF", optional: true, reach: { kind: "GREETING" } });
