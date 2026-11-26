@@ -196,6 +196,7 @@ export function themePalette(skin: SkinTheme) {
     danger: skin.isDark ? "#F6A7AF" : "#984C59",
     affection: skin.isDark ? "#F6A7AF" : "#C87D87",
     onDark: "#F8FAFC",
+    lightboxScrim: "rgba(12,14,18,0.92)",
     scrim: skin.isDark ? "rgba(0,0,0,0.58)" : "rgba(15,23,42,0.34)",
     sheen: skin.isDark ? ["#303645", "#232734", "#363D50"] as const : PEARL_UI.sheen,
   };

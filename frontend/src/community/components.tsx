@@ -1,7 +1,7 @@
 import { useThemedStyles, useSkin } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
-import { useEffect, useState } from "react";
-import { FlatList, Modal, Pressable, SafeAreaView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Modal, PanResponder, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { CommunityActor, CommunityComment, CommunityPost, PostMedia, PostVisibility } from "../../../contracts/community.ts";
@@ -115,6 +115,7 @@ export function ActorLine({
 
 type MediaSource = { uri: string; headers: Record<string, string> };
 type MediaResolver = (path: string) => Promise<MediaSource | undefined>;
+const LIGHTBOX_SWIPE_DISTANCE = 40;
 
 export function AuthPostImage({
   media,
@@ -122,12 +123,14 @@ export function AuthPostImage({
   style,
   contentFit = "cover",
   cacheScope,
+  draggable,
 }: {
   media: PostMedia;
   resolveMedia?: MediaResolver;
   style: Record<string, unknown>;
   contentFit?: "cover" | "contain";
   cacheScope?: string;
+  draggable?: boolean;
 }) {
   const { ui } = useSkin();
   const cacheKey = cacheScope ? `${cacheScope}:${media.path}` : media.path;
@@ -151,13 +154,13 @@ export function AuthPostImage({
   const current = resolved?.key === cacheKey ? resolved : undefined;
   if (current && !current.source) {
     return (
-      <View style={[style, { backgroundColor: ui.background[0], alignItems: "center", justifyContent: "center" }]}>
+      <View style={[{ backgroundColor: ui.background[0], alignItems: "center", justifyContent: "center" }, style]}>
         <Ionicons name="image-outline" size={20} color={ui.muted} />
       </View>
     );
   }
   if (!current?.source) {
-    return <View style={[style, { backgroundColor: ui.background[0] }]} />;
+    return <View style={[{ backgroundColor: ui.background[0] }, style]} />;
   }
   return (
     <Image
@@ -166,6 +169,7 @@ export function AuthPostImage({
       cachePolicy="memory"
       accessibilityLabel={media.alt ?? "动态图片"}
       contentFit={contentFit}
+      draggable={draggable}
       style={style}
       onError={() => setResolved({ key: cacheKey })}
     />
@@ -183,7 +187,6 @@ function PostMediaGrid({ media, resolveMedia, cacheScope }: { media: PostMedia[]
     ? Math.max(0.75, Math.min(1.8, single.width / single.height))
     : 4 / 3;
   const twoCol = images.length === 2 || images.length === 4;
-
 
   return (
     <>
@@ -228,10 +231,20 @@ function MediaLightbox({ images, initialIndex, resolveMedia, cacheScope, onClose
 }) {
   const s = useCommunityStyles();
   const { ui } = useSkin();
-  const { width } = useWindowDimensions();
-  const [pageWidth, setPageWidth] = useState(width);
   const [index, setIndex] = useState(initialIndex);
-  const visibleIndex = Math.min(index, images.length - 1);
+  const lastIndex = images.length - 1;
+  const visibleIndex = Math.min(index, lastIndex);
+  const move = useCallback((step: number) => {
+    setIndex(current => Math.max(0, Math.min(lastIndex, Math.min(current, lastIndex) + step)));
+  }, [lastIndex]);
+  const swipe = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => lastIndex > 0,
+    onPanResponderRelease: (_, { dx, dy }) => {
+      if (Math.abs(dx) >= LIGHTBOX_SWIPE_DISTANCE && Math.abs(dx) > Math.abs(dy)) {
+        move(dx < 0 ? 1 : -1);
+      }
+    },
+  }), [lastIndex, move]);
 
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
@@ -239,36 +252,29 @@ function MediaLightbox({ images, initialIndex, resolveMedia, cacheScope, onClose
         <View style={s.mediaToolbar}>
           <Text accessibilityLiveRegion="polite" style={s.mediaCount}>{visibleIndex + 1} / {images.length}</Text>
           <Pressable accessibilityRole="button" accessibilityLabel="关闭大图预览"
-            onPress={onClose} style={s.mediaClose}>
-            <Ionicons name="close" size={22} color={ui.onAccent} />
+            onPress={onClose} style={s.mediaControl}>
+            <Ionicons name="close" size={22} color={ui.onDark} />
           </Pressable>
         </View>
-        <View style={s.mediaPager} onLayout={event => setPageWidth(event.nativeEvent.layout.width || width)}>
-          <FlatList
-            key={pageWidth}
-            data={images}
-            horizontal
-            pagingEnabled
-            initialScrollIndex={visibleIndex}
-            getItemLayout={(_, index) => ({ length: pageWidth, offset: pageWidth * index, index })}
-            showsHorizontalScrollIndicator={false}
-            keyExtractor={(item, index) => `${item.path}-${index}`}
-            onMomentumScrollEnd={event => {
-              const next = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
-              setIndex(Math.max(0, Math.min(next, images.length - 1)));
-            }}
-            renderItem={({ item }) => (
-              <Pressable style={[s.mediaPage, { width: pageWidth }]} onPress={onClose}>
-                <AuthPostImage
-                  media={item}
-                  resolveMedia={resolveMedia}
-                  cacheScope={cacheScope}
-                  contentFit="contain"
-                  style={{ width: "100%", height: "100%" }}
-                />
+        <View style={s.mediaStage}>
+          <View style={s.mediaFrame} {...swipe.panHandlers}>
+            <AuthPostImage media={images[visibleIndex]} resolveMedia={resolveMedia} cacheScope={cacheScope}
+              contentFit="contain" draggable={false} style={s.mediaImage} />
+          </View>
+          {lastIndex > 0 && (
+            <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, s.mediaNavigation]}>
+              <Pressable accessibilityRole="button" accessibilityLabel="上一张图片"
+                disabled={visibleIndex === 0} onPress={() => move(-1)}
+                style={[s.mediaControl, visibleIndex === 0 && s.mediaControlDisabled]}>
+                <Ionicons name="chevron-back" size={22} color={ui.onDark} />
               </Pressable>
-            )}
-          />
+              <Pressable accessibilityRole="button" accessibilityLabel="下一张图片"
+                disabled={visibleIndex === lastIndex} onPress={() => move(1)}
+                style={[s.mediaControl, visibleIndex === lastIndex && s.mediaControlDisabled]}>
+                <Ionicons name="chevron-forward" size={22} color={ui.onDark} />
+              </Pressable>
+            </View>
+          )}
         </View>
       </SafeAreaView>
     </Modal>
@@ -459,12 +465,16 @@ export const createCommunityStyles = (ui: UiPalette) => StyleSheet.create({
   mediaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   mediaTileTwo: { width: "48.5%", aspectRatio: 1, borderRadius: 12, overflow: "hidden" },
   mediaTileThree: { width: "31.8%", aspectRatio: 1, borderRadius: 12, overflow: "hidden" },
-  mediaModal: { flex: 1, backgroundColor: ui.scrim },
+  mediaModal: { flex: 1, width: "100%", height: "100%", backgroundColor: ui.lightboxScrim },
   mediaToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: CHROME.screenInset },
-  mediaCount: { overflow: "hidden", color: ui.onAccent, backgroundColor: ui.accent, borderRadius: RADIUS.pill,
+  mediaCount: { overflow: "hidden", color: ui.onDark, backgroundColor: ui.lightboxScrim, borderRadius: RADIUS.pill,
     paddingHorizontal: 10, paddingVertical: 4, fontSize: 13, fontWeight: "600" },
-  mediaClose: { width: 44, height: 44, borderRadius: RADIUS.pill, backgroundColor: ui.accent,
+  mediaControl: { width: 44, height: 44, borderRadius: RADIUS.pill, backgroundColor: ui.lightboxScrim,
     alignItems: "center", justifyContent: "center" },
-  mediaPager: { flex: 1 },
-  mediaPage: { padding: CHROME.screenInset },
+  mediaControlDisabled: { opacity: 0.4 },
+  mediaStage: { flex: 1, alignItems: "center", justifyContent: "center" },
+  mediaFrame: { width: "92%", height: "78%" },
+  mediaImage: { width: "100%", height: "100%", backgroundColor: "transparent" },
+  mediaNavigation: { flexDirection: "row", alignItems: "center",
+    justifyContent: "space-between", paddingHorizontal: CHROME.screenInset },
 });
