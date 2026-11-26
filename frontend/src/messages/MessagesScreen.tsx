@@ -114,12 +114,17 @@ function formatShortTime(iso?: string | null): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-export function MessagesScreen({ api, viewer, chatClient, ownerId, draftStore, companions, visible, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup, onCommunityTarget, onLife, onRead }: {
+function unreadLabel(label: string, count: number) {
+  return count > 0 ? `${label}，${count} 条未读` : label;
+}
+
+export function MessagesScreen({ api, viewer, chatClient, ownerId, draftStore, unread, companions, visible, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup, onCommunityTarget, onLife, onRead }: {
   api: ClientApi;
   viewer: ActorContext;
   chatClient?: ChatClient;
   ownerId?: string;
   draftStore?: ChatDraftStore;
+  unread: { chats: number; community: number; owner: number };
   companions: OwnerCompanionSummary[];
   visible: boolean;
   onChat: (chat: Chat) => void;
@@ -135,6 +140,7 @@ export function MessagesScreen({ api, viewer, chatClient, ownerId, draftStore, c
   const [source, setSource] = useState<"community" | "owner">("community");
   const appActive = useAppIsActive();
   const active = visible && appActive;
+  const noticesUnread = unread.community + unread.owner;
 
   return (
     <View style={styles.page}>
@@ -144,19 +150,23 @@ export function MessagesScreen({ api, viewer, chatClient, ownerId, draftStore, c
           <View style={styles.segmentWrap}>
             <Pressable
               accessibilityRole="tab"
+              accessibilityLabel={unreadLabel("会话", unread.chats)}
               accessibilityState={{ selected: section === "chats" }}
               onPress={() => setSection("chats")}
               style={[styles.segmentBtn, section === "chats" && styles.segmentBtnActive]}
             >
               <Text style={[styles.segmentText, section === "chats" && styles.segmentTextActive]}>会话</Text>
+              {unread.chats > 0 && <View pointerEvents="none" style={styles.segmentUnreadDot} />}
             </Pressable>
             <Pressable
               accessibilityRole="tab"
+              accessibilityLabel={unreadLabel("通知", noticesUnread)}
               accessibilityState={{ selected: section === "notices" }}
               onPress={() => setSection("notices")}
               style={[styles.segmentBtn, section === "notices" && styles.segmentBtnActive]}
             >
               <Text style={[styles.segmentText, section === "notices" && styles.segmentTextActive]}>通知</Text>
+              {noticesUnread > 0 && <View pointerEvents="none" style={styles.segmentUnreadDot} />}
             </Pressable>
           </View>
         )}
@@ -164,8 +174,16 @@ export function MessagesScreen({ api, viewer, chatClient, ownerId, draftStore, c
 
       {section === "notices" && viewer.kind === "OWNER" && (
         <View style={styles.subTabs}>
-          <Button label="社区通知" selected={source === "community"} onPress={() => setSource("community")} />
-          <Button label="主人通知" selected={source === "owner"} onPress={() => setSource("owner")} />
+          <View>
+            <Button label="社区通知" accessibilityLabel={unreadLabel("社区通知", unread.community)}
+              selected={source === "community"} onPress={() => setSource("community")} />
+            {unread.community > 0 && <View pointerEvents="none" style={styles.segmentUnreadDot} />}
+          </View>
+          <View>
+            <Button label="主人通知" accessibilityLabel={unreadLabel("主人通知", unread.owner)}
+              selected={source === "owner"} onPress={() => setSource("owner")} />
+            {unread.owner > 0 && <View pointerEvents="none" style={styles.segmentUnreadDot} />}
+          </View>
         </View>
       )}
 
@@ -303,6 +321,12 @@ function ConversationList({ client, ownerId, draftStore, companions, active, onC
     : "";
   const menuPref = menuChat ? prefs[menuChat.id] : undefined;
 
+  function refreshChats() {
+    if (loading) return;
+    setRefreshing(true);
+    setReload(value => value + 1);
+  }
+
   return (
     <ScrollView
       contentContainerStyle={styles.content}
@@ -312,10 +336,7 @@ function ConversationList({ client, ownerId, draftStore, companions, active, onC
         <RefreshControl
           refreshing={refreshing}
           tintColor={ui.accent}
-          onRefresh={() => {
-            setRefreshing(true);
-            setReload(value => value + 1);
-          }}
+          onRefresh={refreshChats}
         />
       }
     >
@@ -352,7 +373,12 @@ function ConversationList({ client, ownerId, draftStore, companions, active, onC
           )}
         </View>
       )}
-      {error !== "" && <Text accessibilityRole="alert" style={styles.errorText}>{error}</Text>}
+      {error !== "" && (
+        <View>
+          <Text accessibilityRole="alert" style={styles.errorText}>{error}</Text>
+          <Button label="重试加载会话" disabled={loading} onPress={refreshChats} />
+        </View>
+      )}
       {prefsSaveFailed && <View>
         <Text accessibilityRole="alert" style={styles.errorText}>会话偏好暂未保存。</Text>
         <Button label="重试保存" onPress={() => { if (prefsRef.current) saveChatPrefs(prefsRef.current); }} />
@@ -404,80 +430,59 @@ function ConversationList({ client, ownerId, draftStore, companions, active, onC
                   <PixelAvatar name={title} role="companion" uri={member?.avatar} size={46} />
                   {hasUnread && <View style={[styles.unreadDot, isMuted && styles.unreadDotMuted]} />}
                 </Pressable>
-                <View style={styles.chatMain}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`打开 ${title} 的会话`}
+                  onPress={openChat}
+                  onLongPress={openMenu}
+                  delayLongPress={320}
+                  style={({ pressed }) => [styles.chatMain, pressed && styles.chatMainPressed]}
+                >
                   <View style={styles.chatHeaderRow}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={openProfile ? `查看 ${title} 的主页` : `打开 ${title} 的会话`}
-                      onPress={openProfile ?? openChat}
-                      onLongPress={openMenu}
-                      delayLongPress={320}
-                      style={styles.chatTitlePress}
-                    >
-                      <View style={styles.chatTitleWrap}>
-                        {isPinned && (
-                          <Ionicons
-                            name="pin-outline"
-                            size={13}
-                            color={ui.accentInk}
-                            accessibilityLabel="已置顶"
-                            style={styles.pinIcon}
-                          />
-                        )}
-                        <Text style={styles.chatTitle} numberOfLines={1}>
-                          {title}{chat.direct ? "" : " · 群聊"}
-                        </Text>
-                      </View>
-                    </Pressable>
-                    {!!timeStr && (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`打开 ${title} 的会话`}
-                        onPress={openChat}
-                        onLongPress={openMenu}
-                        delayLongPress={320}
-                      >
-                        <Text style={styles.chatTime}>{timeStr}</Text>
-                      </Pressable>
-                    )}
-                  </View>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`打开 ${title} 的会话`}
-                    onPress={openChat}
-                    onLongPress={openMenu}
-                    delayLongPress={320}
-                    style={({ pressed }) => pressed && styles.chatMainPressed}
-                  >
-                    <View style={styles.chatFooterRow}>
-                      {hasDraft ? (
-                        <Text style={styles.chatPreview} numberOfLines={1}>
-                          <Text style={styles.draftTag}>[草稿] </Text>
-                          {draftPreviewText || "已提及成员"}
-                        </Text>
-                      ) : (
-                        <Text style={styles.chatPreview} numberOfLines={1}>{fallbackPreview}</Text>
+                    <View style={styles.chatTitleWrap}>
+                      {isPinned && (
+                        <Ionicons
+                          name="pin-outline"
+                          size={13}
+                          color={ui.accentInk}
+                          accessibilityLabel="已置顶"
+                          style={styles.pinIcon}
+                        />
                       )}
-                      <View style={styles.chatFooterRight}>
-                        {isMuted && (
-                          <Ionicons
-                            name="notifications-off-outline"
-                            size={14}
-                            color={ui.muted}
-                            accessibilityLabel="已免打扰"
-                          />
-                        )}
-                        {hasUnread && (
-                          <View style={[styles.unreadPill, isMuted && styles.unreadPillMuted]}>
-                            <Text style={[styles.unreadCount, isMuted && styles.unreadCountMuted]}>
-                              {(chat.unreadCount ?? 0) > 99 ? "99+" : chat.unreadCount}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
+                      <Text style={styles.chatTitle} numberOfLines={1}>
+                        {title}{chat.direct ? "" : " · 群聊"}
+                      </Text>
                     </View>
-                  </Pressable>
-                </View>
+                    {!!timeStr && <Text style={styles.chatTime}>{timeStr}</Text>}
+                  </View>
+                  <View style={styles.chatFooterRow}>
+                    {hasDraft ? (
+                      <Text style={styles.chatPreview} numberOfLines={1}>
+                        <Text style={styles.draftTag}>[草稿] </Text>
+                        {draftPreviewText || "已提及成员"}
+                      </Text>
+                    ) : (
+                      <Text style={styles.chatPreview} numberOfLines={1}>{fallbackPreview}</Text>
+                    )}
+                    <View style={styles.chatFooterRight}>
+                      {isMuted && (
+                        <Ionicons
+                          name="notifications-off-outline"
+                          size={14}
+                          color={ui.muted}
+                          accessibilityLabel="已免打扰"
+                        />
+                      )}
+                      {hasUnread && (
+                        <View style={[styles.unreadPill, isMuted && styles.unreadPillMuted]}>
+                          <Text style={[styles.unreadCount, isMuted && styles.unreadCountMuted]}>
+                            {(chat.unreadCount ?? 0) > 99 ? "99+" : chat.unreadCount}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </Pressable>
               </View>
             );
           })}
@@ -648,20 +653,25 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
   const [markingAll, setMarkingAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [failedRead, setFailedRead] = useState<{ cursor?: Cursor }>();
   const mounted = useRef(false);
   const pending = useRef(false);
   const openAllowed = useRef(visible);
   openAllowed.current = visible;
 
-  async function run(operation: () => Promise<void>) {
+  async function run(operation: () => Promise<void>, onFailure?: () => void) {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
     setError("");
+    setFailedRead(undefined);
     try {
       await operation();
     } catch (err) {
-      if (mounted.current) setError(safeClientMessage(err).title);
+      if (mounted.current) {
+        setError(safeClientMessage(err).title);
+        onFailure?.();
+      }
     } finally {
       pending.current = false;
       if (mounted.current) {
@@ -682,7 +692,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
         return [...merged.values()];
       });
       setCursor(page.nextCursor);
-    });
+    }, () => setFailedRead({ cursor: next }));
   }
 
   useEffect(() => {
@@ -756,6 +766,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
         </View>
       )}
       {error !== "" && <Text accessibilityRole="alert" style={styles.errorText}>{error}</Text>}
+      {failedRead && <Button label="重试加载通知" disabled={busy} onPress={() => void read(failedRead.cursor)} />}
       {!items && !error && <ActivityIndicator accessibilityLabel="正在读取通知" color={ui.accent} style={{ marginVertical: 20 }} />}
       {items?.length === 0 && <Text style={styles.emptyText}>暂时没有通知，下滑可刷新。</Text>}
       {items?.map(item => (
@@ -803,6 +814,11 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   },
   segmentText: { fontSize: 13, fontWeight: "600", color: ui.muted },
   segmentTextActive: { color: ui.onAccent },
+  segmentUnreadDot: {
+    position: "absolute", top: 2, right: 2, width: 8, height: 8,
+    borderRadius: RADIUS.pill, borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.white, backgroundColor: ui.danger,
+  },
   subTabs: {
     flexDirection: "row",
     gap: 8,
@@ -876,8 +892,8 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     backgroundColor: ui.muted,
   },
   chatMain: { flex: 1, gap: 4 },
-  chatTitlePress: { flex: 1 },
   chatTitleWrap: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
