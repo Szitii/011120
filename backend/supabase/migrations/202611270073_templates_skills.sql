@@ -9,7 +9,8 @@ begin;
 --   2. Skills: a named piece of know-how ("英语陪练": when and how to do one thing), told to the
 --      model with every chat reply of a Companion that has it switched on.
 --        * official skills are written by the operators; an Owner switches them on per Companion
---          and sees their title and summary, not the wording;
+--          and is shown their title and summary. The wording is not shown, but it is no secret:
+--          it goes to the model with the rest of the prompt, also to a model the Owner connected;
 --        * an Owner writes skills of their own for one Companion (up to 10), scanned by the API
 --          server before they are saved, like a persona text. They reach nobody else's Companion.
 --      At most 5 skills are on for a Companion at a time: each is up to 600 characters of every reply.
@@ -121,8 +122,10 @@ returns jsonb language plpgsql security definer set search_path='' as $$
 declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
 begin
   if p_enabled is null then raise exception using errcode='22023', message='invalid skill'; end if;
-  -- The Companion first, so two requests cannot both count 4.
-  perform 1 from public.companions where id = c for no key update;
+  -- The Companion first, so two requests cannot both count 4; and a save that waited for a deletion
+  -- under way finds the Companion gone instead of writing into it.
+  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
+  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   if not exists(select 1 from companion_private.skills where id = p_skill and enabled) then
     raise exception using errcode='P0001', message='skill not found';
   end if;
@@ -140,7 +143,8 @@ begin
 end $$;
 
 -- Server only (the texts are scanned first). p_skill null: a new skill of the Companion's own (the
--- 11th is refused); else that one is rewritten. Switching one on as the sixth is refused.
+-- 11th is refused; one it already has word for word is returned as it is); else that one is
+-- rewritten. Switching one on as the sixth is refused.
 create function public.own_skill_save(p_companion uuid, p_skill uuid, p_title text, p_body text, p_enabled boolean)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare c uuid := companion_private.owned_companion(p_companion); o uuid := companion_private.chat_owner();
@@ -150,11 +154,17 @@ begin
     or v_body is null or v_body !~ '\S' or char_length(v_body) > 600 or p_enabled is null then
     raise exception using errcode='22023', message='invalid skill';
   end if;
-  perform 1 from public.companions where id = c for no key update;
+  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
+  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   if p_skill is not null then
     select * into s from companion_private.own_skills where id = p_skill and companion_id = c;
     if not found then raise exception using errcode='P0001', message='skill not found'; end if;
     was_on := s.enabled;
+  elsif exists(select 1 from companion_private.own_skills where companion_id = c and title = v_title and body = v_body) then
+    -- The same skill sent again (a retry): the one that is there, and nothing new.
+    select * into s from companion_private.own_skills where companion_id = c and title = v_title and body = v_body
+      order by created_at, id limit 1;
+    return companion_private.own_skill_json(s);
   elsif (select count(*) from companion_private.own_skills where companion_id = c) >= 10 then
     raise exception using errcode='55000', message='own skill limit reached';
   end if;
@@ -309,6 +319,11 @@ declare v_id uuid := coalesce(p_id, gen_random_uuid()); v_before jsonb;
 begin
   select to_jsonb(s) - 'id' - 'updated_at' into v_before from companion_private.skills s where s.id = p_id for update;
   if p_id is not null and v_before is null then raise exception using errcode='P0001', message='skill not found'; end if;
+  -- Back on the shelf: the Companions that had it on have it on again, except those that filled
+  -- their five places in the meantime (they would have six). For them it is off, like any other.
+  if coalesce(p_enabled, true) and (v_before->>'enabled') = 'false' then
+    delete from companion_private.companion_skills k where k.skill_id = p_id and companion_private.skills_on(k.companion_id) >= 5;
+  end if;
   insert into companion_private.skills as s (id, title, summary, body, position, enabled)
     values (v_id, btrim(p_title), btrim(p_summary), btrim(p_body, E' \t\r\n'), coalesce(p_position, 0), coalesce(p_enabled, true))
     on conflict (id) do update set title = excluded.title, summary = excluded.summary, body = excluded.body,

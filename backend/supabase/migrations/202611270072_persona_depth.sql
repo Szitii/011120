@@ -71,7 +71,9 @@ begin
     raise exception using errcode='22023', message='invalid world entry';
   end if;
   -- The Companion first, so two requests cannot both count 99.
-  perform 1 from public.companions where id = c for no key update;
+  -- Waits for a deletion that is under way, and then finds the Companion gone instead of writing into it.
+  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
+  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   if p_entry is null then
     select * into w from companion_private.world_entries where companion_id = c and body = v_body and keys = v_keys limit 1;
     if found then return companion_private.world_json(w); end if;
@@ -323,7 +325,9 @@ begin
         or char_length(f.value #>> '{}') > case f.key when 'dialogueExamples' then 1500 else 600 end) then
     raise exception using errcode='22023', message='invalid persona';
   end if;
-  perform 1 from public.companions where id = c for no key update;
+  -- Waits for a deletion that is under way, and then finds the Companion gone instead of writing into it.
+  perform 1 from public.companions where id = c and status <> 'DELETED' for no key update;
+  if not found then raise exception using errcode='P0001', message='companion not found'; end if;
   select i.* into cur from public.companions x join public.companion_identities i on i.id = x.current_identity_version_id
     where x.id = c;
   if cur.version <> p_version then raise exception using errcode='23505', message='persona version conflict'; end if;

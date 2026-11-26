@@ -18,6 +18,7 @@ import { vendorStatus, type VendorKey } from "./vendors.ts";
 import { promptBlock, promptTextRefusal, tidyPromptText } from "../chat/prompt-texts.ts";
 import { parseCharacterCard } from "../companion-import/parser.ts";
 import { hasActiveContent, hasCredential } from "../companion-import/policy.ts";
+import { skillLine } from "../chat/prompt.ts";
 import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
 import { withPending, feedbackPage, type FeedbackQueue, chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
@@ -279,7 +280,12 @@ export function createAdminServer(options: AdminServerOptions): Server {
         // What an Owner will hand to the import: it must come through whole, or the template would arrive with parts greyed out.
         const card = { spec: "chara_card_v2", spec_version: "2.0", data: { name: text("name"), description: text("description"),
           ...(text("personality") === "" ? {} : { personality: text("personality") }), ...(text("example") === "" ? {} : { mes_example: text("example") }) } };
-        const blocked = parseCharacterCard(new TextEncoder().encode(JSON.stringify(card))).draft.candidates.filter(candidate => !candidate.approvable);
+        const parsed = parseCharacterCard(new TextEncoder().encode(JSON.stringify(card)));
+        // With the name put in for every {{char}} the example must still fit, or it would arrive cut off.
+        if (parsed.findings.some(finding => finding.safePreview?.startsWith("Cut to"))) {
+          throw new AdminRefusal("示例对话把 {{char}} 换成默认名字以后超过了 1500 字,主人导入时会被截断。请缩短一些再保存。");
+        }
+        const blocked = parsed.draft.candidates.filter(candidate => !candidate.approvable);
         if (blocked.length > 0) {
           const where: Readonly<Record<string, string>> = { displayName: "默认名字", identitySummary: "简介", personaTraits: "性格", dialogueExamples: "示例对话" };
           throw new AdminRefusal(`“${blocked.map(candidate => where[candidate.field] ?? candidate.field).join("”和“")}”里有不能用的内容(密钥、电话或邮箱、网址,或者像“忽略以上指令”的话),主人导入时会被拦下。请改掉再保存。`);
@@ -288,6 +294,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
       } else {
         if (length("body") < 1 || length("body") > 600) throw new AdminRefusal("技能内容要填,最多 600 字。");
         if (hasCredential(text("body")) || hasActiveContent(text("body"))) throw new AdminRefusal("技能内容里不能有密钥或网址。");
+        if (skillLine(text("title"), text("body")) === null) throw new AdminRefusal("名称里除了【】还要有别的字,不然这个技能不会发给模型。");
         await db.call("skill_set", ...shared, text("body"), ...tail);
       }
     } else if (path === "/kit/template/delete" || path === "/kit/skill/delete") {

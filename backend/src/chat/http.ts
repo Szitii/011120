@@ -62,7 +62,7 @@ import { newAgentToken } from "../agent/heartbeat.ts";
 import type {
   CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, SkillRefusal, WorldEntryRefusal,
 } from "../../../contracts/chat.ts";
-import { PERSONA_KEYS, personaLimit, personaTexts, type PersonaKey } from "./prompt.ts";
+import { PERSONA_KEYS, personaLimit, personaTexts, skillLine, type PersonaKey } from "./prompt.ts";
 import { checkRules } from "./reply-rules.ts";
 import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
 import type { ChatReplies } from "./replies.ts";
@@ -492,6 +492,11 @@ export async function handleChatRequest(
       const reason = personaRefusal(skill[field]);
       if (reason !== null) return response(422, { code: "SKILL_REFUSED", field, reason } satisfies SkillRefusal);
     }
+    // And once more as the model is told it, title and text on one line: two harmless halves can make an instruction.
+    const told = skillLine(skill.title, skill.body);
+    if (told === null) return invalid();
+    const whole = personaRefusal(told);
+    if (whole !== null) return response(422, { code: "SKILL_REFUSED", field: "body", reason: whole } satisfies SkillRefusal);
     return response(skillId === null ? 201 : 200, await port.saveOwnSkill(companionId, skillId, skill.title, skill.body, skill.enabled));
   }
   if (worldRoute) {

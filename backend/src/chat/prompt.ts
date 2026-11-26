@@ -261,11 +261,18 @@ const MAX_SKILLS = 5;
  * skill says when and how to do one thing; the rules below it still decide.
  */
 function skillLines(skills: readonly SkillNote[]): string[] {
-  const lines = skills.slice(0, MAX_SKILLS).flatMap(skill => {
-    const title = oneLine(skill.title).replace(/[【】]/g, ""), body = Array.from(oneLine(maskCredentials(skill.body))).slice(0, SKILL_CHARS).join("");
-    return title === "" || body === "" ? [] : [`- 【${title}】${body}`];
-  });
+  const lines = skills.slice(0, MAX_SKILLS).flatMap(skill => skillLine(skill.title, skill.body) ?? []);
   return lines.length === 0 ? [] : ["", "你会的事（主人给你开的技能：用得上的时候照着做；和下面的规则冲突时，听规则的）：", ...lines];
+}
+
+/**
+ * One skill as the model is told it: the title and the text on one line. Null when nothing would
+ * be told (a title of nothing but brackets). A skill is checked in this form before it is saved,
+ * because this, not the two fields apart, is what the model reads.
+ */
+export function skillLine(title: string, text: string): string | null {
+  const name = oneLine(title).replace(/[【】]/g, "").trim(), body = Array.from(oneLine(maskCredentials(text))).slice(0, SKILL_CHARS).join("");
+  return name === "" || body === "" ? null : `- 【${name}】${body}`;
 }
 
 /** The persona fields an Owner can rewrite (GET and PUT /v0/companions/{id}/persona). */
