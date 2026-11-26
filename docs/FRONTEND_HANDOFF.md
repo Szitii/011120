@@ -1163,6 +1163,7 @@ Key 是每个家机单独存的。主人给家机 A 配过自带 Key（或自建
 
 - `GET /v0/companions/{id}/persona` 多返回 `dialogueExamples`（没有就是空字符串）。
 - `PUT` 时可以带它，**最多 1500 字**（别的字段是 600），换行会保留，传空字符串就是清掉。
+- 类型：`PersonaInput` 还是原来的 6 个字段，没有动，所以现在的代码照常编译；要带上示例对话时用 `PersonaWithExamplesInput`（就是 `PersonaInput` 再加一个可选的 `dialogueExamples`）。
 - 422 的 `field` 可能是 `dialogueExamples`（原因和别的字段一样：密钥、隐私信息、像指令的话、链接）。
 - 只用在聊天回复里，写日记和发动态不带它。
 - 建议做成一个多行输入框，提示"写几句 TA 会怎么和你说话，比如：主人：今天好累 / TA：辛苦啦，先坐下"。
