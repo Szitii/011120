@@ -16,11 +16,13 @@ import { AdminRefusal, type AdminDb } from "./db.ts";
 import { hosts, type FlyAccess } from "./fly.ts";
 import { vendorStatus, type VendorKey } from "./vendors.ts";
 import { promptBlock, promptTextRefusal, tidyPromptText } from "../chat/prompt-texts.ts";
+import { parseCharacterCard } from "../companion-import/parser.ts";
+import { hasActiveContent, hasCredential } from "../companion-import/policy.ts";
 import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
 import { withPending, feedbackPage, type FeedbackQueue, chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
   type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue, type SavedPrompts,
-  type Feature } from "./pages.ts";
+  type Feature, kitPage, type Kit } from "./pages.ts";
 
 /** On the tailnet: the console's machine name, and each allowed Tailscale login with their own database login. */
 export interface Tailnet {
@@ -186,6 +188,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
       return costsPage(now(), costs, cap, done, fly, vendors);
     }
     if (path === "/prompts") return promptsPage(zone, now(), await db.call<SavedPrompts>("prompts"), done);
+    if (path === "/kit") return kitPage(zone, await db.call<Kit>("kit"), done);
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
       const owner = ROUTES.uuid.test(query.get("owner") ?? "") ? query.get("owner") : null;
@@ -262,6 +265,34 @@ export function createAdminServer(options: AdminServerOptions): Server {
       const refused = body === null ? null : promptTextRefusal(block, body);
       if (refused !== null) throw new AdminRefusal(refused);
       await db.call("prompt_set", block.key, body, reason);
+    } else if (path === "/kit/template" || path === "/kit/skill") {
+      const template = path === "/kit/template";
+      const text = (name: string) => (form[name] ?? "").replace(/\r\n?/g, "\n").trim();
+      const length = (name: string) => Array.from(text(name)).length;
+      const id = form.id === undefined || form.id === "" ? null : form.id;
+      if ((id !== null && !ROUTES.uuid.test(id)) || !/^\d{1,4}$/.test(form.position ?? "") || length("title") < 1 || length("title") > 20
+        || length("summary") < 1 || length("summary") > 100) throw new AdminRefusal("名称(最多 20 字)和一句话介绍(最多 100 字)都要填,排序填 0 到 9999 的整数。");
+      const shared = [id, text("title"), text("summary")], tail = [Number(form.position), form.enabled === "on", reason];
+      if (template) {
+        if (length("name") < 1 || length("name") > 20 || length("description") < 1 || length("description") > 600 || length("personality") > 600
+          || length("example") > 1500) throw new AdminRefusal("默认名字(最多 20 字)和简介(最多 600 字)要填;性格最多 600 字,示例对话最多 1500 字。");
+        // What an Owner will hand to the import: it must come through whole, or the template would arrive with parts greyed out.
+        const card = { spec: "chara_card_v2", spec_version: "2.0", data: { name: text("name"), description: text("description"),
+          ...(text("personality") === "" ? {} : { personality: text("personality") }), ...(text("example") === "" ? {} : { mes_example: text("example") }) } };
+        const blocked = parseCharacterCard(new TextEncoder().encode(JSON.stringify(card))).draft.candidates.filter(candidate => !candidate.approvable);
+        if (blocked.length > 0) {
+          const where: Readonly<Record<string, string>> = { displayName: "默认名字", identitySummary: "简介", personaTraits: "性格", dialogueExamples: "示例对话" };
+          throw new AdminRefusal(`“${blocked.map(candidate => where[candidate.field] ?? candidate.field).join("”和“")}”里有不能用的内容(密钥、电话或邮箱、网址,或者像“忽略以上指令”的话),主人导入时会被拦下。请改掉再保存。`);
+        }
+        await db.call("template_set", ...shared, text("name"), text("description"), text("personality"), text("example"), ...tail);
+      } else {
+        if (length("body") < 1 || length("body") > 600) throw new AdminRefusal("技能内容要填,最多 600 字。");
+        if (hasCredential(text("body")) || hasActiveContent(text("body"))) throw new AdminRefusal("技能内容里不能有密钥或网址。");
+        await db.call("skill_set", ...shared, text("body"), ...tail);
+      }
+    } else if (path === "/kit/template/delete" || path === "/kit/skill/delete") {
+      if (!ROUTES.uuid.test(form.id ?? "")) throw new AdminRefusal("没有选中要删除的那一个。");
+      await db.call(path === "/kit/template/delete" ? "template_delete" : "skill_delete", form.id, reason);
     } else if (path === "/models/quota") {
       if (!/^\d{1,6}$/.test(form.calls ?? "") || !DOLLARS.test((form.dollars ?? "").trim())) throw new AdminRefusal("次数填整数,金额填美元(最多两位小数)。");
       await db.call("chat_quota_set", Number(form.calls), Math.round(Number(form.dollars!.trim()) * 100), reason);

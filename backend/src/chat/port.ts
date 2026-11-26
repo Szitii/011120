@@ -101,6 +101,9 @@ export interface PostJob {
   others: { author: string; body: string; at: string }[];
 }
 
+/** A skill that is switched on, as a prompt takes it. */
+export interface SkillNote { title: string; body: string }
+
 /** A world book entry as a prompt takes it: told to the model while one of its `keys` is in the conversation. */
 export interface WorldNote { keys: readonly string[]; body: string; enabled?: boolean | undefined }
 
@@ -188,6 +191,17 @@ export interface ChatPort {
   savePersona(companionId: string, version: number, fields: Readonly<Record<string, string>>): Promise<unknown>;
   addMemory(companionId: string, body: string, keyHash: string): Promise<unknown>;
   deleteMemory(companionId: string, memoryId: string): Promise<unknown>;
+  /** The persona templates on offer ({ items }). */
+  personaTemplates(): Promise<unknown>;
+  /** The official skills on offer with whether the Companion has each on, and its own skills ({ maxEnabled, official, own }). */
+  skills(companionId: string): Promise<unknown>;
+  /** Switches an official skill on or off for the Companion; returns skills(). */
+  setSkill(companionId: string, skillId: string, enabled: boolean): Promise<unknown>;
+  /** Server only (the texts are scanned first): a new skill of the Companion's own (`skillId` null) or that one rewritten. */
+  saveOwnSkill(companionId: string, skillId: string | null, title: string, body: string, enabled: boolean): Promise<unknown>;
+  deleteOwnSkill(companionId: string, skillId: string): Promise<unknown>;
+  /** Server only: the skills that are on, as the model is told them ([{ title, body }], 5 at most). */
+  skillTexts(companionId: string): Promise<unknown>;
   /** Every world book entry of the Companion, in the order they were written ({ items }). */
   worldEntries(companionId: string): Promise<unknown>;
   /** Server only (the texts are scanned first): a new entry (`entryId` null) or that entry rewritten. */

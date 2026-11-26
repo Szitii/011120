@@ -261,6 +261,63 @@ export interface ReplyRule {
 }
 
 /**
+ * 人设模板: a ready-made character the platform offers as a starting point. GET /v0/persona-templates.
+ * To create a Companion from one, send `card` to POST /v0/companion-imports like any character card
+ * (change `card.data.name` first if the Owner wants another name) and let the Owner approve it.
+ */
+export interface PersonaTemplate {
+  id: string;
+  /** What the picker shows, e.g. "温柔的倾听者". */
+  title: string;
+  summary: string;
+  /** A chara_card_v2 character card: {spec, spec_version, data: {name, description, personality?, mes_example?}}. */
+  card: { spec: "chara_card_v2"; spec_version: string; data: { name: string; description: string; personality?: string; mes_example?: string } };
+}
+
+/** GET /v0/persona-templates: the templates on offer, in the platform's order. */
+export interface PersonaTemplateList {
+  items: PersonaTemplate[];
+}
+
+/**
+ * 技能: what a Companion knows how to do ("英语陪练"), told to the model with every chat reply while
+ * it is switched on. GET /v0/companions/{id}/skills. At most `maxEnabled` are on at a time
+ * (official ones and the Companion's own together).
+ */
+export interface CompanionSkills {
+  maxEnabled: number;
+  /** The platform's skills: switch one on or off with PUT /v0/companions/{id}/skills/{skillId}. Their wording is not shown. */
+  official: { id: string; title: string; summary: string; enabled: boolean }[];
+  /** Skills the Owner wrote for this Companion (at most 10). */
+  own: OwnSkill[];
+}
+
+export interface OwnSkill {
+  id: string;
+  /** 1 to 20 characters on one line. */
+  title: string;
+  /** What to do and when, 1 to 600 characters. */
+  body: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** POST (a new one) and PUT (rewritten whole) of a skill of the Companion's own. `enabled` left out: true. */
+export interface OwnSkillInput {
+  title: string;
+  body: string;
+  enabled?: boolean;
+}
+
+/** 422 from POST or PUT of an own skill: the text may not be kept, for the same reasons as a persona text. */
+export interface SkillRefusal {
+  code: "SKILL_REFUSED";
+  field: "title" | "body";
+  reason: PersonaRefusal["reason"];
+}
+
+/**
  * 世界书: one piece of background a Companion knows ("小白：主人养的猫，三岁，怕打雷"). It is told
  * to the model only while one of its `keys` appears in the last few messages of the conversation.
  * GET /v0/companions/{id}/world-entries; at most 100 per Companion.

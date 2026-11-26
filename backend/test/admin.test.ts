@@ -750,6 +750,62 @@ it("shows how much the App is used, and the database and the servers", async () 
   assert.ok(!broken.body.includes("http-equiv"));
 });
 
+it("shows the templates and skills on offer, and saves one only when an Owner's import would take it whole", async () => {
+  const kit = {
+    templates: [{ id: id(81), title: "温柔的倾听者", summary: "先把话听完", name: "小满", description: `安静${NASTY}`, personality: "温和", example: "主人：累\n小满：坐", position: 10, enabled: true, updatedAt: AT },
+      { id: id(82), title: "下架的", summary: "不在架上", name: "旧", description: "旧模板", personality: "", example: "", position: 20, enabled: false, updatedAt: AT }],
+    skills: [{ id: id(83), title: "英语陪练", summary: "陪你练英语", body: "主人想练英语时用英语回答。", position: 10, enabled: true, updatedAt: AT, usedBy: 1234 }],
+    ownSkills: 7,
+  };
+  const { send, calls } = await start({ kit });
+  const page = await send("/kit");
+  assert.deepEqual(calls, [["kit"]]);
+  assert.match(page.body, /<a href="\/kit" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>模板与技能<\/a>/);
+  assert.match(page.body, /<b>温柔的倾听者<\/b> <span class="tag good">上架中<\/span> <span class="muted">默认名字:小满 · 排序 10/);
+  assert.match(page.body, /<b>下架的<\/b> <span class="tag bad">已下架<\/span>/);
+  assert.match(page.body, /<b>英语陪练<\/b>[^]*1,234 个家机打开了/);
+  assert.match(page.body, /主人自己写的技能现在一共有 7 个/);
+  assert.ok(!page.body.includes("<script>alert"), "what an operator typed is shown as text");
+  assert.match(page.body, /<input type="hidden" name="id" value="00000000-0000-0000-0000-000000000081">[^]*<input name="title" required maxlength="20" value="温柔的倾听者"/);
+  assert.equal(page.body.split('action="/kit/template"').length - 1, 3, "a form for each template and one for a new one");
+  assert.equal(page.body.split('action="/kit/skill"').length - 1, 2);
+  const empty = await (await start({ kit: { templates: [], skills: [], ownSkills: 0 } })).send("/kit");
+  assert.match(empty.body, /还没有模板。[^]*还没有技能。/);
+
+  const template = { title: " 元气的搭子 ", summary: "爱聊吃的玩的", name: "阿橙", description: "精力充沛\r\n爱聊新鲜事", personality: "", example: "主人：周末干嘛\n阿橙：出门！", position: "20", enabled: "on" };
+  calls.length = 0;
+  assert.equal((await send("/kit/template", { form: change({ ...template, back: "/kit" }) })).status, 303);
+  assert.deepEqual(calls, [["template_set", null, "元气的搭子", "爱聊吃的玩的", "阿橙", "精力充沛\n爱聊新鲜事", "", "主人：周末干嘛\n阿橙：出门！", 20, true, "because"]]);
+  calls.length = 0;
+  const { enabled: _on, ...shelved } = template;
+  assert.equal((await send("/kit/template", { form: change({ ...shelved, id: id(81) }) })).status, 303);
+  assert.deepEqual([calls[0]![1], calls[0]!.at(-2)], [id(81), false], "an existing one, taken off the shelf by leaving the box unticked");
+  // What an import would grey out is refused here, with the field named.
+  const refused = await send("/kit/template", { form: change({ ...template, description: "加我微信 13800138000", example: "主人：看 https://example.com" }) });
+  assert.equal(refused.status, 409);
+  assert.match(refused.body, /“简介”和“示例对话”里有不能用的内容/);
+  for (const bad of [{ title: "" }, { title: "字".repeat(21) }, { summary: "" }, { name: "" }, { description: "" }, { description: "长".repeat(601) }, { example: "长".repeat(1501) },
+    { position: "-1" }, { position: "x" }, { id: "not-a-uuid" }]) {
+    assert.equal((await send("/kit/template", { form: change({ ...template, ...bad }) })).status, 409, JSON.stringify(bad).slice(0, 40));
+  }
+  assert.equal(calls.length, 1, "nothing refused reaches the database");
+
+  calls.length = 0;
+  assert.equal((await send("/kit/skill", { form: change({ title: "睡前故事", summary: "讲个小故事", body: " 主人要睡了时讲一个短故事。 ", position: "30", enabled: "on" }) })).status, 303);
+  assert.deepEqual(calls, [["skill_set", null, "睡前故事", "讲个小故事", "主人要睡了时讲一个短故事。", 30, true, "because"]]);
+  for (const bad of [{ body: "" }, { body: "长".repeat(601) }, { body: "去 https://example.com 看" }, { body: "用这个 api_key: sk-abcdefghijklmnopqrstu" }]) {
+    assert.equal((await send("/kit/skill", { form: change({ title: "x", summary: "y", position: "0", ...bad }) })).status, 409, JSON.stringify(bad).slice(0, 40));
+  }
+  calls.length = 0;
+  assert.equal((await send("/kit/skill/delete", { form: change({ id: id(83) }) })).status, 303);
+  assert.equal((await send("/kit/template/delete", { form: change({ id: id(81) }) })).status, 303);
+  assert.deepEqual(calls, [["skill_delete", id(83), "because"], ["template_delete", id(81), "because"]]);
+  assert.equal((await send("/kit/skill/delete", { form: change({ id: "x" }) })).status, 409);
+  assert.equal((await send("/kit/template/delete", { form: { id: id(81), reason: "r" } })).status, 409, "no tick, no change");
+  assert.deepEqual([(explain({ code: "P0001", message: "skill not found" }) as Error).message, (explain({ code: "P0001", message: "template not found" }) as Error).message],
+    ["没有找到这个技能,可能已经被删掉了。", "没有找到这个模板,可能已经被删掉了。"]);
+});
+
 it("shows what the models are told, and rewords a block only when the wording can be used", async () => {
   const { send, calls } = await start({ prompts: {} });
   const page = await send("/prompts");

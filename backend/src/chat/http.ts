@@ -24,6 +24,11 @@
  *   GET|PUT /v0/companions/{id}/diary-settings         how often it writes
  *   GET|POST /v0/companions/{id}/memories              its long-term memories; { body } adds one
  *   DELETE /v0/companions/{id}/memories/{memoryId}     delete one
+ *   GET    /v0/persona-templates                       ready-made characters to start a Companion from
+ *   GET    /v0/companions/{id}/skills                  the skills on offer and its own
+ *   PUT    /v0/companions/{id}/skills/{skillId}        { enabled }  switch an official skill on or off
+ *   POST   /v0/companions/{id}/own-skills              { title, body, enabled? }  a skill of its own
+ *   PUT|DELETE /v0/companions/{id}/own-skills/{skillId}  rewrite or delete one
  *   GET|POST /v0/companions/{id}/world-entries         its world book; { keys, body, enabled? } adds an entry
  *   PUT|DELETE /v0/companions/{id}/world-entries/{entryId}  rewrite or delete one
  *   GET    /v0/companions/{id}/reminders               the reminders it still has to deliver
@@ -53,7 +58,9 @@ import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
-import type { CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, WorldEntryRefusal } from "../../../contracts/chat.ts";
+import type {
+  CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, SkillRefusal, WorldEntryRefusal,
+} from "../../../contracts/chat.ts";
 import { PERSONA_KEYS, personaLimit, personaTexts, type PersonaKey } from "./prompt.ts";
 import { checkRules } from "./reply-rules.ts";
 import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
@@ -128,6 +135,15 @@ function worldEntry(request: MvpHttpRequest): { keys: string[]; body: string; en
   const length = Array.from(text.trim()).length;
   if (words.some(word => word === "" || Array.from(word).length > 40 || /[\p{Cc}\u2028\u2029]/u.test(word)) || length < 1 || length > 1000) return invalid();
   return { keys: words, body: text.trim(), enabled: enabled !== false };
+}
+
+/** A skill of the Companion's own as sent: a title of 1 to 20 characters on one line and a text of 1 to 600 characters. */
+function ownSkill(request: MvpHttpRequest): { title: string; body: string; enabled: boolean } {
+  const { title, body: text, enabled } = body(request, ["title", "body", "enabled"]);
+  if (typeof title !== "string" || typeof text !== "string" || !(enabled === undefined || typeof enabled === "boolean")) return invalid();
+  const name = title.trim(), length = Array.from(text.trim()).length;
+  if (name === "" || Array.from(name).length > 20 || /[\p{Cc}\u2028\u2029]/u.test(name) || length < 1 || length > 600) return invalid();
+  return { title: name, body: text.trim(), enabled: enabled !== false };
 }
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
@@ -294,6 +310,9 @@ export async function handleChatRequest(
   const memoriesRoute = path[1] === "companions" && path[3] === "memories" && (path.length === 4 || path.length === 5);
   const remindersRoute = path[1] === "companions" && path[3] === "reminders" && (path.length === 4 || path.length === 5);
   const worldRoute = path[1] === "companions" && path[3] === "world-entries" && (path.length === 4 || path.length === 5);
+  const templatesRoute = path[1] === "persona-templates" && path.length === 2;
+  const skillsRoute = path[1] === "companions" && ((path[3] === "skills" && (path.length === 4 || path.length === 5))
+    || (path[3] === "own-skills" && (path.length === 4 || path.length === 5)));
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
@@ -302,8 +321,8 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, personaRoute, connectionRoute,
-    voicesRoute, agentKeysRoute].includes(true);
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute,
+    personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
   const response = (status: number, payload: unknown): MvpHttpResponse => ({
@@ -447,6 +466,26 @@ export async function handleChatRequest(
     const memory = text(body(request, ["body"]).body, 500);
     if (hasCredential(memory)) return invalid();
     return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
+  }
+  if (templatesRoute) return method === "GET" ? response(200, await port.personaTemplates()) : notFound();
+  if (skillsRoute) {
+    const companionId = id(path[2]);
+    if (path[3] === "skills") {
+      if (path.length === 4) return method === "GET" ? response(200, await port.skills(companionId)) : notFound();
+      if (method !== "PUT") return notFound();
+      const { enabled } = body(request, ["enabled"]);
+      return typeof enabled === "boolean" ? response(200, await port.setSkill(companionId, id(path[4]), enabled)) : invalid();
+    }
+    if (path.length === 5 && method === "DELETE") return response(200, await port.deleteOwnSkill(companionId, id(path[4])));
+    if (!(path.length === 4 && method === "POST") && !(path.length === 5 && method === "PUT")) return notFound();
+    const skillId = path.length === 5 ? id(path[4]) : null;
+    const skill = ownSkill(request);
+    // A skill is an instruction to the model in the Owner's words: the same scan as a persona text.
+    for (const field of ["title", "body"] as const) {
+      const reason = personaRefusal(skill[field]);
+      if (reason !== null) return response(422, { code: "SKILL_REFUSED", field, reason } satisfies SkillRefusal);
+    }
+    return response(skillId === null ? 201 : 200, await port.saveOwnSkill(companionId, skillId, skill.title, skill.body, skill.enabled));
   }
   if (worldRoute) {
     const companionId = id(path[2]);

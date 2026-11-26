@@ -1919,6 +1919,29 @@ select public.test_assert(
       or has_table_privilege(r.role, 'companion_private.chat_reminders', 'DELETE')),
   'a Companion''s own turns are queued by the API server alone, and reminders are reachable only through functions'
 );
+-- Templates and skills: Owners read what is on offer and switch skills; saving an Owner's own skill
+-- and reading the wording told to the model are the API server's; editing the catalog is the operators'.
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.persona_template_list()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.skill_list(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.skill_set(uuid,uuid,boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.own_skill_delete(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.persona_template_list()'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.own_skill_save(uuid,uuid,text,text,boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.skill_texts(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.own_skill_save(uuid,uuid,text,text,boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.skill_texts(uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('companion_api', 'companion_admin.skill_set(uuid,text,text,text,integer,boolean,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_admin.kit()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_admin', 'companion_admin.kit()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_admin', 'companion_admin.skill_set(uuid,text,text,text,integer,boolean,text)'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('companion_private.persona_templates'), ('companion_private.skills'),
+      ('companion_private.companion_skills'), ('companion_private.own_skills'), ('companion_private.world_entries')) t(name)
+    cross join (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
+      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
+  'templates, skills and the world book are reachable only through functions, each by the role it is for'
+);
 select public.test_assert(
   not exists(select 1 from (values ('companion_private.model_switches'), ('companion_private.admin_log'),
       ('companion_private.chat_quota')) t(name)
