@@ -6,6 +6,8 @@ export type CommunityTarget =
   | { type: "profile"; id?: string; companionId?: never; chatId?: never }
   | { type: "profile"; companionId: string; chatId?: string; id?: never }
   | { type: "blocks" };
+export type LegalDocKind = "terms" | "privacy";
+
 export type Route =
   | { type: "root"; tab: RootTab }
   | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: RootTab }
@@ -18,6 +20,8 @@ export type Route =
   | { type: "diary"; companionId: string; companionName: string }
   | { type: "life-archive" }
   | { type: "edit-human-profile" }
+  | { type: "settings" }
+  | { type: "legal"; doc: LegalDocKind }
   | { type: "feedback" }
   | { type: "avatar-settings"; companionId?: string }
   | { type: "agent-settings"; companionId?: string }

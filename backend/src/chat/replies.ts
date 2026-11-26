@@ -99,6 +99,21 @@ export interface MemoryTrace {
 }
 
 /**
+ * One line per attempt at noting memories down, so "why does it remember this, and why not that?"
+ * has somewhere to start: how it ended, how many sentences the model gave and the scan let through
+ * (`kept`), and how many of them became a new memory or took the place of an older one. Never the
+ * sentences themselves.
+ */
+export interface MemoryTrace {
+  event: "chat_memory";
+  companionId: string;
+  outcome: "DONE" | "FAILED";
+  kept: number;
+  added: number;
+  replaced: number;
+}
+
+/**
  * Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on.
  * A model that answers through the Owner's own key or agent says so with `via`, for the trace;
  * one that was offered the web says with `searched` how many searches it ran (or that it was refused)

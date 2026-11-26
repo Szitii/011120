@@ -11,11 +11,13 @@ import {
   SafeAreaView,
   FlatList,
   RefreshControl,
+  Share,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { setStringAsync } from "expo-clipboard";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type {
   ActorContext,
@@ -43,6 +45,19 @@ import { RADIUS } from "../theme/layoutTokens";
 import type { CompanionProfile, OwnerCompanionSummary } from "../contracts";
 
 type Page = { type: "feed" } | CommunityTarget;
+
+function buildPostShareUrl(postId: string): string | undefined {
+  const base = process.env.EXPO_PUBLIC_COMMUNITY_SHARE_BASE_URL?.trim();
+  if (!base) return;
+  try {
+    const url = new URL(base);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return;
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/${encodeURIComponent(postId)}`;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
 
 function mergeRows<T extends { id: string }>(previous: T[], incoming: T[]): T[] {
   return [...new Map([...previous, ...incoming].map(item => [item.id, item])).values()];
@@ -123,6 +138,11 @@ export function CommunityScreen({
 
   const [editingProfile, setEditingProfile] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "posts" | "comments"; id: string }>();
+  const [sharePostTarget, setSharePostTarget] = useState<CommunityPost>();
+  const shareLink = sharePostTarget ? buildPostShareUrl(sharePostTarget.id) : undefined;
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareNotice, setShareNotice] = useState("");
+  const sharePending = useRef(false);
   const scope = useMemo(() => new CommunityRequestScope(), []);
   const scroll = useRef<FlatList<CommunityPost>>(null);
   const feedY = useRef(initialScrollY);
@@ -325,6 +345,58 @@ export function CommunityScreen({
   const profileHandle = profile?.handle ?? managed?.handle ?? legacyProfile?.handle;
   const legacyBio = legacyProfile?.publicProfile.bio;
 
+  function openShareSheet(post: CommunityPost) {
+    if (sharePending.current || post.visibility !== "PUBLIC") return;
+    setShareNotice("");
+    setSharePostTarget(post);
+  }
+
+  async function copyPost(post: CommunityPost, linkOnly: boolean) {
+    if (sharePending.current || post.visibility !== "PUBLIC") return;
+    const url = buildPostShareUrl(post.id);
+    const text = linkOnly ? url : [post.body.trim(), url].filter(Boolean).join("\n");
+    if (!text) return;
+    sharePending.current = true;
+    setShareBusy(true);
+    try {
+      const copied = await setStringAsync(text);
+      if (!active.current) return;
+      if (copied) {
+        setSharePostTarget(undefined);
+        setShareNotice(linkOnly ? "动态链接已复制。" : "分享内容已复制。");
+      } else {
+        setShareNotice("复制未完成，请稍后重试。");
+      }
+    } catch {
+      if (active.current) setShareNotice("复制未完成，请稍后重试。");
+    } finally {
+      sharePending.current = false;
+      if (active.current) setShareBusy(false);
+    }
+  }
+
+  async function sharePost(post: CommunityPost) {
+    if (post.visibility !== "PUBLIC") return;
+    if (Platform.OS === "web") {
+      await copyPost(post, false);
+      return;
+    }
+    if (sharePending.current) return;
+    const message = [post.body.trim(), buildPostShareUrl(post.id)].filter(Boolean).join("\n");
+    if (!message) return;
+    sharePending.current = true;
+    setShareBusy(true);
+    try {
+      setSharePostTarget(undefined);
+      await Share.share({ message });
+    } catch {
+      if (active.current) setShareNotice("未能调起系统分享，请稍后重试。");
+    } finally {
+      sharePending.current = false;
+      if (active.current) setShareBusy(false);
+    }
+  }
+
   function editCommentMentions(mentions: Mention[]) {
     setCommentMentions(mentions);
     commentKey.current = communityRequestKey();
@@ -371,16 +443,34 @@ export function CommunityScreen({
         ref={scroll}
         data={posts}
         keyExtractor={post => post.id}
-        renderItem={({ item: post }) => <ContentCard item={post}
-          resolveMedia={client?.postMediaSource}
-          cacheScope={mediaCacheScope}
-          onActor={() => openActor(post.author.id)}
-          onMention={openActor}
-          onLike={client?.like ? () => toggleLike(post) : undefined}
-          likeDisabled={busy || loading}
-          onDetail={() => navigate({ type: "detail", id: post.id })}
-          onDelete={() => remove("posts", post.id)}
-          onReport={own && post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined} />}
+        renderItem={({ item: post }) => (
+          <View style={localStyles.postCardGroup}>
+            <ContentCard item={post}
+              resolveMedia={client?.postMediaSource}
+              cacheScope={mediaCacheScope}
+              onActor={() => openActor(post.author.id)}
+              onMention={openActor}
+              onLike={client?.like ? () => toggleLike(post) : undefined}
+              likeDisabled={busy || loading}
+              onDetail={() => navigate({ type: "detail", id: post.id })}
+              onDelete={() => remove("posts", post.id)}
+              onReport={own && post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined} />
+            {post.visibility === "PUBLIC" && (
+              <View style={localStyles.postShareRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="分享动态"
+                  disabled={shareBusy}
+                  onPress={() => openShareSheet(post)}
+                  style={({ pressed }) => [localStyles.shareChip, pressed && { opacity: 0.68 }]}
+                >
+                  <Ionicons name="share-outline" size={14} color={ui.muted} />
+                  <Text style={localStyles.shareChipText}>分享</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        )}
         ListFooterComponent={nextCursor ? <Button disabled={loading || busy} label="加载更多" onPress={() => void load(nextCursor)} /> : undefined}
         onEndReached={() => { if (nextCursor && !loading && !busy) void load(nextCursor); }}
         onEndReachedThreshold={0.4}
@@ -465,6 +555,12 @@ export function CommunityScreen({
                 </Pressable>
               )}
             </View>
+          </View>
+        )}
+
+        {shareNotice !== "" && !sharePostTarget && (
+          <View style={localStyles.noticePill}>
+            <Text accessibilityLiveRegion="polite" style={s.meta}>{shareNotice}</Text>
           </View>
         )}
 
@@ -562,21 +658,37 @@ export function CommunityScreen({
         {/* Post Detail & Comments */}
         {client && data?.type === "detail" && (
           <>
-            <ContentCard
-              item={data.value.post}
-              resolveMedia={client.postMediaSource}
-              cacheScope={mediaCacheScope}
-              onActor={() => openActor(data.value.post.author.id)}
-              onMention={openActor}
-              onLike={client.like ? () => toggleLike(data.value.post) : undefined}
-              likeDisabled={busy || loading}
-              onDelete={() => remove("posts", data.value.post.id)}
-              onReport={
-                own && data.value.post.author.id !== own.id
-                  ? () => setReportTarget({ kind: "POST", id: data.value.post.id })
-                  : undefined
-              }
-            />
+            <View style={localStyles.postCardGroup}>
+              <ContentCard
+                item={data.value.post}
+                resolveMedia={client.postMediaSource}
+                cacheScope={mediaCacheScope}
+                onActor={() => openActor(data.value.post.author.id)}
+                onMention={openActor}
+                onLike={client.like ? () => toggleLike(data.value.post) : undefined}
+                likeDisabled={busy || loading}
+                onDelete={() => remove("posts", data.value.post.id)}
+                onReport={
+                  own && data.value.post.author.id !== own.id
+                    ? () => setReportTarget({ kind: "POST", id: data.value.post.id })
+                    : undefined
+                }
+              />
+              {data.value.post.visibility === "PUBLIC" && (
+                <View style={localStyles.postShareRow}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="分享动态"
+                    disabled={shareBusy}
+                    onPress={() => openShareSheet(data.value.post)}
+                    style={({ pressed }) => [localStyles.shareChip, pressed && { opacity: 0.68 }]}
+                  >
+                    <Ionicons name="share-outline" size={14} color={ui.muted} />
+                    <Text style={localStyles.shareChipText}>分享</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
             {canCompose && (
               <View style={s.card}>
                 <Text style={s.meta}>
@@ -669,6 +781,36 @@ export function CommunityScreen({
 
         </View>}
       />
+
+      <BottomSheet
+        visible={Boolean(sharePostTarget)}
+        title="分享动态"
+        onClose={() => {
+          if (shareBusy) return;
+          setSharePostTarget(undefined);
+        }}
+      >
+        {sharePostTarget && (
+          <View style={localStyles.profileMenu}>
+            {sharePostTarget.body.trim() !== "" && (
+              <Text style={s.meta} numberOfLines={3}>{sharePostTarget.body}</Text>
+            )}
+            {shareLink && <Text style={s.meta} numberOfLines={1} selectable>{shareLink}</Text>}
+            {shareNotice !== "" && <Text accessibilityRole="alert" style={s.meta}>{shareNotice}</Text>}
+            <Button
+              primary
+              disabled={shareBusy || (!sharePostTarget.body.trim() && !shareLink)}
+              label={Platform.OS === "web" ? "复制分享内容" : "系统分享"}
+              onPress={() => void sharePost(sharePostTarget)}
+            />
+            {shareLink && <Button
+              disabled={shareBusy}
+              label="复制链接"
+              onPress={() => void copyPost(sharePostTarget, true)}
+            />}
+          </View>
+        )}
+      </BottomSheet>
 
       <BottomSheet visible={profileMenuOpen} title={managedActions ? "家机管理" : "更多主页操作"}
         onClose={() => setProfileMenuOpen(false)}>
@@ -876,6 +1018,32 @@ const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
     backgroundColor: ui.white,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.line,
+  },
+  postCardGroup: {
+    gap: 6,
+  },
+  postShareRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 10,
+    paddingHorizontal: 8,
+  },
+  shareChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: RADIUS.pill,
+    backgroundColor: ui.white,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.line,
+  },
+  shareChipText: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: ui.muted,
   },
   emptyCard: {
     paddingVertical: 32,
