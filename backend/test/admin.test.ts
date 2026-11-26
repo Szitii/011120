@@ -698,9 +698,9 @@ it("shows how much the App is used, and the database and the servers", async () 
   const stats = await send("/stats");
   assert.deepEqual(calls, [["activity", "2026-11-01"]]);
   assert.match(stats.body, /<a href="\/stats" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>运营数据<\/a>/);
-  assert.match(stats.body, /本月聊天的人<\/div><div class="big">12<\/div><div class="muted">新注册 3 人/);
-  assert.match(stats.body, /今天聊天的人<\/div><div class="big">3<\/div><div class="muted">主人发 20 条 · 家机回 18 条/);
-  assert.match(stats.body, /消息<\/div><div class="big">57<\/div><div class="muted">主人发 30 · 家机回 27 · 失败 3/);
+  assert.match(stats.body, /本月聊天的人<\/span><b>12<\/b><\/div>\s*<div><span class="muted">新注册<\/span><b>3<\/b>/);
+  assert.match(stats.body, /今天聊天的人<\/span><b>3<\/b><span class="muted">主人 20 · 家机 18 条<\/span>/);
+  assert.match(stats.body, /消息<\/span><b>57<\/b><span class="muted">主人 30 · 家机 27 · 失败 3/);
   assert.match(stats.body, /<title>2026-11-23\n聊天的人:3\n新注册:2<\/title>/);
   assert.ok(!stats.body.includes("2026-11-21"), "the days before anyone used the App are left out");
   const past = await (await start({ activity: { ...activity, month: "2026-10", days: [unused("2026-10-01")] } })).send("/stats?month=2026-10");
