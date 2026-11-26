@@ -788,12 +788,17 @@ it("shows the templates and skills on offer, and saves one only when an Owner's 
     { position: "-1" }, { position: "x" }, { id: "not-a-uuid" }]) {
     assert.equal((await send("/kit/template", { form: change({ ...template, ...bad }) })).status, 409, JSON.stringify(bad).slice(0, 40));
   }
+  // With the default name put in for every {{char}} the example no longer fits: an Owner's import would cut it.
+  const grows = await send("/kit/template", { form: change({ ...template, name: "名".repeat(20), example: `${"{{char}}：好\n".repeat(120)}` }) });
+  assert.equal(grows.status, 409);
+  assert.match(grows.body, /超过了 1500 字/);
   assert.equal(calls.length, 1, "nothing refused reaches the database");
 
   calls.length = 0;
   assert.equal((await send("/kit/skill", { form: change({ title: "睡前故事", summary: "讲个小故事", body: " 主人要睡了时讲一个短故事。 ", position: "30", enabled: "on" }) })).status, 303);
   assert.deepEqual(calls, [["skill_set", null, "睡前故事", "讲个小故事", "主人要睡了时讲一个短故事。", 30, true, "because"]]);
-  for (const bad of [{ body: "" }, { body: "长".repeat(601) }, { body: "去 https://example.com 看" }, { body: "用这个 api_key: sk-abcdefghijklmnopqrstu" }]) {
+  for (const bad of [{ body: "" }, { body: "长".repeat(601) }, { body: "去 https://example.com 看" }, { body: "用这个 api_key: sk-abcdefghijklmnopqrstu" },
+    { title: "【】", body: "名称里什么都没有" }]) {
     assert.equal((await send("/kit/skill", { form: change({ title: "x", summary: "y", position: "0", ...bad }) })).status, 409, JSON.stringify(bad).slice(0, 40));
   }
   calls.length = 0;

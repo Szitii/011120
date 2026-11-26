@@ -1077,7 +1077,7 @@ ${kind === "template" ? html`<label>默认名字 <input name="name" required max
 <textarea name="description" required maxlength="600" rows="3" placeholder="简介:TA 是谁(最多 600 字)" aria-label="简介">${t?.description ?? ""}</textarea>
 <textarea name="personality" maxlength="600" rows="2" placeholder="性格(可不填,最多 600 字)" aria-label="性格">${t?.personality ?? ""}</textarea>
 <textarea name="example" maxlength="1500" rows="4" placeholder="示例对话(可不填,最多 1500 字),一行一句。用 {{char}} 代表家机的名字,主人改了名字它会跟着变。如:主人：今天好累 / {{char}}：辛苦啦" aria-label="示例对话">${t?.example ?? ""}</textarea>`
-    : html`<textarea name="body" required maxlength="600" rows="4" placeholder="写给模型的话:什么时候用、怎么做(最多 600 字)。主人看不到这段。" aria-label="技能内容">${s?.body ?? ""}</textarea>`}
+    : html`<textarea name="body" required maxlength="600" rows="4" placeholder="写给模型的话:什么时候用、怎么做(最多 600 字)。App 里不显示这段,但不要写需要保密的内容。" aria-label="技能内容">${s?.body ?? ""}</textarea>`}
 <label>排序 <input name="position" type="number" min="0" max="9999" required size="4" value="${item?.position ?? 0}"></label>
 <label><input type="checkbox" name="enabled" value="on"${item === undefined || item.enabled ? html` checked` : ""}> 上架</label>`;
 };
@@ -1087,7 +1087,7 @@ export function kitPage(zone: string, kit: Kit, done: boolean): string {
   const shelf = (enabled: boolean) => enabled ? html`<span class="tag good">上架中</span>` : html`<span class="tag bad">已下架</span>`;
   return page("模板与技能", "/kit", html`
 <p>这里是平台提供给主人的两样东西。<b>人设模板</b>是写好的角色,主人新建家机时挑一个当起点,之后可以随便改。
-<b>技能</b>是一段写给模型的话(什么时候、怎么做一件事),主人给自己的家机打开后,每次聊天回复都会带上。主人只看得到技能的名称和一句话介绍,看不到内容。</p>
+<b>技能</b>是一段写给模型的话(什么时候、怎么做一件事),主人给自己的家机打开后,每次聊天回复都会带上。App 里主人只看得到技能的名称和一句话介绍。内容不是秘密:它和其他说明一起发给模型,主人接了自己的模型时会发到主人自己的服务上,所以不要写需要保密的东西。</p>
 <p class="muted">每个家机最多同时打开 5 个技能(官方的和主人自己写的加在一起)。下架的技能不再发给任何家机,重新上架后原来打开它的家机会恢复。
 主人自己写的技能现在一共有 ${count(kit.ownSkills)} 个,只对他们自己的家机生效,这里不显示内容。</p>
 ${panel("人设模板", html`${kit.templates.length === 0 ? html`<p class="muted">还没有模板。</p>` : kit.templates.map(t => html`<div class="card">
