@@ -10,12 +10,14 @@ export function FloatingGlassTabs({
   current,
   onSelect,
   unread = 0,
+  myBadge = 0,
 }: {
   current: RootTab;
   unread?: number;
+  myBadge?: number;
   onSelect: (tab: RootTab) => void;
 }) {
-  const { skin } = useSkin();
+  const { skin, ui } = useSkin();
   const styles = useThemedStyles(createStyles);
   const pulse = useRef(new Animated.Value(1)).current;
 
@@ -58,7 +60,7 @@ export function FloatingGlassTabs({
             const item = items[key];
             const active = current === key;
             const color = active ? skin.colors.tabActive : skin.colors.tabInactive;
-            const count = key === "messages" ? unread : 0;
+            const count = key === "messages" ? unread : key === "my" ? myBadge : 0;
             return (
               <Pressable
                 key={key}
@@ -80,7 +82,7 @@ export function FloatingGlassTabs({
               >
                 <Animated.View style={[styles.tabInner, active && { transform: [{ scale: pulse }] }]}>
                   <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
-                  {count > 0 && <Text style={styles.badge}>{count > 99 ? "99+" : count}</Text>}
+                  {count > 0 && <Text style={[styles.badge, key === "my" && { color: ui.white, backgroundColor: ui.danger }]}>{count > 99 ? "99+" : count}</Text>}
                   <Text style={[styles.label, { color, fontWeight: active ? "700" : "500" }]}>
                     {item.label}
                   </Text>

@@ -17,6 +17,7 @@ import {
   Platform,
   Modal,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -30,8 +31,9 @@ import { ApiProblemError, RealApiAdapter, safeClientMessage } from "./src/adapte
 import { AccountGate } from "./src/auth/AccountGate";
 import type { AccountBinding } from "./src/auth/account-session";
 import type { CommunityPost, CommunityProfile } from "../contracts/community";
-import { CommunityButton, SecondaryHeading } from "./src/community/components";
+import { AuthPostImage, CommunityButton, SecondaryHeading } from "./src/community/components";
 import { ChatSettingsScreen } from "./src/chat/ChatSettingsScreen";
+import { FeedbackScreen } from "./src/feedback/FeedbackScreen";
 import { CreateGroupScreen } from "./src/messages/CreateGroupScreen";
 import { ComposePostScreen } from "./src/community/ComposePostScreen";
 import { CommunityScreen } from "./src/community/CommunityScreen";
@@ -71,7 +73,7 @@ import {
   type CommunityTarget,
 } from "./src/state/navigation";
 import { SkinProvider, useSkin, TEXT_SIZES } from "./src/theme/SkinProvider";
-import { CHROME } from "./src/theme/layoutTokens";
+import { CHROME, RADIUS } from "./src/theme/layoutTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
 import { PixelAvatar } from "./src/components/PixelAvatar";
 import { UnifiedProfileView } from "./src/components/UnifiedProfileView";
@@ -300,6 +302,7 @@ function WorldApp({ client, account, isMockMode }: {
   const badgeData = badgeState?.key === viewerKey ? badgeState.data : undefined;
   const communityUnread = badgeData?.community.find(row => row.actorId === identityId)?.unread ?? 0;
   const unread = communityUnread + (ownerId ? (badgeData?.chats ?? 0) + (badgeData?.ownerInbox ?? 0) : 0);
+  const feedbackUnread = ownerId ? (badgeData?.feedback ?? 0) : 0;
   const profileKey = profileId ? `${viewerKey}:${profileId}` : undefined;
   const encounterKey = encounterId ? `${viewerKey}:${encounterId}` : undefined;
   const detailScope = useRef({ profileKey, encounterKey, profileRequest: 0, encounterRequest: 0 });
@@ -768,6 +771,7 @@ function WorldApp({ client, account, isMockMode }: {
             onStartChat={companion => openFromTab("messages", {
               type: "chat", companionId: companion.companionId, companionName: companion.displayName, fromTab: "messages",
             })}
+            onOpenCompanionProfile={openProfile}
             onCreateGroup={groupCreateEnabled ? () => openFromTab("messages", { type: "create-group" }) : undefined}
             onCommunityTarget={target => openFromTab("messages", { type: "community-target", target })}
             onRead={refreshBadges}
@@ -796,6 +800,10 @@ function WorldApp({ client, account, isMockMode }: {
         <CommunityFollowList client={client.api.community} viewer={viewer} direction={route.direction}
           onActor={id => openCommunity({ type: "profile", id })}
           onChanged={invalidateCommunity} />
+      )}
+
+      {route.type === "feedback" && ownerId && client.api.chat?.listFeedback && (
+        <FeedbackScreen client={client.api.chat} onRead={refreshBadges} />
       )}
 
       {route.type === "album" && homeScope && route.companionId === homeScope.companionId && (
@@ -925,6 +933,13 @@ function WorldApp({ client, account, isMockMode }: {
           }}
           onFollowList={openFollows}
           onPosts={id => openCommunity({ type: "profile", id })}
+          onOpenPostDetail={id => openCommunity({ type: "detail", id })}
+          feedbackUnread={feedbackUnread}
+          onOpenFeedback={ownerId && client.api.chat?.listFeedback ? () => setNav(current => pushRoute(current, { type: "feedback" })) : undefined}
+          onRefresh={() => {
+            refreshBadges();
+            if (authenticatedOwner) void loadOwnerCompanions(true);
+          }}
           communityRevision={communityRevision}
           onEditHumanProfile={identityValue?.activeSubject.kind === "OWNER" && client.api.community
             ? () => setNav(current => pushRoute(current, { type: "edit-human-profile" })) : undefined}
@@ -1069,6 +1084,7 @@ function WorldApp({ client, account, isMockMode }: {
         <FloatingGlassTabs
           current={nav.rootTab}
           unread={unread}
+          myBadge={feedbackUnread}
           onSelect={(tab) => setNav((state) => selectTab(state, tab))}
         />
       )}
@@ -1574,6 +1590,10 @@ function MyScreen({
   onResumeCompanion,
   onFollowList,
   onPosts,
+  onOpenPostDetail,
+  feedbackUnread = 0,
+  onOpenFeedback,
+  onRefresh,
   communityRevision,
   onEditHumanProfile,
 }: {
@@ -1598,6 +1618,10 @@ function MyScreen({
   onFollowList: (direction: FollowDirection) => void;
   communityRevision: number;
   onPosts: (id: string) => void;
+  onOpenPostDetail: (postId: string) => void;
+  feedbackUnread?: number;
+  onOpenFeedback?: () => void;
+  onRefresh: () => void;
   onEditHumanProfile?: () => void;
 }) {
   const styles = useThemedStyles(createStyles);
@@ -1606,12 +1630,17 @@ function MyScreen({
   const [communityData, setCommunityData] = useState<LoadState<CommunityPost[]>>({ kind: "idle" });
   const [ownProfile, setOwnProfile] = useState<CommunityProfile>();
   const [companionMenu, setCompanionMenu] = useState<OwnerCompanionSummary>();
+  const [refreshing, setRefreshing] = useState(false);
+  const [manualRefreshTick, setManualRefreshTick] = useState(0);
   const subject = identity.kind === "success" ? identity.value.activeSubject : undefined;
   const actorKind = subject?.kind;
   const actorId = subject?.id;
 
   useEffect(() => {
-    if (!community || !actorKind || !actorId) return;
+    if (!community || !actorKind || !actorId) {
+      setRefreshing(false);
+      return;
+    }
     const viewer = { kind: actorKind, id: actorId };
     let active = true;
     setCommunityData(previous => previous.kind === "success" ? previous : { kind: "loading" });
@@ -1622,9 +1651,11 @@ function MyScreen({
       if (active) setCommunityData({ kind: "success", value: feed.items });
     }).catch(error => {
       if (active) setCommunityData({ kind: "error", ...safeClientMessage(error) });
+    }).finally(() => {
+      if (active) setRefreshing(false);
     });
     return () => { active = false; };
-  }, [community, actorKind, actorId, communityRevision]);
+  }, [community, actorKind, actorId, communityRevision, manualRefreshTick]);
   const displayName = ownProfile?.displayName ?? subject?.presentation.displayName
     ?? (isSampleCompanion ? companionName : "我的账号");
   const bio = ownProfile?.bio;
@@ -1636,6 +1667,18 @@ function MyScreen({
     <ScrollView
       style={styles.rootContent}
       contentContainerStyle={[styles.mySocialPage, { paddingBottom: CHROME.scrollBottomClearance }]}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          tintColor={ui.accentInk}
+          colors={[ui.accentInk]}
+          onRefresh={() => {
+            setRefreshing(true);
+            setManualRefreshTick(t => t + 1);
+            onRefresh();
+          }}
+        />
+      }
     >
       <UnifiedProfileView name={displayName} role={isSampleCompanion ? "companion" : "owner"}
         avatar={avatar === undefined ? ownProfile?.avatar : avatar} bio={bio}
@@ -1733,15 +1776,57 @@ function MyScreen({
       {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: muted }]}>{communityData.title}</Text> : null}
       {communityData.kind === "success" && communityData.value.length > 0 && (
         <View style={styles.privateHomeRecordList}>
-          {communityData.value.slice(0, 3).map((post) => (
-            <View key={post.id} style={styles.privateHomeRecordRow}>
-              <View style={styles.privateHomeRecordText}>
-                <Text style={[styles.privateHomeRecordTitle, { color: ink }]} numberOfLines={3}>{post.body}</Text>
-                <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>{formatDate(post.createdAt)}</Text>
-              </View>
-            </View>
-          ))}
+          {communityData.value.slice(0, 3).map((post) => {
+            const images = post.media?.filter(item => item.kind === "IMAGE") ?? [];
+            const firstImage = images[0];
+            return (
+              <Pressable
+                key={post.id}
+                accessibilityRole="button"
+                onPress={() => onOpenPostDetail(post.id)}
+                style={({ pressed }) => [styles.privateHomeRecordRow, pressed && styles.myRowPressed]}
+              >
+                <View style={styles.privateHomeRecordText}>
+                  <Text style={[styles.privateHomeRecordTitle, { color: ink }]} numberOfLines={3}>{post.body}</Text>
+                  <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>{formatDate(post.createdAt)}</Text>
+                </View>
+                {firstImage && (
+                  <View style={styles.myThumbnail}>
+                    <AuthPostImage
+                      media={firstImage}
+                      resolveMedia={community?.postMediaSource}
+                      cacheScope={`${actorKind ?? ""}:${actorId ?? ""}:${communityRevision}`}
+                      style={StyleSheet.absoluteFill}
+                    />
+                    {images.length > 1 && (
+                      <Text style={styles.myThumbnailCount}>+{images.length - 1}</Text>
+                    )}
+                  </View>
+                )}
+              </Pressable>
+            );
+          })}
         </View>
+      )}
+      {onOpenFeedback && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="意见反馈"
+          accessibilityHint={feedbackUnread > 0 ? `${feedbackUnread} 条未读反馈` : undefined}
+          onPress={onOpenFeedback}
+          style={({ pressed }) => [styles.myFeedbackRow, pressed && styles.myRowPressed]}
+        >
+          <View style={styles.myFeedbackLabel}>
+            <Ionicons name="chatbox-ellipses-outline" size={18} color={ui.accentInk} />
+            <Text style={styles.myFeedbackTitle}>意见反馈</Text>
+          </View>
+          <View style={styles.myFeedbackLabel}>
+            {feedbackUnread > 0 && (
+              <Text style={styles.myFeedbackBadge}>{feedbackUnread > 99 ? "99+" : feedbackUnread}</Text>
+            )}
+            <Ionicons name="chevron-forward" size={16} color={muted} />
+          </View>
+        </Pressable>
       )}
       {(communityData.kind === "idle" || (communityData.kind === "success" && communityData.value.length === 0)) && (
         <View style={styles.privateHomeEmpty}>
@@ -2068,7 +2153,18 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   privateHomeSectionTitle: { marginTop: 28, fontSize: 18, fontWeight: "700", color: ui.ink },
   privateHomeRecordList: { marginTop: 12, gap: 9 },
   privateHomeEmpty: { minHeight: 74, marginTop: 10, paddingHorizontal: 16, backgroundColor: ui.white, borderWidth: 1, borderColor: ui.highlight, borderRadius: 20, alignItems: "center", justifyContent: "center", gap: 8 },
-  privateHomeRecordRow: { minHeight: 70, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: ui.white, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 20, flexDirection: "row", alignItems: "center", shadowColor: ui.shadow, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 10, elevation: 1 },
+  privateHomeRecordRow: { minHeight: 70, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: ui.white, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, borderRadius: 20, flexDirection: "row", alignItems: "center", gap: 12, shadowColor: ui.shadow, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 10, elevation: 1 },
+  myRowPressed: { opacity: 0.8 },
+  myThumbnail: { width: 56, height: 56, overflow: "hidden", borderRadius: RADIUS.bubbleTail, backgroundColor: ui.accentWash },
+  myThumbnailCount: { position: "absolute", right: 4, bottom: 4, overflow: "hidden", backgroundColor: ui.accent,
+    color: ui.onAccent, borderRadius: RADIUS.pill, paddingHorizontal: 5, paddingVertical: 1, fontSize: 10, fontWeight: "700" },
+  myFeedbackRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 14,
+    borderRadius: RADIUS.bubble, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.line, backgroundColor: ui.white },
+  myFeedbackLabel: { flexDirection: "row", alignItems: "center", gap: 8 },
+  myFeedbackTitle: { color: ui.ink, fontSize: 15, fontWeight: "600" },
+  myFeedbackBadge: { color: ui.white, backgroundColor: ui.danger, overflow: "hidden", borderRadius: RADIUS.pill,
+    paddingHorizontal: 6, paddingVertical: 2, fontSize: 11, fontWeight: "700" },
+
   privateHomeRecordText: { flex: 1 },
   privateHomeRecordTitle: { fontSize: 14, fontWeight: "600", color: ui.ink },
   privateHomeRecordCaption: { marginTop: 5, fontSize: 11, color: ui.muted },

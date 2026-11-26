@@ -9,6 +9,8 @@ import type {
   ChatSendResult,
   ChatSettings,
   ChatVoiceInput,
+  Feedback,
+  FeedbackInput,
   PersonaInput,
   PlatformFeatures,
   VoiceList,
@@ -52,6 +54,10 @@ export interface ChatClient {
   wallet?(): Promise<Wallet>;
   features?(): Promise<PlatformFeatures>;
   badges?(): Promise<Badges>;
+  listFeedback?(): Promise<{ items: Feedback[] }>;
+  createFeedback?(input: FeedbackInput, key: string): Promise<Feedback>;
+  replyFeedback?(id: string, body: string, key: string): Promise<Feedback>;
+  markFeedbackRead?(id: string): Promise<Feedback>;
   markRead?(chatId: string, messageId: string): Promise<Chat>;
   getAnniversary?(id: string): Promise<Anniversary>;
   saveAnniversary?(id: string, value: Pick<Anniversary, "startDate" | "timeZone" | "revision">): Promise<Anniversary>;
@@ -123,6 +129,10 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
     },
     wallet: () => send("GET", "/v0/wallet"),
     badges: () => send("GET", "/v0/badges"),
+    listFeedback: () => send("GET", "/v0/feedback"),
+    createFeedback: (input, key) => send("POST", "/v0/feedback", input, key),
+    replyFeedback: (id, body, key) => send("POST", `/v0/feedback/${encodeURIComponent(id)}/messages`, { body }, key),
+    markFeedbackRead: id => send("PUT", `/v0/feedback/${encodeURIComponent(id)}/read`),
     markRead: (id, messageId) => send("PUT", `/v0/chats/${encodeURIComponent(id)}/read`, { messageId }),
     getAnniversary: id => send("GET", `${companion(id)}/anniversary`),
     saveAnniversary: (id, value) => send("PUT", `${companion(id)}/anniversary`, value),

@@ -14,6 +14,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { setStringAsync } from "expo-clipboard";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
@@ -406,6 +407,19 @@ export function ChatScreen({
     }
   }
 
+  async function copyMessage(text: string) {
+    const session = sessionRef.current;
+    let copied = false;
+    try {
+      copied = await setStringAsync(text);
+    } catch {
+      // A browser may block clipboard access.
+    }
+    if (session === sessionRef.current) {
+      setQuoteResult(copied ? "已复制到剪贴板。" : "复制失败，请长按文字手动复制。");
+    }
+  }
+
   async function saveQuote() {
     if (!quote || !onSaveQuote || quotePending.current) return;
     const session = sessionRef.current;
@@ -436,6 +450,7 @@ export function ChatScreen({
   const showVoiceComposer = voiceMode && voiceInput && !!chat && mentions.length === 0;
   const hasDraft = Boolean(draft.trim()) && !showVoiceComposer;
   const directMember = chat?.direct ? chat.members[0] : undefined;
+  const profileId = chat ? directMember?.companionId : companionId;
 
   return (
     <KeyboardAvoidingView
@@ -457,14 +472,19 @@ export function ChatScreen({
           <Ionicons name="chevron-back" size={19} color={ui.ink} />
         </Pressable>
 
-        <View style={styles.titleBlock}>
-          <ChatAvatar name={title} avatar={directMember?.avatar} size={30}
-            onPress={directMember ? () => onOpenProfile(directMember.companionId) : undefined} />
+        <Pressable
+          disabled={!profileId}
+          accessibilityRole={profileId ? "button" : undefined}
+          accessibilityLabel={profileId ? `查看 ${title} 的主页` : undefined}
+          onPress={profileId ? () => onOpenProfile(profileId) : undefined}
+          style={({ pressed }) => [styles.titleBlock, profileId && pressed && { opacity: 0.72 }]}
+        >
+          <ChatAvatar name={title} avatar={directMember?.avatar} size={30} />
           <View>
             <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
             {replyStatus ? <Text style={styles.typingText}>{replyStatus}</Text> : null}
           </View>
-        </View>
+        </Pressable>
 
         {chat ? (
           <Pressable
@@ -526,7 +546,7 @@ export function ChatScreen({
             const audioLength = item.audio ? Math.max(1, Math.ceil(item.audio.durationMs / 1000)) : 0;
             const voiceLabel = voiceStatus === "loading" ? "取消加载"
               : voiceStatus === "playing" ? "停止播放" : voiceStatus === "expired" ? "语音已过期" : "播放语音";
-            const openQuote = onSaveQuote && chat && item.body && item.status === "SENT"
+            const openQuote = chat && item.body && item.status === "SENT"
               ? () => {
                   if (!item.body) return;
                   setQuoteResult("");
@@ -629,7 +649,7 @@ export function ChatScreen({
 
       <BottomSheet
         visible={!!quote || !!voiceMenuMsg}
-        title={quote ? "保存聊天金句" : "语音消息"}
+        title={quote ? "聊天文字" : "语音消息"}
         onClose={() => {
           if (quoteSaving) return;
           setQuote(undefined);
@@ -638,9 +658,12 @@ export function ChatScreen({
       >
         {quote && (
           <View style={styles.quoteSheet}>
-            <Text style={styles.msgText} numberOfLines={5}>{quote.text}</Text>
+            <Text style={styles.msgText} numberOfLines={5} selectable>{quote.text}</Text>
             {quoteResult !== "" && <Text accessibilityRole="alert" style={styles.mutedText}>{quoteResult}</Text>}
-            <CommunityButton label="保存到相册" primary disabled={quoteSaving} onPress={() => void saveQuote()} />
+            <CommunityButton label="复制文字" onPress={() => void copyMessage(quote.text)} />
+            {onSaveQuote && (
+              <CommunityButton label="保存到相册" primary disabled={quoteSaving} onPress={() => void saveQuote()} />
+            )}
           </View>
         )}
         {!quote && voiceMenuMsg && (
@@ -653,6 +676,16 @@ export function ChatScreen({
                   const id = voiceMenuMsg.id;
                   setExpandedVoiceIds(prev => ({ ...prev, [id]: !prev[id] }));
                   setVoiceMenuMsg(undefined);
+                }}
+              />
+            )}
+            {!!voiceMenuMsg.body && (
+              <CommunityButton
+                label="复制转写文字"
+                onPress={() => {
+                  if (!voiceMenuMsg.body) return;
+                  setVoiceMenuMsg(undefined);
+                  void copyMessage(voiceMenuMsg.body);
                 }}
               />
             )}

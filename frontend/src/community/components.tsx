@@ -1,7 +1,7 @@
 import { useThemedStyles, useSkin } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { FlatList, Modal, Pressable, SafeAreaView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { CommunityActor, CommunityComment, CommunityPost, PostMedia, PostVisibility } from "../../../contracts/community.ts";
@@ -116,61 +116,65 @@ export function ActorLine({
 type MediaSource = { uri: string; headers: Record<string, string> };
 type MediaResolver = (path: string) => Promise<MediaSource | undefined>;
 
-function AuthPostImage({
+export function AuthPostImage({
   media,
   resolveMedia,
   style,
   contentFit = "cover",
+  cacheScope,
 }: {
   media: PostMedia;
   resolveMedia?: MediaResolver;
   style: Record<string, unknown>;
   contentFit?: "cover" | "contain";
+  cacheScope?: string;
 }) {
   const { ui } = useSkin();
-  const [source, setSource] = useState<MediaSource>();
-  const [failed, setFailed] = useState(false);
+  const cacheKey = cacheScope ? `${cacheScope}:${media.path}` : media.path;
+  const [resolved, setResolved] = useState<{ key: string; source?: MediaSource }>();
 
   useEffect(() => {
     let active = true;
-    setFailed(false);
+    setResolved(undefined);
     if (!resolveMedia) {
-      setFailed(true);
-      return () => { active = false; };
+      setResolved({ key: cacheKey });
+      return;
     }
-    void resolveMedia(media.path).then(value => {
-      if (!active) return;
-      if (value) setSource(value);
-      else setFailed(true);
-    }).catch(() => { if (active) setFailed(true); });
+    void resolveMedia(media.path).then(source => {
+      if (active) setResolved({ key: cacheKey, source });
+    }).catch(() => {
+      if (active) setResolved({ key: cacheKey });
+    });
     return () => { active = false; };
-  }, [media.path, resolveMedia]);
+  }, [media.path, resolveMedia, cacheKey]);
 
-  if (failed) {
+  const current = resolved?.key === cacheKey ? resolved : undefined;
+  if (current && !current.source) {
     return (
       <View style={[style, { backgroundColor: ui.background[0], alignItems: "center", justifyContent: "center" }]}>
         <Ionicons name="image-outline" size={20} color={ui.muted} />
       </View>
     );
   }
-  if (!source) {
+  if (!current?.source) {
     return <View style={[style, { backgroundColor: ui.background[0] }]} />;
   }
   return (
     <Image
-      source={source}
+      source={{ ...current.source, cacheKey }}
+      recyclingKey={cacheKey}
+      cachePolicy="memory"
       accessibilityLabel={media.alt ?? "动态图片"}
       contentFit={contentFit}
       style={style}
-      onError={() => setFailed(true)}
+      onError={() => setResolved({ key: cacheKey })}
     />
   );
 }
 
-function PostMediaGrid({ media, resolveMedia }: { media: PostMedia[]; resolveMedia?: MediaResolver }) {
-  const { ui } = useSkin();
+function PostMediaGrid({ media, resolveMedia, cacheScope }: { media: PostMedia[]; resolveMedia?: MediaResolver; cacheScope?: string }) {
   const s = useCommunityStyles();
-  const [preview, setPreview] = useState<PostMedia>();
+  const [previewIndex, setPreviewIndex] = useState<number>();
   const images = media.filter(item => item.kind === "IMAGE").slice(0, 9);
   if (images.length === 0) return null;
 
@@ -180,13 +184,15 @@ function PostMediaGrid({ media, resolveMedia }: { media: PostMedia[]; resolveMed
     : 4 / 3;
   const twoCol = images.length === 2 || images.length === 4;
 
+
   return (
     <>
       {single ? (
-        <Pressable accessibilityRole="button" accessibilityLabel={single.alt ?? "查看大图"} onPress={() => setPreview(single)}>
+        <Pressable accessibilityRole="button" accessibilityLabel={single.alt ?? "查看大图"} onPress={() => setPreviewIndex(0)}>
           <AuthPostImage
             media={single}
             resolveMedia={resolveMedia}
+            cacheScope={cacheScope}
             style={{ width: "100%", aspectRatio: singleRatio, maxHeight: 320, borderRadius: 14, overflow: "hidden" }}
           />
         </Pressable>
@@ -197,27 +203,75 @@ function PostMediaGrid({ media, resolveMedia }: { media: PostMedia[]; resolveMed
               key={`${item.path}-${idx}`}
               accessibilityRole="button"
               accessibilityLabel={item.alt ?? `查看第 ${idx + 1} 张图片`}
-              onPress={() => setPreview(item)}
+              onPress={() => setPreviewIndex(idx)}
               style={twoCol ? s.mediaTileTwo : s.mediaTileThree}
             >
-              <AuthPostImage media={item} resolveMedia={resolveMedia} style={{ width: "100%", height: "100%" }} />
+              <AuthPostImage media={item} resolveMedia={resolveMedia} cacheScope={cacheScope} style={{ width: "100%", height: "100%" }} />
             </Pressable>
           ))}
         </View>
       )}
-      {preview && (
-        <Modal transparent animationType="fade" onRequestClose={() => setPreview(undefined)}>
-          <Pressable style={[s.mediaModal, { backgroundColor: ui.scrim }]} onPress={() => setPreview(undefined)}>
-            <AuthPostImage
-              media={preview}
-              resolveMedia={resolveMedia}
-              contentFit="contain"
-              style={{ width: "92%", height: "80%" }}
-            />
-          </Pressable>
-        </Modal>
+      {previewIndex !== undefined && (
+        <MediaLightbox images={images} initialIndex={Math.min(previewIndex, images.length - 1)}
+          resolveMedia={resolveMedia} cacheScope={cacheScope} onClose={() => setPreviewIndex(undefined)} />
       )}
     </>
+  );
+}
+
+function MediaLightbox({ images, initialIndex, resolveMedia, cacheScope, onClose }: {
+  images: PostMedia[];
+  initialIndex: number;
+  resolveMedia?: MediaResolver;
+  cacheScope?: string;
+  onClose: () => void;
+}) {
+  const s = useCommunityStyles();
+  const { ui } = useSkin();
+  const { width } = useWindowDimensions();
+  const [pageWidth, setPageWidth] = useState(width);
+  const [index, setIndex] = useState(initialIndex);
+  const visibleIndex = Math.min(index, images.length - 1);
+
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <SafeAreaView style={s.mediaModal} accessibilityViewIsModal>
+        <View style={s.mediaToolbar}>
+          <Text accessibilityLiveRegion="polite" style={s.mediaCount}>{visibleIndex + 1} / {images.length}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="关闭大图预览"
+            onPress={onClose} style={s.mediaClose}>
+            <Ionicons name="close" size={22} color={ui.onAccent} />
+          </Pressable>
+        </View>
+        <View style={s.mediaPager} onLayout={event => setPageWidth(event.nativeEvent.layout.width || width)}>
+          <FlatList
+            key={pageWidth}
+            data={images}
+            horizontal
+            pagingEnabled
+            initialScrollIndex={visibleIndex}
+            getItemLayout={(_, index) => ({ length: pageWidth, offset: pageWidth * index, index })}
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item, index) => `${item.path}-${index}`}
+            onMomentumScrollEnd={event => {
+              const next = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
+              setIndex(Math.max(0, Math.min(next, images.length - 1)));
+            }}
+            renderItem={({ item }) => (
+              <Pressable style={[s.mediaPage, { width: pageWidth }]} onPress={onClose}>
+                <AuthPostImage
+                  media={item}
+                  resolveMedia={resolveMedia}
+                  cacheScope={cacheScope}
+                  contentFit="contain"
+                  style={{ width: "100%", height: "100%" }}
+                />
+              </Pressable>
+            )}
+          />
+        </View>
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -232,6 +286,7 @@ export function ContentCard({
   likeDisabled,
   highlighted,
   resolveMedia,
+  cacheScope,
 }: {
   item: CommunityPost | CommunityComment;
   onActor: () => void;
@@ -243,6 +298,7 @@ export function ContentCard({
   likeDisabled?: boolean;
   highlighted?: boolean;
   resolveMedia?: MediaResolver;
+  cacheScope?: string;
 }) {
   const { ui } = useSkin();
   const communityStyles = useCommunityStyles();
@@ -259,7 +315,7 @@ export function ContentCard({
       )}
       <Text selectable style={communityStyles.body}>{item.body}</Text>
       {"media" in item && Array.isArray(item.media) && item.media.length > 0 && (
-        <PostMediaGrid media={item.media} resolveMedia={resolveMedia} />
+        <PostMediaGrid media={item.media} resolveMedia={resolveMedia} cacheScope={cacheScope} />
       )}
       {item.mentions && item.mentions.length > 0 && <View style={communityStyles.row}>
         {item.mentions.map(actor => (
@@ -403,5 +459,12 @@ export const createCommunityStyles = (ui: UiPalette) => StyleSheet.create({
   mediaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   mediaTileTwo: { width: "48.5%", aspectRatio: 1, borderRadius: 12, overflow: "hidden" },
   mediaTileThree: { width: "31.8%", aspectRatio: 1, borderRadius: 12, overflow: "hidden" },
-  mediaModal: { flex: 1, alignItems: "center", justifyContent: "center", padding: 16 },
+  mediaModal: { flex: 1, backgroundColor: ui.scrim },
+  mediaToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: CHROME.screenInset },
+  mediaCount: { overflow: "hidden", color: ui.onAccent, backgroundColor: ui.accent, borderRadius: RADIUS.pill,
+    paddingHorizontal: 10, paddingVertical: 4, fontSize: 13, fontWeight: "600" },
+  mediaClose: { width: 44, height: 44, borderRadius: RADIUS.pill, backgroundColor: ui.accent,
+    alignItems: "center", justifyContent: "center" },
+  mediaPager: { flex: 1 },
+  mediaPage: { padding: CHROME.screenInset },
 });

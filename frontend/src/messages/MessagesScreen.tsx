@@ -38,7 +38,7 @@ function formatShortTime(iso?: string | null): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-export function MessagesScreen({ api, viewer, chatClient, companions, visible, onChat, onStartChat, onCreateGroup, onCommunityTarget, onLife, onRead }: {
+export function MessagesScreen({ api, viewer, chatClient, companions, visible, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup, onCommunityTarget, onLife, onRead }: {
   api: ClientApi;
   viewer: ActorContext;
   chatClient?: ChatClient;
@@ -46,6 +46,7 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   visible: boolean;
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
+  onOpenCompanionProfile?: (companionId: string) => void;
   onCommunityTarget: (target: CommunityTarget) => void;
   onLife: (item: LifeEventInboxItem) => void;
   onRead: () => void;
@@ -97,6 +98,7 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
           active={active}
           onChat={onChat}
           onStartChat={onStartChat}
+          onOpenCompanionProfile={onOpenCompanionProfile}
           onCreateGroup={onCreateGroup}
         />
       )}
@@ -112,12 +114,13 @@ export function MessagesScreen({ api, viewer, chatClient, companions, visible, o
   );
 }
 
-function ConversationList({ client, companions, active, onChat, onStartChat, onCreateGroup }: {
+function ConversationList({ client, companions, active, onChat, onStartChat, onOpenCompanionProfile, onCreateGroup }: {
   client: ChatClient;
   companions: OwnerCompanionSummary[];
   active: boolean;
   onChat: (chat: Chat) => void;
   onStartChat: (companion: OwnerCompanionSummary) => void;
+  onOpenCompanionProfile?: (companionId: string) => void;
   onCreateGroup?: () => void;
 }) {
   const { ui } = useSkin();
@@ -184,22 +187,24 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
                 : "轻点开始聊聊";
             const timeStr = formatShortTime(last?.sentAt ?? chat.activeAt);
             const hasUnread = Boolean(chat.unreadCount && chat.unreadCount > 0);
+            const member = chat.direct ? chat.members[0] : undefined;
+            const openChat = () => onChat(chat);
+            const openProfile = member && onOpenCompanionProfile
+              ? () => onOpenCompanionProfile(member.companionId)
+              : undefined;
             return (
-              <Pressable
-                key={chat.id}
-                accessibilityRole="button"
-                onPress={() => onChat(chat)}
-                style={({ pressed }) => [
-                  styles.chatRow,
-                  index < items.length - 1 && styles.chatRowDivider,
-                  pressed && { backgroundColor: ui.background[0] },
-                ]}
-              >
-                <View style={styles.avatarWrap}>
-                  <PixelAvatar name={title} role="companion" uri={chat.direct ? chat.members[0]?.avatar : undefined} size={46} />
+              <View key={chat.id} style={[styles.chatRow, index < items.length - 1 && styles.chatRowDivider]}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={openProfile ? `查看 ${title} 的主页` : `打开 ${title} 的会话`}
+                  onPress={openProfile ?? openChat}
+                  style={styles.avatarWrap}
+                >
+                  <PixelAvatar name={title} role="companion" uri={member?.avatar} size={46} />
                   {hasUnread && <View style={styles.unreadDot} />}
-                </View>
-                <View style={styles.chatMain}>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={openChat}
+                  style={({ pressed }) => [styles.chatMain, pressed && styles.chatMainPressed]}>
                   <View style={styles.chatHeaderRow}>
                     <Text style={styles.chatTitle} numberOfLines={1}>
                       {title}{chat.direct ? "" : " · 群聊"}
@@ -216,8 +221,8 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
                       </View>
                     )}
                   </View>
-                </View>
-              </Pressable>
+                </Pressable>
+              </View>
             );
           })}
         </View>
@@ -227,24 +232,26 @@ function ConversationList({ client, companions, active, onChat, onStartChat, onC
         <View style={styles.startSection}>
           <Text style={styles.sectionHint}>开始新对话</Text>
           <View style={styles.listCard}>
-            {available.map((companion, index) => (
-              <Pressable
-                key={companion.companionId}
-                accessibilityRole="button"
-                onPress={() => onStartChat(companion)}
-                style={({ pressed }) => [
-                  styles.chatRow,
-                  index < available.length - 1 && styles.chatRowDivider,
-                  pressed && { backgroundColor: ui.background[0] },
-                ]}
-              >
-                <PixelAvatar name={companion.displayName} role="companion" uri={companion.avatar} size={44} />
-                <View style={styles.chatMain}>
-                  <Text style={styles.chatTitle} numberOfLines={1}>{companion.displayName}</Text>
-                  <Text style={styles.chatPreview}>发第一条消息打个招呼</Text>
+            {available.map((companion, index) => {
+              const startChat = () => onStartChat(companion);
+              const openProfile = onOpenCompanionProfile ? () => onOpenCompanionProfile(companion.companionId) : undefined;
+              return (
+                <View key={companion.companionId} style={[styles.chatRow, index < available.length - 1 && styles.chatRowDivider]}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={openProfile ? `查看 ${companion.displayName} 的主页` : `与 ${companion.displayName} 开始对话`}
+                    onPress={openProfile ?? startChat}
+                  >
+                    <PixelAvatar name={companion.displayName} role="companion" uri={companion.avatar} size={44} />
+                  </Pressable>
+                  <Pressable accessibilityRole="button" onPress={startChat}
+                    style={({ pressed }) => [styles.chatMain, pressed && styles.chatMainPressed]}>
+                    <Text style={styles.chatTitle} numberOfLines={1}>{companion.displayName}</Text>
+                    <Text style={styles.chatPreview}>发第一条消息打个招呼</Text>
+                  </Pressable>
                 </View>
-              </Pressable>
-            ))}
+              );
+            })}
           </View>
         </View>
       )}
@@ -465,6 +472,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderBottomColor: ui.line,
   },
   avatarWrap: { position: "relative" },
+  chatMainPressed: { opacity: 0.72 },
   unreadDot: {
     position: "absolute",
     top: -1,

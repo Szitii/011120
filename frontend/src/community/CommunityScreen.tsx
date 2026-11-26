@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   FlatList,
@@ -315,14 +317,16 @@ export function CommunityScreen({
           ? "屏蔽管理"
           : "社区";
 
+  const mediaCacheScope = `${viewer.kind}:${viewer.id}:${revision}`;
   return (
-    <View style={skin.id === "default" ? s.communityPage : s.page}>
+    <KeyboardAvoidingView style={skin.id === "default" ? s.communityPage : s.page} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <FlatList
         ref={scroll}
         data={posts}
         keyExtractor={post => post.id}
         renderItem={({ item: post }) => <ContentCard item={post}
           resolveMedia={client.postMediaSource}
+          cacheScope={mediaCacheScope}
           onActor={() => openActor(post.author.id)}
           onMention={openActor}
           onLike={client.like ? () => toggleLike(post) : undefined}
@@ -331,6 +335,8 @@ export function CommunityScreen({
           onDelete={() => remove("posts", post.id)}
           onReport={own && post.author.id !== own.id ? () => setReportTarget({ kind: "POST", id: post.id }) : undefined} />}
         ListFooterComponent={nextCursor ? <Button disabled={loading || busy} label="加载更多" onPress={() => void load(nextCursor)} /> : undefined}
+        onEndReached={() => { if (nextCursor && !loading && !busy) void load(nextCursor); }}
+        onEndReachedThreshold={0.4}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
         contentContainerStyle={[s.content, s.feedContent]}
@@ -495,6 +501,7 @@ export function CommunityScreen({
             <ContentCard
               item={data.value.post}
               resolveMedia={client.postMediaSource}
+              cacheScope={mediaCacheScope}
               onActor={() => openActor(data.value.post.author.id)}
               onMention={openActor}
               onLike={client.like ? () => toggleLike(data.value.post) : undefined}
@@ -676,7 +683,7 @@ export function CommunityScreen({
           </SafeAreaView>
         </Modal>
       )}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

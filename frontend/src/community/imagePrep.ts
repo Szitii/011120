@@ -5,6 +5,7 @@ import { Platform } from "react-native";
 export const MAX_POST_IMAGE_BYTES = 1_048_576;
 const MAX_LONG_EDGE = 1600;
 const TARGET_MAX_BYTES = 980_000;
+const NATIVE_JPEG_QUALITIES = [0.82, 0.68, 0.52, 0.36];
 
 export type AllowedImageMime = "image/jpeg" | "image/png" | "image/webp";
 export type AllowedImageExt = "jpg" | "png" | "webp";
@@ -40,6 +41,12 @@ function resolveMimeAndExt(asset: ImagePickerAsset): { contentType: AllowedImage
   if (name.endsWith(".png")) return { contentType: "image/png", ext: "png" };
   if (name.endsWith(".webp")) return { contentType: "image/webp", ext: "webp" };
   return undefined;
+}
+
+function isHeicLike(asset: ImagePickerAsset): boolean {
+  const mime = asset.mimeType?.toLowerCase() ?? "";
+  const name = (asset.fileName ?? asset.uri).split("?")[0]?.toLowerCase() ?? "";
+  return mime.includes("heic") || mime.includes("heif") || name.endsWith(".heic") || name.endsWith(".heif");
 }
 
 async function compressWebImage(uri: string): Promise<PreparedPostImage> {
@@ -82,22 +89,73 @@ async function compressWebImage(uri: string): Promise<PreparedPostImage> {
   };
 }
 
+function removeTemporaryImage(file: File) {
+  try {
+    file.delete();
+  } catch {
+    // The OS may already have cleared the cache file.
+  }
+}
+
+async function compressNativeImage(asset: ImagePickerAsset): Promise<PreparedPostImage> {
+  const format = resolveMimeAndExt(asset);
+  const originalFile = new File(asset.uri);
+  const hasDimensions = asset.width > 0 && asset.height > 0;
+  const size = originalFile.size;
+  if (format && !isHeicLike(asset) && hasDimensions
+    && Math.max(asset.width, asset.height) <= MAX_LONG_EDGE && size > 0 && size <= TARGET_MAX_BYTES) {
+    return {
+      previewUri: asset.uri,
+      contentType: format.contentType,
+      ext: format.ext,
+      width: Math.round(asset.width),
+      height: Math.round(asset.height),
+    };
+  }
+
+  const { ImageManipulator, SaveFormat } = await import("expo-image-manipulator").catch(() => {
+    throw new Error("当前版本无法处理这张图片，请更新应用或选择另一张图片。");
+  });
+  const context = ImageManipulator.manipulate(asset.uri);
+  let image: Awaited<ReturnType<typeof context.renderAsync>> | undefined;
+  try {
+    image = await context.renderAsync();
+    if (Math.max(image.width, image.height) > MAX_LONG_EDGE) {
+      context.resize(image.width >= image.height ? { width: MAX_LONG_EDGE } : { height: MAX_LONG_EDGE });
+      image.release();
+      image = undefined;
+      image = await context.renderAsync();
+    }
+    for (const [index, compress] of NATIVE_JPEG_QUALITIES.entries()) {
+      const out = await image.saveAsync({ compress, format: SaveFormat.JPEG });
+      const file = new File(out.uri);
+      const size = file.size;
+      const limit = index === NATIVE_JPEG_QUALITIES.length - 1 ? MAX_POST_IMAGE_BYTES : TARGET_MAX_BYTES;
+      if (size > 0 && size <= limit) {
+        return {
+          previewUri: out.uri,
+          revokePreview: () => removeTemporaryImage(file),
+          contentType: "image/jpeg",
+          ext: "jpg",
+          width: out.width,
+          height: out.height,
+        };
+      }
+      removeTemporaryImage(file);
+    }
+  } finally {
+    image?.release();
+    context.release();
+  }
+
+  throw new Error("单张图片压缩后仍超过 1 MB，请换一张小一点的图片。");
+}
+
 export async function preparePostImage(asset: ImagePickerAsset): Promise<PreparedPostImage> {
   if (Platform.OS === "web" && typeof document !== "undefined") {
     return compressWebImage(asset.uri);
   }
-  const format = resolveMimeAndExt(asset) ?? { contentType: "image/jpeg" as const, ext: "jpg" as const };
-  const file = new File(asset.uri);
-  if (file.size > MAX_POST_IMAGE_BYTES) {
-    throw new Error("单张图片不能超过 1 MB，请选择较小图片后重试。");
-  }
-  return {
-    previewUri: asset.uri,
-    contentType: format.contentType,
-    ext: format.ext,
-    width: asset.width > 0 ? Math.round(asset.width) : undefined,
-    height: asset.height > 0 ? Math.round(asset.height) : undefined,
-  };
+  return compressNativeImage(asset);
 }
 
 export async function readMediaBytes(uri: string): Promise<ArrayBuffer> {
