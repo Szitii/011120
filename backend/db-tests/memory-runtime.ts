@@ -261,6 +261,34 @@ try {
     (select count(*)::int from companion_private.companion_skills where companion_id = $1) as official`, [tuan.companionId])).rows[0], { own: 0, official: 0 });
   passed("persona templates import like any card; skills: official ones switched on per Companion, the Owner's own scanned first, five on at a time, Owner-scoped");
 
+  // ---- a save that meets a deletion ----
+  // Whatever writes into a Companion waits for a deletion that is under way, and then finds the Companion
+  // gone instead of leaving behind a row that nothing lists or removes. Shown with a memory added by hand.
+  const doomed = (await approveRich(["candidate-displayName"])).data.companionId;
+  const asOwner = async () => {
+    const client = await pool.connect();
+    await client.query("begin");
+    await client.query("set local role authenticated");
+    await client.query("select set_config('request.jwt.claim.sub', $1, true)", [A.subject]);
+    return client;
+  };
+  const [deleter, saver] = [await asOwner(), await asOwner()];
+  try {
+    await deleter.query("select public.companion_delete($1)", [doomed]); // not committed yet: it holds the Companion
+    const saving = saver.query("select public.memory_add($1, '来不及记下的事', repeat('d', 64))", [doomed])
+      .then(() => "saved", (error: { message: string }) => error.message);
+    assert.equal(await Promise.race([saving, new Promise(resolve => setTimeout(() => resolve("waiting"), 300))]), "waiting", "it waits for the deletion");
+    await deleter.query("commit");
+    assert.equal(await saving, "companion not found");
+  } finally {
+    await deleter.query("rollback").catch(() => undefined);
+    await saver.query("rollback").catch(() => undefined);
+    deleter.release();
+    saver.release();
+  }
+  assert.equal((await pool.query("select count(*)::int n from companion_private.companion_memories where companion_id = $1", [doomed])).rows[0]!.n, 0);
+  passed("a save that waits for a deletion under way finds the Companion gone and writes nothing");
+
   // ---- delete and the limit ----
   assert.deepEqual((await call(0, `${path}/${added.data.id}`, "DELETE")).data, { deleted: true });
   assert.equal((await call(0, `${path}/${added.data.id}`, "DELETE")).status, 404);
