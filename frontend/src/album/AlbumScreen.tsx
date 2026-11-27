@@ -6,7 +6,8 @@ import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../commun
 import { useSkin } from "../theme/SkinProvider";
 import type { HomeScope } from "../home/keys";
 import { addAlbumPhoto, deleteAlbumEntry, listAlbum, type AlbumEntry } from "./store";
-import { findMedia } from "./mediaFiles";
+import type { AlbumPhotoKind } from "./actions";
+import { exportMedia, findMedia } from "./mediaFiles";
 
 export function AlbumScreen({ scope }: { scope: HomeScope }) {
   const s = useCommunityStyles();
@@ -86,7 +87,7 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
       renderItem={({ item }) => <View style={s.card}>
         <Text style={s.author}>{item.kind === "room_snapshot" ? "小家拍立得" : item.kind === "local_photo" ? "照片" : "聊天金句"}</Text>
         {item.kind === "chat_quote" ? <Text selectable style={s.body}>{item.quote.text}</Text>
-          : <AlbumPhoto path={item.localPath} snapshot={item.kind === "room_snapshot"} />}
+          : <AlbumPhoto entryId={item.id} createdAt={item.createdAt} kind={item.kind} path={item.localPath} />}
         <Text style={s.meta}>
           {item.kind === "chat_quote" ? `${item.quote.speaker} · ` : ""}
           {new Date(item.kind === "chat_quote" ? item.quote.sentAt : item.createdAt).toLocaleDateString("zh-CN")}
@@ -101,12 +102,32 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
   );
 }
 
-function AlbumPhoto({ path, snapshot }: { path: string; snapshot: boolean }) {
+function AlbumPhoto({
+  entryId,
+  createdAt,
+  kind,
+  path,
+}: {
+  entryId: string;
+  createdAt: string;
+  kind: AlbumPhotoKind;
+  path: string;
+}) {
   const s = useCommunityStyles();
   const { ui } = useSkin();
   const [preview, setPreview] = useState(false);
   const [uri, setUri] = useState<string>();
   const [failed, setFailed] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<{ message: string; isError: boolean }>();
+  const exportPending = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
   useEffect(() => {
     let active = true;
     let url: string | undefined;
@@ -120,12 +141,49 @@ function AlbumPhoto({ path, snapshot }: { path: string; snapshot: boolean }) {
     return () => { active = false; release(); };
   }, [path]);
 
+  async function handleWebExport() {
+    if (exportPending.current) return;
+    exportPending.current = true;
+    setExporting(true);
+    setExportFeedback(undefined);
+    try {
+      const result = await exportMedia(path, { kind, createdAt, entryId });
+      if (!mounted.current) return;
+      if (result.status === "exported") {
+        setExportFeedback({ message: `已开始下载：${result.filename}`, isError: false });
+      } else if (result.status === "missing") {
+        setExportFeedback({ message: "这张照片的本地文件已失效，无法导出。", isError: true });
+      } else if (result.status === "denied") {
+        setExportFeedback({ message: "未获得相册写入权限，请在系统设置中开启。", isError: true });
+      } else if (result.status === "canceled") {
+        setExportFeedback(undefined);
+      } else if (result.status === "unsupported") {
+        setExportFeedback({ message: "当前环境暂不支持导出原图。", isError: true });
+      } else {
+        setExportFeedback({ message: result.message, isError: true });
+      }
+    } catch {
+      if (mounted.current) setExportFeedback({ message: "照片导出失败，请稍后重试。", isError: true });
+    } finally {
+      exportPending.current = false;
+      if (mounted.current) setExporting(false);
+    }
+  }
+
   if (failed) return <Text style={s.meta}>这张照片的本地文件已不可读。</Text>;
   if (!uri) return <ActivityIndicator accessibilityLabel="正在读取照片" />;
+  const snapshot = kind === "room_snapshot";
   const label = snapshot ? "小家拍立得" : "本地照片";
-  const close = () => setPreview(false);
+  const open = () => {
+    setExportFeedback(undefined);
+    setPreview(true);
+  };
+  const close = () => {
+    if (exportPending.current) return;
+    setPreview(false);
+  };
   return <>
-    <Pressable accessibilityRole="button" accessibilityLabel={`查看大图：${label}`} onPress={() => setPreview(true)}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`查看大图：${label}`} onPress={open}>
       <Image source={{ uri }} contentFit="contain"
         style={[styles.photo, { aspectRatio: snapshot ? 4 / 5 : 1 }]} onError={() => setFailed(true)} />
     </Pressable>
@@ -133,8 +191,29 @@ function AlbumPhoto({ path, snapshot }: { path: string; snapshot: boolean }) {
       <SafeAreaView style={[styles.preview, { backgroundColor: ui.background[0] }]} accessibilityViewIsModal>
         <View style={styles.previewBar}>
           <Text accessibilityRole="header" style={s.author}>{label}</Text>
-          <CommunityButton label="关闭大图" onPress={close} />
+          <View style={styles.previewActions}>
+            {Platform.OS === "web" && (
+              <CommunityButton
+                primary
+                label={exporting ? "导出中…" : "下载原图"}
+                disabled={exporting}
+                onPress={() => void handleWebExport()}
+              />
+            )}
+            <CommunityButton label="关闭大图" disabled={exporting} onPress={close} />
+          </View>
         </View>
+        {exportFeedback ? (
+          <Text
+            accessibilityLiveRegion="polite"
+            accessibilityRole={exportFeedback.isError ? "alert" : undefined}
+            style={[s.meta, styles.previewNotice]}
+          >
+            {exportFeedback.message}
+          </Text>
+        ) : Platform.OS !== "web" ? (
+          <Text style={[s.meta, styles.previewNotice]}>iOS / Android 分享与保存到系统相册待安装原生依赖后启用。</Text>
+        ) : null}
         <Image accessibilityLabel={label} source={{ uri }} contentFit="contain" style={styles.fullPhoto} />
       </SafeAreaView>
     </Modal>
@@ -147,6 +226,8 @@ const styles = StyleSheet.create({
   empty: { alignItems: "center", paddingVertical: 24 },
   emptyIcon: { width: 52, height: 50 },
   preview: { flex: 1 },
-  previewBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 10 },
+  previewBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, paddingHorizontal: 16, paddingVertical: 10 },
+  previewActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  previewNotice: { paddingHorizontal: 16, paddingBottom: 6 },
   fullPhoto: { flex: 1, marginHorizontal: 12, marginBottom: 12 },
 });

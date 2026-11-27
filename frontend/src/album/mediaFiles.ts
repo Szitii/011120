@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from "expo-file-system";
+import type { ExportMediaOptions, ExportMediaResult } from "./actions";
 
 const directory = new Directory(Paths.document, "cw-album-v1");
 
@@ -15,4 +16,10 @@ export async function findMedia(path: string): Promise<string | undefined> {
 export async function removeMedia(path: string): Promise<void> {
   const file = new File(directory, path);
   if (file.exists) file.delete();
+}
+
+export async function exportMedia(path: string, _options: ExportMediaOptions): Promise<ExportMediaResult> {
+  const file = new File(directory, path);
+  if (!file.exists) return { status: "missing" };
+  return { status: "unsupported" };
 }
