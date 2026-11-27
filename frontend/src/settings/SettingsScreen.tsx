@@ -1,6 +1,8 @@
-import React, { useRef, useState, type ComponentProps } from "react";
-import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useRef, useState, type ComponentProps } from "react";
+import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import Constants, { ExecutionEnvironment } from "expo-constants";
+import appConfig from "../../app.json";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { SelfServiceResult } from "../auth/account-session";
 import type { ChatClient } from "../chat/client";
@@ -52,6 +54,29 @@ export function SettingsScreen({
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordResult, setPasswordResult] = useState<SelfServiceResult>();
   const passwordPendingRef = useRef(false);
+
+  const isPreview = Platform.OS === "web" || Constants.appOwnership === "expo"
+    || (Constants.executionEnvironment === ExecutionEnvironment.StoreClient && Constants.expoGoConfig !== null);
+  const [nativeVersion, setNativeVersion] = useState<{ version?: string; build?: string }>();
+
+  useEffect(() => {
+    if (isPreview) return;
+    let current = true;
+    // Development clients built before this module was added can still open settings.
+    void import("expo-application").then(application => {
+      if (current) setNativeVersion({
+        version: application.nativeApplicationVersion ?? undefined,
+        build: application.nativeBuildVersion ?? undefined,
+      });
+    }).catch(() => {
+      if (current) setNativeVersion({});
+    });
+    return () => { current = false; };
+  }, [isPreview]);
+
+  const appVersion = isPreview ? Constants.expoConfig?.version ?? appConfig.expo.version : nativeVersion?.version;
+  const versionFallback = nativeVersion === undefined ? "正在读取…" : "暂不可用";
+  const buildVersion = isPreview ? "当前环境无原生构建号" : nativeVersion?.build ?? versionFallback;
 
   const canUpdatePassword = Boolean(account?.updatePassword);
 
@@ -242,6 +267,20 @@ export function SettingsScreen({
             </View>
           </View>
         )}
+
+        <View style={styles.section}>
+          <Text accessibilityRole="header" style={styles.sectionTitle}>关于</Text>
+          <View style={styles.card}>
+            <View style={[styles.row, styles.rowDivider]}>
+              <Text style={styles.rowLabel}>App 版本</Text>
+              <Text selectable style={styles.rowValue}>{appVersion ?? versionFallback}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>构建号</Text>
+              <Text selectable style={styles.rowValue}>{buildVersion}</Text>
+            </View>
+          </View>
+        </View>
 
         {account && (
           <View style={styles.card}>
