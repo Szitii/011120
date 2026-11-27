@@ -36,6 +36,7 @@ import { FeedbackScreen } from "./src/feedback/FeedbackScreen";
 import { CreateGroupScreen } from "./src/messages/CreateGroupScreen";
 import { ComposePostScreen } from "./src/community/ComposePostScreen";
 import { CommunityScreen, type ManagedProfileActions } from "./src/community/CommunityScreen";
+import { CommunitySearchScreen } from "./src/community/CommunitySearchScreen";
 import { AgentDraftsScreen } from "./src/community/AgentDraftsScreen";
 import { AgentSettingsScreen } from "./src/community/AgentSettingsScreen";
 import { CommunityFollowList, type FollowDirection } from "./src/community/CommunityFollowList";
@@ -251,6 +252,8 @@ function WorldApp({ client, account, isMockMode }: {
     void (next ? AsyncStorage.setItem(homeSelectionKey, next) : AsyncStorage.removeItem(homeSelectionKey)).catch(() => undefined);
   }, [homeSelectionLoaded, ownerId, homeSelectionKey, ownerCompanions.kind, homeCompanion?.companionId, selectedHomeCompanionId]);
   const worldVisible = route.type === "root" && route.tab === "world";
+  const communitySearchVisible = route.type === "community-search";
+  const communitySearchInStack = nav.stack.some(item => item.type === "community-search");
   const homeScope = ownerId && homeCompanion ? { ownerId, companionId: homeCompanion.companionId } : undefined;
   const diaryClient = viewer?.kind === "OWNER" && !identitySwitchPending ? client.api.diary : undefined;
   const profileTarget = route.type === "community-target" && route.target.type === "profile" ? route.target : undefined;
@@ -788,6 +791,8 @@ function WorldApp({ client, account, isMockMode }: {
           style={worldVisible ? { flex: 1 } : styles.inactiveRoot}>
           <CommunityScreen key={viewerKey} client={client.api.community} viewer={viewer}
             onPublish={() => openFromTab("world", { type: "compose-post" })}
+            onSearch={authenticatedOwner && !isMockMode
+              ? () => openFromTab("world", { type: "community-search" }) : undefined}
             onNavigate={openCommunity} onFollowList={openFollows} onBack={goBack}
             revision={communityRevision} onChanged={invalidateCommunity}
             initialScrollY={nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0}
@@ -866,6 +871,16 @@ function WorldApp({ client, account, isMockMode }: {
               ? openFromTab("messages", { type: "agent-drafts", companionId: item.companionId, draftId: item.linkedObject?.id })
               : openFromTab("messages", { type: "life-archive" })}
           />
+        </View>
+      )}
+
+      {communitySearchInStack && authenticatedOwner && viewer && client.api.community && !isMockMode && (
+        <View pointerEvents={communitySearchVisible ? "auto" : "none"} aria-hidden={!communitySearchVisible}
+          accessibilityElementsHidden={!communitySearchVisible}
+          importantForAccessibility={communitySearchVisible ? "auto" : "no-hide-descendants"}
+          style={communitySearchVisible ? styles.rootContent : styles.inactiveRoot}>
+          <CommunitySearchScreen key={JSON.stringify([authenticatedOwner, viewerKey])} ownerId={authenticatedOwner}
+            viewer={viewer} search={client.api.community.search} revision={communityRevision} onNavigate={openCommunity} />
         </View>
       )}
 

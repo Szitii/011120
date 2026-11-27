@@ -12,6 +12,7 @@ export type Route =
   | { type: "root"; tab: RootTab }
   | { type: "chat"; chatId?: string; companionId?: string; companionName?: string; autoFocus?: boolean; fromTab?: RootTab }
   | { type: "community-target"; target: CommunityTarget }
+  | { type: "community-search" }
   | { type: "compose-post" }
   | { type: "create-group" }
   | { type: "chat-settings"; companionId?: string; chatId?: string; connectionKind?: "key" | "external"; focusPersona?: boolean }

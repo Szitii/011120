@@ -83,6 +83,7 @@ export function CommunityScreen({
   viewer,
   initialScrollY = 0,
   onPublish,
+  onSearch,
   onNavigate,
   onFollowList,
   onBack,
@@ -101,6 +102,7 @@ export function CommunityScreen({
   viewer: ActorContext;
   initialScrollY?: number;
   onPublish?: () => void;
+  onSearch?: () => void;
   onNavigate: (target: CommunityTarget) => void;
   onFollowList: (direction: FollowDirection) => void;
   onBack: () => void;
@@ -522,6 +524,14 @@ export function CommunityScreen({
               </View>
 
               <View style={localStyles.headerActions}>
+                {onSearch && <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="搜索社区"
+                  onPress={onSearch}
+                  style={localStyles.profileMenuButton}
+                >
+                  <Ionicons name="search" size={20} color={ui.accentInk} />
+                </Pressable>}
                 {canCompose && onPublish && (
                   <Pressable
                     disabled={busy}
