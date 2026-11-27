@@ -31,9 +31,6 @@ export function MemorySettings({ client, companionId }: { client: ChatClient; co
 
   useEffect(() => {
     mounted.current = true;
-    void client.listMemories?.(companionId).then(result => {
-      if (mounted.current && result) setItems(result.items);
-    }).catch(() => undefined);
     return () => { mounted.current = false; };
   }, [client, companionId]);
 
@@ -92,7 +89,7 @@ export function MemorySettings({ client, companionId }: { client: ChatClient; co
         onPress={() => {
           const next = !expanded;
           setExpanded(next);
-          if (next && !items) void load();
+          if (next) { setConfirmId(undefined); void load(); }
         }}
       >
         <View style={s.headerLeft}>
@@ -110,7 +107,8 @@ export function MemorySettings({ client, companionId }: { client: ChatClient; co
       {expanded && (
         <View style={s.bodyWrap}>
           {!!notice && <Text accessibilityRole="alert" style={s.error}>{notice}</Text>}
-          {!items && <CommunityButton label="重新读取记忆" disabled={busy} onPress={() => void load()} />}
+          {busy && !items && <Text accessibilityLiveRegion="polite" style={s.subtitle}>正在读取记忆…</Text>}
+          {!busy && (!items || notice) && <CommunityButton label="重新读取记忆" onPress={() => void load()} />}
           {items && (
             <>
               <View style={s.inputBox}>

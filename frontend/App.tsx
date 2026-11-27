@@ -913,6 +913,7 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
         <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId, route.chatId])} client={client.api.chat} companionId={route.companionId} companions={availableCompanions} chatId={route.chatId} ownerId={ownerId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
+          companionReachEnabled={features?.companionReach === true}
           focusPersona={route.focusPersona} onAvailabilityChanged={refreshFeatures} onBack={goBack}
           onConversationDeleted={route.chatId ? () => {
             refreshBadges();
