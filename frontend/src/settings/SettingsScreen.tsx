@@ -1,5 +1,6 @@
-import React, { useRef, useState, type ComponentProps } from "react";
-import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useRef, useState, type ComponentProps } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Keyboard, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { SelfServiceResult } from "../auth/account-session";
@@ -167,6 +168,8 @@ export function SettingsScreen({
             </View>
           </View>
         )}
+
+        <NotificationSettings />
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>外观</Text>
@@ -380,6 +383,98 @@ export function SettingsScreen({
           ) : null}
         </View>
       </BottomSheet>
+    </View>
+  );
+}
+
+const notificationStorageKey = "companion:notification-preferences:v1";
+const notificationOptions = [
+  { key: "messages", label: "消息" },
+  { key: "communityInteractions", label: "社区互动" },
+  { key: "companionActivity", label: "家机动态" },
+] as const;
+type NotificationCategory = typeof notificationOptions[number]["key"];
+type NotificationPreferences = Record<NotificationCategory, boolean>;
+const defaultNotificationPreferences: NotificationPreferences = {
+  messages: true,
+  communityInteractions: true,
+  companionActivity: true,
+};
+let pendingNotificationWrite = Promise.resolve();
+
+function readNotificationPreferences(raw: string | null): NotificationPreferences {
+  let saved: Partial<NotificationPreferences> | null;
+  try {
+    saved = raw ? JSON.parse(raw) : null;
+  } catch {
+    saved = null;
+  }
+  const preferences = { ...defaultNotificationPreferences };
+  for (const { key } of notificationOptions) {
+    const value = saved?.[key];
+    if (typeof value === "boolean") preferences[key] = value;
+  }
+  return preferences;
+}
+
+function NotificationSettings() {
+  const styles = useThemedStyles(createStyles);
+  const { ui } = useSkin();
+  const [preferences, setPreferences] = useState<NotificationPreferences>();
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [failure, setFailure] = useState<"read" | "write">();
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    setFailure(undefined);
+    void pendingNotificationWrite.then(() => AsyncStorage.getItem(notificationStorageKey)).then(raw => {
+      if (active) setPreferences(readNotificationPreferences(raw));
+    }).catch(() => {
+      if (active) setFailure("read");
+    });
+    return () => { active = false; };
+  }, [loadAttempt]);
+
+  function updatePreference(key: NotificationCategory, value: boolean) {
+    if (!preferences || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setFailure(undefined);
+    const next = { ...preferences, [key]: value };
+    const write = pendingNotificationWrite.then(() => AsyncStorage.setItem(notificationStorageKey, JSON.stringify(next)));
+    pendingNotificationWrite = write.catch(() => undefined);
+    void write.then(() => setPreferences(next), () => setFailure("write")).finally(() => {
+      savingRef.current = false;
+      setSaving(false);
+    });
+  }
+
+  return (
+    <View style={styles.section}>
+      <Text accessibilityRole="header" style={styles.sectionTitle}>通知</Text>
+      {preferences ? (
+        <View style={styles.card}>
+          {notificationOptions.map(({ key, label }, index) => (
+            <View key={key} style={[styles.row, index < notificationOptions.length - 1 && styles.rowDivider]}>
+              <Text style={styles.rowLabel}>{label}</Text>
+              <Switch accessibilityLabel={label} value={preferences[key]} disabled={saving}
+                onValueChange={value => updatePreference(key, value)}
+                trackColor={{ false: ui.line, true: ui.accent }} thumbColor={ui.onAccent}
+                ios_backgroundColor={ui.line} />
+            </View>
+          ))}
+        </View>
+      ) : failure === "read" ? (
+        <View style={styles.card}>
+          <SettingRow label="通知偏好读取失败，重试" last onPress={() => setLoadAttempt(value => value + 1)} />
+        </View>
+      ) : (
+        <Text accessibilityLiveRegion="polite" style={styles.subLabel}>正在读取通知偏好…</Text>
+      )}
+      {failure === "write" && <Text accessibilityRole="alert" style={styles.subLabel}>保存失败，请重新切换开关。</Text>}
+      <Text style={styles.subLabel}>偏好仅保存在此设备，系统推送尚未接入。</Text>
     </View>
   );
 }
