@@ -1,3 +1,5 @@
+import { RequestTimeoutError, withRequestDeadline } from "../state/request-deadline.ts";
+
 export interface SessionTokenSource {
   readonly signal: AbortSignal;
   getToken(): Promise<string>;
@@ -37,7 +39,7 @@ export type AccountBinding = {
 export type AccountView =
   | { kind: "restoring" | "signing-in" | "signing-out" }
   | { kind: "signed-out"; message?: string }
-  | { kind: "logout-error"; message: string }
+  | { kind: "logout-error" | "restore-error"; message: string }
   | { kind: "signed-in"; account: AccountBinding };
 
 const EXPIRED = "登录已过期，请重新登录。";
@@ -141,6 +143,7 @@ export class AccountSession {
   #binding?: { userId: string; accessToken: string; abort: AbortController };
   #generation = 0;
   #selfServicePending = false;
+  #restoring?: Promise<void>;
   #passwordUpdatePending = false;
   readonly #auth: AuthDriver;
   readonly #isRetryable: (error: unknown) => boolean;
@@ -158,14 +161,40 @@ export class AccountSession {
   };
 
   observe() {
-    const { data } = this.#auth.onAuthStateChange((_event, session) => {
+    const { data } = this.#auth.onAuthStateChange((event, session) => {
       const kind = this.#view.kind;
       if (kind === "signing-in" || kind === "signing-out" || kind === "logout-error") return;
+      if (event === "INITIAL_SESSION" && kind !== "restoring") return;
       if (session) this.#accept(session);
-      else if (kind === "restoring" || kind === "signed-in") this.#release(kind === "signed-in" ? EXPIRED : undefined);
+      else if (kind === "signed-in" && event === "SIGNED_OUT") this.#release(EXPIRED);
     });
+    void this.restore();
     return () => { data.subscription.unsubscribe(); };
   }
+
+  restore = (): Promise<void> => {
+    if (this.#view.kind !== "restoring" && this.#view.kind !== "restore-error") return Promise.resolve();
+    if (this.#restoring) return this.#restoring;
+    this.#set({ kind: "restoring" });
+    this.#restoring = withRequestDeadline(() => this.#auth.getSession()).then(({ data, error }) => {
+      if (this.#view.kind !== "restoring") return;
+      if (error) {
+        const { code } = authErrorInfo(error);
+        if (!data.session && ["refresh_token_not_found", "refresh_token_already_used", "session_not_found"].includes(code ?? "")) {
+          this.#release(EXPIRED);
+          return;
+        }
+        throw error;
+      }
+      if (data.session) this.#accept(data.session);
+      else this.#release();
+    }).catch(error => {
+      if (this.#view.kind !== "restoring") return;
+      this.#set({ kind: "restore-error", message: error instanceof RequestTimeoutError
+        ? "恢复登录超时，请重试。" : "暂时无法恢复登录，请检查网络后重试。" });
+    }).finally(() => { this.#restoring = undefined; });
+    return this.#restoring;
+  };
 
   async signIn(email: string, password: string) {
     if (this.#view.kind !== "signed-out" || this.#selfServicePending) return;
@@ -247,14 +276,14 @@ export class AccountSession {
     this.#binding = undefined;
     this.#set({ kind: "signing-out" });
     try {
-      const { error } = await this.#auth.signOut({ scope: "local" });
+      const { error } = await withRequestDeadline(() => this.#auth.signOut({ scope: "local" }));
       if (!error) {
         this.#release(message);
         return;
       }
 
       // Supabase clears the local session before revoking it over the network.
-      const remaining = await this.#auth.getSession();
+      const remaining = await withRequestDeadline(() => this.#auth.getSession());
       if (!remaining.data.session && !remaining.error) {
         this.#release(message ?? "已退出此设备。服务器未确认撤销本次会话。");
         return;

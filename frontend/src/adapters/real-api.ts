@@ -1,4 +1,6 @@
 import type { ActorContext } from "../../../contracts/community.ts";
+import { RequestTimeoutError, withRequestDeadline } from "../state/request-deadline.ts";
+import { InvalidIdentityContextError, validateIdentityContext } from "./identity-context.ts";
 import type { SessionTokenSource } from "../auth/account-session.ts";
 import type {
   ActiveIdentityContext,
@@ -18,7 +20,7 @@ import type {
   ProjectionSelection,
   WorldCollection,
 } from "../contracts.ts";
-import { createCommunityClient, type CommunityClient } from "../community/client.ts";
+import { createCommunityClient, InvalidCommunityPayloadError, type CommunityClient } from "../community/client.ts";
 import { createChatClient, type AudioClip, type ChatClient } from "../chat/client.ts";
 
 import { createDiaryClient, type DiaryClient } from "../diary/client.ts";
@@ -84,7 +86,7 @@ export class RealApiAdapter implements ClientApi {
       postMediaSource: (path: string) => this.storageMediaSource(path),
     } : undefined;
     this.community = createCommunityClient((method, path, body, key) => method === "GET"
-      ? this.get(path)
+      ? this.get(path, true)
       : this.send(method, path, body, key ? { "Idempotency-Key": key } : {}), media);
     this.chat = createChatClient((method, path, body, key) => method === "GET"
       ? this.get(path)
@@ -93,7 +95,7 @@ export class RealApiAdapter implements ClientApi {
 
   async identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext> {
     const query = input ? `?activeSubjectKind=${encodeURIComponent(input.kind)}&activeSubjectId=${encodeURIComponent(input.id)}` : "";
-    return this.get<ActiveIdentityContext>(`/v0/identity-context${query}`);
+    return validateIdentityContext(await this.get<unknown>(`/v0/identity-context${query}`, true), input);
   }
 
   ownerCompanions(): Promise<OwnerCompanionCollection> { return this.get("/v0/companions"); }
@@ -167,8 +169,10 @@ export class RealApiAdapter implements ClientApi {
     );
   }
 
-  private get<T>(path: string): Promise<T> {
-    return this.request("GET", path);
+  private get<T>(path: string, startupRead = false): Promise<T> {
+    if (!startupRead) return this.request("GET", path);
+    const sessionSignal = "session" in this.config ? this.config.session.signal : undefined;
+    return withRequestDeadline(signal => this.request("GET", path, undefined, {}, undefined, signal), undefined, sessionSignal);
   }
 
   private send<T>(
@@ -263,12 +267,13 @@ export class RealApiAdapter implements ClientApi {
   }
 
   private async request<T>(method: string, path: string, body?: unknown,
-    extraHeaders: Record<string, string> = {}, read?: (response: Response) => Promise<T>,
+    extraHeaders: Record<string, string> = {}, read?: (response: Response) => Promise<T>, signalOverride?: AbortSignal,
   ): Promise<T> {
     const session = "session" in this.config ? this.config.session : undefined;
-    const signal = session?.signal;
+    const signal = signalOverride ?? session?.signal;
     const ensureCurrent = () => {
-      if (signal?.aborted) throw new Error("Account session changed.");
+      if (session?.signal.aborted) throw new Error("Account session changed.");
+      if (signal?.aborted) throw new RequestTimeoutError();
     };
 
     const send = async (token: string) => {
@@ -294,11 +299,13 @@ export class RealApiAdapter implements ClientApi {
       return { response, payload };
     };
 
+    ensureCurrent();
     let token = "bearerToken" in this.config ? this.config.bearerToken : await this.config.session.getToken();
     let result = await send(token);
     const rejected = () => result.response.status === 401 && result.payload?.code === "INVALID_TOKEN";
     if (session && rejected()) {
       // Authentication is checked before command dispatch. Retrying keeps the original idempotency key.
+      ensureCurrent();
       token = await session.refreshToken(token);
       result = await send(token);
       if (rejected()) session.rejectToken(token);
@@ -319,6 +326,9 @@ export class RealApiAdapter implements ClientApi {
 }
 
 export function safeClientMessage(error: unknown): { title: string; retry: boolean } {
+  if (error instanceof RequestTimeoutError) return { title: "请求超时，请重试。", retry: true };
+  if (error instanceof InvalidCommunityPayloadError) return { title: "社区数据未完整返回，请重试。", retry: true };
+  if (error instanceof InvalidIdentityContextError) return { title: "身份资料不完整，暂时无法进入社区。", retry: true };
   if (!(error instanceof ApiProblemError)) return { title: "没连上。", retry: true };
   switch (error.status) {
     case 401: return { title: "会话过期了。", retry: false };

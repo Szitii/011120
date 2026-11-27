@@ -131,6 +131,7 @@ export function CommunityScreen({
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState("");
+  const [failedRead, setFailedRead] = useState<{ cursor?: string }>();
   const [commentDraft, setCommentDraft] = useState("");
   const [commentMentions, setCommentMentions] = useState<Mention[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -162,6 +163,7 @@ export function CommunityScreen({
 
   const load = useCallback(async (cursor?: string) => {
     const current = scope.begin();
+    setFailedRead(undefined);
     if (!client || (page.type === "profile" && page.companionId && !managedReady)) {
       setLoading(false);
       setError("");
@@ -244,7 +246,8 @@ export function CommunityScreen({
       });
     } catch (e) {
       if (current()) {
-        if (e instanceof ApiProblemError && (e.status === 403 || e.status === 404)) setData(undefined);
+        if (e instanceof ApiProblemError && (e.status === 401 || e.status === 403 || e.status === 404)) setData(undefined);
+        setFailedRead({ cursor });
         setError(safeClientMessage(e).title);
       }
     } finally {
@@ -273,6 +276,7 @@ export function CommunityScreen({
   } = {}) {
     if (busyRef.current) return false;
     busyRef.current = true;
+    setFailedRead(undefined);
     setBusy(true);
     setError("");
     try {
@@ -472,7 +476,7 @@ export function CommunityScreen({
           </View>
         )}
         ListFooterComponent={nextCursor ? <Button disabled={loading || busy} label="加载更多" onPress={() => void load(nextCursor)} /> : undefined}
-        onEndReached={() => { if (nextCursor && !loading && !busy) void load(nextCursor); }}
+        onEndReached={() => { if (nextCursor && !loading && !busy && !failedRead) void load(nextCursor); }}
         onEndReachedThreshold={0.4}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
@@ -565,14 +569,17 @@ export function CommunityScreen({
         )}
 
         {error !== "" && !blockTarget && !deleteTarget && (
-          <Text accessibilityRole="alert" style={s.error}>
-            {error} 可刷新后重试；发布失败时草稿会保留。
-          </Text>
+          <View>
+            <Text accessibilityRole="alert" style={s.error}>{error}</Text>
+            {failedRead && <Button label="重试加载社区" disabled={loading || busy}
+              onPress={() => void load(data ? failedRead.cursor : undefined)} />}
+          </View>
         )}
         {ownUnavailable && (
-          <Text accessibilityRole="alert" style={s.error}>
-            当前身份资料暂时无法加载，部分操作不可用。可刷新后重试。
-          </Text>
+          <View>
+            <Text accessibilityRole="alert" style={s.error}>当前身份资料暂时无法加载，部分操作不可用。</Text>
+            {!failedRead && <Button label="重试读取社区资料" disabled={loading || busy} onPress={() => void refresh()} />}
+          </View>
         )}
         {loading && <ActivityIndicator accessibilityLabel="正在加载社区" color={ui.accent} />}
 

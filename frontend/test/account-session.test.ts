@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createClientBootstrap } from "../src/adapters/index.ts";
 import { RealApiAdapter, ApiProblemError } from "../src/adapters/real-api.ts";
+import { STARTUP_TIMEOUT_MS } from "../src/state/request-deadline.ts";
 import { AccountSession, type AuthDriver } from "../src/auth/account-session.ts";
 
 type Session = NonNullable<Awaited<ReturnType<AuthDriver["getSession"]>>["data"]["session"]>;
@@ -10,7 +11,7 @@ const account = (name: string, token = name): Session => ({
   user: { id: name, email: `${name}@example.test` },
 });
 
-function fixture(initial: Session | null = null) {
+function fixture(initial: Session | null = null, observe = true) {
   let stored = initial;
   let listener: Parameters<AuthDriver["onAuthStateChange"]>[0] | undefined;
   function emit(event: string, value: Session | null) {
@@ -36,7 +37,7 @@ function fixture(initial: Session | null = null) {
     },
   };
   const session = new AccountSession(driver, error => error instanceof TypeError);
-  session.observe();
+  if (observe) session.observe();
   return { driver, session, emit };
 }
 
@@ -142,10 +143,17 @@ test("retains the session on upstream unavailability and clears it after a secon
   assert.equal(session.snapshot().kind, "signed-in");
   assert.equal(refresh.mock.callCount(), 0);
 
+  const signedOut = Promise.withResolvers<void>();
+  const unsubscribe = session.subscribe(() => {
+    if (session.snapshot().kind === "signed-out") signedOut.resolve();
+  });
   response = () => Response.json({ code: "INVALID_TOKEN" }, { status: 401 });
-  await assert.rejects(api.ownerCompanions(), (e: unknown) => e instanceof ApiProblemError && e.status === 401);
-  assert.equal(refresh.mock.callCount(), 1);
-  assert.deepEqual(session.snapshot(), { kind: "signed-out", message: "登录已过期，请重新登录。" });
+  try {
+    await assert.rejects(api.ownerCompanions(), (e: unknown) => e instanceof ApiProblemError && e.status === 401);
+    await signedOut.promise;
+    assert.equal(refresh.mock.callCount(), 1);
+    assert.deepEqual(session.snapshot(), { kind: "signed-out", message: "登录已过期，请重新登录。" });
+  } finally { unsubscribe(); }
 });
 
 test("keeps the old account hidden if local removal fails and permits switching after retry", async () => {
@@ -209,6 +217,7 @@ test("an in-flight voice response is discarded after sign-out", async t => {
 
 test("registration validates credentials and leaves the normal login session signed out", async () => {
   const { session, driver } = fixture();
+  await session.restore();
   const submitted: { email: string; password: string }[] = [];
   driver.signUp = async credentials => {
     submitted.push(credentials);
@@ -225,6 +234,7 @@ test("registration validates credentials and leaves the normal login session sig
 
 test("registration and recovery do not disclose whether an email exists", async () => {
   const { session, driver } = fixture();
+  await session.restore();
   driver.signUp = async () => ({ data: { user: { id: "fixture-user" } }, error: null });
   const registration = await session.signUp("known@example.test", "fixture");
   driver.signUp = async () => ({ data: { user: null }, error: { code: "user_already_exists", status: 422 } });
@@ -242,6 +252,7 @@ test("registration and recovery do not disclose whether an email exists", async 
 
 test("self-service requests cannot race each other or a sign-in", async () => {
   const { session, driver } = fixture();
+  await session.restore();
   const requested = Promise.withResolvers<Awaited<ReturnType<NonNullable<AuthDriver["signUp"]>>>>();
   driver.signUp = () => requested.promise;
   let recoveries = 0;
@@ -331,4 +342,32 @@ test("a pending password change stays bound to the original account", async () =
   release.resolve();
   assert.equal((await pending).ok, false);
   assert.equal(await binding(session).tokens.getToken(), "bob");
+});
+
+test("restoration distinguishes a temporary error from a missing session and supports retry", async () => {
+  const { session, driver } = fixture(null, false);
+  driver.getSession = async () => ({ data: { session: null }, error: new TypeError("offline") });
+  session.observe();
+  await session.restore();
+  assert.equal(session.snapshot().kind, "restore-error");
+  driver.getSession = async () => ({ data: { session: account("owner-a") }, error: null });
+  await session.restore();
+  assert.equal(binding(session).email, "owner-a@example.test");
+});
+
+test("a stalled restoration times out and its late session cannot replace a retried session", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { session, driver } = fixture(null, false);
+  const old = Promise.withResolvers<Awaited<ReturnType<AuthDriver["getSession"]>>>();
+  driver.getSession = () => old.promise;
+  const first = session.restore();
+  await Promise.resolve();
+  t.mock.timers.tick(STARTUP_TIMEOUT_MS);
+  await first;
+  assert.deepEqual(session.snapshot(), { kind: "restore-error", message: "恢复登录超时，请重试。" });
+  driver.getSession = async () => ({ data: { session: account("new-owner") }, error: null });
+  await session.restore();
+  old.resolve({ data: { session: account("stale-owner") }, error: null });
+  await Promise.resolve();
+  assert.equal(binding(session).email, "new-owner@example.test");
 });
