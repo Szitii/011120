@@ -1,3 +1,5 @@
+import type { QuoteInput } from "./store.ts";
+
 export type AlbumPhotoKind = "room_snapshot" | "local_photo";
 
 export type ExportMediaResult =
@@ -113,4 +115,18 @@ export function buildExportFilename(input: {
     kind: input.kind,
   });
   return `${prefix}-${datePart}${suffix}.${ext}`;
+}
+
+export function formatAlbumDate(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleDateString("zh-CN");
+}
+
+export function formatQuoteShareText(quote: Pick<QuoteInput, "speaker" | "text" | "sentAt">): string {
+  const text = quote.text.trim();
+  const speaker = quote.speaker.trim() || "聊天金句";
+  const date = formatAlbumDate(quote.sentAt);
+  const meta = date ? `—— ${speaker} · ${date}` : `—— ${speaker}`;
+  return text ? `「${text}」\n${meta}` : meta;
 }

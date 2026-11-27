@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildExportFilename,
   detectImageExtensionFromBytes,
+  formatQuoteShareText,
   resolveImageExtension,
 } from "../src/album/actions.ts";
 
@@ -63,4 +64,15 @@ test("buildExportFilename formats deterministic filenames for polaroids and phot
     }),
     "companion-world-photo-20261126-xyz987.webp",
   );
+});
+
+test("formatQuoteShareText keeps speaker, date, and quote text", () => {
+  const sentAt = "2026-11-26T12:00:00Z";
+  const expectedDate = new Date(sentAt).toLocaleDateString("zh-CN");
+  const formatted = formatQuoteShareText({
+    speaker: "小星",
+    text: "  今晚风很轻，记得早点休息。 ",
+    sentAt,
+  });
+  assert.equal(formatted, `「今晚风很轻，记得早点休息。」\n—— 小星 · ${expectedDate}`);
 });
