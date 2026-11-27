@@ -1,4 +1,9 @@
-import { buildExportFilename, type ExportMediaOptions, type ExportMediaResult } from "./actions";
+import {
+  buildExportFilename,
+  type ExportMediaOptions,
+  type ExportMediaResult,
+  type ShareMediaResult,
+} from "./actions";
 
 let database: Promise<IDBDatabase> | undefined;
 
@@ -76,4 +81,8 @@ export async function exportMedia(path: string, options: ExportMediaOptions): Pr
   } catch {
     return { status: "failed", message: "照片导出失败，请稍后重试。" };
   }
+}
+
+export async function shareMedia(_path: string, _options: ExportMediaOptions): Promise<ShareMediaResult> {
+  return { status: "unsupported" };
 }

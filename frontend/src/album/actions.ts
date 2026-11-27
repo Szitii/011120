@@ -12,6 +12,14 @@ export type ExportMediaResult =
   | { status: "denied"; canAskAgain?: boolean }
   | { status: "failed"; message: string };
 
+export type ShareMediaResult =
+  | { status: "completed" }
+  | { status: "missing" }
+  | { status: "unsupported" }
+  | { status: "unavailable"; reason?: "module" | "system" }
+  | { status: "canceled" }
+  | { status: "failed"; message: string };
+
 export interface ExportMediaOptions {
   kind: AlbumPhotoKind;
   createdAt: string;
@@ -31,6 +39,18 @@ export interface NativeMediaSaveDeps {
   createAsset: (fileUri: string) => Promise<unknown>;
 }
 
+export interface NativeShareOptions {
+  mimeType?: string;
+  UTI?: string;
+  dialogTitle?: string;
+}
+
+export interface NativeMediaShareDeps {
+  getFileUri: () => string | undefined;
+  isAvailable: () => Promise<boolean>;
+  shareFile: (fileUri: string) => Promise<void>;
+}
+
 const MIME_TO_EXTENSION: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/jpg": "jpg",
@@ -42,6 +62,30 @@ const MIME_TO_EXTENSION: Record<string, string> = {
   "image/avif": "avif",
   "image/bmp": "bmp",
   "image/svg+xml": "svg",
+};
+
+const EXTENSION_TO_MIME: Record<string, string> = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  heic: "image/heic",
+  heif: "image/heif",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
+};
+
+const EXTENSION_TO_UTI: Record<string, string> = {
+  jpg: "public.jpeg",
+  png: "public.png",
+  webp: "org.webmproject.webp",
+  gif: "com.compuserve.gif",
+  heic: "public.heic",
+  heif: "public.heif",
+  avif: "public.avif",
+  bmp: "com.microsoft.bmp",
+  svg: "public.svg-image",
 };
 
 const VALID_EXTENSION = /^[a-z0-9]{1,8}$/i;
@@ -100,6 +144,38 @@ export function resolveImageExtension(input: {
     ?? extensionFromPath(input.localPath)
     ?? (input.kind === "room_snapshot" ? "png" : "jpg")
   );
+}
+
+export function nativeShareFilename(input: { localPath: string; kind: AlbumPhotoKind; bytes?: Uint8Array | null }): string {
+  const ext = resolveImageExtension(input);
+  if (extensionFromPath(input.localPath) === ext) return input.localPath;
+  return input.localPath.replace(/\.[^.]+$/, "") + "." + ext;
+}
+
+export function buildNativeShareOptions(input: {
+  platform: "ios" | "android";
+  localPath?: string | null;
+  kind: AlbumPhotoKind;
+  bytes?: Uint8Array | null;
+}): NativeShareOptions {
+  const resolvedExt = resolveImageExtension({
+    bytes: input.bytes,
+    localPath: input.localPath,
+    kind: input.kind,
+  });
+  const mimeType = EXTENSION_TO_MIME[resolvedExt] ?? "image/*";
+  if (input.platform === "android") {
+    return {
+      mimeType,
+      dialogTitle: input.kind === "room_snapshot" ? "分享小家拍立得" : "分享照片",
+    };
+  }
+  const pathExt = extensionFromPath(input.localPath);
+  if (pathExt === resolvedExt) {
+    return {};
+  }
+  const uti = EXTENSION_TO_UTI[resolvedExt];
+  return uti ? { UTI: uti, mimeType } : { mimeType };
 }
 
 function compactDate(iso: string): string {
@@ -163,6 +239,21 @@ export async function saveNativeMediaToLibrary(deps: NativeMediaSaveDeps): Promi
   }
 }
 
+export async function shareNativeMediaFile(deps: NativeMediaShareDeps): Promise<ShareMediaResult> {
+  if (!deps.getFileUri()) return { status: "missing" };
+  try {
+    const available = await deps.isAvailable();
+    if (!available) return { status: "unavailable", reason: "system" };
+    const latestUri = deps.getFileUri();
+    if (!latestUri) return { status: "missing" };
+    await deps.shareFile(latestUri);
+    return { status: "completed" };
+  } catch (error) {
+    if (isShareAbortError(error)) return { status: "canceled" };
+    return { status: "failed", message: "未能调起系统分享，请稍后重试。" };
+  }
+}
+
 export function getExportFeedback(
   result: ExportMediaResult,
   isWeb: boolean,
@@ -203,6 +294,27 @@ export function getExportFeedback(
   return { message: result.message, isError: true };
 }
 
+export function getShareFeedback(
+  result: ShareMediaResult,
+): { message: string; isError: boolean } | undefined {
+  if (result.status === "completed" || result.status === "canceled") return undefined;
+  if (result.status === "missing") {
+    return { message: "这张照片的本地文件已失效，无法分享。", isError: true };
+  }
+  if (result.status === "unavailable") {
+    return {
+      message: result.reason === "module"
+        ? "当前安装包暂不支持分享图片，请更新应用后重试。"
+        : "当前设备暂不支持分享图片。",
+      isError: true,
+    };
+  }
+  if (result.status === "unsupported") {
+    return { message: "当前环境暂不支持分享图片。", isError: true };
+  }
+  return { message: result.message, isError: true };
+}
+
 export function formatAlbumDate(iso: string): string {
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return "";
@@ -237,5 +349,9 @@ export async function shareTextOnWeb(
 }
 
 export function isShareAbortError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError";
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  if (candidate.name === "AbortError") return true;
+  if (typeof candidate.code === "string" && /cancel/i.test(candidate.code)) return true;
+  return false;
 }
