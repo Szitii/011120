@@ -34,7 +34,7 @@ import { type FollowDirection } from "./CommunityFollowList.tsx";
 import { communityRequestKey, type CommunityClient } from "./client.ts";
 import type { CommunityTarget } from "../state/navigation";
 import { CommunityRequestScope } from "./request-scope.ts";
-import { ActorLine, CommunityButton as Button, ContentCard, useCommunityStyles } from "./components.tsx";
+import { ActorLine, CommunityButton as Button, ContentCard, communityIdentityLabel, useCommunityStyles } from "./components.tsx";
 import { MentionChips, MentionPicker, type Mention } from "./MentionPicker";
 import { UnifiedProfileView } from "../components/UnifiedProfileView";
 import { ReportForm } from "./ReportForm.tsx";
@@ -343,6 +343,8 @@ export function CommunityScreen({
   const showSocialActions = Boolean(profile && !profile.isSelf && !managedActions);
   const profileName = profile?.displayName ?? managed?.displayName ?? legacyProfile?.displayName;
   const profileHandle = profile?.handle ?? managed?.handle ?? legacyProfile?.handle;
+  const profileSubtitle = [profileHandle ? `@${profileHandle}` : undefined, communityIdentityLabel(profile?.kind)]
+    .filter(Boolean).join(" · ");
   const legacyBio = legacyProfile?.publicProfile.bio;
 
   function openShareSheet(post: CommunityPost) {
@@ -590,7 +592,7 @@ export function CommunityScreen({
             <UnifiedProfileView name={profileName}
               role={profile?.kind === "HUMAN" ? "owner" : "companion"}
               avatar={profile?.avatar ?? managed?.avatar}
-              subtitle={profileHandle ? `@${profileHandle}` : undefined}
+              subtitle={profileSubtitle}
               bio={profile?.bio ?? (typeof legacyBio === "string" ? legacyBio : undefined)}
               stats={profile ?? (managed && managed.socialReady !== true ? EMPTY_PROFILE_STATS : undefined)}
               onFollowList={profile?.isSelf && !managedActions && !busy ? onFollowList : undefined}
