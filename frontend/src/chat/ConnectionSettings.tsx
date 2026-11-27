@@ -30,6 +30,8 @@ export function ConnectionSettings({
   mode,
   onModeChange,
   enabled,
+  featureLoadNotice,
+  retryFeatures,
   onAvailabilityChanged,
   onConnectionChange,
 }: {
@@ -39,6 +41,8 @@ export function ConnectionSettings({
   mode?: "key" | "external";
   onModeChange: (next?: "key" | "external") => void;
   enabled: boolean;
+  featureLoadNotice?: string;
+  retryFeatures?: () => void;
   onAvailabilityChanged: () => void;
   onConnectionChange?: (connection?: CompanionConnection) => void;
 }) {
@@ -213,7 +217,7 @@ export function ConnectionSettings({
         ? "自带 API Key"
         : connection?.kind === "EXTERNAL"
           ? "自建家机"
-          : "平台托管";
+          : connection?.kind === "PLATFORM" ? "平台托管" : "未读取到连接方式";
 
   async function submitCopy() {
     if (pending.current || copyBusy || !copyTargetId || !copyConsent) return;
@@ -354,9 +358,10 @@ export function ConnectionSettings({
                 </>
               )}
             </View>
-          ) : (
-            <Text style={s.mutedText}>连接自己的模型暂未开放。</Text>
-          )}
+          ) : <>
+            <Text style={s.mutedText}>{featureLoadNotice ?? "连接自己的模型暂未开放。"}</Text>
+            {retryFeatures && <CommunityButton label="重试读取功能状态" onPress={retryFeatures} />}
+          </>}
 
           {connection && connection.kind !== "PLATFORM" && (
             <View style={s.revokeRow}>

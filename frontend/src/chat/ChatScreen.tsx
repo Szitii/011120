@@ -41,11 +41,13 @@ import {
 const QUICK_EMOJIS = ["😊", "🥺", "❤️", "😂", "🫂", "✨", "👍", "🌙", "☕️", "🐶", "😭", "🫶"];
 
 const replyFailureMessages = {
-  UNAVAILABLE: "即将推出",
+  UNAVAILABLE: "当前没有可用模型，家机暂时无法回复。",
   DISABLED: "平台模型暂时关闭",
   ERROR: "这条回复没发出来，可以重试",
 };
 
+// The private-chat API only supports text and voice. Restore this tray when attachments are supported.
+const CHAT_ATTACHMENTS_AVAILABLE = false;
 const MAX_MESSAGE_LENGTH = 2000;
 
 export function formatQuotedReplyPrefix(sourceText: string): string {
@@ -99,6 +101,8 @@ export function ChatScreen({
   onOpenProfile,
   onRead,
   groupSendEnabled,
+  featureLoadNotice,
+  retryFeatures,
   onAvailabilityChanged,
   draftStore,
 }: {
@@ -115,6 +119,8 @@ export function ChatScreen({
   onBackToHome: () => void;
   onSaveQuote?: (quote: QuoteInput) => Promise<void>;
   groupSendEnabled: boolean;
+  featureLoadNotice?: string;
+  retryFeatures?: () => void;
   onAvailabilityChanged: () => void;
   onRead?: () => void;
   onOpenSettings: (chatId: string, companionId?: string) => void;
@@ -916,7 +922,10 @@ export function ChatScreen({
 
       {/* WeChat-style single-row bottom bar */}
       {groupReadOnly ? (
-        <Text style={styles.quoteResult}>群聊暂未开放发言，可以查看记录或删除会话。</Text>
+        <View>
+          <Text style={styles.quoteResult}>{featureLoadNotice ?? "群聊暂未开放发言，可以查看记录或删除会话。"}</Text>
+          {retryFeatures && <CommunityButton label="重试读取功能状态" onPress={retryFeatures} />}
+        </View>
       ) : (
         <View style={styles.composerWrap}>
           {!!attachNotice && <Text style={styles.attachNotice}>{attachNotice}</Text>}
@@ -998,7 +1007,7 @@ export function ChatScreen({
                   <Ionicons name="paper-plane-outline" size={16} color={ui.onAccent} />
                 )}
               </Pressable>
-            ) : (
+            ) : CHAT_ATTACHMENTS_AVAILABLE ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="更多功能"
@@ -1012,7 +1021,7 @@ export function ChatScreen({
               >
                 <Ionicons name="add-circle-outline" size={25} color={ui.ink} />
               </Pressable>
-            )}
+            ) : null}
           </View>
 
           {tray === "emoji" && (
@@ -1032,7 +1041,7 @@ export function ChatScreen({
             </ScrollView>
           )}
 
-          {tray === "plus" && (
+          {CHAT_ATTACHMENTS_AVAILABLE && tray === "plus" && (
             <View style={styles.plusTray}>
               {[
                 { icon: "image-outline" as const, label: "照片" },

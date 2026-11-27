@@ -77,11 +77,6 @@ export function PrivateHomeScreen({
     }
   }
 
-  function openDiary() {
-    if (onOpenDiary) onOpenDiary();
-    else setNotice(isCompanion ? "日记由主人打开。" : "请先添加家机，或等待小家资料加载完成。");
-  }
-
   const canSwitch = !isCompanion && companions.length > 1 && Boolean(onSelectCompanion);
 
   return (
@@ -110,22 +105,22 @@ export function PrivateHomeScreen({
         isActive={isActive}
         externalAction={externalAction}
         companionSpeech={companionSpeech}
-        onOpenDiary={openDiary}
+        onOpenDiary={onOpenDiary}
         onAction={submitAction}
         onCapture={scope ? scene => void capture(scene) : undefined}
         capturing={capturing}
       />
       {scope && <AnniversaryPill scope={scope} client={chatClient} active={isActive} />}
-      {scope && (
+      {scope && (onOpenDiary || onOpenAlbum) && (
         <View style={styles.cards}>
-          <Pressable accessibilityRole="button" accessibilityLabel="日记" style={styles.card} onPress={openDiary}>
+          {onOpenDiary && <Pressable accessibilityRole="button" accessibilityLabel="日记" style={styles.card} onPress={onOpenDiary}>
             <Image source={DIARY_SLOT_IMAGE} style={styles.icon} resizeMode="contain" />
             <Text style={styles.label}>日记</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="相册" style={styles.card} disabled={capturing || !onOpenAlbum} onPress={onOpenAlbum}>
+          </Pressable>}
+          {onOpenAlbum && <Pressable accessibilityRole="button" accessibilityLabel="相册" style={styles.card} disabled={capturing} onPress={onOpenAlbum}>
             <Image source={ALBUM_SLOT_IMAGE} style={styles.icon} resizeMode="contain" />
             <Text style={styles.label}>相册</Text>
-          </Pressable>
+          </Pressable>}
         </View>
       )}
       {notice !== "" && <Text accessibilityLiveRegion="polite" style={styles.notice}>{notice}</Text>}

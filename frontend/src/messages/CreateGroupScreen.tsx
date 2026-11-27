@@ -6,10 +6,12 @@ import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { makeIdempotencyKey, type ChatClient } from "../chat/client";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 
-export function CreateGroupScreen({ client, companions, enabled, onAvailabilityChanged, onCreated }: {
+export function CreateGroupScreen({ client, companions, enabled, featureLoadNotice, retryFeatures, onAvailabilityChanged, onCreated }: {
   client: ChatClient;
   companions: OwnerCompanionSummary[];
   enabled: boolean;
+  featureLoadNotice?: string;
+  retryFeatures?: () => void;
   onAvailabilityChanged: () => void;
   onCreated: (chat: Chat) => void;
 }) {
@@ -44,7 +46,10 @@ export function CreateGroupScreen({ client, companions, enabled, onAvailabilityC
 
   return <ScrollView style={s.page} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
     <SecondaryHeading title="新建群聊" />
-    {!enabled ? <Text style={s.meta}>新建群聊暂未开放。</Text> : <>
+    {!enabled ? <>
+      <Text style={s.meta}>{featureLoadNotice ?? "新建群聊暂未开放。"}</Text>
+      {retryFeatures && <CommunityButton label="重试读取功能状态" onPress={retryFeatures} />}
+    </> : <>
       <Text style={s.meta}>从自己的家机中选 2–8 位。已选 {ids.length} 位</Text>
       <View style={s.card}>
         <TextInput accessibilityLabel="群聊名称" placeholder="群聊名称（可选）" value={title} onChangeText={setTitle} editable={!busy} style={s.input} />
