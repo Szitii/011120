@@ -108,7 +108,7 @@ const main = async (): Promise<void> => {
       `Stage 1 mobile dev API listening on http://${host}:${port}`,
       `Bearer token: ${bearerToken}`,
       "SampleCompanion Companion: 00000000-0000-0000-0000-0000000002a1",
-      "This host is development-only and Encounter creation is intentionally disabled.",
+      "This host is development-only.",
       "",
     ].join("\n"),
   );

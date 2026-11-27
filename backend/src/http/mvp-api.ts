@@ -327,8 +327,6 @@ const getCompanionProfile: Handler = async ({ query, params, session }) => {
   return [200, await session.owner.getCompanionProfile(requireUuid(params[0], "companionId"), viewer)];
 };
 
-const getEncounterDetail: Handler = async ({ params, session }) =>
-  [200, await session.owner.getEncounterDetail(requireUuid(params[0], "encounterId"))];
 
 const listLifeContinuity: Handler = async ({ query, session }) => {
   const limit = limitParam(query, 30);
@@ -433,7 +431,6 @@ const updateControls: Handler = async (context) => {
 
 
 const ROUTES: readonly (readonly [method: string, path: RegExp, handler: Handler])[] = [
-  ["GET", /^\/v0\/encounters\/([^/]+)$/, getEncounterDetail],
   ["GET", /^\/v0\/identity-context$/, getIdentityContext],
   ["GET", /^\/v0\/world-items$/, listWorldItems],
   ["GET", /^\/v0\/companions$/, listOwnerCompanions],

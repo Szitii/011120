@@ -26,13 +26,13 @@ describe("PostgreSQL persistence adapter",()=>{
 
     const worldDb=new FakeExecutor({item:{
       id:id("2"),
-      kind:"ENCOUNTER_EXCERPT",
+      kind:"POST",
       author:{subjectKind:"SOCIAL_TWIN",subjectId:id("4"),companionId:id("3"),displayName:"SampleCompanion",handle:"sample_companion"},
       publishedAt:"2026-09-18T00:00:00.000Z",
       body:"A quiet first meeting",
-      source:{type:"ENCOUNTER",id:id("6")},
+      source:{type:"POST",id:id("6")},
       visibility:"PUBLIC",
-      viewerCapabilities:{openProfile:true,openDetail:true,react:false,reply:false,share:false},
+      viewerCapabilities:{openProfile:true,openDetail:false,react:false,reply:false,share:false},
       completeness:"COMPLETE"
     }});
     const world=await new PostgresOwnerAdapter(worldDb).listWorldItems(1);
@@ -41,7 +41,7 @@ describe("PostgreSQL persistence adapter",()=>{
     assert.equal(world.nextCursor,"2026-09-18T00:00:00.000Z");
 
     const lifeDb=new FakeExecutor({item:{
-      id:id("20"),kind:"LIFE_EVENT",title:"Encounter complete",occurredAt:"2026-09-18T00:00:00.000Z",
+      id:id("20"),kind:"LIFE_EVENT",title:"A new day",occurredAt:"2026-09-18T00:00:00.000Z",
       companion:{companionId:id("3"),displayName:"SampleCompanion"},inboxItemId:id("21"),status:"AVAILABLE",
       linkedObject:{type:"LIFE_EVENT",id:id("20")},viewerCapabilities:{openDetail:false},completeness:"COMPLETE"
     }});
@@ -60,12 +60,9 @@ describe("PostgreSQL persistence adapter",()=>{
     assert.equal(profile?.viewer.relationship,"SELF");
     assert.deepEqual(profileDb.calls[0]?.values,[id("3"),"COMPANION",id("3")]);
 
-    const encounterDb=new FakeExecutor({payload:{encounterId:id("6"),invitationId:id("7"),status:"DELIVERED",initiatorTwinId:id("8"),responderTwinId:id("9"),occurredAt:"2026-09-18T00:00:00.000Z",capabilities:{view:true},completeness:"COMPLETE"}});
-    const detail=await new PostgresOwnerAdapter(encounterDb).getEncounterDetail(id("6"));
-    assert.equal(detail?.status,"DELIVERED");
   });
   it("maps Life Event inbox list and acknowledgement reads",async()=>{
-    const item={id:id("20"),kind:"LIFE_EVENT",lifeEventId:id("21"),companionId:id("3"),title:"Encounter complete",createdAt:"2026-09-18T00:00:00.000Z",linkedObject:{type:"LIFE_EVENT",id:id("21")}};
+    const item={id:id("20"),kind:"LIFE_EVENT",lifeEventId:id("21"),companionId:id("3"),title:"A new day",createdAt:"2026-09-18T00:00:00.000Z",linkedObject:{type:"LIFE_EVENT",id:id("21")}};
     const listDb=new FakeExecutor({item});
     const page=await new PostgresOwnerAdapter(listDb).listLifeEventInbox(1,{createdAt:"2026-09-19T00:00:00.000Z",id:id("99")});
     assert.equal(page.items[0]?.id,id("20"));

@@ -332,7 +332,7 @@ paths:
         - { name: beforeId, in: query, required: false, schema: { type: string, format: uuid } }
       responses:
         '200':
-          description: Owner-only Life continuity across Life Events and participant-authorized Encounter summaries
+          description: Owner-only Life continuity (Life Events)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LifeContinuityCollection' }
@@ -427,21 +427,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CompanionProfile' }
-        '404': { $ref: '#/components/responses/Problem' }
-        '501': { $ref: '#/components/responses/Problem' }
-  /encounters/{encounterId}:
-    get:
-      x-capability-status: implemented
-      operationId: getEncounterDetail
-      summary: Read an authorized Encounter terminal view and receipt link
-      parameters:
-        - { name: encounterId, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        '200':
-          description: Owner-authorized terminal Encounter view
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/EncounterDetail' }
         '404': { $ref: '#/components/responses/Problem' }
         '501': { $ref: '#/components/responses/Problem' }
   /controls:
@@ -724,38 +709,6 @@ components:
           properties:
             relationship: { enum: [SELF, OWNER_OF, PUBLIC_VIEWER] }
             capabilities: { type: object, additionalProperties: { type: boolean } }
-        completeness: { enum: [COMPLETE, PARTIAL] }
-    EncounterDetail:
-      type: object
-      additionalProperties: false
-      required: [encounterId, invitationId, status, initiatorTwinId, responderTwinId, participants, occurredAt, capabilities, completeness]
-      properties:
-        encounterId: { type: string, format: uuid }
-        invitationId: { type: string, format: uuid }
-        status: { enum: [DELIVERED, REDACTED, BLOCKED, FAILED] }
-        initiatorTwinId: { type: string, format: uuid }
-        responderTwinId: { type: string, format: uuid }
-        occurredAt: { type: string, format: date-time }
-        body: { type: string }
-        computeReceiptTransactionId: { type: string, format: uuid }
-        participants:
-          type: array
-          minItems: 2
-          maxItems: 2
-          items:
-            type: object
-            additionalProperties: false
-            required: [role, socialTwinId, presentationAvailable, profileAvailable]
-            properties:
-              role: { enum: [INITIATOR, RESPONDER] }
-              socialTwinId: { type: string, format: uuid }
-              presentationAvailable: { type: boolean }
-              companionId: { type: string, format: uuid }
-              displayName: { type: string }
-              handle: { type: string }
-              avatar: { type: string, format: uri }
-              profileAvailable: { type: boolean }
-        capabilities: { type: object, additionalProperties: { type: boolean } }
         completeness: { enum: [COMPLETE, PARTIAL] }
     ProjectionSelection:
       type: object

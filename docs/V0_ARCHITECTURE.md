@@ -102,19 +102,7 @@ Every model request is created as a `RuntimeInvocation` with:
 
 The call sequence is: authorize principal and scan untrusted input → reserve publication and Compute budgets → authorize memory candidates → build typed context → atomically claim the invitation for those reservations → append provider start → call provider → validate usage and scan output → settle ledger → persist or block → append event and receipt. The database rejects a social Provider start without the claim and binds every terminal result to it. Failures before claim release reservations; failures after Provider I/O record actual or conservative usage and consume no publication budget.
 
-Update 2026-11-23: the TypeScript Encounter composition (`PersistentEncounterOrchestrator`, `PostgresServerAdapter`, the reconciliation worker, `POST /v0/encounters`, invitations and receipts) was removed because no host ever ran it; the SQL functions and `GET /v0/encounters/{id}` remain. The rest of this section describes the design as it was.
-
-The production Encounter composition now uses the asynchronous PostgreSQL persistence port exclusively. It has no in-memory fallback and performs no dual write; fixed adapter calls delegate consent, locking, budget, claim, idempotency, settlement, and every terminal decision to PostgreSQL. The synchronous in-memory Encounter service was removed on 2026-11-22; `PersistentEncounterOrchestrator` is the only composition (ADR-0020 follow-up). Successful output is delivered only through hash-bound safety evidence and the atomic delivery command; blocked and failed outcomes cannot create delivery side effects.
-
-After claim and before Provider `START`, PostgreSQL assembles one immutable context snapshot. Its manifest binds the claim, Invitation, Encounter, Compute transaction, both frozen Social Persona/Identity Passport chains, scope, purpose, context hash, expiry, Provider request hash, and ordered Memory IDs. The runtime receives the public Persona projection plus bounded presence/summary representations only; it cannot accept Persona or Memory bodies in the Encounter command. Snapshot replay is stable rather than re-running retrieval.
-
-Before that execution sequence, the initiating Owner issues a version-frozen one-shot invitation through an authenticated database command. Issuance counts only as the initiator's approval; the independently authenticated responder must approve before any server execution claim can succeed, or may reject irreversibly. Owner adapters never send an actor Owner identifier because PostgreSQL derives it from Auth context.
-
-If a worker dies after claim but before `START`, a service-only recovery command waits for the fixed grace window or invitation expiry, then atomically releases both holds, consumes the one-shot invitation, and records non-delivery. Row locking makes this mutually exclusive with `START`. Once `START` exists, recovery fails closed and the attempt enters provider reconciliation rather than being assumed free.
-
-For a stale `START` with no trusted terminal provider result, a separate service-only database command locks the same claim and Compute aggregate, settles the full reserved ceiling conservatively, records immutable reconciliation evidence, consumes the invitation, and releases publication. It cannot retry the provider or create an Artifact, Life Event, Inbox item, Post, or Memory; a concurrent normal settlement and reconciliation cannot both win.
-
-A runner-neutral worker tick pages through an advisory service-only candidate query with explicit cutoff, batch, and run caps, then calls the reconciliation command through the typed PostgreSQL adapter. Scheduling, Provider-specific evidence acquisition, and later cost correction are outside this boundary; eligibility and settlement remain database-owned.
+Update: 相遇 (Encounter) was removed: the run on 2026-11-23, the rest on 2026-11-27 (migration `202611270079_remove_encounter.sql`, ADR 0024). The Encounter call sequence above is history.
 
 ## API shape
 
@@ -124,7 +112,6 @@ Use commands for mutations and resources for reads, for example:
 - `GET /v0/companions/{id}/identity-versions/{version}`
 - `PUT /v0/companions/{id}/social-persona`
 - `POST /v0/memory-access-decisions:explain`
-- `POST /v0/encounters` for a bounded one-shot social encounter
 - `GET /v0/life-events` and `GET /v0/compute-transactions`
 
 All mutations require idempotency keys. Problem Details responses expose stable machine codes without leaking private policy evidence.
@@ -142,7 +129,7 @@ All mutations require idempotency keys. Problem Details responses expose stable 
 1. **Companion Import Firewall + Identity Passport draft.** Parse one bounded card format into quarantine, show provenance/diff, strip executable prompts, and require explicit Owner approval. This proves “Bring Your Companion,” not merely BYOK.
 2. **Private Companion → Social Twin projection.** Let the Owner select a versioned public persona without cloning private memory. This validates the project's defining identity boundary.
 3. **Memory Permission Gate with explanation receipt.** A test console shows which candidate memories were allowed, denied, or redacted and why. This makes the firewall observable before social scale.
-4. **Bounded Twin Encounter.** Two invited Social Twins exchange one purpose-limited event under strict budgets; inputs are untrusted and output is scanned. This tests identity and relationship effects without building DM or Feed.
+4. **Bounded Twin Encounter** (built, then removed 2026-11-27). Two invited Social Twins exchange one purpose-limited event under strict budgets; inputs are untrusted and output is scanned. This tests identity and relationship effects without building DM or Feed.
 5. **Life Event inbox + Compute receipt.** The Owner sees what happened, what changed, and which Companion/reason/model/tokens/cost produced it. This measures meaningful return and builds economic trust.
 
 Only after these slices produce safe return behavior should the team decide whether Feed, comments, or DM is the next surface.

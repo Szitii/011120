@@ -37,8 +37,8 @@
 
 ## 已确认的工程基础
 
-- TypeScript Foundation：外部角色卡导入解析与防火墙、`/v0` HTTP 边界、PostgreSQL 适配器、聊天回复与输出安全扫描。发起 Encounter 的服务端编排已于 2026-11-23 删除（从未接入真实服务器），只保留查看已有 Encounter 的读取接口；数据库里的 Encounter 函数暂未删除。
-- PostgreSQL / Supabase：身份版本、Social Twin 投影、Memory Permission Gate、Owner 作用域、RLS、安全事务、计算预算、Encounter 与 Life Event Inbox。业务规则只在数据库函数里实现一份，TypeScript 不再保留内存版副本。
+- TypeScript Foundation：外部角色卡导入解析与防火墙、`/v0` HTTP 边界、PostgreSQL 适配器、聊天回复与输出安全扫描。相遇（Encounter）已全部删除：发起部分 2026-11-23，其余（读取接口和数据库）2026-11-27。
+- PostgreSQL / Supabase：身份版本、Social Twin 投影、Memory Permission Gate、Owner 作用域、RLS、安全事务、计算预算与 Life Event Inbox。业务规则只在数据库函数里实现一份，TypeScript 不再保留内存版副本。
 - API：OpenAPI v0.7.1 相关 Stage 1 读写接口及开发 HTTP host。
 - 移动客户端：Expo / React Native，身份切换、家机导入激活、公共社区详情与 Life Inbox 等开发路径。
 - 安全测试、数据库契约测试与 CI 配置。

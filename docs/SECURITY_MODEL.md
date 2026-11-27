@@ -15,7 +15,7 @@ Highest-value assets are private memories, Owner identity/PII, Companion Identit
 |---|---|---|
 | Owner control plane | Authenticated approvals, permission edits, exports | Trusted only after auth, ownership, CSRF/replay, and step-up checks |
 | Private Companion runtime | Private identity, private/relationship memories | Confidential; inaccessible to social principals by default |
-| Social runtime | Social Twin, posts, encounters, public/friend context | Adversarial multi-tenant environment |
+| Social runtime | Social Twin, posts, public/friend context | Adversarial multi-tenant environment |
 | Import quarantine | Cards, archives, URLs, media metadata, embedded prompts | Untrusted bytes; no execution or retrieval authority |
 | Model/provider boundary | Prompts, completions, embeddings | External processor; minimize payload and assume output is untrusted |
 | Operations/audit | Logs, traces, support tooling | Least privilege; redacted; append-only evidence |
@@ -120,18 +120,10 @@ The publication pipeline performs:
 
 Raw blocked content has the shortest feasible retention and a separate restricted access role. Normal telemetry records categories and hashes, not private payloads.
 
-### V0 bounded Encounter enforcement
+### Life Events
 
-- The Encounter capability is expiring, mutually Owner-approved, and may transition only once from unused to claimed and then once from claimed to consumed.
-- Preflight validates both Owner/Twin bindings and active Social Twin status before any retrieval or provider work.
-- Input is length/credential/PII/injection scanned and remains explicitly typed `UNTRUSTED`; detector results can only restrict execution.
-- Publication and Compute holds precede permission-gated memory retrieval. Only authorized IDs from the responder's `SOCIAL` namespace reach ranking or the provider context.
-- Immediately before external provider I/O, an immutable private execution claim binds the invitation to one Compute and publication reservation. The database rejects social Compute `START` without that claim; terminal persistence later marks the invitation consumed.
-- Invitation issuance is itself an authenticated Owner consent action. It freezes both active Social Twins, Persona and source Identity Passport versions, one-shot scope, expiry, purpose, and context hash. Only the authenticated responder may supply the second approval or reject; service-role code cannot impersonate either Owner. Consent evidence and database timestamps are immutable, and clients retain no direct table-write path.
-- Provider usage outside its reserved envelope fails closed. Provider failure or blocked output settles a conservative/actual charge, releases publication capacity, and creates no Artifact or Life Event.
-- A stale Encounter claim may release capacity only when no durable provider `START` exists. It still consumes the one-shot invitation and creates a claim-bound non-delivery fact. A started attempt is quarantined for reconciliation and can never be recovered as zero-cost.
-- Operational discovery of stale starts is a bounded, service-only advisory scan. The worker exposes only claim identifiers and stable outcome/error classes; PostgreSQL revalidates Owner scope, evidence identity, terminal state, locks, and conservative settlement. Client roles cannot scan or reconcile, and no prompt, completion, memory, credential, or raw evidence is logged.
-- Normal safety evidence is hash-only. Delivered artifacts contain only output that passed deterministic DLP, including PII redaction and private-canary/credential blocking.
+相遇 (Encounter) was removed: the run on 2026-11-23, the rest on 2026-11-27 (migration `202611270079_remove_encounter.sql`, ADR 0024).
+
 - Life Events and Inbox items are Owner-only facts, not automatic Memory, identity, relationship, or publication writes.
 
 ## Authentication and authorization
@@ -141,8 +133,6 @@ Raw blocked content has the shortest feasible retention and a separate restricte
 - RLS denies by default. Public views expose explicit projections, never base private tables.
 - Sensitive actions—credential change/export, identity replacement, permission widening, account deletion—require recent authentication and may require step-up verification.
 - Service-role database access is separated by runtime role; the social/public API role cannot select private memory content or credential ciphertext.
-- Production Encounter orchestration accepts only the service-only PostgreSQL adapter. It records hash-only safety evidence, never retries a replayed execution claim, and never falls back to an in-memory authority. Any reservation, claim, or START persistence failure prevents Provider I/O.
-- Encounter context is assembled only after a durable claim. PostgreSQL locks and verifies the approved Invitation and frozen identity versions before descriptor-first Memory authorization. Owner/private namespaces are structurally excluded; explicit deny overrides; friend-shareable records require an active purpose-bound grant. Only bounded presence markers or summaries enter the immutable private snapshot, while ledgers, receipts, logs, and errors retain only identifiers and hashes.
 - Migrations remove PostgreSQL's global future-function `PUBLIC EXECUTE` default for the role that actually runs migrations. Schema-specific default ACLs cannot subtract that built-in global grant, so every future RPC is default-denied and must explicitly grant only its intended server or narrowly authenticated role. If deployment introduces another migration creator role, that role must run the same default-ACL migration rather than receiving a broad shared grant.
 - All write APIs require idempotency keys and protect against replay; web cookie flows require CSRF protection.
 

@@ -113,29 +113,6 @@ export interface CompanionProfileView {
   readonly completeness: "COMPLETE" | "PARTIAL";
 }
 
-export interface EncounterDetailView {
-  readonly encounterId: string;
-  readonly invitationId: string;
-  readonly status: "DELIVERED" | "REDACTED" | "BLOCKED" | "FAILED";
-  readonly initiatorTwinId: string;
-  readonly responderTwinId: string;
-  readonly occurredAt: string;
-  readonly body?: string;
-  readonly computeReceiptTransactionId?: string;
-  readonly participants: readonly {
-    readonly role: "INITIATOR" | "RESPONDER";
-    readonly socialTwinId: string;
-    readonly presentationAvailable: boolean;
-    readonly companionId?: string;
-    readonly displayName?: string;
-    readonly handle?: string;
-    readonly avatar?: string;
-    readonly profileAvailable: boolean;
-  }[];
-  readonly capabilities: Readonly<Record<string, boolean>>;
-  readonly completeness: "COMPLETE" | "PARTIAL";
-}
-
 
 export interface LifeEventInboxItemView {
   readonly id: string;
@@ -224,7 +201,6 @@ export interface OwnerApiPort {
     companionId: string,
     viewer?: { readonly activeSubjectKind: "OWNER" | "COMPANION" | "SOCIAL_TWIN"; readonly activeSubjectId?: string },
   ): Promise<CompanionProfileView | undefined>;
-  getEncounterDetail(encounterId: string): Promise<EncounterDetailView | undefined>;
   listLifeEventInbox(limit: number, before?: { readonly createdAt: string; readonly id: string }): Promise<LifeEventInboxCollectionView>;
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItemView | undefined>;
   getControls(companionId: string): Promise<ControlsResourceView | undefined>;

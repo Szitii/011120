@@ -3,7 +3,6 @@ import type {
   ActiveIdentityContextView,
   CompanionProfileView,
   ControlsResourceView,
-  EncounterDetailView,
   LifeContinuityCollectionView,
   LifeContinuityItemView,
   LifeEventInboxCollectionView,
@@ -101,11 +100,6 @@ export class PostgresOwnerAdapter implements OwnerApiPort {
       companionId, viewer?.activeSubjectKind ?? "OWNER", viewer?.activeSubjectId ?? null,
     ]);
     return r && json<CompanionProfileView>(r, "payload");
-  }
-
-  async getEncounterDetail(encounterId: string): Promise<EncounterDetailView | undefined> {
-    const r = await first(this.#executor, "select * from public.get_encounter_detail($1)", [encounterId]);
-    return r && json<EncounterDetailView>(r, "payload");
   }
 
   async listLifeEventInbox(

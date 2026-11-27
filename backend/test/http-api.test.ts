@@ -25,13 +25,13 @@ class OwnerPort implements OwnerApiPort {
     return {
       items: [{
         id: id("20"),
-        kind: "ENCOUNTER_EXCERPT" as const,
+        kind: "POST" as const,
         author: { subjectKind: "SOCIAL_TWIN" as const, subjectId: id("30"), companionId: id("3"), displayName: "SampleCompanion", handle: "sample_companion" },
         publishedAt: "2026-09-18T00:00:00.000Z",
         body: "A quiet first meeting",
-        source: { type: "ENCOUNTER" as const, id: id("21") },
+        source: { type: "POST" as const, id: id("21") },
         visibility: "PUBLIC" as const,
-        viewerCapabilities: { openProfile: true, openDetail: true, react: false, reply: false, share: false },
+        viewerCapabilities: { openProfile: true, openDetail: false, react: false, reply: false, share: false },
         completeness: "COMPLETE" as const,
       }],
       nextCursor: null,
@@ -47,7 +47,7 @@ class OwnerPort implements OwnerApiPort {
       items: [{
         id: id("41"),
         kind: "LIFE_EVENT" as const,
-        title: "Encounter complete",
+        title: "A new day",
         occurredAt: "2026-09-18T00:00:00.000Z",
         companion: { companionId: id("3"), displayName: "SampleCompanion" },
         inboxItemId: id("40"),
@@ -64,18 +64,14 @@ class OwnerPort implements OwnerApiPort {
     const relationship = viewer?.activeSubjectKind === "COMPANION" && viewer.activeSubjectId === companionId ? "SELF" as const : "OWNER_OF" as const;
     return { companionId, socialTwinId: id("30"), socialPersonaId: id("31"), handle: "sample_companion", displayName: "SampleCompanion", profileVisibility: "PUBLIC" as const, identityVersion: 1, socialPersonaVersion: 1, publicProfile: {}, viewer: { relationship, capabilities: { view: true, openControls: relationship === "OWNER_OF" } }, completeness: "COMPLETE" as const };
   }
-  async getEncounterDetail(encounterId: string) {
-    this.calls.push({ name: "detail", input: encounterId });
-    return { encounterId, invitationId: id("2"), status: "DELIVERED" as const, initiatorTwinId: id("4"), responderTwinId: id("5"), participants: [{ role: "INITIATOR" as const, socialTwinId: id("4"), presentationAvailable: true, companionId: id("3"), displayName: "SampleCompanion", profileAvailable: true }, { role: "RESPONDER" as const, socialTwinId: id("5"), presentationAvailable: true, companionId: id("7"), displayName: "AnotherSample", profileAvailable: true }], occurredAt: "2026-09-18T00:00:00.000Z", body: "safe", computeReceiptTransactionId: id("6"), capabilities: { view: true }, completeness: "COMPLETE" as const };
-  }
 
   async listLifeEventInbox(limit: number, before?: Parameters<OwnerApiPort["listLifeEventInbox"]>[1]) {
     this.calls.push({ name: "life-list", input: { limit, before } });
-    return { items: [{ id: id("40"), kind: "LIFE_EVENT" as const, lifeEventId: id("41"), companionId: id("3"), title: "Encounter complete", createdAt: "2026-09-18T00:00:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } }], nextCursor: null };
+    return { items: [{ id: id("40"), kind: "LIFE_EVENT" as const, lifeEventId: id("41"), companionId: id("3"), title: "A new day", createdAt: "2026-09-18T00:00:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } }], nextCursor: null };
   }
   async acknowledgeLifeEvent(itemId: string) {
     this.calls.push({ name: "life-read", input: itemId });
-    return { id: itemId, kind: "LIFE_EVENT" as const, lifeEventId: id("41"), companionId: id("3"), title: "Encounter complete", createdAt: "2026-09-18T00:00:00.000Z", readAt: "2026-09-18T00:01:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } };
+    return { id: itemId, kind: "LIFE_EVENT" as const, lifeEventId: id("41"), companionId: id("3"), title: "A new day", createdAt: "2026-09-18T00:00:00.000Z", readAt: "2026-09-18T00:01:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } };
   }
   async getControls(companionId: string) {
     this.calls.push({ name: "controls-get", input: companionId });
@@ -247,9 +243,8 @@ describe("server-only MVP HTTP/API boundary", () => {
     const selfProfile = await api.handle(request("GET", `/v0/companions/${id("3")}/profile?activeSubjectKind=COMPANION&activeSubjectId=${id("3")}`));
     assert.equal(selfProfile.status, 200);
     assert.equal((selfProfile.body as { viewer: { relationship: string } }).viewer.relationship, "SELF");
-    assert.equal((await api.handle(request("GET", `/v0/encounters/${id("4")}`))).status, 200);
-    // Running an Encounter, its invitations and receipts were removed: no route, no retry hint.
-    for (const [method, path] of [["POST", "/v0/encounters"], ["POST", "/v0/encounter-invitations"], ["GET", `/v0/compute-receipts/${id("2")}`]] as const) {
+    // Encounter (all of it) and compute receipts were removed: no route, no retry hint.
+    for (const [method, path] of [["GET", `/v0/encounters/${id("4")}`], ["POST", "/v0/encounters"], ["POST", "/v0/encounter-invitations"], ["GET", `/v0/compute-receipts/${id("2")}`]] as const) {
       const gone = await api.handle(request(method, path, method === "POST" ? {} : undefined));
       assert.deepEqual([gone.status, (gone.body as { code: string }).code], [404, "ROUTE_NOT_FOUND"]);
     }
