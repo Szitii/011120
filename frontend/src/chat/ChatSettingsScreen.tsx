@@ -11,6 +11,7 @@ import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { ConnectionSettings } from "./ConnectionSettings";
+import { ReminderSettings } from "./ReminderSettings";
 import { MemorySettings } from "./MemorySettings";
 import { PersonaSettings } from "./PersonaSettings";
 import { VoicePicker } from "./VoicePicker";
@@ -280,6 +281,7 @@ export function ChatSettingsScreen({
           <>
             {!focusPersona && personaEditor}
             {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
+            <ReminderSettings key={companionId} client={client} companionId={companionId} />
 
             {!form ? (
               busy ? (

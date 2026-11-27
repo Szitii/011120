@@ -18,6 +18,7 @@ import { setStringAsync } from "expo-clipboard";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
+import { chatReminderLabel } from "./reminders";
 import { formatChatAction } from "./actions";
 import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
 import { chatDraftKey, type ChatDraftStore } from "./draftStore";
@@ -647,6 +648,7 @@ export function ChatScreen({
           renderItem={({ item }) => {
             if (item.action) return <Text style={styles.actionEvent}>{formatChatAction(item.action, item.companionId)}</Text>;
             const isMine = item.companionId === null;
+            const reminderLabel = !isMine && chat?.direct ? chatReminderLabel(item) : undefined;
             const sender = chat?.members.find(member => member.companionId === item.companionId);
             const senderName = isMine ? ownerName : sender?.displayName ?? title;
 
@@ -794,6 +796,7 @@ export function ChatScreen({
                       </>
                     )}
                   </View>
+                  {reminderLabel && <Text style={styles.reminderLabel}>{reminderLabel}</Text>}
                 </View>
               </View>
             );
@@ -1094,6 +1097,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   voiceBubble: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, paddingVertical: 2 },
   voiceDuration: { fontSize: 14, fontWeight: "600", color: ui.ink },
   voiceTranscript: { fontSize: 13.5, lineHeight: 20, color: ui.ink, paddingTop: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: ui.line },
+  reminderLabel: { color: ui.muted, fontSize: 12, marginTop: 4 },
   voiceMeta: { fontSize: 12, color: ui.accentInk },
   mentionsBar: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 14, gap: 6, paddingBottom: 6 },
   root: { flex: 1 },

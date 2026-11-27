@@ -13,6 +13,7 @@ import type {
   FeedbackInput,
   PersonaInput,
   PlatformFeatures,
+  ReminderList,
   VoiceList,
   Wallet,
   CompanionActionResult,
@@ -61,6 +62,8 @@ export interface ChatClient {
   markRead?(chatId: string, messageId: string): Promise<Chat>;
   getAnniversary?(id: string): Promise<Anniversary>;
   saveAnniversary?(id: string, value: Pick<Anniversary, "startDate" | "timeZone" | "revision">): Promise<Anniversary>;
+  listReminders?(id: string): Promise<ReminderList>;
+  cancelReminder?(id: string, reminderId: string): Promise<{ deleted: true }>;
   listMemories?(id: string): Promise<MemoryList>;
   addMemory?(id: string, body: string, key: string): Promise<CompanionMemory>;
   deleteMemory?(id: string, memoryId: string): Promise<unknown>;
@@ -136,6 +139,8 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
     markRead: (id, messageId) => send("PUT", `/v0/chats/${encodeURIComponent(id)}/read`, { messageId }),
     getAnniversary: id => send("GET", `${companion(id)}/anniversary`),
     saveAnniversary: (id, value) => send("PUT", `${companion(id)}/anniversary`, value),
+    listReminders: id => send("GET", `${companion(id)}/reminders`),
+    cancelReminder: (id, reminderId) => send("DELETE", `${companion(id)}/reminders/${encodeURIComponent(reminderId)}`),
     listMemories: id => send("GET", `${companion(id)}/memories`),
     addMemory: (id, body, key) => send("POST", `${companion(id)}/memories`, { body }, key),
     deleteMemory: (id, memoryId) => send("DELETE", `${companion(id)}/memories/${encodeURIComponent(memoryId)}`),
