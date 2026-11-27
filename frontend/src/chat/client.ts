@@ -125,6 +125,7 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
         groupChatCreate: response?.groupChatCreate === true,
         groupChatSend: response?.groupChatSend === true,
         connections: response?.connections === true,
+        ...(typeof response?.companionReach === "boolean" ? { companionReach: response.companionReach } : {}),
       };
     },
     wallet: () => send("GET", "/v0/wallet"),

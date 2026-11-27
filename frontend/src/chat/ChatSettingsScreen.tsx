@@ -19,6 +19,7 @@ import type { ChatClient } from "./client";
 
 const ACTIVITY = [["QUIET", "安静"], ["NORMAL", "适中"], ["ACTIVE", "活跃"]] as const;
 const INTERACTION = [["NONE", "不互动"], ["RARE", "偶尔"], ["NORMAL", "适中"], ["LIVELY", "热络"]] as const;
+const PROACTIVE = [["OFF", "关"], ["SOMETIMES", "偶尔"], ["OFTEN", "经常"]] as const;
 const AUTO_MEMORY = [["OFF", "关"], ["SOMETIMES", "偶尔"], ["OFTEN", "经常"]] as const;
 const TIER = { ECONOMY: "经济", STANDARD: "均衡", PREMIUM: "高级" };
 
@@ -29,6 +30,7 @@ export function ChatSettingsScreen({
   connectionKind,
   connectionsEnabled,
   groupSendEnabled,
+  companionReachEnabled,
   onAvailabilityChanged,
   onBack,
   chatId,
@@ -45,6 +47,7 @@ export function ChatSettingsScreen({
   connectionKind?: "key" | "external";
   connectionsEnabled: boolean;
   groupSendEnabled: boolean;
+  companionReachEnabled: boolean;
   onAvailabilityChanged: () => void;
   onBack?: () => void;
   onDeleteCompanion?: () => Promise<void>;
@@ -138,6 +141,7 @@ export function ChatSettingsScreen({
     setSaveNotice("");
     try {
       const { voice: _savedVoice, preferredUserTitle: rawTitle, ...rest } = form;
+      if (!companionReachEnabled) delete rest.proactive;
       const settings = rawTitle === undefined
         ? rest
         : { ...rest, preferredUserTitle: rawTitle === null || rawTitle.trim() === "" ? null : rawTitle.trim() };
@@ -338,6 +342,21 @@ export function ChatSettingsScreen({
                     style={s.textInput}
                   />
                 </View>
+
+                {companionReachEnabled && (
+                  <View style={s.card}>
+                    <Text style={s.sectionTitle}>主动找你</Text>
+                    <Text style={s.mutedText}>你有一段时间没来聊天时，TA 有时会主动发消息，夜里不会打扰。</Text>
+                    <View style={s.pillRow}>
+                      {PROACTIVE.map(([value, label]) => (
+                        <CommunityButton key={value} label={label} disabled={busy}
+                          accessibilityLabel={`主动找你：${label}`}
+                          selected={(form.proactive ?? "OFF") === value}
+                          onPress={() => setForm({ ...form, proactive: value })} />
+                      ))}
+                    </View>
+                  </View>
+                )}
 
                 <View style={s.card}>
                   <Text style={s.sectionTitle}>自动记忆</Text>
