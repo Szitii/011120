@@ -20,6 +20,7 @@ import type {
 } from "../contracts.ts";
 import { createCommunityClient, type CommunityClient } from "../community/client.ts";
 import { createChatClient, type AudioClip, type ChatClient } from "../chat/client.ts";
+import { fetchWithConnectionStatus } from "../state/connection-status.ts";
 
 import { createDiaryClient, type DiaryClient } from "../diary/client.ts";
 
@@ -273,7 +274,7 @@ export class RealApiAdapter implements ClientApi {
 
     const send = async (token: string) => {
       ensureCurrent();
-      const response = await fetch(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
+      const response = await fetchWithConnectionStatus(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
         method,
         signal,
         headers: {

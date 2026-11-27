@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createChatDraftStore } from "./src/chat/draftStore";
 import type { Badges, PlatformFeatures } from "../contracts/chat";
 import { useAppIsActive } from "./src/state/useAppIsActive";
+import { ConnectionBanner } from "./src/state/ConnectionBanner";
 import { ConnectionForm } from "./src/onboarding/ConnectionForm";
 import { BringCompanionScreen } from "./src/onboarding/BringCompanionScreen";
 import { useThemedStyles } from "./src/theme/SkinProvider";
@@ -748,6 +749,7 @@ function WorldApp({ client, account, isMockMode }: {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar style={skin.isDark ? "light" : "dark"} />
+        <ConnectionBanner active={appActive} />
         {identity.kind === "error" ? (
           <ErrorState
             title={identity.title}
@@ -766,6 +768,7 @@ function WorldApp({ client, account, isMockMode }: {
       {(route.type === "root" || route.type === "bring-companion") && (
         <LinearGradient pointerEvents="none" colors={ui.background} style={StyleSheet.absoluteFill} />
       )}
+      <ConnectionBanner active={appActive} />
 
       {!isMoment && route.type !== "chat" && route.type !== "chat-settings" && route.type !== "compose-post" && route.type !== "bring-companion" && route.type !== "bring-connection" && (
         <AppHeader

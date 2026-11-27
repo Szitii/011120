@@ -42,7 +42,7 @@ export function SettingsScreen({
   onOpenFeedback?: () => void;
   onOpenLegal?: (doc: LegalDocKind) => void;
 }) {
-  const { ui, skin, setSkinById, availableSkins, textSize, setTextSize } = useSkin();
+  const { ui, skinPreference, setSkinById, availableSkins, textSize, setTextSize } = useSkin();
   const styles = useThemedStyles(createStyles);
   const [passwordSheetOpen, setPasswordSheetOpen] = useState(false);
   const [deleteInfoOpen, setDeleteInfoOpen] = useState(false);
@@ -172,15 +172,28 @@ export function SettingsScreen({
           <Text style={styles.sectionTitle}>外观</Text>
           <View style={styles.appearanceCard}>
             <Text style={styles.subLabel}>配色</Text>
+            <View style={styles.pillRow}>
+              <Pressable
+                accessibilityRole="radio"
+                accessibilityLabel="配色跟随系统"
+                aria-checked={skinPreference === "system"}
+                onPress={() => setSkinById("system")}
+                style={[styles.pill, skinPreference === "system" && styles.pillActive]}
+              >
+                <Text style={[styles.pillText, skinPreference === "system" && styles.pillTextActive]}>
+                  跟随系统
+                </Text>
+              </Pressable>
+            </View>
             <View style={styles.swatchRow}>
               {availableSkins.map(preset => {
-                const active = preset.id === skin.id;
+                const active = preset.id === skinPreference;
                 return (
                   <Pressable
                     key={preset.id}
                     accessibilityRole="radio"
                     accessibilityLabel={preset.name}
-                    accessibilityState={{ selected: active }}
+                    aria-checked={active}
                     onPress={() => setSkinById(preset.id)}
                     style={({ pressed }) => [styles.swatchItem, pressed && { opacity: 0.72 }]}
                   >

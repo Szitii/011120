@@ -1,12 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useWindowDimensions } from "react-native";
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useColorScheme, useWindowDimensions } from "react-native";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { BUILTIN_SKINS, themePalette, type SkinId, type SkinTheme, type UiPalette } from "./skinTokens";
 
 export const TEXT_SIZES = { system: "跟随系统", standard: "标准", large: "大", extra: "特大" } as const;
 type TextSize = keyof typeof TEXT_SIZES;
 const textSizeStorage = "companion:text-size:v1";
+const skinStorage = "companion:appearance:v1";
 const fontMagnification = { standard: 1, large: 1.15, extra: 1.3 };
+type SkinPreference = SkinId | "system";
 
 interface SkinContextValue {
   textSize: TextSize;
@@ -14,45 +16,49 @@ interface SkinContextValue {
   skin: SkinTheme;
   ui: UiPalette;
   availableSkins: readonly SkinTheme[];
-  setSkinById: (id: SkinId) => void;
+  skinPreference: SkinPreference;
+  setSkinById: (id: SkinPreference) => void;
 }
 
 const SkinContext = createContext<SkinContextValue | null>(null);
 const availableSkins = Object.values(BUILTIN_SKINS);
 
 export function SkinProvider({ children }: { children: React.ReactNode }) {
-  const [skinId, setSkinId] = useState<SkinId>("default");
+  const [skinPreference, setSkinPreference] = useState<SkinPreference>("default");
+  const colorScheme = useColorScheme();
+  const skinId = skinPreference === "system" ? (colorScheme === "dark" ? "titanium" : "default") : skinPreference;
   const [textSize, setTextSizeValue] = useState<TextSize>("system");
   const textSelected = useRef(false);
   const selected = useRef(false);
   const writes = useRef(Promise.resolve());
-  const storageKey = "companion:appearance:v1";
   useEffect(() => {
     let current = true;
-    void AsyncStorage.getItem(storageKey).then(value => {
-      if (current && !selected.current && value && Object.hasOwn(BUILTIN_SKINS, value)) setSkinId(value as SkinId);
+    void AsyncStorage.getItem(skinStorage).then(value => {
+      if (current && !selected.current && value && (value === "system" || Object.hasOwn(BUILTIN_SKINS, value))) {
+        setSkinPreference(value as SkinPreference);
+      }
     }).catch(() => undefined);
     void AsyncStorage.getItem(textSizeStorage).then(value => {
       if (current && !textSelected.current && value && Object.hasOwn(TEXT_SIZES, value)) setTextSizeValue(value as TextSize);
     }).catch(() => undefined);
     return () => { current = false; };
   }, []);
-  function setSkinById(id: SkinId) {
+  const setSkinById = useCallback((id: SkinPreference) => {
     selected.current = true;
-    setSkinId(id);
-    writes.current = writes.current.then(() => AsyncStorage.setItem(storageKey, id)).catch(() => undefined);
-  }
-  function setTextSize(size: TextSize) {
+    setSkinPreference(id);
+    writes.current = writes.current.then(() => AsyncStorage.setItem(skinStorage, id)).catch(() => undefined);
+  }, []);
+  const setTextSize = useCallback((size: TextSize) => {
     textSelected.current = true;
     setTextSizeValue(size);
     writes.current = writes.current.then(() => AsyncStorage.setItem(textSizeStorage, size)).catch(() => undefined);
-  }
+  }, []);
   const value = useMemo<SkinContextValue>(() => ({
     skin: BUILTIN_SKINS[skinId],
     ui: themePalette(BUILTIN_SKINS[skinId]),
     availableSkins, textSize, setTextSize,
-    setSkinById,
-  }), [skinId, textSize]);
+    skinPreference, setSkinById,
+  }), [skinId, skinPreference, textSize, setSkinById, setTextSize]);
 
   return <SkinContext.Provider value={value}>{children}</SkinContext.Provider>;
 }
