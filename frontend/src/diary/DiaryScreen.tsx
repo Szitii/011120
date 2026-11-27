@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, View } from "react-native";
+import { setStringAsync } from "expo-clipboard";
 import type { DiaryEntry, DiaryWriteResult } from "../../../contracts/chat.ts";
 import { safeClientMessage } from "../adapters/real-api";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
@@ -11,6 +12,10 @@ import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { DiaryFrequency } from "./DiaryFrequency";
 import type { DiaryClient } from "./client";
+
+function diaryDate(entry: DiaryEntry) {
+  return new Date(entry.writtenAt).toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
+}
 
 export function DiaryScreen({
   client,
@@ -33,6 +38,9 @@ export function DiaryScreen({
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [sharedNotice, setSharedNotice] = useState<{ id: string; message: string }>();
+  const sharing = useRef(false);
   const [generating, setGenerating] = useState(true);
   const [writingElsewhere, setWritingElsewhere] = useState(false);
   const [readError, setReadError] = useState<{ title: string; cursor?: string }>();
@@ -44,6 +52,7 @@ export function DiaryScreen({
   const removed = useRef(new Set<string>());
   const reading = useRef(false);
   const polling = useRef(false);
+  const foregroundRead = useRef(0);
   const removing = useRef(false);
   const appActive = useAppIsActive();
 
@@ -56,19 +65,22 @@ export function DiaryScreen({
     });
   }, [companionId]);
 
-  const read = useCallback(async (older?: string, background = false) => {
+  const read = useCallback(async (older?: string, mode: "load" | "background" | "refresh" = "load") => {
+    const background = mode === "background";
     const pending = background ? polling : reading;
-    if (pending.current) return;
+    if (pending.current || (background && reading.current)) return;
     const scope = session.current;
+    const readRevision = background ? foregroundRead.current : ++foregroundRead.current;
     pending.current = true;
     if (!background) {
       setReadError(undefined);
       if (older) setLoadingOlder(true);
+      else if (mode === "refresh") setRefreshing(true);
       else setLoading(true);
     }
     try {
       const page = await client.list(companionId, older);
-      if (scope !== session.current) return;
+      if (scope !== session.current || readRevision !== foregroundRead.current) return;
       merge(page.items);
       if (!background) setCursor(page.nextCursor);
       if (!older) setWritingElsewhere(page.writing);
@@ -80,6 +92,7 @@ export function DiaryScreen({
         if (!background) {
           setLoading(false);
           setLoadingOlder(false);
+          setRefreshing(false);
         }
       }
     }
@@ -114,7 +127,7 @@ export function DiaryScreen({
     let remaining = 60;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      await read(undefined, true);
+      await read(undefined, "background");
       if (active && --remaining > 0) timer = setTimeout(() => void tick(), 3000);
       else if (active) {
         setWritingElsewhere(false);
@@ -146,8 +159,33 @@ export function DiaryScreen({
   }
 
   const writing = generating || writingElsewhere;
+  const canShare = Platform.OS !== "web" || (typeof navigator !== "undefined" && typeof navigator.share === "function");
+  async function shareEntry(entry: DiaryEntry, copy: boolean) {
+    if (sharing.current) return;
+    sharing.current = true;
+    const scope = session.current;
+    setSharedNotice(undefined);
+    const text = `${companionName}的日记 · ${diaryDate(entry)}\n\n${entry.body}`;
+    try {
+      if (copy) {
+        if (!await setStringAsync(text)) throw new Error("Clipboard unavailable.");
+        if (scope === session.current) setSharedNotice({ id: entry.id, message: "日记已复制。" });
+      } else if (Platform.OS === "web") {
+        await navigator.share({ title: `${companionName}的日记`, text });
+      } else {
+        await Share.share({ message: text });
+      }
+    } catch (error) {
+      if (scope === session.current && !(error instanceof Error && error.name === "AbortError")) {
+        setSharedNotice({ id: entry.id, message: copy ? "复制失败，请重试。" : "分享未完成，请重试。" });
+      }
+    } finally { sharing.current = false; }
+  }
+
+  const refreshDiary = () => void read(undefined, "refresh");
   return (
-    <ScrollView style={s.page} contentContainerStyle={s.content}>
+    <ScrollView style={s.page} contentContainerStyle={s.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshDiary} tintColor={ui.accent} colors={[ui.accent]} />}>
       <SecondaryHeading title={`${companionName}的日记`} />
 
       {companions.length > 1 && onSelectCompanion && (
@@ -170,8 +208,12 @@ export function DiaryScreen({
         </ScrollView>
       )}
 
-      <CommunityButton label={settingsOpen ? "收起日记设置" : "日记设置"} selected={settingsOpen}
-        onPress={() => setSettingsOpen(open => !open)} />
+      <View style={s.row}>
+        <CommunityButton label={settingsOpen ? "收起日记设置" : "日记设置"} selected={settingsOpen}
+          onPress={() => setSettingsOpen(open => !open)} />
+        {Platform.OS === "web" && <CommunityButton label={refreshing ? "正在刷新…" : "刷新日记"}
+          disabled={loading || loadingOlder || refreshing} onPress={refreshDiary} />}
+      </View>
       {settingsOpen && <DiaryFrequency client={client} companionId={companionId} />}
       {writing && <Text accessibilityLiveRegion="polite" style={s.meta}>TA 正在写日记…</Text>}
       {notice !== "" && <Text accessibilityLiveRegion="polite" style={s.meta}>{notice}</Text>}
@@ -183,7 +225,7 @@ export function DiaryScreen({
       {!loading && !writing && !readError && items.length === 0 && <Text style={s.meta}>这里还没有日记。</Text>}
       {items.map(entry => <View key={entry.id} style={s.card}>
         <Text accessibilityRole="header" style={s.author}>
-          {new Date(entry.writtenAt).toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}
+          {diaryDate(entry)}
         </Text>
         <Text style={s.body}>{entry.body}</Text>
         {confirmId === entry.id ? <>
@@ -192,9 +234,14 @@ export function DiaryScreen({
             <CommunityButton label="确认删除" disabled={deleting} onPress={() => void remove(entry.id)} />
             <CommunityButton label="取消" disabled={deleting} onPress={() => setConfirmId(undefined)} />
           </View>
-        </> : <CommunityButton label="删除" disabled={deleting} onPress={() => setConfirmId(entry.id)} />}
+        </> : <View style={s.row}>
+          <CommunityButton label="复制" accessibilityLabel="复制这篇日记" onPress={() => void shareEntry(entry, true)} />
+          {canShare && <CommunityButton label="分享" accessibilityLabel="分享这篇日记" onPress={() => void shareEntry(entry, false)} />}
+          <CommunityButton label="删除" disabled={deleting} onPress={() => setConfirmId(entry.id)} />
+        </View>}
+        {sharedNotice?.id === entry.id && <Text accessibilityLiveRegion="polite" style={s.meta}>{sharedNotice.message}</Text>}
       </View>)}
-      {cursor && <CommunityButton label={loadingOlder ? "正在加载…" : "更早的日记"} disabled={loading || loadingOlder}
+      {cursor && <CommunityButton label={loadingOlder ? "正在加载…" : "更早的日记"} disabled={loading || loadingOlder || refreshing}
         onPress={() => void read(cursor)} />}
     </ScrollView>
   );
