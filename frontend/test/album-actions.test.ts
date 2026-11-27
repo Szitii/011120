@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildExportFilename,
+  canUseWebShare,
   detectImageExtensionFromBytes,
   formatQuoteShareText,
+  isShareAbortError,
   resolveImageExtension,
+  shareTextOnWeb,
 } from "../src/album/actions.ts";
 
 test("detectImageExtensionFromBytes identifies real file signatures", () => {
@@ -75,4 +78,22 @@ test("formatQuoteShareText keeps speaker, date, and quote text", () => {
     sentAt,
   });
   assert.equal(formatted, `「今晚风很轻，记得早点休息。」\n—— 小星 · ${expectedDate}`);
+});
+
+test("canUseWebShare, shareTextOnWeb, and isShareAbortError handle browser share capabilities", async () => {
+  assert.equal(canUseWebShare({}), false);
+  assert.equal(await shareTextOnWeb("hello", {}), false);
+
+  const shared: Array<{ text?: string }> = [];
+  const nav = {
+    share: async (data: { text?: string }) => {
+      shared.push(data);
+    },
+  };
+  assert.equal(canUseWebShare(nav), true);
+  assert.equal(await shareTextOnWeb("hello", nav), true);
+  assert.deepEqual(shared, [{ text: "hello" }]);
+
+  assert.equal(isShareAbortError({ name: "AbortError" }), true);
+  assert.equal(isShareAbortError(new Error("failed")), false);
 });
