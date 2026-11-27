@@ -41,7 +41,7 @@ import { ReportForm } from "./ReportForm.tsx";
 import { HumanProfileEditor } from "./HumanProfileEditor.tsx";
 import { BottomSheet } from "../components/BottomSheet.tsx";
 import { useSkin } from "../theme/SkinProvider";
-import { RADIUS } from "../theme/layoutTokens";
+import { CHROME, RADIUS } from "../theme/layoutTokens";
 import type { CompanionProfile, OwnerCompanionSummary } from "../contracts";
 
 type Page = { type: "feed" } | CommunityTarget;
@@ -77,6 +77,7 @@ export interface ManagedProfileActions {
 }
 
 const EMPTY_PROFILE_STATS = { postsCount: 0, followersCount: 0, followingCount: 0 };
+const MAX_COMMENT_LOOKUP_PAGES = 10;
 
 export function CommunityScreen({
   client,
@@ -145,6 +146,8 @@ export function CommunityScreen({
   const sharePending = useRef(false);
   const scope = useMemo(() => new CommunityRequestScope(), []);
   const scroll = useRef<FlatList<CommunityPost>>(null);
+  const commentCursors = useRef(new Set<string>());
+  const positionedComment = useRef<string | undefined>(undefined);
   const feedY = useRef(initialScrollY);
   const restoreFeed = useRef(true);
   const active = useRef(true);
@@ -169,6 +172,7 @@ export function CommunityScreen({
     }
     setLoading(true);
     setError("");
+    if (!cursor) commentCursors.current.clear();
     const ownRequest = cursor ? undefined : client.profile(viewer);
     void ownRequest?.then(
       (profile) => {
@@ -216,6 +220,7 @@ export function CommunityScreen({
         };
       }
       if (!current()) return;
+      if (cursor && next.type === "detail") commentCursors.current.add(cursor);
       if (next.type === "profile") visibleProfile.current = next.profile;
       setData((previous) => {
         if (!cursor || !previous || previous.type !== next.type) return next;
@@ -329,7 +334,27 @@ export function CommunityScreen({
   }
 
   const posts = data?.type === "feed" || data?.type === "profile" ? data.value.items : [];
-  const nextCursor = data?.type === "detail" ? data.value.comments.nextCursor : data?.value.nextCursor;
+  const pageCursor = data?.type === "detail" ? data.value.comments.nextCursor : data?.value.nextCursor;
+  const nextCursor = data?.type === "detail" && pageCursor && commentCursors.current.has(pageCursor)
+    ? undefined : pageCursor;
+  const targetCommentId = page.type === "detail" ? page.commentId : undefined;
+  const targetCommentFound = Boolean(targetCommentId && data?.type === "detail"
+    && data.value.comments.items.some(comment => comment.id === targetCommentId));
+  const lookupLimitReached = commentCursors.current.size >= MAX_COMMENT_LOOKUP_PAGES;
+  useEffect(() => {
+    if (!targetCommentId || targetCommentFound || !nextCursor || loading || busy || error || lookupLimitReached) return;
+    void load(nextCursor);
+  }, [targetCommentId, targetCommentFound, nextCursor, loading, busy, error, lookupLimitReached, load]);
+
+  function positionComment(id: string, offset: number) {
+    if (positionedComment.current === id) return;
+    requestAnimationFrame(() => {
+      if (!active.current || positionedComment.current === id || !scroll.current) return;
+      positionedComment.current = id;
+      scroll.current.scrollToOffset({ offset: Math.max(0, offset - CHROME.screenInset), animated: false });
+    });
+  }
+
   const draftLimit = 2000;
   const draftLength = Array.from(commentDraft.trim()).length;
   const canSubmit = draftLength > 0 && draftLength <= draftLimit;
@@ -471,8 +496,8 @@ export function CommunityScreen({
             )}
           </View>
         )}
-        ListFooterComponent={nextCursor ? <Button disabled={loading || busy} label="加载更多" onPress={() => void load(nextCursor)} /> : undefined}
-        onEndReached={() => { if (nextCursor && !loading && !busy) void load(nextCursor); }}
+        ListFooterComponent={nextCursor ? <Button disabled={loading || busy} label={error ? "重试加载更多" : "加载更多"} onPress={() => void load(nextCursor)} /> : undefined}
+        onEndReached={() => { if (!targetCommentId && nextCursor && !loading && !busy && !error) void load(nextCursor); }}
         onEndReachedThreshold={0.4}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
@@ -722,7 +747,7 @@ export function CommunityScreen({
                         () => client.comment(viewer, data.value.post.id, commentDraft, commentKey.current, {
                           mentions: commentMentions.map(mention => mention.id),
                         }),
-                        { write: "评论", success: () => {
+                        { write: "评论", refreshCommunity: true, success: () => {
                           setCommentDraft("");
                           editCommentMentions([]);
                         } },
@@ -733,21 +758,29 @@ export function CommunityScreen({
               </View>
             )}
             <Text style={localStyles.sectionLabel}>评论（{data.value.post.commentsCount}）</Text>
-            {data.value.comments.items.map((comment) => (
-              <ContentCard
-                key={comment.id}
-                item={comment}
-                onActor={() => openActor(comment.author.id)}
-                onMention={openActor}
-                highlighted={page.type === "detail" && comment.id === page.commentId}
-                onDelete={() => remove("comments", comment.id)}
-                onReport={
-                  own && comment.author.id !== own.id
-                    ? () => setReportTarget({ kind: "COMMENT", id: comment.id })
-                    : undefined
-                }
-              />
-            ))}
+            {targetCommentId && !targetCommentFound && !loading && !error && (!nextCursor || lookupLimitReached) && (
+              <Text accessibilityLiveRegion="polite" style={s.meta}>
+                {nextCursor ? "暂未定位到这条评论，可以继续加载。" : "这条评论可能已删除或暂不可见。"}
+              </Text>
+            )}
+            {data.value.comments.items.map((comment) => {
+              const highlighted = comment.id === targetCommentId;
+              const card = (
+                <ContentCard
+                  key={comment.id}
+                  item={comment}
+                  onActor={() => openActor(comment.author.id)}
+                  onMention={openActor}
+                  highlighted={highlighted}
+                  onDelete={() => remove("comments", comment.id)}
+                  onReport={own && comment.author.id !== own.id
+                    ? () => setReportTarget({ kind: "COMMENT", id: comment.id }) : undefined}
+                />
+              );
+              return highlighted ? (
+                <View key={comment.id} onLayout={event => positionComment(comment.id, event.nativeEvent.layout.y)}>{card}</View>
+              ) : card;
+            })}
             {mentionOpen && own && <MentionPicker client={client} viewer={viewer} selfId={own.id}
               related={[data.value.post.author, ...data.value.comments.items.map(comment => comment.author)]}
               selected={commentMentions} onChange={editCommentMentions} onClose={() => setMentionOpen(false)} />}
@@ -893,6 +926,7 @@ export function CommunityScreen({
                           void client.deletePostMedia?.(mediaPath).catch(() => undefined);
                         }
                       },
+                      refreshCommunity: target.kind === "comments",
                       nextPage: target.kind === "posts" && page.type === "detail" && page.id === target.id ? { type: "feed" } : undefined,
                     },
                   );

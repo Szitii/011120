@@ -1,10 +1,11 @@
 import { useThemedStyles, useSkin } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -19,6 +20,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
 import { formatChatAction } from "./actions";
+import { chatTimeDivider } from "./message-time";
 import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
 import { chatDraftKey, type ChatDraftStore } from "./draftStore";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
@@ -47,6 +49,7 @@ const replyFailureMessages = {
 };
 
 const MAX_MESSAGE_LENGTH = 2000;
+const RETURN_TO_LATEST_SCROLL_DISTANCE = 160;
 
 export function formatQuotedReplyPrefix(sourceText: string): string {
   const normalized = sourceText.replace(/\r\n?/g, "\n").trim();
@@ -133,6 +136,14 @@ export function ChatScreen({
   const [bootstrapRevision, setBootstrapRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState("");
+  const [showReturnToLatest, setShowReturnToLatest] = useState(false);
+  const messageList = useRef<FlatList<ChatMessage>>(null);
+  const visibleMessages = useMemo(() => messages.filter((item, index) => {
+    if (!item.action || item.companionId !== null) return true;
+    const newer = messages[index - 1];
+    return !(newer?.action && newer.companionId === null);
+  }), [messages]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voiceInput, setVoiceInput] = useState(false);
@@ -294,6 +305,9 @@ export function ChatScreen({
     let focusTimer: ReturnType<typeof setTimeout> | undefined;
     async function bootstrap() {
       setLoading(true);
+      setLoadingOlder(false);
+      setOlderError("");
+      setShowReturnToLatest(false);
       setError(null);
       try {
         let targetId = initialChatId;
@@ -335,6 +349,7 @@ export function ChatScreen({
       sessionRef.current++;
       reqVersionRef.current++;
       chatIdRef.current = undefined;
+      loadingOlderRef.current = false;
       clearTimeout(focusTimer);
       if (quoteFocusTimerRef.current) {
         clearTimeout(quoteFocusTimerRef.current);
@@ -471,6 +486,7 @@ export function ChatScreen({
     if (!targetId || !nextCursor || loadingOlderRef.current) return;
     const session = sessionRef.current;
     loadingOlderRef.current = true;
+    setOlderError("");
     setLoadingOlder(true);
     try {
       const older = await client.getChat(targetId, nextCursor);
@@ -481,11 +497,13 @@ export function ChatScreen({
       });
       setNextCursor(older.nextCursor);
       if (older.nextCursor === null) cursorExhaustedRef.current = true;
-    } catch {
-      // ignore transient pagination error
+    } catch (error) {
+      if (session === sessionRef.current) setOlderError(safeClientMessage(error).title);
     } finally {
-      loadingOlderRef.current = false;
-      if (session === sessionRef.current) setLoadingOlder(false);
+      if (session === sessionRef.current) {
+        loadingOlderRef.current = false;
+        setLoadingOlder(false);
+      }
     }
   }
 
@@ -625,16 +643,21 @@ export function ChatScreen({
           <Text style={styles.mutedText}>正在打开私密会话…</Text>
         </View>
       ) : (
+        <View style={styles.timeline}>
         <FlatList
-          data={messages.filter((item, index) => {
-            if (!item.action || item.companionId !== null) return true;
-            const newer = messages[index - 1];
-            return !(newer?.action && newer.companionId === null);
-          })}
+          ref={messageList}
+          data={visibleMessages}
+          style={styles.timeline}
+          onScroll={event => setShowReturnToLatest(
+            Math.abs(event.nativeEvent.contentOffset.y) > RETURN_TO_LATEST_SCROLL_DISTANCE,
+          )}
+          scrollEventThrottle={100}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           inverted
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
-          onEndReached={handleLoadOlder}
+          onEndReached={() => { if (!olderError) void handleLoadOlder(); }}
           onEndReachedThreshold={0.2}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
@@ -642,10 +665,16 @@ export function ChatScreen({
             </View>
           }
           ListFooterComponent={
-            loadingOlder ? <ActivityIndicator size="small" color={ui.accent} style={{ marginVertical: 12 }} /> : undefined
+            olderError ? <View style={styles.historyError}>
+              <Text accessibilityRole="alert" style={styles.errorText}>{olderError}</Text>
+              <CommunityButton label="重试加载历史消息" onPress={() => void handleLoadOlder()} />
+            </View> : loadingOlder
+              ? <ActivityIndicator size="small" color={ui.accent} style={styles.historySpinner} /> : undefined
           }
-          renderItem={({ item }) => {
-            if (item.action) return <Text style={styles.actionEvent}>{formatChatAction(item.action, item.companionId)}</Text>;
+          renderItem={({ item, index }) => {
+            const time = chatTimeDivider(item.sentAt, visibleMessages[index + 1]?.sentAt);
+            const timeLabel = time && <Text style={styles.timeDivider}>{time}</Text>;
+            if (item.action) return <View>{timeLabel}<Text style={styles.actionEvent}>{formatChatAction(item.action, item.companionId)}</Text></View>;
             const isMine = item.companionId === null;
             const sender = chat?.members.find(member => member.companionId === item.companionId);
             const senderName = isMine ? ownerName : sender?.displayName ?? title;
@@ -681,6 +710,8 @@ export function ChatScreen({
               : undefined;
 
             return (
+              <View>
+              {timeLabel}
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
                 <ChatAvatar name={senderName} owner={isMine} avatar={isMine ? ownerAvatar : sender?.avatar} size={32}
                   onPress={() => onOpenProfile(item.companionId, chat?.direct ? chat.id : undefined)} />
@@ -796,9 +827,24 @@ export function ChatScreen({
                   </View>
                 </View>
               </View>
+              </View>
             );
           }}
         />
+        {showReturnToLatest && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="回到底部"
+            style={styles.returnToLatest}
+            onPress={() => {
+              messageList.current?.scrollToOffset({ offset: 0, animated: true });
+              setShowReturnToLatest(false);
+            }}
+          >
+            <Ionicons name="arrow-down" size={18} color={ui.accentInk} />
+          </Pressable>
+        )}
+        </View>
       )}
 
       <BottomSheet
@@ -929,6 +975,7 @@ export function ChatScreen({
                 onPress={() => {
                   setAttachNotice("");
                   setTray("none");
+                  Keyboard.dismiss();
                   setVoiceMode(prev => !prev);
                 }}
                 style={styles.iconBtn}
@@ -977,7 +1024,8 @@ export function ChatScreen({
               onPress={() => {
                 setVoiceMode(false);
                 setAttachNotice("");
-                setTray(prev => (prev === "emoji" ? "none" : "emoji"));
+                Keyboard.dismiss();
+                  setTray(prev => (prev === "emoji" ? "none" : "emoji"));
               }}
               style={styles.iconBtn}
             >
@@ -1006,6 +1054,7 @@ export function ChatScreen({
                 onPress={() => {
                   setVoiceMode(false);
                   setAttachNotice("");
+                  Keyboard.dismiss();
                   setTray(prev => (prev === "plus" ? "none" : "plus"));
                 }}
                 style={styles.iconBtn}
@@ -1097,6 +1146,16 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   voiceMeta: { fontSize: 12, color: ui.accentInk },
   mentionsBar: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 14, gap: 6, paddingBottom: 6 },
   root: { flex: 1 },
+  timeline: { flex: 1 },
+  timeDivider: { alignSelf: "center", color: ui.muted, fontSize: 12, paddingVertical: 8 },
+  historyError: { alignItems: "center", gap: 8, padding: CHROME.screenInset },
+  historySpinner: { marginVertical: 12 },
+  returnToLatest: {
+    position: "absolute", right: CHROME.screenInset, bottom: CHROME.screenInset,
+    minWidth: 44, minHeight: 44, borderRadius: RADIUS.pill,
+    alignItems: "center", justifyContent: "center", backgroundColor: ui.white,
+    borderWidth: 1, borderColor: ui.line, elevation: 2,
+  },
   quoteResult: { color: ui.muted, textAlign: "center", paddingVertical: 8 },
   quoteSheet: { gap: 10 },
   header: {

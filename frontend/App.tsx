@@ -320,7 +320,9 @@ function WorldApp({ client, account, isMockMode }: {
   const communityUnread = Array.isArray(badgeData?.community)
     ? badgeData.community.find(row => row?.actorId === identityId)?.unread ?? 0
     : 0;
-  const unread = communityUnread + (ownerId ? (badgeData?.chats ?? 0) + (badgeData?.ownerInbox ?? 0) : 0);
+  const chatsUnread = ownerId ? (badgeData?.chats ?? 0) : 0;
+  const ownerInboxUnread = ownerId ? (badgeData?.ownerInbox ?? 0) : 0;
+  const unread = communityUnread + chatsUnread + ownerInboxUnread;
   const feedbackUnread = ownerId ? (badgeData?.feedback ?? 0) : 0;
   const profileKey = profileId ? `${viewerKey}:${profileId}` : undefined;
   const encounterKey = encounterId ? `${viewerKey}:${encounterId}` : undefined;
@@ -848,6 +850,7 @@ function WorldApp({ client, account, isMockMode }: {
             chatClient={canUseChat ? client.api.chat : undefined}
             ownerId={ownerId}
             draftStore={canUseChat ? chatDrafts : undefined}
+            unread={{ chats: chatsUnread, community: communityUnread, owner: ownerInboxUnread }}
             companions={ownerCompanions.kind === "success" ? ownerCompanions.value.items : []}
             visible={messagesVisible}
             onChat={chat => openFromTab("messages", {
@@ -1645,7 +1648,9 @@ function MyScreen({
   const styles = useThemedStyles(createStyles);
   const { skin, ui } = useSkin();
 
-  const [communityData, setCommunityData] = useState<LoadState<CommunityPost[]>>({ kind: "idle" });
+  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>();
+  const [communityLoading, setCommunityLoading] = useState(false);
+  const [communityError, setCommunityError] = useState("");
   const [ownProfile, setOwnProfile] = useState<CommunityProfile>();
   const [refreshing, setRefreshing] = useState(false);
   const [manualRefreshTick, setManualRefreshTick] = useState(0);
@@ -1656,20 +1661,33 @@ function MyScreen({
   useEffect(() => {
     if (!community || !actorKind || !actorId) {
       setRefreshing(false);
+      setCommunityLoading(false);
+      setCommunityPosts(undefined);
+      setOwnProfile(undefined);
+      setCommunityError("");
       return;
     }
     const viewer = { kind: actorKind, id: actorId };
     let active = true;
-    setCommunityData(previous => previous.kind === "success" ? previous : { kind: "loading" });
+    setCommunityLoading(true);
+    setCommunityError("");
     void community.profile(viewer).then(async profile => {
       if (!active) return;
       setOwnProfile(profile);
       const feed = await community.feed(viewer, { authorId: profile.id });
-      if (active) setCommunityData({ kind: "success", value: feed.items });
+      if (active) setCommunityPosts(feed.items);
     }).catch(error => {
-      if (active) setCommunityData({ kind: "error", ...safeClientMessage(error) });
+      if (!active) return;
+      if (error instanceof ApiProblemError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+        setCommunityPosts(undefined);
+        setOwnProfile(undefined);
+      }
+      setCommunityError(safeClientMessage(error).title);
     }).finally(() => {
-      if (active) setRefreshing(false);
+      if (active) {
+        setCommunityLoading(false);
+        setRefreshing(false);
+      }
     });
     return () => { active = false; };
   }, [community, actorKind, actorId, communityRevision, manualRefreshTick]);
@@ -1680,6 +1698,13 @@ function MyScreen({
   const ink = defaultSkin ? ui.ink : skin.colors.ink;
   const muted = defaultSkin ? ui.muted : skin.colors.inkSub;
 
+  function refreshMy() {
+    if (communityLoading) return;
+    setRefreshing(true);
+    setManualRefreshTick(t => t + 1);
+    onRefresh();
+  }
+
   return (
     <ScrollView
       style={styles.rootContent}
@@ -1689,11 +1714,7 @@ function MyScreen({
           refreshing={refreshing}
           tintColor={ui.accentInk}
           colors={[ui.accentInk]}
-          onRefresh={() => {
-            setRefreshing(true);
-            setManualRefreshTick(t => t + 1);
-            onRefresh();
-          }}
+          onRefresh={refreshMy}
         />
       }
     >
@@ -1767,11 +1788,16 @@ function MyScreen({
           <Text style={[styles.heroBio, { color: ui.accentInk }]}>查看全部动态</Text>
         </Pressable>}
       </View>
-      {communityData.kind === "loading" ? <ActivityIndicator /> : null}
-      {communityData.kind === "error" ? <Text accessibilityRole="alert" style={[styles.heroBio, { color: muted }]}>{communityData.title}</Text> : null}
-      {communityData.kind === "success" && communityData.value.length > 0 && (
+      {communityLoading && !communityPosts && <ActivityIndicator />}
+      {communityError !== "" && (
+        <View>
+          <Text accessibilityRole="alert" style={[styles.heroBio, { color: muted }]}>{communityError}</Text>
+          <CommunityButton label="重试加载动态" onPress={refreshMy} />
+        </View>
+      )}
+      {communityPosts && communityPosts.length > 0 && (
         <View style={styles.privateHomeRecordList}>
-          {communityData.value.slice(0, 3).map((post) => {
+          {communityPosts.slice(0, 3).map((post) => {
             const images = post.media?.filter(item => item.kind === "IMAGE") ?? [];
             const firstImage = images[0];
             return (
@@ -1823,7 +1849,7 @@ function MyScreen({
           </View>
         </Pressable>
       )}
-      {(communityData.kind === "idle" || (communityData.kind === "success" && communityData.value.length === 0)) && (
+      {!communityLoading && !communityError && !communityPosts?.length && (
         <View style={styles.privateHomeEmpty}>
           <Text style={[styles.privateHomeRecordCaption, { color: muted }]}>暂无动态</Text>
         </View>
