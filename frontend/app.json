@@ -5,6 +5,14 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "android": {
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+      ]
+    },
     "plugins": [
       "expo-status-bar",
       "expo-secure-store",
@@ -14,6 +22,14 @@
         {
           "photosPermission": "允许从系统相册选择照片，在动态中预览或保存到小家相册。",
           "cameraPermission": "允许使用相机为动态拍照。"
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "savePhotosPermission": "允许将小家相册中的照片保存到系统相册。",
+          "isAccessMediaLocationEnabled": false,
+          "granularPermissions": []
         }
       ],
       [
