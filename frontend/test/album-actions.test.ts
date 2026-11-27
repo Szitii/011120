@@ -5,8 +5,11 @@ import {
   canUseWebShare,
   detectImageExtensionFromBytes,
   formatQuoteShareText,
+  getExportFeedback,
   isShareAbortError,
+  needsMediaLibraryPermission,
   resolveImageExtension,
+  saveNativeMediaToLibrary,
   shareTextOnWeb,
 } from "../src/album/actions.ts";
 
@@ -96,4 +99,124 @@ test("canUseWebShare, shareTextOnWeb, and isShareAbortError handle browser share
 
   assert.equal(isShareAbortError({ name: "AbortError" }), true);
   assert.equal(isShareAbortError(new Error("failed")), false);
+});
+
+test("needsMediaLibraryPermission skips runtime permission on Android 10+ and keeps iOS/Android <= 9", () => {
+  assert.equal(needsMediaLibraryPermission("ios", "18.1"), true);
+  assert.equal(needsMediaLibraryPermission("android", 28), true);
+  assert.equal(needsMediaLibraryPermission("android", 29), false);
+  assert.equal(needsMediaLibraryPermission("android", 34), false);
+  assert.equal(needsMediaLibraryPermission("web"), false);
+});
+
+test("saveNativeMediaToLibrary skips permission calls on Android 10+ and saves directly", async () => {
+  let permissionChecked = false;
+  const savedUris: string[] = [];
+  const result = await saveNativeMediaToLibrary({
+    requirePermission: false,
+    getFileUri: () => "file:///documents/cw-album-v1/album-android10.png",
+    getPermission: async () => { permissionChecked = true; return { granted: false }; },
+    requestPermission: async () => { permissionChecked = true; return { granted: false }; },
+    createAsset: async (uri) => { savedUris.push(uri); },
+  });
+  assert.deepEqual(result, { status: "saved" });
+  assert.equal(permissionChecked, false);
+  assert.deepEqual(savedUris, ["file:///documents/cw-album-v1/album-android10.png"]);
+});
+
+test("saveNativeMediaToLibrary skips permission prompt when local file is missing", async () => {
+  let asked = false;
+  let saved = false;
+  const result = await saveNativeMediaToLibrary({
+    getFileUri: () => undefined,
+    getPermission: async () => { asked = true; return { granted: true }; },
+    requestPermission: async () => { asked = true; return { granted: true }; },
+    createAsset: async () => { saved = true; },
+  });
+  assert.deepEqual(result, { status: "missing" });
+  assert.equal(asked, false);
+  assert.equal(saved, false);
+});
+
+test("saveNativeMediaToLibrary requests permission on demand and saves original file URI", async () => {
+  const calls: string[] = [];
+  const result = await saveNativeMediaToLibrary({
+    getFileUri: () => "file:///documents/cw-album-v1/album-1.png",
+    getPermission: async () => {
+      calls.push("get");
+      return { granted: false, canAskAgain: true };
+    },
+    requestPermission: async () => {
+      calls.push("request");
+      return { granted: true, canAskAgain: true };
+    },
+    createAsset: async (uri) => {
+      calls.push(`create:${uri}`);
+    },
+  });
+  assert.deepEqual(result, { status: "saved" });
+  assert.deepEqual(calls, ["get", "request", "create:file:///documents/cw-album-v1/album-1.png"]);
+});
+
+test("saveNativeMediaToLibrary returns denied immediately when canAskAgain is false without re-requesting", async () => {
+  let requested = false;
+  let created = false;
+  const result = await saveNativeMediaToLibrary({
+    getFileUri: () => "file:///documents/cw-album-v1/album-2.jpg",
+    getPermission: async () => ({ granted: false, canAskAgain: false }),
+    requestPermission: async () => {
+      requested = true;
+      return { granted: false, canAskAgain: false };
+    },
+    createAsset: async () => {
+      created = true;
+    },
+  });
+  assert.deepEqual(result, { status: "denied", canAskAgain: false });
+  assert.equal(requested, false);
+  assert.equal(created, false);
+});
+
+test("saveNativeMediaToLibrary handles user denial and save failures without faking success", async () => {
+  let createCalled = false;
+  const denied = await saveNativeMediaToLibrary({
+    getFileUri: () => "file:///documents/cw-album-v1/album-2.jpg",
+    getPermission: async () => ({ granted: false, canAskAgain: true }),
+    requestPermission: async () => ({ granted: false, canAskAgain: true }),
+    createAsset: async () => { createCalled = true; },
+  });
+  assert.deepEqual(denied, { status: "denied", canAskAgain: true });
+  assert.equal(createCalled, false);
+
+  const failed = await saveNativeMediaToLibrary({
+    getFileUri: () => "file:///documents/cw-album-v1/album-2.jpg",
+    getPermission: async () => ({ granted: true }),
+    requestPermission: async () => ({ granted: true }),
+    createAsset: async () => { throw new Error("disk full"); },
+  });
+  assert.equal(failed.status, "failed");
+});
+
+test("getExportFeedback maps native save, permission denial, unavailable module, and missing file states", () => {
+  assert.deepEqual(getExportFeedback({ status: "saved" }, false), {
+    message: "已保存到系统相册。",
+    isError: false,
+  });
+  assert.deepEqual(getExportFeedback({ status: "denied", canAskAgain: false }, false), {
+    message: "未获得系统相册写入权限，请在系统设置中开启后重试。",
+    isError: true,
+  });
+  assert.deepEqual(getExportFeedback({ status: "denied", canAskAgain: true }, false), {
+    message: "未获得系统相册写入权限，无法保存。",
+    isError: true,
+  });
+  assert.deepEqual(getExportFeedback({ status: "unavailable" }, false), {
+    message: "当前安装包暂不支持保存到系统相册，请更新应用后重试。",
+    isError: true,
+  });
+  assert.deepEqual(getExportFeedback({ status: "missing" }, false), {
+    message: "这张照片的本地文件已失效，无法保存。",
+    isError: true,
+  });
+  assert.equal(getExportFeedback({ status: "canceled" }, false), undefined);
 });

@@ -4,16 +4,31 @@ export type AlbumPhotoKind = "room_snapshot" | "local_photo";
 
 export type ExportMediaResult =
   | { status: "exported"; filename: string }
+  | { status: "saved" }
   | { status: "missing" }
   | { status: "unsupported" }
+  | { status: "unavailable" }
   | { status: "canceled" }
-  | { status: "denied" }
+  | { status: "denied"; canAskAgain?: boolean }
   | { status: "failed"; message: string };
 
 export interface ExportMediaOptions {
   kind: AlbumPhotoKind;
   createdAt: string;
   entryId: string;
+}
+
+export interface MediaPermissionResult {
+  granted: boolean;
+  canAskAgain?: boolean;
+}
+
+export interface NativeMediaSaveDeps {
+  requirePermission?: boolean;
+  getFileUri: () => string | undefined;
+  getPermission: () => Promise<MediaPermissionResult>;
+  requestPermission: () => Promise<MediaPermissionResult>;
+  createAsset: (fileUri: string) => Promise<unknown>;
 }
 
 const MIME_TO_EXTENSION: Record<string, string> = {
@@ -115,6 +130,77 @@ export function buildExportFilename(input: {
     kind: input.kind,
   });
   return `${prefix}-${datePart}${suffix}.${ext}`;
+}
+
+export function needsMediaLibraryPermission(platform: string, version?: string | number): boolean {
+  if (platform === "ios") return true;
+  if (platform === "android") {
+    const apiLevel = typeof version === "number" ? version : Number.parseInt(String(version ?? ""), 10);
+    return Number.isNaN(apiLevel) || apiLevel < 29;
+  }
+  return false;
+}
+
+export async function saveNativeMediaToLibrary(deps: NativeMediaSaveDeps): Promise<ExportMediaResult> {
+  if (!deps.getFileUri()) return { status: "missing" };
+  try {
+    if (deps.requirePermission !== false) {
+      const existing = await deps.getPermission();
+      if (!existing.granted && existing.canAskAgain === false) {
+        return { status: "denied", canAskAgain: false };
+      }
+      const permission = existing.granted ? existing : await deps.requestPermission();
+      if (!permission.granted) {
+        return { status: "denied", canAskAgain: permission.canAskAgain };
+      }
+    }
+    const latestUri = deps.getFileUri();
+    if (!latestUri) return { status: "missing" };
+    await deps.createAsset(latestUri);
+    return { status: "saved" };
+  } catch {
+    return { status: "failed", message: "保存到系统相册失败，请稍后重试。" };
+  }
+}
+
+export function getExportFeedback(
+  result: ExportMediaResult,
+  isWeb: boolean,
+): { message: string; isError: boolean } | undefined {
+  if (result.status === "exported") {
+    return { message: `已开始下载：${result.filename}`, isError: false };
+  }
+  if (result.status === "saved") {
+    return { message: "已保存到系统相册。", isError: false };
+  }
+  if (result.status === "missing") {
+    return {
+      message: isWeb ? "这张照片的本地文件已失效，无法导出。" : "这张照片的本地文件已失效，无法保存。",
+      isError: true,
+    };
+  }
+  if (result.status === "denied") {
+    return {
+      message: result.canAskAgain === false
+        ? "未获得系统相册写入权限，请在系统设置中开启后重试。"
+        : "未获得系统相册写入权限，无法保存。",
+      isError: true,
+    };
+  }
+  if (result.status === "unavailable") {
+    return {
+      message: "当前安装包暂不支持保存到系统相册，请更新应用后重试。",
+      isError: true,
+    };
+  }
+  if (result.status === "canceled") return undefined;
+  if (result.status === "unsupported") {
+    return {
+      message: isWeb ? "当前环境暂不支持导出原图。" : "当前设备暂不支持保存到系统相册。",
+      isError: true,
+    };
+  }
+  return { message: result.message, isError: true };
 }
 
 export function formatAlbumDate(iso: string): string {

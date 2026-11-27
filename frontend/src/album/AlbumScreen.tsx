@@ -10,6 +10,7 @@ import {
   canUseWebShare,
   formatAlbumDate,
   formatQuoteShareText,
+  getExportFeedback,
   isShareAbortError,
   shareTextOnWeb,
   type AlbumPhotoKind,
@@ -219,6 +220,8 @@ function AlbumPhoto({
   const [exportFeedback, setExportFeedback] = useState<{ message: string; isError: boolean }>();
   const exportPending = useRef(false);
   const mounted = useRef(true);
+  const isWeb = Platform.OS === "web";
+  const isNativeSaveSupported = Platform.OS === "ios" || Platform.OS === "android";
 
   useEffect(() => {
     mounted.current = true;
@@ -238,7 +241,7 @@ function AlbumPhoto({
     return () => { active = false; release(); };
   }, [path]);
 
-  async function handleWebExport() {
+  async function handleExport() {
     if (exportPending.current) return;
     exportPending.current = true;
     setExporting(true);
@@ -246,21 +249,14 @@ function AlbumPhoto({
     try {
       const result = await exportMedia(path, { kind, createdAt, entryId });
       if (!mounted.current) return;
-      if (result.status === "exported") {
-        setExportFeedback({ message: `已开始下载：${result.filename}`, isError: false });
-      } else if (result.status === "missing") {
-        setExportFeedback({ message: "这张照片的本地文件已失效，无法导出。", isError: true });
-      } else if (result.status === "denied") {
-        setExportFeedback({ message: "未获得相册写入权限，请在系统设置中开启。", isError: true });
-      } else if (result.status === "canceled") {
-        setExportFeedback(undefined);
-      } else if (result.status === "unsupported") {
-        setExportFeedback({ message: "当前环境暂不支持导出原图。", isError: true });
-      } else {
-        setExportFeedback({ message: result.message, isError: true });
-      }
+      setExportFeedback(getExportFeedback(result, isWeb));
     } catch {
-      if (mounted.current) setExportFeedback({ message: "照片导出失败，请稍后重试。", isError: true });
+      if (mounted.current) {
+        setExportFeedback({
+          message: isWeb ? "照片导出失败，请稍后重试。" : "保存到系统相册失败，请稍后重试。",
+          isError: true,
+        });
+      }
     } finally {
       exportPending.current = false;
       if (mounted.current) setExporting(false);
@@ -289,18 +285,26 @@ function AlbumPhoto({
         <View style={styles.previewBar}>
           <Text accessibilityRole="header" style={s.author}>{label}</Text>
           <View style={styles.previewActions}>
-            {Platform.OS === "web" && (
+            {isWeb && (
               <CommunityButton
                 primary
                 label={exporting ? "导出中…" : "下载原图"}
                 disabled={exporting}
-                onPress={() => void handleWebExport()}
+                onPress={() => void handleExport()}
+              />
+            )}
+            {isNativeSaveSupported && (
+              <CommunityButton
+                primary
+                label={exporting ? "保存中…" : "保存图片"}
+                disabled={exporting}
+                onPress={() => void handleExport()}
               />
             )}
             <CommunityButton label="关闭大图" disabled={exporting} onPress={close} />
           </View>
         </View>
-        {exportFeedback ? (
+        {exportFeedback && (
           <Text
             accessibilityLiveRegion="polite"
             accessibilityRole={exportFeedback.isError ? "alert" : undefined}
@@ -308,9 +312,7 @@ function AlbumPhoto({
           >
             {exportFeedback.message}
           </Text>
-        ) : Platform.OS !== "web" ? (
-          <Text style={[s.meta, styles.previewNotice]}>iOS / Android 分享与保存到系统相册待安装原生依赖后启用。</Text>
-        ) : null}
+        )}
         <Image accessibilityLabel={label} source={{ uri }} contentFit="contain" style={styles.fullPhoto} />
       </SafeAreaView>
     </Modal>
