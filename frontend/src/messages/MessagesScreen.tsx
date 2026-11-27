@@ -185,7 +185,7 @@ export function MessagesScreen({ api, viewer, chatClient, ownerId, draftStore, c
       {section === "notices" && source === "community" && (
         api.community
           ? <CommunityNotices client={api.community} viewer={viewer} visible={active} onOpen={onCommunityTarget} onRead={onRead} />
-          : <Text style={styles.emptyText}>连接社区后可以查看通知。</Text>
+          : <Text style={styles.emptyText}>当前版本暂不支持社区通知。</Text>
       )}
       {section === "notices" && source === "owner" && viewer.kind === "OWNER" && (
         <OwnerNotices api={api} visible={active} onOpen={onLife} onRead={onRead} companions={companions} />

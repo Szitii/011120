@@ -201,6 +201,11 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
   }
 
   function submitExternal() {
+    const saveConnection = api.chat?.saveConnection;
+    if (!canConfigureConnection || !saveConnection) {
+      setMessage("当前无法配置自建连接，请返回选择其它入驻方式，或稍后重试。");
+      return;
+    }
     Keyboard.dismiss();
     const outcome = validateExternal({
       name: extName,
@@ -232,18 +237,14 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
         setCreatedExternal(identity);
       }
 
-      if (api.chat?.saveConnection) {
-        const saved = await api.chat.saveConnection(identity.companionId, outcome.input);
-        if (!mounted.current) return;
-        if (saved.result === "CONNECTED") {
-          setExtToken("");
-          onCreated(identity, ["displayName"], undefined);
-          return;
-        }
-        setMessage(connectionMessage(saved, "external"));
-      } else {
-        onCreated(identity, ["displayName"], "external");
+      const saved = await saveConnection(identity.companionId, outcome.input);
+      if (!mounted.current) return;
+      if (saved.result === "CONNECTED") {
+        setExtToken("");
+        onCreated(identity, ["displayName"], undefined);
+        return;
       }
+      setMessage(connectionMessage(saved, "external"));
     });
   }
 
@@ -352,7 +353,9 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
         </View>
         <Check label="我同意将近期聊天发给填写的外部接口，内容可能包含群聊中其他家机的消息及写日记用的聊天记录。" checked={extConsent}
           onPress={() => setExtConsent(prev => !prev)} disabled={busy} />
-        <BringButton label={busy ? "正在测试…" : "测试并连通"} disabled={busy || !extName.trim() || !extEndpoint.trim() || !extConsent}
+        {!canConfigureConnection && <Text style={s.hint}>当前无法配置自建连接，请稍后重试。</Text>}
+        <BringButton label={busy ? "正在测试…" : "测试并连通"}
+          disabled={busy || !canConfigureConnection || !extName.trim() || !extEndpoint.trim() || !extConsent}
           onPress={submitExternal} />
         {createdExternal && (
           <BringButton label="稍后配置，先去小家" secondary disabled={busy}
@@ -410,8 +413,8 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
       {step === "reply" && <>
         <View accessibilityRole="radiogroup" style={s.replyOptions}>
           <Choice icon="cloud-outline" title="平台托管" badge="默认" selected={!selectedConnection}
-            description="开箱即用，含新手体验额度，无需自己配置"
-            note="体验额度归属你的账号，随时可查看余额"
+            description="使用平台提供的模型，无需填写密钥"
+            note="可用模型和额度以当前账号状态为准"
             onPress={() => { if (!pending.current) setConnectionKind(undefined); }} />
           {canConfigureConnection && <Choice icon="key-outline" title="自带 API Key" selected={connectionKind === "key"}
             description="填写你自己的服务商密钥，使用个人账号额度"

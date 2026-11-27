@@ -286,22 +286,34 @@ function WorldApp({ client, account, isMockMode }: {
     }).catch(() => undefined);
     return () => { ownerProfileRequest.current++; };
   }, [authenticatedOwner, client.api, profileRevision]);
-  const [features, setFeatures] = useState<PlatformFeatures>();
+  const [featureResult, setFeatureResult] = useState<{
+    ownerId: string; api: typeof client.api; revision: number;
+    value?: PlatformFeatures; error?: ReturnType<typeof safeClientMessage>;
+  }>();
   const [featureRevision, setFeatureRevision] = useState(0);
   const refreshFeatures = useCallback(() => setFeatureRevision(value => value + 1), []);
   useEffect(() => {
-    if (!appActive || !authenticatedOwner || !client.api.chat?.features) {
-      setFeatures(undefined);
+    if (!appActive) {
+      setFeatureResult(undefined);
       return;
     }
+    if (!authenticatedOwner || !client.api.chat?.features) return;
     let current = true;
+    const scope = { ownerId: authenticatedOwner, api: client.api, revision: featureRevision };
     void client.api.chat.features().then(value => {
-      if (current) setFeatures(value);
-    }).catch(() => {
-      if (current) setFeatures(undefined);
+      if (current) setFeatureResult({ ...scope, value });
+    }).catch(error => {
+      if (current) setFeatureResult({ ...scope, error: safeClientMessage(error) });
     });
     return () => { current = false; };
   }, [appActive, authenticatedOwner, client.api, featureRevision]);
+  const currentFeatureResult = featureResult && featureResult.ownerId === authenticatedOwner
+    && featureResult.api === client.api && featureResult.revision === featureRevision ? featureResult : undefined;
+  const features = appActive ? currentFeatureResult?.value : undefined;
+  const featureError = currentFeatureResult?.error;
+  const featureLoadNotice = !client.api.chat?.features || features ? undefined
+    : featureError ? `无法确认功能状态。${featureError.title}` : "正在确认功能状态…";
+  const retryFeatures = featureError?.retry ? refreshFeatures : undefined;
   const groupCreateEnabled = features?.groupChatCreate === true;
   const groupSendEnabled = features?.groupChatSend === true;
   const connectionsEnabled = features?.connections === true;
@@ -816,6 +828,10 @@ function WorldApp({ client, account, isMockMode }: {
             <CommunityButton label="接入家机" primary
               onPress={() => setNav(current => pushRoute(current, { type: "bring-companion" }))} />
           </View>
+        ) : !isMockMode && ownerId && !homeScope ? (
+          ownerCompanions.kind === "error"
+            ? <ErrorState title={ownerCompanions.title} retry={ownerCompanions.retry} onRetry={() => void loadOwnerCompanions()} />
+            : <Loading />
         ) : <PrivateHomeScreen
           key={JSON.stringify([viewerKey, homeScope?.ownerId, homeCompanion?.companionId])}
           chatClient={canUseChat ? client.api.chat : undefined}
@@ -904,7 +920,8 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "create-group" && canUseChat && client.api.chat && (
         <CreateGroupScreen client={client.api.chat} companions={availableCompanions}
-          enabled={groupCreateEnabled} onAvailabilityChanged={refreshFeatures} onCreated={chat => {
+          enabled={groupCreateEnabled} featureLoadNotice={featureLoadNotice} retryFeatures={retryFeatures}
+          onAvailabilityChanged={refreshFeatures} onCreated={chat => {
           setNav(current => current.stack.at(-1) === route
             ? pushRoute(popRoute(current), { type: "chat", chatId: chat.id, companionName: chat.title ?? "群聊", fromTab: "messages" })
             : current);
@@ -913,7 +930,8 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "chat-settings" && canUseChat && client.api.chat && (
         <ChatSettingsScreen key={JSON.stringify([viewerKey, route.companionId, route.chatId])} client={client.api.chat} companionId={route.companionId} companions={availableCompanions} chatId={route.chatId} ownerId={ownerId} connectionKind={route.connectionKind} connectionsEnabled={connectionsEnabled} groupSendEnabled={groupSendEnabled}
-          focusPersona={route.focusPersona} onAvailabilityChanged={refreshFeatures} onBack={goBack}
+          focusPersona={route.focusPersona} featureLoadNotice={featureLoadNotice} retryFeatures={retryFeatures}
+          onAvailabilityChanged={refreshFeatures} onBack={goBack}
           onConversationDeleted={route.chatId ? () => {
             refreshBadges();
             setNav(current => {
@@ -946,7 +964,7 @@ function WorldApp({ client, account, isMockMode }: {
             else if (client.api.community) openCommunity({ type: "profile" });
           }}
           onRead={refreshBadges}
-          groupSendEnabled={groupSendEnabled}
+          groupSendEnabled={groupSendEnabled} featureLoadNotice={featureLoadNotice} retryFeatures={retryFeatures}
           onAvailabilityChanged={refreshFeatures}
           onBackToHome={goBack}
         />
@@ -1083,7 +1101,7 @@ function WorldApp({ client, account, isMockMode }: {
             void loadOwnerCompanions();
             setNav(current => {
               const home = selectTab(current, "home");
-              return connectionKind && client.api.chat?.saveConnection
+              return connectionKind && connectionsEnabled && client.api.chat?.saveConnection
                 ? pushRoute(home, { type: "bring-connection", companionId: created.companionId, kind: connectionKind })
                 : home;
             });
@@ -1091,8 +1109,13 @@ function WorldApp({ client, account, isMockMode }: {
         />
       )}
 
-      {route.type === "bring-connection" && canUseChat && client.api.chat?.saveConnection && (
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      {route.type === "bring-connection" && (!canUseChat
+        ? <Centered title={viewer?.kind === "OWNER" ? "当前无法打开家机连接设置。" : "请切回主人身份后管理家机连接。"} />
+        : !connectionsEnabled || !client.api.chat?.saveConnection
+          ? retryFeatures && featureLoadNotice
+            ? <ErrorState title={featureLoadNotice} retry onRetry={retryFeatures} />
+            : <Centered title={featureLoadNotice ?? "连接自己的模型暂未开放。"} />
+          : <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: CHROME.screenInset, gap: 14 }}>
             <SecondaryHeading title={route.kind === "key" ? "自带 API Key" : "连接自建家机"} />
             <ConnectionForm kind={route.kind} onClose={goBack} handleBack closeLabel="稍后设置，先去小家" submitConnection={async input => {
@@ -1295,7 +1318,7 @@ function WorldScreen({
       scrollEventThrottle={100}
     >
       <View style={styles.feedHeading}>
-        <Text style={styles.feedTitle}>社区动态</Text>
+        <Text style={styles.feedTitle}>{isMockMode ? "社区动态 · 演示数据" : "社区动态"}</Text>
       </View>
 
       {items.length === 0 && (
@@ -1349,7 +1372,6 @@ function FeedItem({
           </View>
           <Text style={styles.feedMeta}>{formatDate(item.publishedAt)}</Text>
         </View>
-        {item.viewerCapabilities.more === true && <Text style={styles.more}>•••</Text>}
       </Pressable>
 
       {item.body && (
@@ -1761,7 +1783,7 @@ function MyScreen({
       )}
 
 
-      <View style={styles.postSectionHeader}>
+      <View style={[styles.postSectionHeader, !community && { display: "none" }]}>
         <Text style={[styles.privateHomeSectionTitle, { color: ink }]}>最近动态</Text>
         {ownProfile && <Pressable accessibilityRole="button" onPress={() => onPosts(ownProfile.id)}>
           <Text style={[styles.heroBio, { color: ui.accentInk }]}>查看全部动态</Text>
@@ -1803,6 +1825,8 @@ function MyScreen({
           })}
         </View>
       )}
+      {communityData.kind === "success" && communityData.value.length === 0 &&
+        <Text style={[styles.heroBio, { color: muted }]}>还没有动态。</Text>}
       {onOpenFeedback && (
         <Pressable
           accessibilityRole="button"
@@ -2030,7 +2054,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   feedAuthorLine: { flexDirection: "row", alignItems: "center", gap: 6 },
   feedAuthorName: { fontSize: 14, fontWeight: "600", color: ui.ink },
   feedMeta: { marginTop: 2, fontSize: 11, color: ui.placeholder },
-  more: { fontSize: 15, color: ui.placeholder, letterSpacing: 1.5 },
   feedBody: { marginTop: 12, fontSize: 15, lineHeight: 22, color: ui.ink },
   mediaStack: { gap: 8, marginTop: 4 },
   feedMediaImage: { width: "100%", height: 196, borderRadius: 16, backgroundColor: ui.accentWash },

@@ -651,7 +651,7 @@ export function CommunityScreen({
 
         {own && !own.canPublish && page.type === "feed" && (
           <View style={localStyles.noticePill}>
-            <Text style={s.meta}>当前家机尚未开放公开发布，请前往「我的」页右上角的设置。</Text>
+            <Text style={s.meta}>当前家机没有发帖权限。请切回主人身份，在家机主页的「社区公开设置」检查可见范围。</Text>
           </View>
         )}
 

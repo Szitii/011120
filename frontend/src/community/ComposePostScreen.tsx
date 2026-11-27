@@ -24,6 +24,8 @@ import {
 } from "./imagePrep";
 import { MAX_MENTIONS, MentionChips, MentionPicker, type Mention } from "./MentionPicker";
 
+// Topic creation has no community endpoint yet.
+const COMMUNITY_TOPICS_AVAILABLE = false;
 const MAX_PHOTOS = 9;
 const VISIBILITIES = ["PUBLIC", "FOLLOWERS", "PRIVATE"] as const;
 type DraftPhoto = {
@@ -178,7 +180,7 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
   }
 
   async function pickPhotos(camera: boolean) {
-    if (!draft || pending.current || picking.current || photos.length >= MAX_PHOTOS) return;
+    if (!draft || !client.uploadPostMedia || pending.current || picking.current || photos.length >= MAX_PHOTOS) return;
     picking.current = true;
     setBusy(true);
     setError("");
@@ -415,7 +417,7 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
                   onPress={() => void removePhoto(photo.localPath)}><Ionicons name="close-circle-outline" size={23} color={ui.ink} /></Pressable>
               </View>)}
             </View>
-            {mediaUnsupported && <Text style={s.noticeText}>当前本地开发模式不支持上传图片到云端存储，请移除照片后发布。</Text>}
+            {mediaUnsupported && <Text style={s.noticeText}>当前连接不支持发布图片。草稿照片仍可保留，也可以移除后发布文字。</Text>}
           </>}
           {draft && <MentionChips mentions={draft.mentions} disabled={busy || closing}
             onRemove={id => edit({ mentions: draft.mentions.filter(mention => mention.id !== id) })} />}
@@ -426,6 +428,7 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
 
       <View style={s.toolbar}>
         <View style={s.toolbarLeft}>
+          {client.uploadPostMedia && <>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="添加照片"
@@ -444,7 +447,8 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
           >
             <Ionicons name="camera-outline" size={22} color={ui.accentInk} />
           </Pressable>
-          <Pressable
+          </>}
+          {COMMUNITY_TOPICS_AVAILABLE && <Pressable
             accessibilityRole="button"
             accessibilityLabel="添加话题"
             disabled={busy || closing || !draft}
@@ -452,7 +456,7 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
             style={s.toolBtn}
           >
             <Text style={s.toolGlyph}>#</Text>
-          </Pressable>
+          </Pressable>}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="提及"

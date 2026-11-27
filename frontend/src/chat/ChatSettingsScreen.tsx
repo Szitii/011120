@@ -29,6 +29,8 @@ export function ChatSettingsScreen({
   connectionKind,
   connectionsEnabled,
   groupSendEnabled,
+  featureLoadNotice,
+  retryFeatures,
   onAvailabilityChanged,
   onBack,
   chatId,
@@ -45,6 +47,8 @@ export function ChatSettingsScreen({
   connectionKind?: "key" | "external";
   connectionsEnabled: boolean;
   groupSendEnabled: boolean;
+  featureLoadNotice?: string;
+  retryFeatures?: () => void;
   onAvailabilityChanged: () => void;
   onBack?: () => void;
   onDeleteCompanion?: () => Promise<void>;
@@ -243,6 +247,8 @@ export function ChatSettingsScreen({
             mode={connectionMode}
             onModeChange={setConnectionMode}
             enabled={connectionsEnabled}
+            featureLoadNotice={featureLoadNotice}
+            retryFeatures={retryFeatures}
             onAvailabilityChanged={onAvailabilityChanged}
             onConnectionChange={setActiveConnection}
           />

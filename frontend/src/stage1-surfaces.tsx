@@ -55,6 +55,9 @@ function ErrorBlock({
   );
 }
 
+// The legacy values are stored by the API but do not drive the current community scheduler or notifications.
+const LEGACY_SOCIAL_CONTROLS_AVAILABLE = false;
+
 export function ControlsScreen({
   api,
   companionId,
@@ -149,6 +152,7 @@ export function ControlsScreen({
         />
       </ControlSection>
 
+      {LEGACY_SOCIAL_CONTROLS_AVAILABLE && <>
       <View style={styles.section}>
         <View style={styles.sectionTitleRow}>
           <Text style={styles.sectionTitle}>社交主动性</Text>
@@ -193,6 +197,7 @@ export function ControlsScreen({
           </View>
         </Pressable>
       </ControlSection>
+      </>}
 
       {onChatSettings && <CommunityButton label="聊天设置" onPress={onChatSettings} />}
       {diaryClient && <DiaryFrequency key={companionId} client={diaryClient} companionId={companionId} />}
@@ -399,6 +404,7 @@ export function SocialActivationScreen({
             onSelect={(value) => setVisibility(value as "PRIVATE" | "FRIENDS" | "PUBLIC")}
           />
 
+          {LEGACY_SOCIAL_CONTROLS_AVAILABLE && <>
           <Text style={styles.fieldLabel}>社交主动性</Text>
           <PillOptions
             values={["QUIET", "NORMAL", "ACTIVE"]}
@@ -407,6 +413,7 @@ export function SocialActivationScreen({
             labels={{ QUIET: "较少", NORMAL: "适中", ACTIVE: "较多" }}
             onSelect={(value) => setAutonomy(value as "QUIET" | "NORMAL" | "ACTIVE")}
           />
+          </>}
 
           {message && <Text accessibilityRole="alert" style={styles.message}>{message}</Text>}
           <CommunityButton primary disabled={busy} onPress={() => void activate()}

@@ -94,8 +94,11 @@ export function DiaryScreen({
       if (result.status === "WRITTEN" && result.entry) merge([result.entry]);
       if (result.status === "WRITING") setWritingElsewhere(true);
       if (result.status === "OFF") setNotice("日记已关闭，可以在家机设置里开启。");
-      if (result.failure === "UNAVAILABLE") setNotice("即将推出");
-      if (result.failure === "QUOTA") setNotice("今天累了，明天再写。");
+      if (result.failure === "UNAVAILABLE") setNotice("当前没有可用模型，暂时无法写日记。已有日记仍可阅读。");
+      if (result.failure === "DISABLED") setNotice("日记生成暂未开放。已有日记仍可阅读。");
+      if (result.failure === "QUOTA") setNotice("今天的日记生成额度已用完。");
+      if (result.failure === "BLOCKED") setNotice("本次日记未通过内容审核。");
+      if (result.failure === "ERROR") setNotice("本次日记没能生成。已有日记仍可阅读。");
     }).catch(() => {
       if (scope === session.current) setNotice("暂时无法确认日记是否写好，已有日记仍可阅读。");
     }).finally(() => {
