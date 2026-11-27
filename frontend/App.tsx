@@ -94,6 +94,8 @@ type LoadState<T> =
   | { kind: "error"; title: string; retry: boolean };
 
 
+const DRAFT_SAVED_NOTICE_MS = 2800;
+
 const LOCAL_PREVIEW_IMAGES: Record<string, number> = {
   "rainy-cafe": require("./assets/post-rainy-cafe.jpg"),
   "night-desk": require("./assets/post-night-desk.jpg"),
@@ -195,6 +197,12 @@ function WorldApp({ client, account, isMockMode }: {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const [communityRevision, setCommunityRevision] = useState(0);
+  const [draftSaved, setDraftSaved] = useState<{ viewerKey: string }>();
+  useEffect(() => {
+    if (!draftSaved) return;
+    const timeout = setTimeout(() => setDraftSaved(undefined), DRAFT_SAVED_NOTICE_MS);
+    return () => clearTimeout(timeout);
+  }, [draftSaved]);
   const invalidateCommunity = useCallback(() => setCommunityRevision(value => value + 1), []);
   const [companionDeleteRevision, setCompanionDeleteRevision] = useState(0);
   const [createdHome, setCreatedHome] = useState<OwnerCompanionSummary>();
@@ -792,6 +800,11 @@ function WorldApp({ client, account, isMockMode }: {
             revision={communityRevision} onChanged={invalidateCommunity}
             initialScrollY={nav.scrollByIdentityAndTab[scrollKey(identityId, "world")] ?? 0}
             onScroll={y => setNav(current => saveScroll(current, identityId, "world", y))} />
+          {worldVisible && draftSaved?.viewerKey === viewerKey && (
+            <View pointerEvents="none" style={styles.draftSavedNotice}>
+              <Text accessibilityLiveRegion="polite" style={styles.draftSavedText}>草稿已保存</Text>
+            </View>
+          )}
         </View>
       )}
       {worldVisible && !client.api.community && <WorldScreen
@@ -882,7 +895,8 @@ function WorldApp({ client, account, isMockMode }: {
 
       {route.type === "compose-post" && viewer && identityValue && client.api.community && (
         <ComposePostScreen key={viewerKey} client={client.api.community} viewer={viewer}
-          ownerId={identityValue.viewer.ownerId} onBack={goBack} onPublished={() => {
+          ownerId={identityValue.viewer.ownerId} onBack={goBack}
+          onDraftSaved={() => { setDraftSaved({ viewerKey }); goBack(); }} onPublished={() => {
             setCommunityRevision(value => value + 1);
             goBack();
           }} />
@@ -1963,6 +1977,12 @@ function ErrorState({
 }
 
 const createStyles = (ui: UiPalette) => StyleSheet.create({
+  draftSavedNotice: {
+    position: "absolute", alignSelf: "center", top: CHROME.screenInset, zIndex: 1,
+    paddingHorizontal: CHROME.screenInset, paddingVertical: 8, borderRadius: RADIUS.pill,
+    backgroundColor: ui.white, borderColor: ui.line, borderWidth: StyleSheet.hairlineWidth,
+  },
+  draftSavedText: { color: ui.ink, fontWeight: "600", fontSize: 13 },
   postSectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" },
   safe: { flex: 1, backgroundColor: ui.background[0] },
   content: { flex: 1, backgroundColor: ui.background[0] },

@@ -103,11 +103,12 @@ function DraftPhotoPreview({ path }: { path: string }) {
   </View>;
 }
 
-export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished }: {
+export function ComposePostScreen({ client, viewer, ownerId, onBack, onDraftSaved, onPublished }: {
   client: CommunityClient;
   viewer: ActorContext;
   ownerId: string;
   onBack: () => void;
+  onDraftSaved: () => void;
   onPublished: (post: CommunityPost) => void;
 }) {
   const { ui } = useSkin();
@@ -120,6 +121,7 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
   const [author, setAuthor] = useState<Awaited<ReturnType<CommunityClient["profile"]>>>();
   const [busy, setBusy] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [exitError, setExitError] = useState("");
   const [mentionOpen, setMentionOpen] = useState(false);
   const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [error, setError] = useState("");
@@ -255,6 +257,7 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
     if (pending.current || picking.current) return;
     pending.current = true;
     setBusy(true);
+    setExitError("");
     try {
       await persist(keep ? draft : undefined);
       if (!keep) {
@@ -263,9 +266,12 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
           ...photos.filter(photo => photo.storagePath).map(photo => client.deletePostMedia?.(photo.storagePath!)),
         ]);
       }
-      if (alive.current) onBack();
+      if (alive.current) {
+        if (keep) onDraftSaved();
+        else onBack();
+      }
     } catch {
-      if (alive.current) setError("草稿未保存，请再试一次。");
+      if (alive.current) setExitError(keep ? "草稿未保存，请重试。" : "本机草稿未能清除，请重试。");
     } finally {
       pending.current = false;
       if (alive.current) setBusy(false);
@@ -482,12 +488,15 @@ export function ComposePostScreen({ client, viewer, ownerId, onBack, onPublished
         </View>
       </BottomSheet>
 
-      <BottomSheet visible={closing} title="这条动态还没发布" onClose={() => { if (!busy) setClosing(false); }}>
+      <BottomSheet visible={closing} title="这条动态还没发布" onClose={() => {
+        if (!busy) { setClosing(false); setExitError(""); }
+      }}>
         <View style={s.sheetActions}>
           <Text style={s.sheetHint}>保存后下次进入发动态页可继续编辑。</Text>
+          {exitError !== "" && <Text accessibilityRole="alert" style={s.sheetHint}>{exitError}</Text>}
           <CommunityButton primary label="存为草稿" disabled={busy} onPress={() => void exit(true)} />
           <CommunityButton label="不保存，直接离开" disabled={busy} onPress={() => void exit(false)} />
-          <CommunityButton label="继续编辑" disabled={busy} onPress={() => setClosing(false)} />
+          <CommunityButton label="继续编辑" disabled={busy} onPress={() => { setClosing(false); setExitError(""); }} />
         </View>
       </BottomSheet>
     </KeyboardAvoidingView>
