@@ -9,7 +9,8 @@ it("binds every community request to its actor and keeps retry keys stable", asy
   const calls: { url: URL; method: string; headers: Headers; body: string | null }[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: new URL(String(input)), method: init?.method ?? "GET", headers: new Headers(init?.headers), body: init?.body as string ?? null });
-    return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+    const profile = new URL(String(input)).pathname.includes("/community/profile");
+    return Response.json(profile ? { id: "actor", displayName: "Fixture profile" } : { items: [], nextCursor: null });
   }) as typeof fetch;
   try {
     const api = new RealApiAdapter({ baseUrl: "https://community.test", bearerToken: "test-token" }).community;

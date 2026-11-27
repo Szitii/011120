@@ -2,6 +2,7 @@ import "react-native-url-polyfill/auto";
 import { AuthClient, AuthRetryableFetchError, isAuthRetryableFetchError } from "@supabase/auth-js";
 import * as SecureStore from "expo-secure-store";
 import { AppState, Platform } from "react-native";
+import { withRequestDeadline } from "../state/request-deadline.ts";
 import { AccountSession } from "./account-session.ts";
 import type { SupabaseConfig } from "./config.ts";
 
@@ -21,6 +22,9 @@ export function createSupabaseAccount(config: SupabaseConfig) {
     url: new URL("/auth/v1", project).toString(),
     headers: { apikey: config.publishableKey },
     detectSessionInUrl: false,
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => withRequestDeadline(
+      signal => fetch(input, { ...init, signal }), undefined, init?.signal ?? undefined,
+    ),
   };
   const auth = new AuthClient({
     ...options,

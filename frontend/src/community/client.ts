@@ -7,6 +7,7 @@ import type {
   CommunityFollow,
   CommunityPage,
   CommunityPost,
+  CommunityProfile,
   CommunityClient as BaseCommunityClient,
   CommunityFeedMode,
   CommunityActorFilter,
@@ -45,6 +46,27 @@ export interface CommunityClient extends Omit<BaseCommunityClient, "publish"> {
   saveAgentSettings(viewer: AgentViewer, settings: AgentSettings): Promise<AgentSettingsView>;
 }
 
+export class InvalidCommunityPayloadError extends Error {
+  constructor() { super("Invalid community response."); }
+}
+
+function checkedProfile(profile: CommunityProfile): CommunityProfile {
+  if (!profile || typeof profile.id !== "string" || typeof profile.displayName !== "string") {
+    throw new InvalidCommunityPayloadError();
+  }
+  return profile;
+}
+
+function checkedFeed(page: CommunityPage<CommunityPost>): CommunityPage<CommunityPost> {
+  if (!page || !Array.isArray(page.items) || (page.nextCursor !== null && typeof page.nextCursor !== "string")
+      || page.items.some(post => !post || typeof post.id !== "string" || typeof post.body !== "string"
+        || typeof post.createdAt !== "string" || typeof post.author?.id !== "string" || typeof post.author.displayName !== "string"
+        || (post.media !== undefined && !Array.isArray(post.media)) || (post.mentions !== undefined && !Array.isArray(post.mentions)))) {
+    throw new InvalidCommunityPayloadError();
+  }
+  return page;
+}
+
 type Requester = <T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown, key?: string) => Promise<T>;
 
 export function createCommunityClient(request: Requester, media?: CommunityMediaHandlers): CommunityClient {
@@ -68,11 +90,11 @@ export function createCommunityClient(request: Requester, media?: CommunityMedia
     report: (v, target, reason, details, key) => request("POST",
       path(v, `reports/${{ ACTOR: "actors", POST: "posts", COMMENT: "comments" }[target.kind]}/${encodeURIComponent(target.id)}`),
       { reason, details }, key),
-    profile: (v, actorId) => request("GET", path(v, actorId ? `profile/${encodeURIComponent(actorId)}` : "profile")),
+    profile: (v, actorId) => request<CommunityProfile>("GET", path(v, actorId ? `profile/${encodeURIComponent(actorId)}` : "profile")).then(checkedProfile),
     humanProfileSettings: v => request("GET", path(v, "profile/settings")),
     saveHumanProfile: (v, settings) => request("PUT", path(v, "profile/settings"), settings),
     feed: (v, options: { mode?: CommunityFeedMode; filter?: CommunityActorFilter; authorId?: string; cursor?: string } = {}) =>
-      request("GET", path(v, "feed", options)),
+      request<CommunityPage<CommunityPost>>("GET", path(v, "feed", options)).then(checkedFeed),
     detail: (v, postId, cursor) => request("GET", path(v, `posts/${encodeURIComponent(postId)}`, { cursor })),
     publish: (v, body, key, options) => request("POST", path(v, "posts"), { body, ...options }, key),
     comment: (v, postId, body, key, options) => request("POST", path(v, `posts/${encodeURIComponent(postId)}/comments`), { body, ...options }, key),

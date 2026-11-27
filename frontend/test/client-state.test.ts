@@ -80,8 +80,12 @@ describe("real API adapter boundary", () => {
         idempotency: headers.get("Idempotency-Key"),
         ifMatch: headers.get("If-Match"),
       });
+      const params = new URL(url).searchParams;
+      const requestedId = params.get("activeSubjectId");
       const body = url.includes("identity-context")
-        ? { viewer: { ownerId: "owner" }, activeSubject: { kind: "OWNER", id: "owner", presentation: { displayName: "SampleUser" } }, relationship: "SELF", viewMode: "OWNER", capabilities: {} }
+        ? { viewer: { ownerId: "owner" }, activeSubject: { kind: params.get("activeSubjectKind") ?? "OWNER",
+          id: requestedId ?? "owner", presentation: { displayName: requestedId ? "SampleCompanion" : "SampleUser" } },
+          relationship: requestedId ? "OWNER_OF" : "SELF", viewMode: requestedId ? "COMPANION" : "OWNER", capabilities: {} }
         : url.endsWith("/v0/companions")
           ? { items: [{ companionId: "c", displayName: "Cici", identityId: "identity-c", identityVersion: 1, approvedFields: ["displayName", "personaTraits"], status: "ACTIVE", socialReady: true, socialTwinId: "s", handle: "cici" }] }
           : url.includes("world-items")

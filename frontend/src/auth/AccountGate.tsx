@@ -44,17 +44,19 @@ export function AccountGate({ config, children }: {
     onRegister={auth.signUp}
     onRecover={auth.resetPasswordForEmail}
     onRetrySignOut={signOut}
+    onRetryRestore={() => void auth.session.restore()}
   />;
 }
 
 type AuthPage = "login" | "register" | "recover";
 
-function AccountScreen({ state, onSignIn, onRegister, onRecover, onRetrySignOut }: {
+function AccountScreen({ state, onSignIn, onRegister, onRecover, onRetrySignOut, onRetryRestore }: {
   state: Exclude<AccountView, { kind: "signed-in" }>;
   onSignIn: (email: string, password: string) => void;
   onRegister: (email: string, password: string) => Promise<SelfServiceResult>;
   onRecover: (email: string) => Promise<SelfServiceResult>;
   onRetrySignOut: () => void;
+  onRetryRestore: () => void;
 }) {
   const { ui, skin } = useSkin();
   const styles = useThemedStyles(createStyles);
@@ -222,18 +224,21 @@ function AccountScreen({ state, onSignIn, onRegister, onRecover, onRetrySignOut 
                 )}
               </View>
             </>
-          ) : state.kind === "logout-error" ? (
+          ) : (state.kind === "logout-error" || state.kind === "restore-error") ? (
             <View style={styles.formCard}>
               <Text accessibilityRole="alert" style={styles.message}>{state.message}</Text>
-              <Pressable accessibilityRole="button" style={styles.button} onPress={onRetrySignOut}>
-                <Text style={styles.buttonText}>重试退出</Text>
+              <Pressable accessibilityRole="button" style={styles.button}
+                onPress={state.kind === "logout-error" ? onRetrySignOut : onRetryRestore}>
+                <Text style={styles.buttonText}>{state.kind === "logout-error" ? "重试退出" : "重试恢复登录"}</Text>
               </Pressable>
             </View>
           ) : (
-            <ActivityIndicator
-              accessibilityLabel={state.kind === "restoring" ? "正在恢复登录" : "正在退出"}
-              color={ui.accent}
-            />
+            <View style={styles.formCard}>
+              <ActivityIndicator color={ui.accent} />
+              <Text accessibilityLiveRegion="polite" style={styles.message}>
+                {state.kind === "restoring" ? "正在恢复登录…" : "正在退出…"}
+              </Text>
+            </View>
           )}
         </ScrollView>
       </KeyboardAvoidingView>

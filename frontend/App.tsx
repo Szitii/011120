@@ -111,9 +111,9 @@ function formatDate(value: string): string {
 
 function identityLabel(identity?: ActiveIdentityContext, ownerNickname?: string): string {
   const subject = identity?.activeSubject;
-  const name = subject?.presentation.displayName;
-  if (subject?.kind === "OWNER") return ownerNickname ?? (name && name !== "Owner" ? name : "本人");
-  return name ?? "本人";
+  const name = subject?.presentation.displayName.trim();
+  if (subject?.kind === "OWNER") return ownerNickname?.trim() || (name !== "Owner" && name) || "账号";
+  return name || (subject ? "家机" : "账号");
 }
 
 export default function App() {
@@ -277,15 +277,21 @@ function WorldApp({ client, account, isMockMode }: {
     ? { kind: "COMPANION" as const, id: route.companionId } : agentViewer;
   const [profileRevision, reloadOwnerProfile] = useState(0);
   const ownerProfileRequest = useRef(0);
+  const [ownerProfileFailure, setOwnerProfileFailure] = useState<string>();
   useEffect(() => {
     const community = client.api.community;
-    if (!authenticatedOwner || !community) return;
+    if (!appActive || !authenticatedOwner || !community) return;
     const request = ++ownerProfileRequest.current;
+    setOwnerProfileFailure(undefined);
     void community.profile({ kind: "OWNER", id: authenticatedOwner }).then(profile => {
-      if (request === ownerProfileRequest.current) setOwnerProfile({ id: authenticatedOwner, name: profile.displayName, avatar: profile.avatar });
-    }).catch(() => undefined);
+      if (request === ownerProfileRequest.current) setOwnerProfile({
+        id: authenticatedOwner, name: profile.displayName.trim(), avatar: profile.avatar,
+      });
+    }).catch(() => {
+      if (request === ownerProfileRequest.current) setOwnerProfileFailure(authenticatedOwner);
+    });
     return () => { ownerProfileRequest.current++; };
-  }, [authenticatedOwner, client.api, profileRevision]);
+  }, [appActive, authenticatedOwner, client.api, profileRevision]);
   const [features, setFeatures] = useState<PlatformFeatures>();
   const [featureRevision, setFeatureRevision] = useState(0);
   const refreshFeatures = useCallback(() => setFeatureRevision(value => value + 1), []);
@@ -755,7 +761,7 @@ function WorldApp({ client, account, isMockMode }: {
             onRetry={() => setIdentityRevision(value => value + 1)}
             onSignOut={account?.signOut}
           />
-        ) : <Loading />}
+        ) : <Loading label="正在加载账号身份…" />}
       </SafeAreaView>
     );
   }
@@ -779,6 +785,14 @@ function WorldApp({ client, account, isMockMode }: {
           onIdentity={() => setSwitcherOpen(true)}
           onOpenSettings={() => setNav(current => pushRoute(current, { type: "settings" }))}
         />
+      )}
+
+      {route.type === "root" && viewer?.kind === "OWNER" && ownerProfileFailure === authenticatedOwner
+        && !ownerNickname && (!subject?.presentation.displayName.trim() || subject.presentation.displayName === "Owner") && (
+        <View style={styles.contentNotice}>
+          <Text accessibilityRole="alert" style={styles.tinyMuted}>社区昵称暂时无法读取。</Text>
+          <CommunityButton label="重试读取昵称" onPress={() => reloadOwnerProfile(value => value + 1)} />
+        </View>
       )}
 
       {viewer && client.api.community && (
@@ -1913,12 +1927,12 @@ function IdentitySwitcher({
   );
 }
 
-function Loading() {
+function Loading({ label = "稍等。" }: { label?: string } = {}) {
   const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.center}>
       <ActivityIndicator />
-      <Text style={styles.tinyMuted}>稍等。</Text>
+      <Text accessibilityLiveRegion="polite" style={styles.tinyMuted}>{label}</Text>
     </View>
   );
 }
@@ -1968,6 +1982,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   content: { flex: 1, backgroundColor: ui.background[0] },
 
   rootContent: { flex: 1 },
+  contentNotice: { paddingHorizontal: CHROME.screenInset, gap: 4, alignItems: "flex-start" },
   inactiveRoot: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, opacity: 0, zIndex: -1 },
   topBar: {
     minHeight: 58,
