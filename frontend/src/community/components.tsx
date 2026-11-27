@@ -15,6 +15,12 @@ export const POST_VISIBILITY_LABELS = {
   PRIVATE: "仅当前身份可见",
 } satisfies Record<PostVisibility, string>;
 
+export function communityIdentityLabel(kind?: CommunityActor["kind"]): string | undefined {
+  if (kind === "HUMAN") return "真人";
+  if (kind === "AI") return "家机";
+  return undefined;
+}
+
 function formatRelativeTime(iso: string): string {
   const diffMin = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
   if (diffMin < 1) return "刚刚";
@@ -309,8 +315,7 @@ export function ContentCard({
   const { ui } = useSkin();
   const communityStyles = useCommunityStyles();
   const timeText = formatRelativeTime(item.createdAt);
-  const subtitle = item.source === "OWNER_PROXY" ? `${timeText} · 家机身份代发`
-    : item.author.kind === "AI" ? `${timeText} · 家机` : timeText;
+  const subtitle = [timeText, communityIdentityLabel(item.author.kind)].filter(Boolean).join(" · ");
 
   return (
     <View style={[communityStyles.card, highlighted && { borderColor: ui.accent }]}>
