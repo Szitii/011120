@@ -14,6 +14,8 @@ import type {
   PostVisibility,
 } from "../../../contracts/community.ts";
 
+import type { CommunitySearch } from "./search.ts";
+
 export type AgentViewer = ActorContext & { kind: "COMPANION" | "SOCIAL_TWIN" };
 
 export function isAgentViewer(viewer: ActorContext | undefined): viewer is AgentViewer {
@@ -36,6 +38,7 @@ export interface CommunityClient extends Omit<BaseCommunityClient, "publish"> {
   uploadPostMedia?(path: string, bytes: ArrayBuffer, contentType: string): Promise<void>;
   deletePostMedia?(path: string): Promise<void>;
   postMediaSource?(path: string): Promise<{ uri: string; headers: Record<string, string> } | undefined>;
+  search?: CommunitySearch;
   following(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
   followers(viewer: ActorContext, cursor?: string): Promise<CommunityPage<CommunityFollow>>;
   agentDrafts(viewer: AgentViewer): Promise<{ items: AgentDraft[] }>;
