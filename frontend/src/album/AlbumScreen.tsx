@@ -11,12 +11,13 @@ import {
   formatAlbumDate,
   formatQuoteShareText,
   getExportFeedback,
+  getShareFeedback,
   isShareAbortError,
   shareTextOnWeb,
   type AlbumPhotoKind,
 } from "./actions";
 import { addAlbumPhoto, deleteAlbumEntry, listAlbum, type AlbumEntry, type QuoteInput } from "./store";
-import { exportMedia, findMedia } from "./mediaFiles";
+import { exportMedia, findMedia, shareMedia } from "./mediaFiles";
 
 interface InlineFeedback {
   id: string;
@@ -216,12 +217,12 @@ function AlbumPhoto({
   const [preview, setPreview] = useState(false);
   const [uri, setUri] = useState<string>();
   const [failed, setFailed] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [photoAction, setPhotoAction] = useState<"export" | "share">();
   const [exportFeedback, setExportFeedback] = useState<{ message: string; isError: boolean }>();
-  const exportPending = useRef(false);
+  const actionPending = useRef(false);
   const mounted = useRef(true);
   const isWeb = Platform.OS === "web";
-  const isNativeSaveSupported = Platform.OS === "ios" || Platform.OS === "android";
+  const isNativePhotoSupported = Platform.OS === "ios" || Platform.OS === "android";
 
   useEffect(() => {
     mounted.current = true;
@@ -242,9 +243,9 @@ function AlbumPhoto({
   }, [path]);
 
   async function handleExport() {
-    if (exportPending.current) return;
-    exportPending.current = true;
-    setExporting(true);
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setPhotoAction("export");
     setExportFeedback(undefined);
     try {
       const result = await exportMedia(path, { kind, createdAt, entryId });
@@ -258,8 +259,27 @@ function AlbumPhoto({
         });
       }
     } finally {
-      exportPending.current = false;
-      if (mounted.current) setExporting(false);
+      actionPending.current = false;
+      if (mounted.current) setPhotoAction(undefined);
+    }
+  }
+
+  async function handleShare() {
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setPhotoAction("share");
+    setExportFeedback(undefined);
+    try {
+      const result = await shareMedia(path, { kind, createdAt, entryId });
+      if (!mounted.current) return;
+      setExportFeedback(getShareFeedback(result));
+    } catch {
+      if (mounted.current) {
+        setExportFeedback({ message: "未能调起系统分享，请稍后重试。", isError: true });
+      }
+    } finally {
+      actionPending.current = false;
+      if (mounted.current) setPhotoAction(undefined);
     }
   }
 
@@ -267,12 +287,13 @@ function AlbumPhoto({
   if (!uri) return <ActivityIndicator accessibilityLabel="正在读取照片" />;
   const snapshot = kind === "room_snapshot";
   const label = snapshot ? "小家拍立得" : "本地照片";
+  const photoBusy = photoAction !== undefined;
   const open = () => {
     setExportFeedback(undefined);
     setPreview(true);
   };
   const close = () => {
-    if (exportPending.current) return;
+    if (actionPending.current) return;
     setPreview(false);
   };
   return <>
@@ -288,20 +309,25 @@ function AlbumPhoto({
             {isWeb && (
               <CommunityButton
                 primary
-                label={exporting ? "导出中…" : "下载原图"}
-                disabled={exporting}
+                label={photoAction === "export" ? "导出中…" : "下载原图"}
+                disabled={photoBusy}
                 onPress={() => void handleExport()}
               />
             )}
-            {isNativeSaveSupported && (
+            {isNativePhotoSupported && <>
+              <CommunityButton
+                label={photoAction === "share" ? "分享中…" : "分享图片"}
+                disabled={photoBusy}
+                onPress={() => void handleShare()}
+              />
               <CommunityButton
                 primary
-                label={exporting ? "保存中…" : "保存图片"}
-                disabled={exporting}
+                label={photoAction === "export" ? "保存中…" : "保存图片"}
+                disabled={photoBusy}
                 onPress={() => void handleExport()}
               />
-            )}
-            <CommunityButton label="关闭大图" disabled={exporting} onPress={close} />
+            </>}
+            <CommunityButton label="关闭大图" disabled={photoBusy} onPress={close} />
           </View>
         </View>
         {exportFeedback && (

@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildExportFilename,
+  buildNativeShareOptions,
   canUseWebShare,
   detectImageExtensionFromBytes,
   formatQuoteShareText,
   getExportFeedback,
+  getShareFeedback,
   isShareAbortError,
   needsMediaLibraryPermission,
+  nativeShareFilename,
   resolveImageExtension,
   saveNativeMediaToLibrary,
+  shareNativeMediaFile,
   shareTextOnWeb,
 } from "../src/album/actions.ts";
 
@@ -72,6 +76,44 @@ test("buildExportFilename formats deterministic filenames for polaroids and phot
   );
 });
 
+test("nativeShareFilename replaces wrong suffix without adding a second suffix", () => {
+  const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal(nativeShareFilename({ localPath: "album-1.jpg", kind: "local_photo", bytes }), "album-1.png");
+  assert.equal(nativeShareFilename({ localPath: "album-1.png", kind: "local_photo", bytes }), "album-1.png");
+  assert.equal(nativeShareFilename({ localPath: "album-1", kind: "room_snapshot", bytes }), "album-1.png");
+});
+
+test("buildNativeShareOptions sets Android MIME type and avoids duplicate iOS extensions", () => {
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.deepEqual(
+    buildNativeShareOptions({
+      platform: "android",
+      localPath: "album-1.jpg",
+      kind: "room_snapshot",
+      bytes: pngBytes,
+    }),
+    { mimeType: "image/png", dialogTitle: "分享小家拍立得" },
+  );
+  assert.deepEqual(
+    buildNativeShareOptions({
+      platform: "ios",
+      localPath: "album-1.png",
+      kind: "room_snapshot",
+      bytes: pngBytes,
+    }),
+    {},
+  );
+  assert.deepEqual(
+    buildNativeShareOptions({
+      platform: "ios",
+      localPath: "album-1.jpg",
+      kind: "local_photo",
+      bytes: pngBytes,
+    }),
+    { UTI: "public.png", mimeType: "image/png" },
+  );
+});
+
 test("formatQuoteShareText keeps speaker, date, and quote text", () => {
   const sentAt = "2026-11-26T12:00:00Z";
   const expectedDate = new Date(sentAt).toLocaleDateString("zh-CN");
@@ -98,6 +140,7 @@ test("canUseWebShare, shareTextOnWeb, and isShareAbortError handle browser share
   assert.deepEqual(shared, [{ text: "hello" }]);
 
   assert.equal(isShareAbortError({ name: "AbortError" }), true);
+  assert.equal(isShareAbortError({ code: "ERR_SHARING_CANCELED" }), true);
   assert.equal(isShareAbortError(new Error("failed")), false);
 });
 
@@ -197,7 +240,48 @@ test("saveNativeMediaToLibrary handles user denial and save failures without fak
   assert.equal(failed.status, "failed");
 });
 
-test("getExportFeedback maps native save, permission denial, unavailable module, and missing file states", () => {
+test("shareNativeMediaFile checks file existence, availability, cancel, and failure without faking success", async () => {
+  let checkedAvailable = false;
+  const missing = await shareNativeMediaFile({
+    getFileUri: () => undefined,
+    isAvailable: async () => { checkedAvailable = true; return true; },
+    shareFile: async () => undefined,
+  });
+  assert.deepEqual(missing, { status: "missing" });
+  assert.equal(checkedAvailable, false);
+
+  const unavailable = await shareNativeMediaFile({
+    getFileUri: () => "file:///documents/cw-album-v1/album-1.png",
+    isAvailable: async () => false,
+    shareFile: async () => undefined,
+  });
+  assert.deepEqual(unavailable, { status: "unavailable", reason: "system" });
+
+  const sharedUris: string[] = [];
+  const completed = await shareNativeMediaFile({
+    getFileUri: () => "file:///documents/cw-album-v1/album-1.png",
+    isAvailable: async () => true,
+    shareFile: async (uri) => { sharedUris.push(uri); },
+  });
+  assert.deepEqual(completed, { status: "completed" });
+  assert.deepEqual(sharedUris, ["file:///documents/cw-album-v1/album-1.png"]);
+
+  const canceled = await shareNativeMediaFile({
+    getFileUri: () => "file:///documents/cw-album-v1/album-1.png",
+    isAvailable: async () => true,
+    shareFile: async () => { throw { name: "AbortError" }; },
+  });
+  assert.deepEqual(canceled, { status: "canceled" });
+
+  const failed = await shareNativeMediaFile({
+    getFileUri: () => "file:///documents/cw-album-v1/album-1.png",
+    isAvailable: async () => true,
+    shareFile: async () => { throw new Error("share sheet failed"); },
+  });
+  assert.equal(failed.status, "failed");
+});
+
+test("getExportFeedback and getShareFeedback map states accurately without faking share success", () => {
   assert.deepEqual(getExportFeedback({ status: "saved" }, false), {
     message: "已保存到系统相册。",
     isError: false,
@@ -219,4 +303,19 @@ test("getExportFeedback maps native save, permission denial, unavailable module,
     isError: true,
   });
   assert.equal(getExportFeedback({ status: "canceled" }, false), undefined);
+
+  assert.equal(getShareFeedback({ status: "completed" }), undefined);
+  assert.equal(getShareFeedback({ status: "canceled" }), undefined);
+  assert.deepEqual(getShareFeedback({ status: "missing" }), {
+    message: "这张照片的本地文件已失效，无法分享。",
+    isError: true,
+  });
+  assert.deepEqual(getShareFeedback({ status: "unavailable", reason: "module" }), {
+    message: "当前安装包暂不支持分享图片，请更新应用后重试。",
+    isError: true,
+  });
+  assert.deepEqual(getShareFeedback({ status: "unavailable", reason: "system" }), {
+    message: "当前设备暂不支持分享图片。",
+    isError: true,
+  });
 });
