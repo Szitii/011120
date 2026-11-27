@@ -130,3 +130,26 @@ export function formatQuoteShareText(quote: Pick<QuoteInput, "speaker" | "text" 
   const meta = date ? `—— ${speaker} · ${date}` : `—— ${speaker}`;
   return text ? `「${text}」\n${meta}` : meta;
 }
+
+interface WebShareNavigator {
+  share?: (data: { text?: string; title?: string; url?: string }) => Promise<void>;
+}
+
+export function canUseWebShare(
+  nav: WebShareNavigator | undefined = (globalThis as { navigator?: WebShareNavigator }).navigator,
+): boolean {
+  return typeof nav?.share === "function";
+}
+
+export async function shareTextOnWeb(
+  text: string,
+  nav: WebShareNavigator | undefined = (globalThis as { navigator?: WebShareNavigator }).navigator,
+): Promise<boolean> {
+  if (typeof nav?.share !== "function") return false;
+  await nav.share({ text });
+  return true;
+}
+
+export function isShareAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError";
+}

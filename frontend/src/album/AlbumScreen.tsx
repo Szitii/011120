@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Modal, Platform, Pressable, SafeAreaView, Share, StyleSheet, Text, View } from "react-native";
 import { setStringAsync } from "expo-clipboard";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
@@ -7,8 +7,11 @@ import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../commun
 import { useSkin } from "../theme/SkinProvider";
 import type { HomeScope } from "../home/keys";
 import {
+  canUseWebShare,
   formatAlbumDate,
   formatQuoteShareText,
+  isShareAbortError,
+  shareTextOnWeb,
   type AlbumPhotoKind,
 } from "./actions";
 import { addAlbumPhoto, deleteAlbumEntry, listAlbum, type AlbumEntry, type QuoteInput } from "./store";
@@ -31,6 +34,7 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
   const pending = useRef(false);
   const quotePending = useRef(false);
   const active = useRef(false);
+  const canShareQuote = Platform.OS !== "web" || canUseWebShare();
 
   async function refresh() {
     try {
@@ -97,6 +101,35 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
     }
   }
 
+  async function shareQuote(entryId: string, quote: QuoteInput) {
+    if (quotePending.current) return;
+    const message = formatQuoteShareText(quote);
+    quotePending.current = true;
+    setQuoteActionKey(`${entryId}:share`);
+    setQuoteFeedback(undefined);
+    try {
+      if (Platform.OS === "web") {
+        const shared = await shareTextOnWeb(message);
+        if (!shared && active.current) {
+          setQuoteFeedback({ id: entryId, message: "当前浏览器不支持系统分享，请使用复制。", isError: true });
+        }
+      } else {
+        await Share.share({ message });
+      }
+    } catch (shareError) {
+      if (active.current && !isShareAbortError(shareError)) {
+        setQuoteFeedback({
+          id: entryId,
+          message: Platform.OS === "web" ? "未能调起系统分享，请改用复制。" : "未能调起系统分享，请稍后重试。",
+          isError: true,
+        });
+      }
+    } finally {
+      quotePending.current = false;
+      if (active.current) setQuoteActionKey(undefined);
+    }
+  }
+
   const quoteBusy = quoteActionKey !== undefined;
 
   return (
@@ -142,6 +175,13 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
               disabled={busy || quoteBusy}
               onPress={() => void copyQuote(item.id, item.quote)}
             />
+            {canShareQuote && (
+              <CommunityButton
+                label={quoteActionKey === `${item.id}:share` ? "分享中…" : "分享"}
+                disabled={busy || quoteBusy}
+                onPress={() => void shareQuote(item.id, item.quote)}
+              />
+            )}
           </>}
           <CommunityButton label="删除" disabled={busy || quoteBusy} onPress={() => setConfirmId(item.id)} />
         </View>}
