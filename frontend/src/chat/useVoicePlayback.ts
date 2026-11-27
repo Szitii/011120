@@ -5,6 +5,7 @@ import { File, Paths } from "expo-file-system";
 import { ApiProblemError } from "../adapters/real-api";
 import { useAppIsActive } from "../state/useAppIsActive";
 import { makeIdempotencyKey, type AudioClip } from "./client";
+import { retainPlaybackCacheFile } from "./playback-cache";
 
 type Source = { uri: string; dispose: () => void };
 
@@ -14,9 +15,12 @@ function makeSource(audio: AudioClip): Source {
     return { uri, dispose: () => URL.revokeObjectURL(uri) };
   }
   const ext = ({ "audio/wav": "wav", "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/aac": "aac", "audio/ogg": "ogg" })[audio.mime];
-  const file = new File(Paths.cache, `${makeIdempotencyKey("voice")}.${ext}`);
+  const name = `${makeIdempotencyKey("voice")}.${ext}`;
+  const file = new File(Paths.cache, name);
+  const releaseCacheFile = retainPlaybackCacheFile(name);
   const dispose = () => {
     try { if (file.exists) file.delete(); } catch { /* The OS can reclaim its cache. */ }
+    finally { releaseCacheFile(); }
   };
   try {
     file.create();
