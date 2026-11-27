@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import type { CompanionPersona, PersonaInput } from "../../../contracts/chat";
+import type { CompanionPersona, PersonaWithExamplesInput } from "../../../contracts/chat";
 import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
 import { CommunityButton } from "../community/components";
 import { RADIUS } from "../theme/layoutTokens";
@@ -9,7 +9,7 @@ import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import type { ChatClient } from "./client";
 
-type PersonaField = keyof Omit<PersonaInput, "version">;
+type PersonaField = keyof Omit<PersonaWithExamplesInput, "version">;
 
 const PRIMARY_FIELDS: ReadonlyArray<[PersonaField, string, string]> = [
   ["identitySummary", "简介", "TA 是谁、和你的基本背景…"],
@@ -21,6 +21,7 @@ const EXTRA_FIELDS: ReadonlyArray<[PersonaField, string, string]> = [
   ["values", "在意的事", "看重的原则或珍视的事物…"],
   ["boundaries", "边界", "不希望 TA 说或做的事…"],
   ["aspirations", "向往", "TA 的心愿或期待…"],
+  ["dialogueExamples", "示例对话", "写几句你说的话和 TA 可能的回应…"],
 ];
 
 const ALL_FIELDS: ReadonlyArray<PersonaField> = [
@@ -30,9 +31,10 @@ const ALL_FIELDS: ReadonlyArray<PersonaField> = [
   "values",
   "boundaries",
   "aspirations",
+  "dialogueExamples",
 ];
 
-const MAX_FIELD_CHARS = 600;
+const fieldLimit = (field: PersonaField) => field === "dialogueExamples" ? 1500 : 600;
 
 function personaRefusalMessage(reason?: string): string {
   switch (reason) {
@@ -89,6 +91,7 @@ export function PersonaSettings({
       values: persona.values,
       boundaries: persona.boundaries,
       aspirations: persona.aspirations,
+      dialogueExamples: persona.dialogueExamples ?? "",
     });
   }, []);
 
@@ -120,8 +123,8 @@ export function PersonaSettings({
   let hasOverLimit = false;
   if (saved && draft) {
     for (const key of ALL_FIELDS) {
-      if (Array.from(draft[key]).length > MAX_FIELD_CHARS) hasOverLimit = true;
-      if (draft[key] !== saved[key]) changedPatch[key] = draft[key];
+      if (Array.from(draft[key]).length > fieldLimit(key)) hasOverLimit = true;
+      if (draft[key] !== (saved[key] ?? "")) changedPatch[key] = draft[key];
     }
   }
   const hasChanges = Object.keys(changedPatch).length > 0;
@@ -165,17 +168,18 @@ export function PersonaSettings({
   const renderField = ([key, label, placeholder]: readonly [PersonaField, string, string]) => {
     if (!draft) return null;
     const len = Array.from(draft[key]).length;
-    const isErr = fieldError?.field === key || len > MAX_FIELD_CHARS;
+    const limit = fieldLimit(key);
+    const isErr = fieldError?.field === key || len > limit;
     return (
       <View key={key} style={s.fieldWrap}>
         <View style={s.fieldHeader}>
           <Text style={s.fieldLabel}>{label}</Text>
-          <Text style={[s.charCount, len > MAX_FIELD_CHARS && s.errorText]}>{len} / {MAX_FIELD_CHARS}</Text>
+          <Text style={[s.charCount, len > limit && s.errorText]}>{len} / {limit}</Text>
         </View>
         <TextInput
           accessibilityLabel={label}
           multiline
-          maxLength={MAX_FIELD_CHARS}
+          maxLength={limit}
           editable={!busy}
           value={draft[key]}
           placeholder={placeholder}

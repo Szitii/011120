@@ -46,3 +46,17 @@ export function normalizeImportCard(value: unknown, suppliedName = ""): Card | u
 export function importCardName(card: Card): string {
   return firstText(record(card.data)?.name, card.name);
 }
+
+export function formatCandidatePreview(field: string, value: unknown): string {
+  if (field === "worldEntry") {
+    const entry = record(value);
+    if (typeof entry?.body === "string") {
+      const keys = Array.isArray(entry.keys) ? entry.keys.filter((key): key is string => typeof key === "string") : [];
+      return keys.length ? `触发词：${keys.join("、")}
+${entry.body}` : entry.body;
+    }
+  }
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string").join("、");
+  return "这项资料暂时无法预览。";
+}

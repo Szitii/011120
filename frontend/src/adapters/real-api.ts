@@ -122,6 +122,8 @@ export class RealApiAdapter implements ClientApi {
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem> {
     return this.send("PUT", `/v0/life-event-inbox/${encodeURIComponent(itemId)}/read`);
   }
+  listPersonaTemplates() { return this.get<import("../../../contracts/chat.ts").PersonaTemplateList>("/v0/persona-templates"); }
+
   getCompanionImport(id: string): Promise<ImportReview> {
     return this.get(`/v0/companion-imports/${encodeURIComponent(id)}`);
   }

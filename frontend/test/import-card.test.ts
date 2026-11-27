@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { importCardName, normalizeImportCard } from "../src/onboarding/import-card.ts";
+import { formatCandidatePreview, importCardName, normalizeImportCard } from "../src/onboarding/import-card.ts";
 
 test("structured import picks the documented name priority and withholds private records", () => {
   const input = {
@@ -30,4 +30,10 @@ test("custom exports pass the supported memory list to the firewall while retain
     private_memory_vault: ["不随请求发送"],
   });
   assert.deepEqual(card, { name: "阿宁", description: "", personality: "", memories: ["一起去看海"] });
+});
+
+test("previews world-book triggers and text without stringifying candidate objects", () => {
+  assert.equal(formatCandidatePreview("worldEntry", { keys: ["小白", "猫"], body: "一只猫" }), "触发词：小白、猫\n一只猫");
+  assert.equal(formatCandidatePreview("dialogueExamples", "你好\n早上好"), "你好\n早上好");
+  assert.equal(formatCandidatePreview("worldEntry", { keys: ["未知字段"] }), "这项资料暂时无法预览。");
 });
