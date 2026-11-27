@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -32,6 +33,8 @@ import type { QuoteInput } from "../album/store";
 import { BottomSheet } from "../components/BottomSheet";
 import { CommunityButton } from "../community/components";
 import { VoiceComposer } from "./VoiceComposer";
+import { ChatEmojiPanel } from "./ChatEmojiPanel";
+import { insertChatEmoji, type ComposerSelection } from "./emoji";
 import { quotaMessage } from "../wallet/wallet";
 import { useVoicePlayback } from "./useVoicePlayback";
 import { useAppIsActive } from "../state/useAppIsActive";
@@ -41,7 +44,6 @@ import {
   type ChatThemePreference,
 } from "../theme/chatThemes";
 
-const QUICK_EMOJIS = ["😊", "🥺", "❤️", "😂", "🫂", "✨", "👍", "🌙", "☕️", "🐶", "😭", "🫶"];
 
 const replyFailureMessages = {
   UNAVAILABLE: "即将推出",
@@ -210,6 +212,32 @@ export function ChatScreen({
   const quotePending = useRef(false);
   const quoteFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<React.ComponentRef<typeof TextInput> | null>(null);
+  const inputFocused = useRef(false);
+  const draftSelection = useRef<ComposerSelection | undefined>(undefined);
+  const [emojiCaret, setEmojiCaret] = useState<ComposerSelection>();
+  const focusAfterPanel = useRef(false);
+
+  useEffect(() => {
+    if (!focusAfterPanel.current || tray !== "none" || voiceMode) return;
+    focusAfterPanel.current = false;
+    inputRef.current?.focus();
+  }, [tray, voiceMode]);
+
+  useEffect(() => {
+    if (!emojiCaret || tray !== "none" || voiceMode) return;
+    const frame = requestAnimationFrame(() => setEmojiCaret(current => current === emojiCaret ? undefined : current));
+    return () => cancelAnimationFrame(frame);
+  }, [emojiCaret, tray, voiceMode]);
+
+  useEffect(() => {
+    if (tray === "none") return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      setTray("none");
+      setAttachNotice("");
+      return true;
+    });
+    return () => subscription.remove();
+  }, [tray]);
   const chatIdRef = useRef<string | undefined>(initialChatId);
   const sessionRef = useRef(0);
   const sendingRef = useRef(false);
@@ -248,6 +276,8 @@ export function ChatScreen({
     const restored = draftStore.adopt(draftKeyRef.current, nextKey);
     draftKeyRef.current = nextKey;
     draftRef.current = restored.text;
+    draftSelection.current = undefined;
+    setEmojiCaret(undefined);
     mentionsRef.current = restored.mentions;
     setDraft(restored.text);
     setMentions(restored.mentions);
@@ -427,10 +457,12 @@ export function ChatScreen({
   async function handleSend() {
     const text = draft.trim();
     const targetId = chatIdRef.current;
-    if (groupReadOnly || voiceBusy || !text || text.length > MAX_MESSAGE_LENGTH || !targetId || sendingRef.current) return;
+    if (groupReadOnly || voiceBusy || !text || Array.from(text).length > MAX_MESSAGE_LENGTH || !targetId || sendingRef.current) return;
     const session = sessionRef.current;
     sendingRef.current = true;
     setSending(true);
+    draftSelection.current = undefined;
+    setEmojiCaret(undefined);
     updateDraft("");
     setTray("none");
     const recipients = chat?.direct === false ? mentions : [];
@@ -590,6 +622,8 @@ export function ChatScreen({
     setAttachNotice("");
     setTray("none");
     setVoiceMode(false);
+    draftSelection.current = undefined;
+    setEmojiCaret(undefined);
     updateDraft(nextDraft);
     setQuoteResult(truncated ? "引用内容较长，已截断插入输入框。" : "");
     if (quoteFocusTimerRef.current) clearTimeout(quoteFocusTimerRef.current);
@@ -597,6 +631,20 @@ export function ChatScreen({
       quoteFocusTimerRef.current = null;
       inputRef.current?.focus();
     }, 80);
+  }
+
+  function insertEmoji(emoji: string): boolean {
+    if (!chat || groupReadOnly || voiceBusy || sendingRef.current) return false;
+    const next = insertChatEmoji(draftRef.current, emoji, draftSelection.current, MAX_MESSAGE_LENGTH);
+    if (!next) {
+      setAttachNotice(`消息最多 ${MAX_MESSAGE_LENGTH} 字，请删减后再插入表情。`);
+      return false;
+    }
+    draftSelection.current = next.selection;
+    setEmojiCaret(next.selection);
+    updateDraft(next.text);
+    setAttachNotice("");
+    return true;
   }
 
   const theme = resolveChatThemeStyles(themePref, ui);
@@ -1037,7 +1085,7 @@ export function ChatScreen({
         <Text style={styles.quoteResult}>群聊暂未开放发言，可以查看记录或删除会话。</Text>
       ) : (
         <View style={styles.composerWrap}>
-          {!!attachNotice && <Text style={styles.attachNotice}>{attachNotice}</Text>}
+          {!!attachNotice && <Text accessibilityLiveRegion="polite" style={styles.attachNotice}>{attachNotice}</Text>}
           <View style={styles.wechatBar}>
             {voiceInput && (
               <Pressable
@@ -1047,8 +1095,14 @@ export function ChatScreen({
                 onPress={() => {
                   setAttachNotice("");
                   setTray("none");
-                  Keyboard.dismiss();
-                  setVoiceMode(prev => !prev);
+                  if (voiceMode) {
+                    focusAfterPanel.current = true;
+                    setVoiceMode(false);
+                  } else {
+                    Keyboard.dismiss();
+                    setMentionOpen(false);
+                    setVoiceMode(true);
+                  }
                 }}
                 style={styles.iconBtn}
               >
@@ -1075,14 +1129,30 @@ export function ChatScreen({
                 <TextInput
                   ref={inputRef}
                   value={draft}
-                  onChangeText={val => { updateDraft(val); setAttachNotice(""); }}
-                  onFocus={() => setTray("none")}
+                  onChangeText={value => {
+                    if (Array.from(value).length > MAX_MESSAGE_LENGTH) {
+                      setAttachNotice(`消息最多 ${MAX_MESSAGE_LENGTH} 字，请删减后再输入。`);
+                      return;
+                    }
+                    setEmojiCaret(undefined);
+                    updateDraft(value);
+                    setAttachNotice("");
+                  }}
+                  onFocus={() => {
+                    inputFocused.current = true;
+                    if (tray !== "none") setAttachNotice("");
+                    setTray("none");
+                  }}
+                  onBlur={() => { inputFocused.current = false; }}
+                  onSelectionChange={({ nativeEvent }) => {
+                    if (inputFocused.current) draftSelection.current = nativeEvent.selection;
+                  }}
+                  selection={emojiCaret}
                   placeholder="发消息…"
                   placeholderTextColor={ui.muted}
                   style={styles.input}
                   multiline
                   editable={!!chat && !voiceBusy}
-                  maxLength={MAX_MESSAGE_LENGTH}
                   returnKeyType="send"
                   onSubmitEditing={() => void handleSend()}
                 />
@@ -1091,17 +1161,23 @@ export function ChatScreen({
 
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="表情"
-              disabled={voiceBusy || sending}
+              accessibilityLabel={tray === "emoji" ? "切换到键盘" : "表情"}
+              disabled={voiceBusy || sending || !chat}
               onPress={() => {
                 setVoiceMode(false);
                 setAttachNotice("");
-                Keyboard.dismiss();
-                  setTray(prev => (prev === "emoji" ? "none" : "emoji"));
+                if (tray === "emoji") {
+                  setTray("none");
+                  inputRef.current?.focus();
+                } else {
+                  Keyboard.dismiss();
+                  setMentionOpen(false);
+                  setTray("emoji");
+                }
               }}
               style={styles.iconBtn}
             >
-              <Ionicons name="happy-outline" size={23} color={ui.ink} />
+              <Ionicons name={tray === "emoji" ? "keypad-outline" : "happy-outline"} size={23} color={ui.ink} />
             </Pressable>
 
             {hasDraft ? (
@@ -1127,6 +1203,7 @@ export function ChatScreen({
                   setVoiceMode(false);
                   setAttachNotice("");
                   Keyboard.dismiss();
+                  setMentionOpen(false);
                   setTray(prev => (prev === "plus" ? "none" : "plus"));
                 }}
                 style={styles.iconBtn}
@@ -1136,22 +1213,7 @@ export function ChatScreen({
             )}
           </View>
 
-          {tray === "emoji" && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.emojiTray}>
-              {QUICK_EMOJIS.map(emoji => (
-                <Pressable
-                  key={emoji}
-                  onPress={() => {
-                    const next = draftRef.current + emoji;
-                    if (next.length <= MAX_MESSAGE_LENGTH) updateDraft(next);
-                  }}
-                  style={styles.emojiBtn}
-                >
-                  <Text style={styles.emojiText}>{emoji}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          )}
+          {tray === "emoji" && <ChatEmojiPanel key={ownerId} ownerId={ownerId} onInsert={insertEmoji} />}
 
           {tray === "plus" && (
             <View style={styles.plusTray}>
@@ -1338,20 +1400,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  emojiTray: {
-    paddingVertical: 6,
-    paddingHorizontal: 4,
-    gap: 10,
-  },
-  emojiBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: ui.background[0],
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  emojiText: { fontSize: 20 },
   plusTray: {
     flexDirection: "row",
     justifyContent: "space-around",
