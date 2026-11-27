@@ -82,7 +82,8 @@ export function FloatingGlassTabs({
               >
                 <Animated.View style={[styles.tabInner, active && { transform: [{ scale: pulse }] }]}>
                   <Ionicons name={active ? item.activeIcon : item.icon} size={18} color={color} />
-                  {count > 0 && <Text style={[styles.badge, key === "my" && { color: ui.white, backgroundColor: ui.danger }]}>{count > 99 ? "99+" : count}</Text>}
+                  {count > 0 && <Text style={[styles.badge, key === "my" ? { color: ui.white, backgroundColor: ui.danger }
+                    : { color: ui.accentInk, backgroundColor: ui.accentWash }]}>{count > 99 ? "99+" : count}</Text>}
                   <Text style={[styles.label, { color, fontWeight: active ? "700" : "500" }]}>
                     {item.label}
                   </Text>
@@ -97,7 +98,7 @@ export function FloatingGlassTabs({
 }
 
 const createStyles = () => StyleSheet.create({
-  badge: { position: "absolute", top: -3, right: -13, color: "#FFFFFF", backgroundColor: "#495C76",
+  badge: { position: "absolute", top: -3, right: -13,
     borderRadius: 10, overflow: "hidden", paddingHorizontal: 5, fontSize: 10, fontWeight: "700" },
   wrapper: { position: "absolute", zIndex: 30 },
   row: { flexDirection: "row", alignItems: "center", padding: 5, gap: 5 },

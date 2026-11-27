@@ -1902,7 +1902,7 @@ function IdentitySwitcher({
                 <View style={styles.switchAccountText}>
                   <Text style={styles.switchAccountName}>{item.displayName}</Text>
                   {!item.socialReady && (
-                    <Text style={styles.accountHandle}>还没出门</Text>
+                    <Text style={styles.accountHandle}>尚未公开到社区</Text>
                   )}
                 </View>
                 <Text style={styles.checkmark}>{active ? "●" : "○"}</Text>

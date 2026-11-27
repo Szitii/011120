@@ -176,7 +176,7 @@ export function SettingsScreen({
               <Pressable
                 accessibilityRole="radio"
                 accessibilityLabel="配色跟随系统"
-                aria-checked={skinPreference === "system"}
+                accessibilityState={{ checked: skinPreference === "system" }}
                 onPress={() => setSkinById("system")}
                 style={[styles.pill, skinPreference === "system" && styles.pillActive]}
               >
@@ -193,7 +193,7 @@ export function SettingsScreen({
                     key={preset.id}
                     accessibilityRole="radio"
                     accessibilityLabel={preset.name}
-                    aria-checked={active}
+                    accessibilityState={{ checked: active }}
                     onPress={() => setSkinById(preset.id)}
                     style={({ pressed }) => [styles.swatchItem, pressed && { opacity: 0.72 }]}
                   >
@@ -219,7 +219,7 @@ export function SettingsScreen({
                   <Pressable
                     key={size}
                     accessibilityRole="radio"
-                    accessibilityState={{ selected: active }}
+                    accessibilityState={{ checked: active }}
                     onPress={() => setTextSize(size)}
                     style={[styles.pill, active && styles.pillActive]}
                   >
