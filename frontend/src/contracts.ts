@@ -115,6 +115,7 @@ export interface ClientApi {
   ): Promise<CompanionProfile>;
   lifeEventInbox(cursor?: NonNullable<LifeEventInboxCollection["nextCursor"]>): Promise<LifeEventInboxCollection>;
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItem>;
+  listPersonaTemplates?(): Promise<import("../../contracts/chat.ts").PersonaTemplateList>;
   getCompanionImport?(id: string): Promise<ImportReview>;
   createCompanionImport(payload: Record<string, unknown>, idempotencyKey?: string): Promise<ImportReview>;
   approveCompanionImport(importId: string, approvedCandidateIds: string[], companionId?: string, idempotencyKey?: string): Promise<CompanionIdentity>;

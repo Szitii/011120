@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
+import type { PersonaTemplate } from "../../../contracts/chat";
 import { File } from "expo-file-system";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -12,10 +13,10 @@ import type { ClientApi, CompanionIdentity, ImportReview } from "../contracts";
 import { useCommandKeys } from "../state/useCommandKeys";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import { BringButton, BringField, Check, Choice, GlassCard, GlassIcon, createStyles } from "./BringControls";
-import { importCardName, normalizeImportCard } from "./import-card";
+import { formatCandidatePreview, importCardName, normalizeImportCard } from "./import-card";
 import { connectionMessage, extendedImportAvailability, validateExternal } from "./connection-client";
 
-type Step = "entry" | "details" | "review" | "reply" | "external";
+type Step = "templates" | "entry" | "details" | "review" | "reply" | "external";
 type Method = "card" | "manual";
 
 const options = [
@@ -50,6 +51,10 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
   const [step, setStep] = useState<Step>("entry");
   const [method, setMethod] = useState<Method>("manual");
   const [help, setHelp] = useState(false);
+  const [templates, setTemplates] = useState<PersonaTemplate[]>();
+  const [template, setTemplate] = useState<PersonaTemplate>();
+  const [templateName, setTemplateName] = useState("");
+  const reviewBackStep = useRef<Step>("details");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [personality, setPersonality] = useState("");
@@ -126,11 +131,12 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
     setMessage("");
     switch (step) {
       case "entry": onBack(); break;
+      case "templates":
       case "details": setStep("entry"); break;
       case "external":
         if (createdExternal) { onCreated(createdExternal, ["displayName"], undefined); break; }
         setConnectionKind(undefined); setExtToken(""); setStep("entry"); break;
-      case "review": setStep("details"); break;
+      case "review": setStep(reviewBackStep.current); break;
       case "reply": setStep("review"); break;
     }
   }
@@ -146,7 +152,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
   const selectedConnection = canConfigureConnection ? connectionKind : undefined;
   const candidates = review?.draft?.candidates ?? [];
   const required = candidates.find(item => item.field === "displayName" && item.approvable && item.value != null);
-  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格", memory: "记忆" };
+  const labels: Record<string, string> = { displayName: "名字", identitySummary: "简介", personaTraits: "性格", memory: "记忆", dialogueExamples: "示例对话", worldEntry: "世界书条目" };
 
   async function run(work: () => Promise<void>) {
     if (pending.current) return;
@@ -189,6 +195,11 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
       setMessage("请在上方补填家机名字，再核对资料。");
       return;
     }
+    await submitCard(card, "details");
+  }
+
+  async function submitCard(card: Record<string, unknown>, returnTo: Step) {
+    reviewBackStep.current = returnTo;
     const result = await api.createCompanionImport(card, keys.forRequest("import", card));
     if (!mounted.current) return;
     keys.complete("import");
@@ -289,7 +300,17 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
     });
   }
 
+  function loadTemplates() {
+    if (!api.listPersonaTemplates) return;
+    const list = api.listPersonaTemplates.bind(api);
+    void run(async () => {
+      const result = await list();
+      if (mounted.current) setTemplates(result.items);
+    });
+  }
+
   const heading = step === "entry" ? (existingCompanionId ? "更新家机资料" : "接入你的家机")
+    : step === "templates" ? "挑一个人设模板"
     : step === "external" ? "连接自建家机"
     : step === "details" ? (method === "manual" ? (existingCompanionId ? "填写家机资料" : "从零创建") : "导入人设与记忆")
     : step === "review" ? "核对家机资料"
@@ -297,6 +318,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
   const subtitle = {
     entry: existingCompanionId ? "选择这次更新资料的方式" : "选一种最适合你们的方式",
     external: "接入你自己的外部 Agent 或本体服务",
+    templates: "选好后，你可以改名字并核对要导入的资料。",
     details: method === "manual" ? "从名字和性格开始，记忆可以慢慢积累" : "先核对资料，再决定要带入哪些内容",
     review: "这些资料默认只留在你的小家",
     reply: "随时可在聊天设置里切换",
@@ -309,7 +331,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
     </View>
     <ScrollView key={step} style={s.flex} contentContainerStyle={s.page} keyboardShouldPersistTaps="handled"
       keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}>
-      {step !== "entry" && step !== "external" && !existingCompanionId && <View style={s.progress} accessible
+      {step !== "entry" && step !== "external" && step !== "templates" && !existingCompanionId && <View style={s.progress} accessible
         accessibilityLabel={step === "details" || step === "review" ? "第 1 步，共 2 步" : "第 2 步，共 2 步"}>
         <View style={[s.segment, s.segmentCurrent]} />
         <View style={[s.segment, step === "reply" && s.segmentCurrent]} />
@@ -321,6 +343,41 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
 
       {step === "entry" && atLimit && <Text accessibilityRole="alert" style={s.alert}>{COMPANION_LIMIT_MESSAGE}</Text>}
       {step === "entry" && !atLimit && savedImportId && <BringButton label="继续上次审核" secondary disabled={busy} onPress={resumeReview} />}
+      {step === "entry" && !existingCompanionId && !atLimit && api.listPersonaTemplates && (
+        <Choice icon="people-outline" title="挑一个模板" description="选一个平台人设作为起点" note="可改名"
+          onPress={() => {
+            setStep("templates");
+            setTemplate(undefined);
+            loadTemplates();
+          }} />
+      )}
+      {step === "templates" && <>
+        {busy && !templates && <ActivityIndicator accessibilityLabel="正在读取人设模板" color={ui.accent} />}
+        {!busy && !templates && <BringButton label="重试读取模板" onPress={loadTemplates} />}
+        {templates?.length === 0 && <Text style={s.body}>暂时没有可选模板。</Text>}
+        {templates?.map(item => (
+          <Choice key={item.id} icon="person-outline" title={item.title} description={item.summary} note={template?.id === item.id ? "已选择" : "选择后核对资料"}
+            selected={template?.id === item.id} onPress={() => {
+              if (pending.current) return;
+              setTemplate(item);
+              setTemplateName(importCardName(item.card));
+              setMessage("");
+            }} />
+        ))}
+        {template && <GlassCard>
+          <BringField label="名字" value={templateName} onChangeText={setTemplateName} editable={!busy} maxLength={200} />
+          <BringButton label="核对模板资料" disabled={busy || !templateName.trim()} onPress={() => {
+            setMethod("card");
+            void run(() => {
+              const { data } = template.card;
+              const card = data && typeof data === "object" && !Array.isArray(data)
+                ? { ...template.card, data: { ...data, name: templateName.trim() } }
+                : { ...template.card, name: templateName.trim() };
+              return submitCard(card, "templates");
+            });
+          }} />
+        </GlassCard>}
+      </>}
       {step === "entry" && !atLimit && options.filter(option => option.id !== "external" || (!existingCompanionId && canConfigureConnection)).map(option => (
         <Choice key={option.id} icon={option.icon} title={existingCompanionId && option.id === "manual" ? "手动填写" : option.title}
           description={option.description} note={option.tags} onPress={() => {
@@ -395,7 +452,7 @@ export function BringCompanionScreen({ api, existingCompanionId, ownerId, compan
         {candidates.map(item => <GlassCard key={item.id}>
           <Text style={s.label}>{labels[item.field] ?? "资料"}</Text>
           <Text style={s.body}>{item.approvable && item.value != null
-            ? (Array.isArray(item.value) ? item.value.join("、") : String(item.value))
+            ? formatCandidatePreview(item.field, item.value)
             : "该项未通过检查，无法带入。"}</Text>
           {item.approvable && item.value != null && item.id !== required?.id && <Check label="保留这项" checked={selected.includes(item.id)}
             onPress={() => setSelected(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])}

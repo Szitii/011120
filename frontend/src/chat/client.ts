@@ -11,7 +11,8 @@ import type {
   ChatVoiceInput,
   Feedback,
   FeedbackInput,
-  PersonaInput,
+  PersonaWithExamplesInput,
+  CompanionSkills, OwnSkill, OwnSkillInput, WorldEntry, WorldEntryInput, WorldEntryList,
   PlatformFeatures,
   VoiceList,
   Wallet,
@@ -70,7 +71,14 @@ export interface ChatClient {
   saveConnection?(id: string, input: ConnectionInput | ConnectionCopyInput): Promise<ConnectionSaveResult>;
   removeConnection?(id: string): Promise<CompanionConnection>;
   getPersona?(id: string): Promise<CompanionPersona>;
-  savePersona?(id: string, input: PersonaInput): Promise<CompanionPersona>;
+  savePersona?(id: string, input: PersonaWithExamplesInput): Promise<CompanionPersona>;
+  listWorldEntries?(id: string): Promise<WorldEntryList>;
+  saveWorldEntry?(id: string, input: WorldEntryInput, entryId?: string): Promise<WorldEntry>;
+  deleteWorldEntry?(id: string, entryId: string): Promise<{ deleted: true }>;
+  listSkills?(id: string): Promise<CompanionSkills>;
+  toggleOfficialSkill?(id: string, skillId: string, enabled: boolean): Promise<CompanionSkills>;
+  saveOwnSkill?(id: string, input: OwnSkillInput, skillId?: string): Promise<OwnSkill>;
+  deleteOwnSkill?(id: string, skillId: string): Promise<{ deleted: true }>;
   listChats(): Promise<{ items: Chat[] }>;
   openChat(companionIds: string[], title?: string, key?: string): Promise<Chat>;
   getChat(chatId: string, cursor?: string): Promise<ChatPage>;
@@ -144,6 +152,17 @@ export function createChatClient(send: SendFn, getAudio?: (path: string) => Prom
     removeConnection: id => send("DELETE", `${companion(id)}/connection`),
     getPersona: id => send("GET", `${companion(id)}/persona`),
     savePersona: (id, input) => send("PUT", `${companion(id)}/persona`, input),
+    listWorldEntries: id => send("GET", `${companion(id)}/world-entries`),
+    saveWorldEntry: (id, input, entryId) => entryId
+      ? send("PUT", `${companion(id)}/world-entries/${encodeURIComponent(entryId)}`, input)
+      : send("POST", `${companion(id)}/world-entries`, input),
+    deleteWorldEntry: (id, entryId) => send("DELETE", `${companion(id)}/world-entries/${encodeURIComponent(entryId)}`),
+    listSkills: id => send("GET", `${companion(id)}/skills`),
+    toggleOfficialSkill: (id, skillId, enabled) => send("PUT", `${companion(id)}/skills/${encodeURIComponent(skillId)}`, { enabled }),
+    saveOwnSkill: (id, input, skillId) => skillId
+      ? send("PUT", `${companion(id)}/own-skills/${encodeURIComponent(skillId)}`, input)
+      : send("POST", `${companion(id)}/own-skills`, input),
+    deleteOwnSkill: (id, skillId) => send("DELETE", `${companion(id)}/own-skills/${encodeURIComponent(skillId)}`),
     listChats() {
       return send("GET", "/v0/chats");
     },

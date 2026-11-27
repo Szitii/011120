@@ -10,6 +10,8 @@ import type { OwnerCompanionSummary } from "../contracts";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
+import { ChatKnowledgeSettings } from "./ChatKnowledgeSettings";
+import { ReplyRulesSettings, replyRuleError } from "./ReplyRulesSettings";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { MemorySettings } from "./MemorySettings";
 import { PersonaSettings } from "./PersonaSettings";
@@ -86,7 +88,7 @@ export function ChatSettingsScreen({
   const settingsRead = useRef(0);
   const voiceChanged = voiceDraft !== undefined;
   const titleLen = Array.from((form?.preferredUserTitle ?? "").trim()).length;
-  const saveDisabled = busy || (voiceChanged && !voices?.available) || titleLen > 20;
+  const saveDisabled = busy || (voiceChanged && !voices?.available) || titleLen > 20 || form?.replyRules?.some(rule => !!replyRuleError(rule));
 
   const handleBack = useCallback(() => {
     if (pending.current || deletingRef.current) return;
@@ -280,6 +282,8 @@ export function ChatSettingsScreen({
           <>
             {!focusPersona && personaEditor}
             {client.listMemories && <MemorySettings client={client} companionId={companionId} />}
+            <ChatKnowledgeSettings client={client} companionId={companionId} kind="world" />
+            <ChatKnowledgeSettings client={client} companionId={companionId} kind="skills" />
 
             {!form ? (
               busy ? (
@@ -380,6 +384,9 @@ export function ChatSettingsScreen({
                     {modelError && <Text style={s.mutedText}>暂时无法读取模型列表，当前设置仍会保留。</Text>}
                   </View>
                 )}
+
+                {form.replyRules !== undefined && <ReplyRulesSettings rules={form.replyRules} disabled={busy}
+                  onChange={replyRules => setForm(current => current && { ...current, replyRules })} />}
 
                 {voices?.available && (
                   <VoicePicker
