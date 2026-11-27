@@ -587,9 +587,9 @@ export function ChatScreen({
           style={({ pressed }) => [styles.titleBlock, profileId && pressed && { opacity: 0.72 }]}
         >
           <ChatAvatar name={title} avatar={directMember?.avatar} size={30} />
-          <View>
+          <View style={styles.titleCopy}>
             <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
-            {replyStatus ? <Text style={styles.typingText}>{replyStatus}</Text> : null}
+            {replyStatus ? <Text style={styles.typingText} numberOfLines={2}>{replyStatus}</Text> : null}
           </View>
         </Pressable>
 
@@ -1114,7 +1114,8 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     justifyContent: "center",
   },
   headerSpacer: { width: 38 },
-  titleBlock: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1 },
+  titleBlock: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1, minWidth: 0 },
+  titleCopy: { flexShrink: 1, minWidth: 0 },
   titleText: { fontSize: 16, fontWeight: "700", color: ui.ink },
   typingText: { fontSize: 11, color: ui.accent, marginTop: 1 },
   errorBanner: {

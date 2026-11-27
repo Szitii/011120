@@ -15,7 +15,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Modal,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -75,6 +74,7 @@ import {
 import { SkinProvider, useSkin } from "./src/theme/SkinProvider";
 import { CHROME, RADIUS } from "./src/theme/layoutTokens";
 import { LiquidGlassSurface } from "./src/components/LiquidGlassSurface";
+import { BottomSheet } from "./src/components/BottomSheet";
 import { PixelAvatar } from "./src/components/PixelAvatar";
 import { UnifiedProfileView } from "./src/components/UnifiedProfileView";
 import { PresetAvatarPicker } from "./src/components/PresetAvatarPicker";
@@ -193,6 +193,8 @@ function WorldApp({ client, account, isMockMode }: {
   const [reducedMotion, setReducedMotion] = useState(false);
   const [momentMode, setMomentMode] = useState(false);
   const [identitySwitchPending, setIdentitySwitchPending] = useState(false);
+  const identitySwitchBusy = useRef(false);
+  const [identitySwitchError, setIdentitySwitchError] = useState<string>();
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [companionDisplayName, setCompanionDisplayName] = useState("我的家机");
   const [communityRevision, setCommunityRevision] = useState(0);
@@ -573,6 +575,9 @@ function WorldApp({ client, account, isMockMode }: {
     | { kind: "OWNER" }
     | { kind: "COMPANION"; id: string; displayName: string }
   ) {
+    if (identitySwitchBusy.current) return;
+    identitySwitchBusy.current = true;
+    setIdentitySwitchError(undefined);
     const previousIdentity = identityValue;
     const previousName = companionDisplayName;
 
@@ -587,6 +592,7 @@ function WorldApp({ client, account, isMockMode }: {
     setEncounterResult(undefined);
     setProfileResult(undefined);
     cache.purgeViewerSensitive();
+    const epoch = cache.epoch;
 
     try {
       const value =
@@ -596,10 +602,12 @@ function WorldApp({ client, account, isMockMode }: {
               kind: "COMPANION",
               id: target.id,
             });
+      if (epoch !== cache.epoch) return;
       if (target.kind === "COMPANION") setCompanionDisplayName(target.displayName);
       setIdentity({ kind: "success", value });
       setNav((current) => selectTab(current, current.rootTab));
     } catch (error) {
+      if (epoch !== cache.epoch) return;
       const safe = safeClientMessage(error);
       if (previousIdentity) {
         try {
@@ -610,15 +618,19 @@ function WorldApp({ client, account, isMockMode }: {
                   kind: previousIdentity.activeSubject.kind,
                   id: previousIdentity.activeSubject.id,
                 });
+          if (epoch !== cache.epoch) return;
           setCompanionDisplayName(previousName);
           setIdentity({ kind: "success", value: restored });
+          setIdentitySwitchError(`切换身份失败。${safe.title}`);
+          setSwitcherOpen(true);
         } catch {
-          setIdentity({ kind: "error", ...safe });
+          if (epoch === cache.epoch) setIdentity({ kind: "error", ...safe });
         }
       } else {
         setIdentity({ kind: "error", ...safe });
       }
     } finally {
+      identitySwitchBusy.current = false;
       setIdentitySwitchPending(false);
     }
   }
@@ -1157,7 +1169,9 @@ function WorldApp({ client, account, isMockMode }: {
         ownerAvatar={ownerAvatar}
         companions={ownerCompanions}
         pending={identitySwitchPending}
-        onClose={() => setSwitcherOpen(false)}
+        error={identitySwitchError}
+        onRetryCompanions={() => void loadOwnerCompanions(true)}
+        onClose={() => { setSwitcherOpen(false); setIdentitySwitchError(undefined); }}
         onOwner={() => void switchIdentity({ kind: "OWNER" })}
         onCompanion={(item) => void switchCompanionFromUi(item)}
       />
@@ -1843,6 +1857,8 @@ function IdentitySwitcher({
   ownerAvatar,
   companions,
   pending,
+  error,
+  onRetryCompanions,
   onClose,
   onOwner,
   onCompanion,
@@ -1853,6 +1869,8 @@ function IdentitySwitcher({
   ownerAvatar?: string | null;
   companions: LoadState<OwnerCompanionCollection>;
   pending: boolean;
+  error?: string;
+  onRetryCompanions: () => void;
   onClose: () => void;
   onOwner: () => void;
   onCompanion: (item: OwnerCompanionSummary) => void;
@@ -1865,14 +1883,12 @@ function IdentitySwitcher({
   const ownerName = ownerNickname ?? identityLabel(ownerActive && identity.kind === "success" ? identity.value : undefined);
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessible={false} />
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} />
+    <BottomSheet visible={visible} onClose={onClose}>
+        <View style={styles.identitySheet}>
           <LiquidGlassSurface glass borderRadius={16} style={styles.sheetHeading}>
             <Text accessibilityRole="header" style={styles.sheetTitle}>切换身份</Text>
           </LiquidGlassSurface>
+          {error && <Text accessibilityRole="alert" style={styles.tinyMuted}>{error}</Text>}
           <Text style={styles.sheetLabel}>现在是</Text>
 
           <Pressable style={styles.switchAccountRow} onPress={onOwner} disabled={pending}>
@@ -1885,9 +1901,13 @@ function IdentitySwitcher({
 
           <Text style={styles.sheetLabel}>切换成员</Text>
 
-          {companions.kind === "loading" && <Text style={styles.tinyMuted}>稍等。</Text>}
+          {(companions.kind === "loading" || companions.kind === "idle") &&
+            <ActivityIndicator accessibilityLabel="正在读取家机名单" />}
           {companions.kind === "empty" && <Text style={styles.tinyMuted}>这里还没有家机。</Text>}
-          {companions.kind === "error" && <Text style={styles.tinyMuted}>家机名单没回来。</Text>}
+          {companions.kind === "error" && <>
+            <Text accessibilityRole="alert" style={styles.tinyMuted}>{companions.title}</Text>
+            {companions.retry && <CommunityButton label="重试读取家机名单" onPress={onRetryCompanions} />}
+          </>}
 
           {items.map((item) => {
             const active = activeKind !== "OWNER" && activeId === item.companionId;
@@ -1911,8 +1931,7 @@ function IdentitySwitcher({
           })}
 
         </View>
-      </View>
-    </Modal>
+    </BottomSheet>
   );
 }
 
@@ -2117,22 +2136,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   accountHandle: { marginTop: 3, fontSize: 11, color: ui.placeholder },
   accountArrow: { fontSize: 22, color: ui.placeholder, fontWeight: "300" },
 
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: ui.scrim,
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    paddingHorizontal: 18,
-    paddingTop: 10,
-    paddingBottom: 30,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    backgroundColor: ui.background[0],
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.line,
-  },
-  sheetHandle: { alignSelf: "center", width: 38, height: 4, borderRadius: 2, backgroundColor: ui.line },
+  identitySheet: { gap: 8 },
   sheetHeading: { marginTop: 12, paddingVertical: 8 },
   sheetTitle: { fontSize: 22, fontWeight: "700", textAlign: "center", color: ui.ink },
   sheetLabel: { marginTop: 22, marginBottom: 8, fontSize: 11, color: ui.placeholder },
@@ -2146,7 +2150,7 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.line,
   },
-  switchAccountText: { flex: 1, marginLeft: 12 },
+  switchAccountText: { flex: 1, minWidth: 0, marginLeft: 12 },
   switchAccountName: { fontSize: 14, fontWeight: "700", color: ui.ink },
   checkmark: { fontSize: 20, color: ui.ink },
 

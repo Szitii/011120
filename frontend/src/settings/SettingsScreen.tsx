@@ -134,7 +134,7 @@ export function SettingsScreen({
                 <Ionicons name="mail-outline" size={18} color={ui.accentInk} />
                 <Text style={styles.rowLabel}>登录邮箱</Text>
               </View>
-              <Text style={styles.rowValue} numberOfLines={1}>
+              <Text style={styles.rowValue}>
                 {account?.email ?? "未登录邮箱会话"}
               </Text>
             </View>
@@ -420,7 +420,7 @@ function SettingRow({ icon, label, valueText, danger, last, onPress }: {
       </View>
       {!danger && (
         <View style={styles.rowRight}>
-          {valueText ? <Text style={styles.rowValue} numberOfLines={1}>{valueText}</Text> : null}
+          {valueText ? <Text style={styles.rowValue}>{valueText}</Text> : null}
           <Ionicons name="chevron-forward" size={15} color={ui.muted} />
         </View>
       )}
@@ -467,11 +467,11 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     gap: 10,
   },
   rowDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: ui.line },
-  rowLeft: { flexDirection: "row", alignItems: "center", gap: 10, flexShrink: 1 },
+  rowLeft: { flexDirection: "row", alignItems: "center", gap: 10, flexShrink: 1, minWidth: 0 },
   rowRight: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1, maxWidth: "60%" },
-  rowLabel: { fontSize: 15, fontWeight: "600", color: ui.ink },
+  rowLabel: { fontSize: 15, fontWeight: "600", color: ui.ink, flexShrink: 1 },
   rowLabelDanger: { color: ui.danger },
-  rowValue: { fontSize: 13, color: ui.muted, flexShrink: 1 },
+  rowValue: { fontSize: 13, color: ui.muted, flexShrink: 1, textAlign: "right" },
   appearanceCard: {
     backgroundColor: ui.white,
     borderRadius: 20,
