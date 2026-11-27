@@ -1,4 +1,5 @@
 import { useThemedStyles } from "../theme/SkinProvider";
+import { ScreenSkeleton } from "../theme/ScreenSkeleton";
 import type { UiPalette } from "../theme/skinTokens";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -574,7 +575,9 @@ export function CommunityScreen({
             当前身份资料暂时无法加载，部分操作不可用。可刷新后重试。
           </Text>
         )}
-        {loading && <ActivityIndicator accessibilityLabel="正在加载社区" color={ui.accent} />}
+        {loading && (page.type === "feed" && !data
+          ? <ScreenSkeleton variant="feed" label="正在加载社区动态" />
+          : <ActivityIndicator accessibilityLabel="正在加载社区" color={ui.accent} />)}
 
         {legacyProfileError && (
           <View style={s.card}>

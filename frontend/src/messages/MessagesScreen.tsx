@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat } from "../../../contracts/chat";
 import type { ActorContext, CommunityNotification } from "../../../contracts/community";
@@ -17,6 +17,7 @@ import type { CommunityTarget } from "../state/navigation";
 import { useAppIsActive } from "../state/useAppIsActive";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { useSkin, useThemedStyles } from "../theme/SkinProvider";
+import { ScreenSkeleton } from "../theme/ScreenSkeleton";
 import type { UiPalette } from "../theme/skinTokens";
 
 export interface ChatLocalPreference {
@@ -208,7 +209,6 @@ function ConversationList({ client, ownerId, draftStore, companions, active, onC
   const { ui } = useSkin();
   const styles = useThemedStyles(createStyles);
   const [items, setItems] = useState<Chat[]>();
-  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
@@ -278,17 +278,13 @@ function ConversationList({ client, ownerId, draftStore, companions, active, onC
   useEffect(() => {
     if (!active) return;
     let current = true;
-    setLoading(true);
     setError("");
     void client.listChats().then(page => {
       if (current) setItems(page.items);
     }).catch(err => {
       if (current) setError(safeClientMessage(err).title);
     }).finally(() => {
-      if (current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
+      if (current) setRefreshing(false);
     });
     return () => { current = false; };
   }, [client, active, reload]);
@@ -357,7 +353,7 @@ function ConversationList({ client, ownerId, draftStore, companions, active, onC
         <Text accessibilityRole="alert" style={styles.errorText}>会话偏好暂未保存。</Text>
         <Button label="重试保存" onPress={() => { if (prefsRef.current) saveChatPrefs(prefsRef.current); }} />
       </View>}
-      {!items && !error && loading && <ActivityIndicator accessibilityLabel="正在读取会话" color={ui.accent} style={{ marginVertical: 20 }} />}
+      {!items && !error && <ScreenSkeleton variant="list" label="正在读取会话" />}
 
       {visibleChats && visibleChats.length > 0 && (
         <View style={styles.listCard}>
@@ -756,7 +752,7 @@ function NoticeList<T extends { id: string; readAt?: string | null }, Cursor>({ 
         </View>
       )}
       {error !== "" && <Text accessibilityRole="alert" style={styles.errorText}>{error}</Text>}
-      {!items && !error && <ActivityIndicator accessibilityLabel="正在读取通知" color={ui.accent} style={{ marginVertical: 20 }} />}
+      {!items && !error && <ScreenSkeleton variant="list" label="正在读取通知" />}
       {items?.length === 0 && <Text style={styles.emptyText}>暂时没有通知，下滑可刷新。</Text>}
       {items?.map(item => (
         <View key={item.id} style={s.card}>

@@ -1,4 +1,5 @@
 import { useThemedStyles, useSkin } from "../theme/SkinProvider";
+import { ScreenSkeleton } from "../theme/ScreenSkeleton";
 import type { UiPalette } from "../theme/skinTokens";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -620,10 +621,7 @@ export function ChatScreen({
       ) : null}
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ui.accent} />
-          <Text style={styles.mutedText}>正在打开私密会话…</Text>
-        </View>
+        <ScreenSkeleton variant="chat" label="正在读取聊天消息" />
       ) : (
         <FlatList
           data={messages.filter((item, index) => {
@@ -1130,7 +1128,6 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     borderColor: ui.line,
   },
   errorText: { fontSize: 12.5, color: ui.danger },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
   emptyWrap: { paddingVertical: 48, alignItems: "center" },
   mutedText: { fontSize: 13.5, color: ui.muted },
   listContent: { paddingHorizontal: CHROME.screenInset, paddingVertical: 14, gap: 12 },
