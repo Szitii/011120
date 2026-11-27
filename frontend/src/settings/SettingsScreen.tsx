@@ -1,9 +1,11 @@
 import React, { useRef, useState, type ComponentProps } from "react";
-import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { SelfServiceResult } from "../auth/account-session";
 import type { ChatClient } from "../chat/client";
+import { ApiProblemError, safeClientMessage } from "../adapters/real-api";
+import { saveAccountExport } from "./account-export";
 import { BottomSheet } from "../components/BottomSheet";
 import { GlassChatBubble } from "../components/GlassChatBubble";
 import { PixelAvatar } from "../components/PixelAvatar";
@@ -15,6 +17,7 @@ import { WalletBalance } from "../wallet/WalletBalance";
 
 export function SettingsScreen({
   account,
+  exportAccount,
   ownerName,
   avatar,
   isCompanion,
@@ -31,6 +34,7 @@ export function SettingsScreen({
     signOut: () => void;
     updatePassword?: (password: string) => Promise<SelfServiceResult>;
   };
+  exportAccount?: () => Promise<string>;
   ownerName: string;
   avatar?: string | null;
   isCompanion: boolean;
@@ -52,6 +56,26 @@ export function SettingsScreen({
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordResult, setPasswordResult] = useState<SelfServiceResult>();
   const passwordPendingRef = useRef(false);
+  const exporting = useRef(false);
+  const [exportingData, setExportingData] = useState(false);
+  const [exportNotice, setExportNotice] = useState("");
+
+  async function exportData() {
+    if (!exportAccount || exporting.current) return;
+    exporting.current = true;
+    setExportingData(true);
+    setExportNotice("");
+    try {
+      const saved = await saveAccountExport(exportAccount);
+      if (saved) setExportNotice(Platform.OS === "web" ? "浏览器已开始下载。" : "已交给系统保存或分享。");
+    } catch (error) {
+      setExportNotice(error instanceof ApiProblemError && error.status === 429 && error.code === "EXPORT_LIMIT"
+        ? "导出太频繁，请过一会儿再试。" : `导出失败。${safeClientMessage(error).title}`);
+    } finally {
+      exporting.current = false;
+      setExportingData(false);
+    }
+  }
 
   const canUpdatePassword = Boolean(account?.updatePassword);
 
@@ -144,6 +168,9 @@ export function SettingsScreen({
               valueText={canUpdatePassword ? undefined : "需当前登录会话"}
               onPress={openPasswordSheet}
             />
+            {exportAccount && <SettingRow icon="download-outline"
+              label={exportingData ? "正在准备导出…" : "导出我的数据"}
+              disabled={exportingData} onPress={() => void exportData()} />}
             <SettingRow
               icon="trash-outline"
               label="注销账号"
@@ -153,6 +180,11 @@ export function SettingsScreen({
             />
           </View>
         </View>
+
+        {exportAccount && <Text style={styles.subLabel}>
+          导出为 JSON，包含你的家机、聊天文字等资料。请妥善保管下载的文件。
+        </Text>}
+        {exportNotice !== "" && <Text accessibilityLiveRegion="polite" style={styles.subLabel}>{exportNotice}</Text>}
 
         {(onBringCompanion || onAgentSettings) && (
           <View style={styles.section}>
@@ -384,12 +416,13 @@ export function SettingsScreen({
   );
 }
 
-function SettingRow({ icon, label, valueText, danger, last, onPress }: {
+function SettingRow({ icon, label, valueText, danger, last, disabled = false, onPress }: {
   icon?: ComponentProps<typeof Ionicons>["name"];
   label: string;
   valueText?: string;
   danger?: boolean;
   last?: boolean;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const { ui } = useSkin();
@@ -398,6 +431,7 @@ function SettingRow({ icon, label, valueText, danger, last, onPress }: {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [styles.row, !last && styles.rowDivider, pressed && { opacity: 0.72 }]}
     >

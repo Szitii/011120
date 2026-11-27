@@ -96,6 +96,15 @@ export class RealApiAdapter implements ClientApi {
     return this.get<ActiveIdentityContext>(`/v0/identity-context${query}`);
   }
 
+  exportAccount(): Promise<string> {
+    return this.request("GET", "/v0/export", undefined, {}, async response => {
+      if (!response.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) {
+        throw new Error("Unexpected export response.");
+      }
+      return response.text();
+    });
+  }
+
   ownerCompanions(): Promise<OwnerCompanionCollection> { return this.get("/v0/companions"); }
   worldItems(): Promise<WorldCollection> { return this.get("/v0/world-items?limit=20"); }
   lifeContinuity(viewer?: { kind: IdentityKind; id: string }): Promise<LifeContinuityCollection> {

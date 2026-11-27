@@ -105,6 +105,7 @@ export interface ClientApi {
   readonly diary?: import("./diary/client.ts").DiaryClient;
   readonly chat?: import("./chat/client.ts").ChatClient;
   identityContext(input?: { kind: IdentityKind; id: string }): Promise<ActiveIdentityContext>;
+  exportAccount?(): Promise<string>;
   ownerCompanions(): Promise<OwnerCompanionCollection>;
   worldItems(): Promise<WorldCollection>;
   lifeContinuity(viewer?: { kind: IdentityKind; id: string }): Promise<LifeContinuityCollection>;

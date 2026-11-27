@@ -1162,6 +1162,7 @@ function WorldApp({ client, account, isMockMode }: {
       {route.type === "settings" && (
         <SettingsScreen
           account={account}
+          exportAccount={ownerId && account && client.api.exportAccount ? () => client.api.exportAccount!() : undefined}
           ownerName={identityLabel(identityValue, ownerNickname)}
           avatar={activeAvatar}
           isCompanion={isSampleCompanion}
