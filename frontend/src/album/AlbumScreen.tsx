@@ -1,13 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { setStringAsync } from "expo-clipboard";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { CommunityButton, SecondaryHeading, useCommunityStyles } from "../community/components";
 import { useSkin } from "../theme/SkinProvider";
 import type { HomeScope } from "../home/keys";
-import { addAlbumPhoto, deleteAlbumEntry, listAlbum, type AlbumEntry } from "./store";
-import type { AlbumPhotoKind } from "./actions";
+import {
+  formatAlbumDate,
+  formatQuoteShareText,
+  type AlbumPhotoKind,
+} from "./actions";
+import { addAlbumPhoto, deleteAlbumEntry, listAlbum, type AlbumEntry, type QuoteInput } from "./store";
 import { exportMedia, findMedia } from "./mediaFiles";
+
+interface InlineFeedback {
+  id: string;
+  message: string;
+  isError: boolean;
+}
 
 export function AlbumScreen({ scope }: { scope: HomeScope }) {
   const s = useCommunityStyles();
@@ -15,7 +26,10 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmId, setConfirmId] = useState<string>();
+  const [quoteActionKey, setQuoteActionKey] = useState<string>();
+  const [quoteFeedback, setQuoteFeedback] = useState<InlineFeedback>();
   const pending = useRef(false);
+  const quotePending = useRef(false);
   const active = useRef(false);
 
   async function refresh() {
@@ -60,6 +74,31 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
     await addAlbumPhoto(scope, "local_photo", asset.uri, extension);
   }
 
+  async function copyQuote(entryId: string, quote: QuoteInput) {
+    if (quotePending.current) return;
+    quotePending.current = true;
+    setQuoteActionKey(`${entryId}:copy`);
+    setQuoteFeedback(undefined);
+    let copied = false;
+    try {
+      copied = await setStringAsync(formatQuoteShareText(quote));
+    } catch {
+      copied = false;
+    } finally {
+      quotePending.current = false;
+      if (active.current) {
+        setQuoteActionKey(undefined);
+        setQuoteFeedback({
+          id: entryId,
+          message: copied ? "金句已复制到剪贴板。" : "复制失败，请长按文字手动复制。",
+          isError: !copied,
+        });
+      }
+    }
+  }
+
+  const quoteBusy = quoteActionKey !== undefined;
+
   return (
     <FlatList
       style={s.page}
@@ -90,13 +129,31 @@ export function AlbumScreen({ scope }: { scope: HomeScope }) {
           : <AlbumPhoto entryId={item.id} createdAt={item.createdAt} kind={item.kind} path={item.localPath} />}
         <Text style={s.meta}>
           {item.kind === "chat_quote" ? `${item.quote.speaker} · ` : ""}
-          {new Date(item.kind === "chat_quote" ? item.quote.sentAt : item.createdAt).toLocaleDateString("zh-CN")}
+          {formatAlbumDate(item.kind === "chat_quote" ? item.quote.sentAt : item.createdAt)}
         </Text>
         {confirmId === item.id ? <View style={s.row}>
-          <CommunityButton label="确认删除" disabled={busy}
+          <CommunityButton label="确认删除" disabled={busy || quoteBusy}
             onPress={() => void change(() => deleteAlbumEntry(scope, item.id), "这条留念没能删除。")} />
-          <CommunityButton label="取消" disabled={busy} onPress={() => setConfirmId(undefined)} />
-        </View> : <CommunityButton label="删除" disabled={busy} onPress={() => setConfirmId(item.id)} />}
+          <CommunityButton label="取消" disabled={busy || quoteBusy} onPress={() => setConfirmId(undefined)} />
+        </View> : <View style={s.row}>
+          {item.kind === "chat_quote" && <>
+            <CommunityButton
+              label={quoteActionKey === `${item.id}:copy` ? "复制中…" : "复制"}
+              disabled={busy || quoteBusy}
+              onPress={() => void copyQuote(item.id, item.quote)}
+            />
+          </>}
+          <CommunityButton label="删除" disabled={busy || quoteBusy} onPress={() => setConfirmId(item.id)} />
+        </View>}
+        {item.kind === "chat_quote" && quoteFeedback?.id === item.id && (
+          <Text
+            accessibilityLiveRegion="polite"
+            accessibilityRole={quoteFeedback.isError ? "alert" : undefined}
+            style={s.meta}
+          >
+            {quoteFeedback.message}
+          </Text>
+        )}
       </View>}
     />
   );
