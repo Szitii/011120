@@ -42,6 +42,6 @@ check_response() {
 
 check_response '/v0/identity-context' '"kind":"OWNER"'
 check_response '/v0/world-items?limit=20' '"displayName":"AnotherSample"'
-check_response '/v0/life-continuity?limit=30&activeSubjectKind=OWNER' '"kind":"ENCOUNTER"'
+check_response '/v0/life-continuity?limit=30&activeSubjectKind=OWNER' '"items":'
 check_response '/v0/companions/00000000-0000-0000-0000-0000000002a1/profile?activeSubjectKind=OWNER' '"relationship":"OWNER_OF"'
 npm run test:mobile:residency

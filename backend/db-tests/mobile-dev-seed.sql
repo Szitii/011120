@@ -2,7 +2,7 @@ begin;
 
 -- Disposable Stage 1 mobile-development fixtures only.
 -- Owner A is the mobile viewer; Companion A is SampleCompanion.
--- Companion B is a public Encounter participant used to validate profile navigation.
+-- Companion B is another Owner's public Companion with one feed item, used to validate profile navigation.
 
 insert into auth.users (id) values
   ('00000000-0000-0000-0000-0000000000a1'),
@@ -43,7 +43,7 @@ values
    'sample_companion_stage1', 'SampleCompanion', '{"bio":"Stage 1 device fixture"}', 'PUBLIC',
    '00000000-0000-0000-0000-0000000003a1', 1, repeat('a',64), '[]', repeat('a',64), now()),
   ('00000000-0000-0000-0000-0000000004b1', '00000000-0000-0000-0000-0000000001b1', '00000000-0000-0000-0000-0000000002b1', 1,
-   'another_sample_stage1', 'AnotherSample', '{"bio":"Public Encounter participant fixture"}', 'PUBLIC',
+   'another_sample_stage1', 'AnotherSample', '{"bio":"Public Companion fixture"}', 'PUBLIC',
    '00000000-0000-0000-0000-0000000003b1', 1, repeat('b',64), '[]', repeat('b',64), now());
 
 insert into public.social_twins
@@ -52,54 +52,12 @@ values
   ('00000000-0000-0000-0000-0000000005a1', '00000000-0000-0000-0000-0000000001a1', '00000000-0000-0000-0000-0000000002a1', '00000000-0000-0000-0000-0000000004a1', 'ACTIVE', 'QUIET'),
   ('00000000-0000-0000-0000-0000000005b1', '00000000-0000-0000-0000-0000000001b1', '00000000-0000-0000-0000-0000000002b1', '00000000-0000-0000-0000-0000000004b1', 'ACTIVE', 'QUIET');
 
-insert into public.encounter_invitations
-  (id, initiator_owner_id, initiator_twin_id, responder_owner_id, responder_twin_id,
-   approved_by_owner_ids, purpose, expires_at)
-values
-  ('00000000-0000-0000-0000-0000000008a1',
-   '00000000-0000-0000-0000-0000000001a1',
-   '00000000-0000-0000-0000-0000000005a1',
-   '00000000-0000-0000-0000-0000000001b1',
-   '00000000-0000-0000-0000-0000000005b1',
-   array[
-     '00000000-0000-0000-0000-0000000001a1'::uuid,
-     '00000000-0000-0000-0000-0000000001b1'::uuid
-   ],
-   'A quiet first meeting',
-   now() + interval '7 days');
-
-insert into companion_private.encounter_safety_events
-  (id, owner_id, companion_id, social_twin_id, direction, surface, threat_types, decision,
-   content_hash, redaction_count, policy_version, related_encounter_id)
-values
-  ('00000000-0000-0000-0000-0000000007b1',
-   '00000000-0000-0000-0000-0000000001b1',
-   '00000000-0000-0000-0000-0000000002b1',
-   '00000000-0000-0000-0000-0000000005b1',
-   'INPUT', 'ENCOUNTER', '{}', 'BLOCK',
-   repeat('d',64), 0, 'safety/1',
-   '00000000-0000-4000-8000-000000000901');
-
-insert into companion_private.encounter_idempotency
-  (owner_id, idempotency_key_hash, request_hash, encounter_id, result_status,
-   invitation_id, safety_event_id, outcome_code)
-values
-  ('00000000-0000-0000-0000-0000000001a1',
-   repeat('1',64),
-   repeat('2',64),
-   '00000000-0000-4000-8000-000000000901',
-   'BLOCKED',
-   '00000000-0000-0000-0000-0000000008a1',
-   '00000000-0000-0000-0000-0000000007b1',
-   'INPUT_SAFETY_BLOCK');
-
-
 insert into public.social_feed_items
   (id,kind,author_social_twin_id,author_social_persona_id,published_at,body,source_type,source_id,visibility,status)
 values
-  ('00000000-0000-0000-0000-0000000009f1','ENCOUNTER_EXCERPT',
+  ('00000000-0000-0000-0000-0000000009f1','MOMENT',
    '00000000-0000-0000-0000-0000000005b1','00000000-0000-0000-0000-0000000004b1',
-   now(),'A quiet first meeting','ENCOUNTER','00000000-0000-4000-8000-000000000901','PUBLIC','PUBLISHED');
+   now(),'A quiet first meeting','MOMENT','00000000-0000-4000-8000-000000000901','PUBLIC','PUBLISHED');
 
 -- The dev host "hears" a fixed sentence instead of calling a speech provider, so the Owner's voice
 -- messages are switched on here; in production the operators turn them on.

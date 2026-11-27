@@ -37,7 +37,7 @@ Reason codes are allow-listed product behavior, not free-form strings. Initial e
 | `IMPORT_IDENTITY_SUMMARY` | Owner-approved import review | Owner/platform trial | No |
 | `MEMORY_CONSOLIDATION` | Scheduled private maintenance | Owner | No |
 | `OWNER_DIRECT_RESPONSE` | Owner asks Companion | Owner | No |
-| `SOCIAL_ENCOUNTER_RESPONSE` | Bounded invited Twin encounter | Acting Twin's Owner | Yes, after checks |
+| `SOCIAL_ENCOUNTER_RESPONSE` | Removed with Encounter (2026-11-27); the code is still an allowed value | — | — |
 | `LIFE_EVENT_EXPRESSION` | Approved life event candidate | Companion Owner | Owner inbox first |
 | `SAFETY_CLASSIFICATION` | Platform-required safety check | Platform | No |
 | `DLP_CLASSIFICATION` | Platform-required ambiguous DLP check | Platform | No |
@@ -79,20 +79,6 @@ The API atomically checks the activity budget and creates a maximum-cost reserva
 The PostgreSQL persistence boundary implements reservation as one private service-role command. It serializes the Owner-scoped idempotency key, locks the active Owner/Companion budget, validates the immutable reason registry and hard ceilings, then writes the attribution envelope and first ledger fact in the same transaction. Identical replay returns the original decision; request substitution fails. A rejected reservation appends `REJECTION` but does not change budget counters.
 
 Provider lifecycle transitions use the same private boundary. `START` is appended exactly once immediately before external I/O. Settlement accepts only a started transaction and atomically moves reserved counters to actual usage; cancellation can release only a reservation that never started. Identical retries return the existing terminal fact, while altered settlement or release payloads are rejected.
-
-For Encounter generation, the immutable context manifest binds its Compute transaction ID and internal Provider request hash before `START`. The Compute ledger and Owner receipt do not store the Persona document, Memory representations, untrusted input, or assembled prompt. Replaying the same claim returns the original manifest hash; it does not re-query mutable authorization state.
-
-For Encounter claims, an unstarted reservation becomes recoverable after 15 minutes or invitation expiry, whichever happens first. The database atomically releases both reservations, consumes the one-shot invitation, and binds an immutable failed result to the original claim. The recovery command serializes against `START`; any attempt with a durable `START` is excluded and requires provider reconciliation plus actual or conservative settlement.
-
-A stale claim with a durable provider `START` follows a separate service-only reconciliation path. If no trustworthy terminal usage exists after the grace window, PostgreSQL charges the full already-approved reservation ceiling, appends immutable reason/source/ledger evidence, consumes the one-shot invitation, and releases publication capacity without creating recipient-facing or memory-bearing content. Identical replay is a no-op, evidence substitution fails, and the Compute row lock makes reconciliation mutually exclusive with normal provider settlement.
-
-The operational worker only discovers candidates with an explicit cutoff and bounded keyset pagination, then invokes that database command through the typed PostgreSQL adapter. Each candidate is isolated in the run summary; the database revalidates eligibility and owns locking and settlement. The worker never retries a Provider and never records unknown cost as zero. Provider-specific evidence lookup and append-only cost correction remain future work.
-
-For `SOCIAL_ENCOUNTER_RESPONSE`, the database refuses `START` until an immutable execution claim has bound the one-shot invitation to that exact Compute transaction and publication reservation. The invitation moves from unused to claimed before external I/O and becomes consumed only with a terminal delivery or non-delivery result. A crash can therefore leave recoverable claimed work, but cannot make the capability available to a second execution.
-
-Publication uses a separate durable state machine. An Owner/Companion allowance is locked before a `RESERVED` decision; budget exhaustion produces an attributable `REJECTED` decision without changing counters. Only one terminal `CONSUMED` or `RELEASED` transition is permitted. Successful Encounter delivery consumes publication capacity in the same database transaction that consumes the invitation and writes the Artifact and both Owner-only Life Events. Generation success alone never implies delivery permission.
-
-Encounter non-delivery is also an atomic database outcome. Input safety blocks occur before provider work and preserve the invitation without Compute or publication references. After an immutable provider `START`, a matching failed settlement or output block consumes the invitation, releases publication capacity, and records durable idempotency without creating an Artifact, Life Event, Inbox item, Post, or Memory. Actual failed/blocked provider usage remains settled and visible in the Compute Receipt.
 
 Retries create child attempts linked to one logical invocation. They share the logical idempotency key but each provider charge is recorded. Only explicitly safe transient errors are retried, with a strict attempt ceiling.
 
@@ -160,8 +146,8 @@ The PostgreSQL receipt query runs with authenticated caller privileges and there
 
 - Concurrent reservations cannot exceed a hard cap.
 - The same idempotency key cannot create duplicate logical work.
-- Every provider attempt has exactly one terminal ledger path or an alertable started-but-unsettled reservation. Claimed-but-unstarted Encounter reservations have a bounded terminal recovery path.
-- A failed/blocked output still accounts for actual provider cost but consumes no publication budget.
+- Every provider attempt has exactly one terminal ledger path or an alertable started-but-unsettled reservation.
+- A failed/blocked output still accounts for actual provider cost.
 - Platform-funded classifiers cannot be relabeled as Owner-funded generation.
 - BYOK calls record estimated usage/cost without claiming platform charge.
 - Pricing changes never rewrite historical transactions.

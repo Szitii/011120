@@ -69,7 +69,7 @@ try {
       "select * from public.get_active_identity_context($1,$2)",
       ["OWNER", null],
     );
-    const world = await client.query<{ item: { author?: { companionId?: string }; source?: { type?: string; id?: string } } }>(
+    const world = await client.query<{ item: { author?: { companionId?: string } } }>(
       "select * from public.list_world_items($1,$2)",
       [20, null],
     );
@@ -86,46 +86,17 @@ try {
       throw new Error("Mobile dev identity presentation fixtures failed validation.");
     }
 
-    const encounter = world.rows.find((row) => row.item.source?.type === "ENCOUNTER");
-    if (
-      !encounter ||
-      encounter.item.author?.companionId !== "00000000-0000-0000-0000-0000000002b1" ||
-      !encounter.item.source?.id
-    ) {
-      throw new Error("Mobile dev Encounter actor mapping failed validation.");
+    const another = world.rows.find((row) => row.item.author?.companionId === "00000000-0000-0000-0000-0000000002b1");
+    if (!another?.item.author?.companionId) {
+      throw new Error("Mobile dev feed actor mapping failed validation.");
     }
 
     const profile = await client.query<{ payload: { companionId?: string } }>(
       "select * from public.get_companion_profile($1)",
-      [encounter.item.author.companionId],
+      [another.item.author.companionId],
     );
-    const detail = await client.query<{
-      payload: {
-        encounterId?: string;
-        participants?: Array<{
-          companionId?: string;
-          displayName?: string;
-          presentationAvailable?: boolean;
-          profileAvailable?: boolean;
-        }>;
-      };
-    }>(
-      "select * from public.get_encounter_detail($1)",
-      [encounter.item.source.id],
-    );
-
-    const visibleAnotherSample = detail.rows[0]?.payload.participants?.find(
-      (participant) => participant.companionId === "00000000-0000-0000-0000-0000000002b1",
-    );
-
-    if (
-      profile.rows[0]?.payload.companionId !== "00000000-0000-0000-0000-0000000002b1" ||
-      detail.rows[0]?.payload.encounterId !== encounter.item.source.id ||
-      visibleAnotherSample?.displayName !== "AnotherSample" ||
-      visibleAnotherSample.presentationAvailable !== true ||
-      visibleAnotherSample.profileAvailable !== true
-    ) {
-      throw new Error("Mobile dev profile or Encounter detail fixtures failed validation.");
+    if (profile.rows[0]?.payload.companionId !== "00000000-0000-0000-0000-0000000002b1") {
+      throw new Error("Mobile dev profile fixture failed validation.");
     }
 
     await client.query("rollback");
