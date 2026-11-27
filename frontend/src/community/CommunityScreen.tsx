@@ -925,6 +925,8 @@ export function CommunityScreen({
 const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
   feedHeaderRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
+    columnGap: 8,
     alignItems: "center",
     justifyContent: "space-between",
     paddingTop: 2,
@@ -970,7 +972,8 @@ const createLocalStyles = (ui: UiPalette) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-    height: 36,
+    minHeight: 36,
+    paddingVertical: 4,
     paddingHorizontal: 12,
     borderRadius: RADIUS.pill,
     backgroundColor: ui.accent,

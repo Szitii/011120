@@ -83,18 +83,23 @@ test("drops late HTTP responses and never uses the new account token on the old 
   const api = new RealApiAdapter({ baseUrl: "https://api.example.test", session: original.tokens });
   const started = Promise.withResolvers<void>();
   const delayed = Promise.withResolvers<Response>();
+  let requestSignal: AbortSignal | null | undefined;
   const fetchMock = t.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
     assert.equal(new Headers(options.headers).get("Authorization"), "Bearer alice");
-    assert.equal(options.signal, original.tokens.signal);
+    requestSignal = options.signal;
+    assert.ok(requestSignal);
+    assert.equal(requestSignal.aborted, false);
     started.resolve();
     return delayed.promise;
   });
 
   const request = api.worldItems();
+  const rejected = assert.rejects(request, /session changed/);
   await started.promise;
   const logout = session.signOut();
   assert.equal(session.snapshot().kind, "signing-out");
   assert.equal(original.tokens.signal.aborted, true);
+  assert.equal(requestSignal?.aborted, true);
   await logout;
   await session.signIn("bob@example.test", "wrong");
   assert.equal(session.snapshot().kind, "signed-out");
@@ -103,7 +108,7 @@ test("drops late HTTP responses and never uses the new account token on the old 
   assert.notEqual(binding(session).generation, original.generation);
 
   delayed.resolve(Response.json({ items: ["alice data"] }));
-  await assert.rejects(request, /session changed/);
+  await rejected;
   await assert.rejects(api.worldItems(), /session changed/);
   assert.equal(fetchMock.mock.callCount(), 1);
 });

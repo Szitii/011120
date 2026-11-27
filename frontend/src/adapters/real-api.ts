@@ -20,6 +20,7 @@ import type {
 } from "../contracts.ts";
 import { createCommunityClient, type CommunityClient } from "../community/client.ts";
 import { createChatClient, type AudioClip, type ChatClient } from "../chat/client.ts";
+import { RequestTimeoutError } from "../state/request-deadline.ts";
 import { fetchWithConnectionStatus } from "../state/connection-status.ts";
 
 import { createDiaryClient, type DiaryClient } from "../diary/client.ts";
@@ -274,7 +275,7 @@ export class RealApiAdapter implements ClientApi {
 
     const send = async (token: string) => {
       ensureCurrent();
-      const response = await fetchWithConnectionStatus(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
+      return fetchWithConnectionStatus(`${this.config.baseUrl.replace(/\/$/, "")}${path}`, {
         method,
         signal,
         headers: {
@@ -284,15 +285,16 @@ export class RealApiAdapter implements ClientApi {
           ...extraHeaders,
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-      if (response.ok && read) {
-        const data = await read(response);
+      }, async response => {
+        if (response.ok && read) {
+          const data = await read(response);
+          ensureCurrent();
+          return { response, data, payload: undefined };
+        }
+        const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
         ensureCurrent();
-        return { response, data, payload: undefined };
-      }
-      const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
-      ensureCurrent();
-      return { response, payload };
+        return { response, payload };
+      });
     };
 
     let token = "bearerToken" in this.config ? this.config.bearerToken : await this.config.session.getToken();
@@ -320,6 +322,7 @@ export class RealApiAdapter implements ClientApi {
 }
 
 export function safeClientMessage(error: unknown): { title: string; retry: boolean } {
+  if (error instanceof RequestTimeoutError) return { title: "请求超时，请重试。", retry: true };
   if (!(error instanceof ApiProblemError)) return { title: "没连上。", retry: true };
   switch (error.status) {
     case 401: return { title: "会话过期了。", retry: false };
