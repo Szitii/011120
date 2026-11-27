@@ -1,6 +1,6 @@
 import { useThemedStyles, useSkin } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -21,8 +21,9 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
 import { formatChatAction } from "./actions";
 import { chatTimeDivider } from "./message-time";
+import { compareChatMessages, firstUnreadMessageId, incomingChatMessages, visibleUnreadMessageId } from "./unread";
 import { ChatHistorySearch } from "./ChatHistorySearch";
-import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
+import { makeIdempotencyKey, type ChatClient } from "./client";
 import { chatDraftKey, type ChatDraftStore } from "./draftStore";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
 import { PixelAvatar } from "../components/PixelAvatar";
@@ -51,6 +52,13 @@ const replyFailureMessages = {
 
 const MAX_MESSAGE_LENGTH = 2000;
 const RETURN_TO_LATEST_SCROLL_DISTANCE = 160;
+const LATEST_SCROLL_DISTANCE = 24;
+const REPLY_POLL_MS = 1_500;
+const IDLE_CHAT_POLL_MS = 10_000;
+const CHAT_VIEWABILITY = { viewAreaCoveragePercentThreshold: 10 };
+const KEEP_VISIBLE_MESSAGE = { minIndexForVisible: 0, autoscrollToTopThreshold: LATEST_SCROLL_DISTANCE };
+const messageAnchorId = (id: string) => `chat-message-anchor-${id}`;
+type ViewableMessages = NonNullable<React.ComponentProps<typeof FlatList<ChatMessage>>["onViewableItemsChanged"]>;
 
 export function formatQuotedReplyPrefix(sourceText: string): string {
   const normalized = sourceText.replace(/\r\n?/g, "\n").trim();
@@ -79,12 +87,9 @@ export function insertQuotedTextIntoDraft(
 }
 
 function mergeLatestMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-  const byId = new Map<string, ChatMessage>();
-  for (const m of existing) byId.set(m.id, m);
-  for (const m of incoming) byId.set(m.id, m);
-  const incomingIds = new Set(incoming.map((m) => m.id));
-  const older = existing.filter((m) => !incomingIds.has(m.id));
-  return [...incoming.map((m) => byId.get(m.id)!), ...older];
+  const byId = new Map(existing.map(message => [message.id, message]));
+  for (const message of incoming) byId.set(message.id, message);
+  return [...byId.values()].sort(compareChatMessages);
 }
 
 export function ChatScreen({
@@ -133,6 +138,14 @@ export function ChatScreen({
   const isGroup = chat?.direct === false;
   const groupReadOnly = isGroup && !groupSendEnabled;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const latestFetched = useRef<ChatMessage | undefined>(undefined);
+  const [unreadDivider, setUnreadDivider] = useState<string>();
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const [viewedIds, setViewedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const latestOffset = useRef(0);
+  const waitingForUnread = useRef<string | undefined>(undefined);
+  const visibleAnchor = useRef<string | undefined>(undefined);
+  const webAnchor = useRef<{ id: string; top: number } | "latest" | undefined>(undefined);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [bootstrapRevision, setBootstrapRevision] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -142,31 +155,62 @@ export function ChatScreen({
   const messageList = useRef<FlatList<ChatMessage>>(null);
   const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [highlightedMessage, setHighlightedMessage] = useState<string>();
-  const jump = useRef<{ id: string; attempts: number } | undefined>(undefined);
+  const jump = useRef<{ id: string; attempts: number; kind: "search" | "unread" } | undefined>(undefined);
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visibleMessages = useMemo(() => messages.filter((item, index) => {
     if (!item.action || item.companionId !== null) return true;
     const newer = messages[index - 1];
     return !(newer?.action && newer.companionId === null);
   }), [messages]);
-  const scrollToHistoryMessage = useCallback((index: number) => {
+  const renderedMessages = useRef(visibleMessages);
+  renderedMessages.current = visibleMessages;
+  const scrollToMessage = useCallback(() => {
     const target = jump.current;
     if (!target || !messageList.current) return;
+    const index = renderedMessages.current.findIndex(message => message.id === target.id);
+    if (index < 0) return;
     const attempts = target.attempts;
-    messageList.current.scrollToIndex({ index, viewPosition: 0.5, animated: false });
+    messageList.current.scrollToIndex({ index, viewPosition: target.kind === "unread" ? 1 : 0.5, animated: false });
     if (jump.current === target && target.attempts === attempts) jump.current = undefined;
   }, []);
-  const jumpIndex = highlightedMessage ? visibleMessages.findIndex(message => message.id === highlightedMessage) : -1;
+  const jumpId = jump.current?.id;
+  const jumpIndex = jumpId ? visibleMessages.findIndex(message => message.id === jumpId) : -1;
   useEffect(() => {
-    if (historySearchOpen || !jump.current || jumpIndex < 0) return;
+    if (loading || historySearchOpen || !jump.current || jumpIndex < 0) return;
     const target = jump.current;
     const frame = requestAnimationFrame(() => {
-      if (jump.current === target) scrollToHistoryMessage(jumpIndex);
+      if (jump.current === target) scrollToMessage();
     });
     return () => cancelAnimationFrame(frame);
-  }, [historySearchOpen, highlightedMessage, jumpIndex, scrollToHistoryMessage]);
+  }, [loading, historySearchOpen, jumpId, jumpIndex, scrollToMessage]);
 
   useEffect(() => () => clearTimeout(jumpTimer.current), []);
+
+  const onViewableMessages = useCallback<ViewableMessages>(({ viewableItems }) => {
+    const ids = new Set<string>(viewableItems.filter(row => row.isViewable).map(row => row.item.id));
+    if (waitingForUnread.current && !ids.has(waitingForUnread.current)) return;
+    waitingForUnread.current = undefined;
+    visibleAnchor.current = ids.values().next().value;
+    setViewedIds(ids);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const anchor = webAnchor.current;
+    webAnchor.current = undefined;
+    if (!anchor) return;
+    if (anchor === "latest") {
+      if (latestOffset.current <= LATEST_SCROLL_DISTANCE) {
+        messageList.current?.scrollToOffset({ offset: 0, animated: false });
+      }
+      return;
+    }
+    const row = document.getElementById(messageAnchorId(anchor.id));
+    const scroller = messageList.current?.getScrollableNode();
+    if (!row || !(scroller instanceof HTMLElement)) return;
+    // Inverted Web lists move the row down as the scroll offset increases.
+    scroller.scrollTop += anchor.top - row.getBoundingClientRect().top;
+  }, [messages]);
 
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -271,28 +315,28 @@ export function ChatScreen({
 
   const sendingRead = useRef<string | undefined>(undefined);
   const lastRead = useRef<string | undefined>(undefined);
-  const [readRevision, bumpReadRevision] = useState(0);
-  const latestMessage = messages[0];
+  const messageToRead = chat && visibleUnreadMessageId(messages, chat, viewedIds);
   useEffect(() => {
-    if (!client.markRead || !appActive || !chat || chatIdRef.current !== chat.id) return;
-    const messageToRead = chatReadTarget(chat, latestMessage);
-    if (!messageToRead) return;
+    if (!client.markRead || !appActive || loading || historySearchOpen || waitingForUnread.current
+      || !chat || chatIdRef.current !== chat.id || !messageToRead) return;
     const chatId = chat.id;
     const key = `${chatId}:${messageToRead}`;
     if (sendingRead.current || lastRead.current === key) return;
     sendingRead.current = key;
     const session = sessionRef.current;
 
-    void client.markRead(chatId, messageToRead).then(() => {
-      sendingRead.current = undefined;
+    void client.markRead(chatId, messageToRead).then(updated => {
       if (session !== sessionRef.current) return;
-      lastRead.current = key;
-      onRead?.();
-      bumpReadRevision(value => value + 1);
-    }, () => {
       sendingRead.current = undefined;
+      lastRead.current = key;
+      setChat(current => current?.id === chatId
+        ? { ...current, readUpTo: updated.readUpTo, unreadCount: updated.unreadCount } : current);
+      onRead?.();
+    }).catch(() => {
+      // The next successful refresh can retry the same visible read position.
+      if (session === sessionRef.current) sendingRead.current = undefined;
     });
-  }, [client, appActive, chat, latestMessage, onRead, readRevision]);
+  }, [client, appActive, loading, historySearchOpen, chat, messageToRead, onRead]);
 
   const loadLatest = useCallback(async (targetChatId: string, silent = false) => {
     if (silent && pollInFlightRef.current) return;
@@ -307,15 +351,56 @@ export function ChatScreen({
     try {
       const page = await client.getChat(targetChatId);
       if (!current()) return;
-      setChat(page.chat);
-      setMessages((prev) => (silent && prev.length > 0 ? mergeLatestMessages(prev, page.items) : page.items));
-      if (!silent) {
-        setNextCursor(page.nextCursor);
-        if (page.nextCursor === null) cursorExhaustedRef.current = true;
-      } else if (!cursorExhaustedRef.current) {
-        setNextCursor((prev) => prev ?? page.nextCursor);
+      const previousHead = silent ? latestFetched.current : undefined;
+      let items = page.items;
+      let cursor = page.nextCursor;
+      let firstUnread = silent ? undefined : firstUnreadMessageId(items, page.chat);
+
+      // Walk older pages on entry until the unread boundary is known. A poll after a
+      // long pause can also span more than one page; bridge it to our newest cached row.
+      const cursors = new Set<string>();
+      while (cursor && !cursors.has(cursor) && (silent
+        ? previousHead && items.length > 0 && compareChatMessages(items[items.length - 1], previousHead) < 0
+        : page.chat.unreadCount && !firstUnread)) {
+        cursors.add(cursor);
+        const older = await client.getChat(targetChatId, cursor);
+        if (!current()) return;
+        items = mergeLatestMessages(items, older.items);
+        cursor = older.nextCursor;
+        if (!silent) firstUnread = firstUnreadMessageId(items, page.chat);
       }
-      setError(null);
+      if (cursor && cursors.has(cursor)) cursor = null;
+
+      if (!silent) {
+        if (firstUnread) {
+          waitingForUnread.current = firstUnread;
+          jump.current = { id: firstUnread, attempts: 0, kind: "unread" };
+        }
+        setUnreadDivider(firstUnread);
+        setNextCursor(cursor);
+        cursorExhaustedRef.current = cursor === null;
+      } else {
+        const offBottom = latestOffset.current > LATEST_SCROLL_DISTANCE || !!waitingForUnread.current;
+        const arrivals = incomingChatMessages(items, previousHead);
+        if (offBottom && arrivals.length > 0) {
+          setNewMessageCount(count => count + arrivals.length);
+          setUnreadDivider(current => current ?? arrivals.at(-1)?.id);
+        }
+        if (Platform.OS === "web" && typeof document !== "undefined"
+          && items[0] && (!previousHead || compareChatMessages(items[0], previousHead) < 0)) {
+          if (!offBottom) webAnchor.current = "latest";
+          else if (visibleAnchor.current) {
+            const id = visibleAnchor.current;
+            const row = document.getElementById(messageAnchorId(id));
+            if (row) webAnchor.current = { id, top: row.getBoundingClientRect().top };
+          }
+        }
+        if (!cursorExhaustedRef.current) setNextCursor(previous => previous ?? cursor);
+      }
+      latestFetched.current = page.items[0];
+      setChat(page.chat);
+      setMessages(previous => silent ? mergeLatestMessages(previous, items) : items);
+      if (!silent) setError(null);
     } catch (e) {
       if (!silent && current()) setError(safeClientMessage(e).title);
     } finally {
@@ -332,6 +417,20 @@ export function ChatScreen({
       setLoadingOlder(false);
       setOlderError("");
       setShowReturnToLatest(false);
+      setUnreadDivider(undefined);
+      setNewMessageCount(0);
+      setViewedIds(new Set());
+      setChat(null);
+      setMessages([]);
+      latestFetched.current = undefined;
+      latestOffset.current = 0;
+      waitingForUnread.current = undefined;
+      visibleAnchor.current = undefined;
+      webAnchor.current = undefined;
+      jump.current = undefined;
+      setHighlightedMessage(undefined);
+      sendingRead.current = undefined;
+      lastRead.current = undefined;
       setError(null);
       try {
         let targetId = initialChatId;
@@ -374,6 +473,7 @@ export function ChatScreen({
       reqVersionRef.current++;
       chatIdRef.current = undefined;
       loadingOlderRef.current = false;
+      clearTimeout(jumpTimer.current);
       clearTimeout(focusTimer);
       if (quoteFocusTimerRef.current) {
         clearTimeout(quoteFocusTimerRef.current);
@@ -390,7 +490,8 @@ export function ChatScreen({
   }, [chat?.id, updateMentions]);
 
   useEffect(() => {
-    if (!appActive || !chat?.replying || !chatIdRef.current) return;
+    if (!appActive || loading || !chat || chatIdRef.current !== chat.id) return;
+    const delay = chat.replying ? REPLY_POLL_MS : IDLE_CHAT_POLL_MS;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const activeId = chatIdRef.current;
@@ -399,22 +500,22 @@ export function ChatScreen({
       if (cancelled) return;
       await loadLatest(activeId, true);
       if (!cancelled) {
-        timer = setTimeout(() => void tick(), 1500);
+        timer = setTimeout(() => void tick(), delay);
       }
     };
-    timer = setTimeout(() => void tick(), 1500);
+    timer = setTimeout(() => void tick(), delay);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [appActive, chat?.replying, loadLatest]);
+  }, [appActive, loading, chat?.id, chat?.replying, loadLatest]);
 
   useEffect(() => {
-    if (appActive && !wasActive.current && chatIdRef.current) {
+    if (appActive && !wasActive.current && !loading && chatIdRef.current) {
       void loadLatest(chatIdRef.current, true);
     }
     wasActive.current = appActive;
-  }, [appActive, loadLatest]);
+  }, [appActive, loading, loadLatest]);
 
   function writeError(err: unknown) {
     if (isGroup && err instanceof ApiProblemError && err.status === 409 && err.code === "INVALID_STATE") {
@@ -519,8 +620,9 @@ export function ChatScreen({
         const seen = new Set(prev.map((m) => m.id));
         return [...prev, ...older.items.filter((m) => !seen.has(m.id))];
       });
-      setNextCursor(older.nextCursor);
-      if (older.nextCursor === null) cursorExhaustedRef.current = true;
+      const cursor = older.nextCursor === nextCursor ? null : older.nextCursor;
+      setNextCursor(cursor);
+      if (cursor === null) cursorExhaustedRef.current = true;
     } catch (error) {
       if (session === sessionRef.current) setOlderError(safeClientMessage(error).title);
     } finally {
@@ -533,11 +635,12 @@ export function ChatScreen({
 
   function openHistoryMessage(id: string, history: ChatMessage[]) {
     clearTimeout(jumpTimer.current);
-    jump.current = { id, attempts: 0 };
+    waitingForUnread.current = undefined;
+    jump.current = { id, attempts: 0, kind: "search" };
     setMessages(previous => {
       const combined = new Map(history.map(message => [message.id, message]));
       for (const message of previous) combined.set(message.id, message);
-      return [...combined.values()].sort((a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt));
+      return [...combined.values()].sort(compareChatMessages);
     });
     setHighlightedMessage(id);
     setHistorySearchOpen(false);
@@ -702,18 +805,29 @@ export function ChatScreen({
           ref={messageList}
           data={visibleMessages}
           style={styles.timeline}
-          onScroll={event => setShowReturnToLatest(
-            Math.abs(event.nativeEvent.contentOffset.y) > RETURN_TO_LATEST_SCROLL_DISTANCE,
-          )}
+          maintainVisibleContentPosition={KEEP_VISIBLE_MESSAGE}
+          viewabilityConfig={CHAT_VIEWABILITY}
+          onViewableItemsChanged={onViewableMessages}
+          onScroll={event => {
+            const offset = Math.abs(event.nativeEvent.contentOffset.y);
+            latestOffset.current = offset;
+            setShowReturnToLatest(offset > RETURN_TO_LATEST_SCROLL_DISTANCE);
+            if (offset <= LATEST_SCROLL_DISTANCE && !waitingForUnread.current) setNewMessageCount(0);
+          }}
           scrollEventThrottle={100}
           onScrollToIndexFailed={({ index, averageItemLength }) => {
             const target = jump.current;
-            if (!target || target.attempts >= 5) return;
+            if (!target) return;
+            if (target.attempts >= 5) {
+              jump.current = undefined;
+              waitingForUnread.current = undefined;
+              return;
+            }
             target.attempts++;
             messageList.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
             clearTimeout(jumpTimer.current);
             jumpTimer.current = setTimeout(() => {
-              if (jump.current === target) scrollToHistoryMessage(index);
+              if (jump.current === target) scrollToMessage();
             }, 180);
           }}
           keyboardShouldPersistTaps="handled"
@@ -737,8 +851,16 @@ export function ChatScreen({
           }
           renderItem={({ item, index }) => {
             const time = chatTimeDivider(item.sentAt, visibleMessages[index + 1]?.sentAt);
-            const timeLabel = time && <Text style={styles.timeDivider}>{time}</Text>;
-            if (item.action) return <View>{timeLabel}<Text style={styles.actionEvent}>{formatChatAction(item.action, item.companionId)}</Text></View>;
+            const labels = <>
+              {unreadDivider === item.id && <View style={styles.unreadDivider}>
+                <View style={styles.unreadDividerRule} />
+                <Text accessibilityRole="header" style={styles.newMessageLabel}>以下为未读消息</Text>
+                <View style={styles.unreadDividerRule} />
+              </View>}
+              {time && <Text style={styles.timeDivider}>{time}</Text>}
+            </>;
+            if (item.action) return <View nativeID={messageAnchorId(item.id)}>{labels}
+              <Text style={styles.actionEvent}>{formatChatAction(item.action, item.companionId)}</Text></View>;
             const isMine = item.companionId === null;
             const sender = chat?.members.find(member => member.companionId === item.companionId);
             const senderName = isMine ? ownerName : sender?.displayName ?? title;
@@ -774,8 +896,8 @@ export function ChatScreen({
               : undefined;
 
             return (
-              <View style={highlightedMessage === item.id ? styles.highlightedMessage : undefined}>
-              {timeLabel}
+              <View nativeID={messageAnchorId(item.id)} style={highlightedMessage === item.id ? styles.highlightedMessage : undefined}>
+              {labels}
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
                 <ChatAvatar name={senderName} owner={isMine} avatar={isMine ? ownerAvatar : sender?.avatar} size={32}
                   onPress={() => onOpenProfile(item.companionId, chat?.direct ? chat.id : undefined)} />
@@ -895,20 +1017,25 @@ export function ChatScreen({
             );
           }}
         />
-        {showReturnToLatest && (
+        {(showReturnToLatest || newMessageCount > 0) && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="回到底部"
+            accessibilityLabel={newMessageCount > 0 ? `${newMessageCount} 条新消息，回到最新` : "回到底部"}
             style={styles.returnToLatest}
             onPress={() => {
               clearTimeout(jumpTimer.current);
               jump.current = undefined;
+              waitingForUnread.current = undefined;
               setHighlightedMessage(undefined);
               messageList.current?.scrollToOffset({ offset: 0, animated: true });
               setShowReturnToLatest(false);
+              setNewMessageCount(0);
             }}
           >
             <Ionicons name="arrow-down" size={18} color={ui.accentInk} />
+            {newMessageCount > 0 && <Text accessibilityLiveRegion="polite" style={styles.newMessageLabel}>
+              {newMessageCount} 条新消息
+            </Text>}
           </Pressable>
         )}
         </View>
@@ -1220,11 +1347,15 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
   root: { flex: 1 },
   timeline: { flex: 1 },
   timeDivider: { alignSelf: "center", color: ui.muted, fontSize: 12, paddingVertical: 8 },
+  unreadDivider: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8 },
+  unreadDividerRule: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: ui.line },
+  newMessageLabel: { color: ui.accentInk, fontSize: 13, fontWeight: "600" },
   historyError: { alignItems: "center", gap: 8, padding: CHROME.screenInset },
   historySpinner: { marginVertical: 12 },
   returnToLatest: {
     position: "absolute", right: CHROME.screenInset, bottom: CHROME.screenInset,
     minWidth: 44, minHeight: 44, borderRadius: RADIUS.pill,
+    flexDirection: "row", gap: 6, paddingHorizontal: 12,
     alignItems: "center", justifyContent: "center", backgroundColor: ui.white,
     borderWidth: 1, borderColor: ui.line, elevation: 2,
   },
