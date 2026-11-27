@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, TextInput, View } from "react-native";
 import type { ActorContext, CommunityActor } from "../../../contracts/community";
 import { BottomSheet } from "../components/BottomSheet";
+import { useSkin } from "../theme/SkinProvider";
 import type { CommunityClient } from "./client";
 import { CommunityRequestScope } from "./request-scope";
 import { ActorLine, CommunityButton, useCommunityStyles } from "./components";
@@ -36,6 +37,8 @@ export function MentionPicker({ client, viewer, selfId, related = [], selected, 
   onClose: () => void;
 }) {
   const s = useCommunityStyles();
+  const { ui } = useSkin();
+  const [query, setQuery] = useState("");
   const [items, setItems] = useState<CommunityActor[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [next, setNext] = useState<string>();
@@ -60,13 +63,29 @@ export function MentionPicker({ client, viewer, selfId, related = [], selected, 
 
   const candidates = [...new Map([...related, ...items].map(actor => [actor.id, actor])).values()]
     .filter(actor => actor.id !== selfId);
+  const keyword = normalizeMentionKeyword(query);
+  const matches = keyword ? candidates.filter(actor =>
+    normalizeMentionKeyword(actor.displayName).includes(keyword)
+    || normalizeMentionKeyword(actor.handle).includes(keyword)
+  ) : candidates;
   const chosen = new Set(selected.map(item => item.id));
 
-  return <BottomSheet visible title="提及谁？" onClose={onClose}>
+  return <BottomSheet visible title="提及谁？" avoidKeyboard onClose={onClose}>
     <View style={{ gap: 8 }}>
-      <Text style={s.meta}>{related.length ? "从当前讨论和关注列表中选择" : "从关注列表中选择"} · {selected.length} / {MAX_MENTIONS}</Text>
+      <TextInput
+        accessibilityLabel="搜索已加载的提及候选"
+        autoCapitalize="none"
+        autoCorrect={false}
+        onChangeText={setQuery}
+        placeholder="昵称或 @用户名"
+        placeholderTextColor={ui.placeholder}
+        returnKeyType="search"
+        style={[s.input, { minHeight: 44, textAlignVertical: "center" }]}
+        value={query}
+      />
+      <Text style={s.meta}>{related.length ? "仅搜索已加载的关注和讨论参与者" : "仅搜索已加载的关注"} · {selected.length} / {MAX_MENTIONS}</Text>
       <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 260 }} contentContainerStyle={{ gap: 8 }}>
-        {candidates.map(actor => {
+        {matches.map(actor => {
           const included = chosen.has(actor.id);
           return <View key={actor.id} style={[s.row, { justifyContent: "space-between" }]}>
             <View style={{ flex: 1 }}><ActorLine actor={actor} subtitle={`@${actor.handle}`} /></View>
@@ -79,9 +98,16 @@ export function MentionPicker({ client, viewer, selfId, related = [], selected, 
         })}
         {loading && <Text style={s.meta}>正在读取关注列表…</Text>}
         {error && <CommunityButton label="关注列表暂时无法读取，重试" onPress={() => setReload(value => value + 1)} />}
-        {!loading && !error && candidates.length === 0 && <Text style={s.meta}>暂时没有可提及的人。</Text>}
+        {!loading && !error && matches.length === 0 &&
+          <Text accessibilityLiveRegion="polite" style={s.meta}>
+            {keyword ? "已加载的候选里没有匹配结果。" : "暂时没有可提及的人。"}
+          </Text>}
         {!loading && !error && cursor && <CommunityButton label="加载更多关注" onPress={() => setNext(cursor)} />}
       </ScrollView>
     </View>
   </BottomSheet>;
+}
+
+function normalizeMentionKeyword(value: string): string {
+  return value.normalize("NFKC").trim().replace(/^@/, "").trim().toLowerCase();
 }
