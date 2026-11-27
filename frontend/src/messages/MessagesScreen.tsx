@@ -5,6 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat } from "../../../contracts/chat";
 import type { ActorContext, CommunityNotification } from "../../../contracts/community";
 import { safeClientMessage } from "../adapters/real-api";
+import { communityNoticeLabel, communityNoticeTarget } from "./community-notice";
 import { formatChatAction } from "../chat/actions";
 import type { ChatClient } from "../chat/client";
 import type { ChatDraftStore } from "../chat/draftStore";
@@ -599,20 +600,9 @@ function CommunityNotices({ client, viewer, visible, onOpen, onRead }: {
   };
 
   return <NoticeList load={load} acknowledge={acknowledge} onRead={onRead} visible={visible}
-    onOpen={note => onOpen(note.postId ? { type: "detail", id: note.postId, commentId: note.commentId ?? undefined }
-      : { type: "profile", id: note.actor.id })}
+    onOpen={note => onOpen(communityNoticeTarget(note))}
     renderSummary={note => <ActorLine actor={note.actor} subtitle={communityNoticeLabel(note)} />}
   />;
-}
-
-function communityNoticeLabel({ kind, commentId }: CommunityNotification) {
-  switch (kind) {
-    case "FOLLOW": return "关注了你";
-    case "COMMENT": return "评论了你的动态";
-    case "LIKE": return "赞了你的动态";
-    case "MENTION": return commentId ? "在评论中提及了你" : "在动态中提及了你";
-    default: return "给你发来一条社区通知";
-  }
 }
 
 function OwnerNotices({ api, visible, onOpen, onRead, companions }: {
