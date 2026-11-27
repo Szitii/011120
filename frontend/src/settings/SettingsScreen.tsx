@@ -1,5 +1,5 @@
-import React, { useRef, useState, type ComponentProps } from "react";
-import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useRef, useState, type ComponentProps } from "react";
+import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { SelfServiceResult } from "../auth/account-session";
@@ -12,6 +12,7 @@ import { useSkin, useThemedStyles, TEXT_SIZES } from "../theme/SkinProvider";
 import type { UiPalette } from "../theme/skinTokens";
 import { CHROME, RADIUS } from "../theme/layoutTokens";
 import { WalletBalance } from "../wallet/WalletBalance";
+import { clearAppCache, formatCacheBytes, readPlaybackCacheBytes } from "./cache-management";
 
 export function SettingsScreen({
   account,
@@ -52,6 +53,43 @@ export function SettingsScreen({
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordResult, setPasswordResult] = useState<SelfServiceResult>();
   const passwordPendingRef = useRef(false);
+
+  const [cacheSheetOpen, setCacheSheetOpen] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
+  const [cacheBytes, setCacheBytes] = useState<number>();
+  const [cacheNotice, setCacheNotice] = useState("");
+  const cachePending = useRef(false);
+  const webCache = Platform.OS === "web";
+
+  useEffect(() => {
+    if (!webCache) setCacheBytes(readPlaybackCacheBytes());
+  }, [webCache]);
+
+  function openCacheSheet() {
+    if (cachePending.current) return;
+    if (!webCache) setCacheBytes(readPlaybackCacheBytes());
+    setCacheNotice("");
+    setCacheSheetOpen(true);
+  }
+
+  async function confirmCacheClear() {
+    if (webCache || cachePending.current) return;
+    cachePending.current = true;
+    setClearingCache(true);
+    setCacheNotice("");
+    try {
+      const result = await clearAppCache();
+      setCacheNotice(result.failed ? "缓存未完全清除，请重试。"
+        : result.inUse ? "已清除可清理的缓存。正在播放的语音会在结束后释放。"
+        : "缓存已清除。");
+    } catch {
+      setCacheNotice("未能清除缓存，请重试。");
+    } finally {
+      setCacheBytes(readPlaybackCacheBytes());
+      cachePending.current = false;
+      setClearingCache(false);
+    }
+  }
 
   const canUpdatePassword = Boolean(account?.updatePassword);
 
@@ -224,6 +262,15 @@ export function SettingsScreen({
           </View>
         </View>
 
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>存储</Text>
+          <View style={styles.card}>
+            <SettingRow icon="trash-outline" label="清除缓存"
+              valueText={webCache ? "由浏览器管理" : cacheBytes === undefined ? "部分缓存无法统计" : `语音 ${formatCacheBytes(cacheBytes)}`}
+              onPress={openCacheSheet} last />
+          </View>
+        </View>
+
         {onOpenLegal && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>协议与条款</Text>
@@ -257,6 +304,25 @@ export function SettingsScreen({
 
         <Text style={styles.footnote}>外观设置只在这台设备生效。</Text>
       </ScrollView>
+
+      <BottomSheet visible={cacheSheetOpen} title="清除缓存"
+        onClose={() => { if (!cachePending.current) setCacheSheetOpen(false); }}>
+        <View style={styles.sheetBody}>
+          {webCache ? <Text style={styles.sheetDescription}>网页缓存由浏览器管理，请使用浏览器的缓存设置。</Text> : <>
+            <Text style={styles.sheetDescription}>清除应用的图片缓存和可重新下载的语音回放文件。登录状态、草稿和偏好设置会保留。</Text>
+            <Text style={styles.sheetHint}>
+              {cacheBytes === undefined ? "语音缓存大小暂时无法统计。" : `语音回放缓存占用 ${formatCacheBytes(cacheBytes)}。`}
+              图片缓存大小无法统计。
+            </Text>
+            {cacheNotice !== "" && <Text accessibilityLiveRegion="polite" style={styles.sheetHint}>{cacheNotice}</Text>}
+            <Pressable accessibilityRole="button" accessibilityState={{ disabled: clearingCache, busy: clearingCache }}
+              disabled={clearingCache} onPress={() => void confirmCacheClear()}
+              style={[styles.primaryButton, clearingCache && styles.buttonDisabled]}>
+              <Text style={styles.primaryButtonText}>{clearingCache ? "正在清除…" : "确认清除"}</Text>
+            </Pressable>
+          </>}
+        </View>
+      </BottomSheet>
 
       <BottomSheet visible={passwordSheetOpen} title="修改密码" avoidKeyboard onClose={closePasswordSheet}>
         {canUpdatePassword ? (
