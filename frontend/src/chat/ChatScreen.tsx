@@ -21,6 +21,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Chat, ChatMessage, ChatSendResult, ChatVoiceInput, Wallet } from "../../../contracts/chat";
 import { formatChatAction } from "./actions";
 import { chatTimeDivider } from "./message-time";
+import { ChatHistorySearch } from "./ChatHistorySearch";
 import { chatReadTarget, makeIdempotencyKey, type ChatClient } from "./client";
 import { chatDraftKey, type ChatDraftStore } from "./draftStore";
 import { LiquidGlassSurface } from "../components/LiquidGlassSurface";
@@ -139,11 +140,34 @@ export function ChatScreen({
   const [olderError, setOlderError] = useState("");
   const [showReturnToLatest, setShowReturnToLatest] = useState(false);
   const messageList = useRef<FlatList<ChatMessage>>(null);
+  const [historySearchOpen, setHistorySearchOpen] = useState(false);
+  const [highlightedMessage, setHighlightedMessage] = useState<string>();
+  const jump = useRef<{ id: string; attempts: number } | undefined>(undefined);
+  const jumpTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visibleMessages = useMemo(() => messages.filter((item, index) => {
     if (!item.action || item.companionId !== null) return true;
     const newer = messages[index - 1];
     return !(newer?.action && newer.companionId === null);
   }), [messages]);
+  const scrollToHistoryMessage = useCallback((index: number) => {
+    const target = jump.current;
+    if (!target || !messageList.current) return;
+    const attempts = target.attempts;
+    messageList.current.scrollToIndex({ index, viewPosition: 0.5, animated: false });
+    if (jump.current === target && target.attempts === attempts) jump.current = undefined;
+  }, []);
+  const jumpIndex = highlightedMessage ? visibleMessages.findIndex(message => message.id === highlightedMessage) : -1;
+  useEffect(() => {
+    if (historySearchOpen || !jump.current || jumpIndex < 0) return;
+    const target = jump.current;
+    const frame = requestAnimationFrame(() => {
+      if (jump.current === target) scrollToHistoryMessage(jumpIndex);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [historySearchOpen, highlightedMessage, jumpIndex, scrollToHistoryMessage]);
+
+  useEffect(() => () => clearTimeout(jumpTimer.current), []);
+
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voiceInput, setVoiceInput] = useState(false);
@@ -507,6 +531,18 @@ export function ChatScreen({
     }
   }
 
+  function openHistoryMessage(id: string, history: ChatMessage[]) {
+    clearTimeout(jumpTimer.current);
+    jump.current = { id, attempts: 0 };
+    setMessages(previous => {
+      const combined = new Map(history.map(message => [message.id, message]));
+      for (const message of previous) combined.set(message.id, message);
+      return [...combined.values()].sort((a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt));
+    });
+    setHighlightedMessage(id);
+    setHistorySearchOpen(false);
+  }
+
   async function copyMessage(text: string) {
     const session = sessionRef.current;
     let copied = false;
@@ -611,16 +647,34 @@ export function ChatScreen({
         </Pressable>
 
         {chat ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="聊天设置"
-            style={({ pressed }) => [styles.backCircle, pressed && { opacity: 0.78 }]}
-            disabled={sending || voiceBusy}
-            onPress={() => onOpenSettings(chat.id, directMember?.companionId)}
-          >
-            <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
-            <Ionicons name="ellipsis-horizontal" size={19} color={ui.ink} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="查找聊天记录"
+              style={({ pressed }) => [styles.backCircle, pressed && { opacity: 0.78 }]}
+              disabled={voiceBusy || loading}
+              onPress={() => {
+                Keyboard.dismiss();
+                setTray("none");
+                clearTimeout(jumpTimer.current);
+                jump.current = undefined;
+                setHistorySearchOpen(true);
+              }}
+            >
+              <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
+              <Ionicons name="search-outline" size={19} color={ui.ink} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="聊天设置"
+              style={({ pressed }) => [styles.backCircle, pressed && { opacity: 0.78 }]}
+              disabled={sending || voiceBusy}
+              onPress={() => onOpenSettings(chat.id, directMember?.companionId)}
+            >
+              <LiquidGlassSurface glass borderRadius={RADIUS.pill} style={StyleSheet.absoluteFill} />
+              <Ionicons name="ellipsis-horizontal" size={19} color={ui.ink} />
+            </Pressable>
+          </View>
         ) : (
           <View style={styles.headerSpacer} />
         )}
@@ -652,6 +706,16 @@ export function ChatScreen({
             Math.abs(event.nativeEvent.contentOffset.y) > RETURN_TO_LATEST_SCROLL_DISTANCE,
           )}
           scrollEventThrottle={100}
+          onScrollToIndexFailed={({ index, averageItemLength }) => {
+            const target = jump.current;
+            if (!target || target.attempts >= 5) return;
+            target.attempts++;
+            messageList.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
+            clearTimeout(jumpTimer.current);
+            jumpTimer.current = setTimeout(() => {
+              if (jump.current === target) scrollToHistoryMessage(index);
+            }, 180);
+          }}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           inverted
@@ -710,7 +774,7 @@ export function ChatScreen({
               : undefined;
 
             return (
-              <View>
+              <View style={highlightedMessage === item.id ? styles.highlightedMessage : undefined}>
               {timeLabel}
               <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
                 <ChatAvatar name={senderName} owner={isMine} avatar={isMine ? ownerAvatar : sender?.avatar} size={32}
@@ -837,6 +901,9 @@ export function ChatScreen({
             accessibilityLabel="回到底部"
             style={styles.returnToLatest}
             onPress={() => {
+              clearTimeout(jumpTimer.current);
+              jump.current = undefined;
+              setHighlightedMessage(undefined);
               messageList.current?.scrollToOffset({ offset: 0, animated: true });
               setShowReturnToLatest(false);
             }}
@@ -845,6 +912,11 @@ export function ChatScreen({
           </Pressable>
         )}
         </View>
+      )}
+
+      {historySearchOpen && chat && (
+        <ChatHistorySearch key={chat.id} client={client} chatId={chat.id}
+          onClose={() => setHistorySearchOpen(false)} onSelect={openHistoryMessage} />
       )}
 
       <BottomSheet
@@ -1175,6 +1247,8 @@ const createStyles = (ui: UiPalette) => StyleSheet.create({
     justifyContent: "center",
   },
   headerSpacer: { width: 38 },
+  headerActions: { flexDirection: "row", gap: 4 },
+  highlightedMessage: { backgroundColor: ui.accentWash, borderRadius: RADIUS.bubble },
   titleBlock: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1 },
   titleText: { fontSize: 16, fontWeight: "700", color: ui.ink },
   typingText: { fontSize: 11, color: ui.accent, marginTop: 1 },
