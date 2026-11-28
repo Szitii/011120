@@ -20,7 +20,7 @@ import { ACTION_TEXT, MAX_NOTES, answersAction, localStamp, splitAction, splitRe
 import { applyRules } from "./reply-rules.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { SafetyPipeline } from "./safety.ts";
-import type { DiaryWriteResult } from "../../../contracts/chat.ts";
+import type { ConnectionFailure, DiaryWriteResult } from "../../../contracts/chat.ts";
 import type {
   ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, PostJob, PostOutcome, PostStart, ReachStart, ReminderChange,
 } from "./port.ts";
@@ -67,6 +67,8 @@ export type VoiceResult = "SPOKEN" | "NO_VOICE" | "VOICE_UNAVAILABLE" | "NO_MARK
  * REFUSED when the provider would not take the tool and the reply was written without.
  * `webTokens`: for a reply that was offered the web, the input tokens it was billed, which hold
  * what the searches brought back (16,000 are booked for a reply; a searched one may come back with more).
+ * `key` BACKUP: the platform's first key for the provider could not make the call and the backup did
+ * (time to look at the first one). `connection`: why the Owner's own key or agent gave no usable answer.
  */
 export interface ReplyTrace {
   event: "chat_reply";
@@ -82,6 +84,21 @@ export interface ReplyTrace {
   stored: boolean;
   web: number | "REFUSED" | "OFF";
   webTokens?: number;
+  key?: "BACKUP";
+  connection?: ConnectionFailure;
+}
+
+/**
+ * The Owner's own key or agent gave no usable answer, and why: thrown by a model that answers
+ * through one, so the failed reply can tell the Owner it was their side and what to look at.
+ */
+export class ConnectionFailed extends Error {
+  readonly reason: ConnectionFailure;
+  constructor(reason: ConnectionFailure) {
+    super(`The connection failed: ${reason}.`);
+    this.name = "ConnectionFailed";
+    this.reason = reason;
+  }
 }
 
 /**
@@ -103,11 +120,12 @@ export interface MemoryTrace {
  * Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on.
  * A model that answers through the Owner's own key or agent says so with `via`, for the trace;
  * one that was offered the web says with `searched` how many searches it ran (or that it was refused)
- * and how many input tokens the answer was billed.
+ * and how many input tokens the answer was billed; one that had to use the platform's backup key
+ * says so with `backup`. A key or agent of the Owner's that gives no usable answer: ConnectionFailed.
  */
 export interface ChatModel {
   reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void;
-    searched?: (searches: number | "REFUSED", inputTokens: number) => void }): Promise<Answer>;
+    searched?: (searches: number | "REFUSED", inputTokens: number) => void; backup?: () => void }): Promise<Answer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
   /** Writes a community post of its own; without it, such posts fail. */
@@ -246,6 +264,10 @@ export class ChatReplies {
       trace.outcome = final;
       try {
         trace.stored = await port.finish(turn.replyId, turn.claimId, final, bodies, clips, action, reminders);
+        // The failed reply says it was the Owner's own key or agent, and why. Without the note it is a plain failure.
+        if (trace.stored && final === "ERROR" && trace.connection !== undefined) {
+          await port.failNote(turn.replyId, trace.connection).catch(() => undefined);
+        }
       } finally {
         this.#trace(trace);
       }
@@ -436,7 +458,8 @@ export class ChatReplies {
     try {
       const started = Date.now();
       const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; },
-        searched: (searches, inputTokens) => { trace.web = searches; trace.webTokens = inputTokens; } }))
+        searched: (searches, inputTokens) => { trace.web = searches; trace.webTokens = inputTokens; },
+        backup: () => { trace.key = "BACKUP"; } }))
         .finally(() => { trace.modelMs = Date.now() - started; });
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];
@@ -479,7 +502,8 @@ export class ChatReplies {
       const clips = await this.#speak(turn, port, safe, marked.map(part => part.voice || null), results, trace);
       trace.voice = results.map(result => result ?? "VOICE_UNAVAILABLE");
       return ["SENT", safe, clips, action, reminders];
-    } catch {
+    } catch (error) {
+      if (error instanceof ConnectionFailed) trace.connection = error.reason;
       return ["ERROR", null]; // the model failed, timed out, or answered in the wrong shape
     }
   }

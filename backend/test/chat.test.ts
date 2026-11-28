@@ -5,7 +5,7 @@ import { sha256 } from "../src/companion-import/canonical.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { localStamp, splitReminders } from "../src/chat/prompt.ts";
 import { applyRules, checkRules } from "../src/chat/reply-rules.ts";
-import { ChatReplies, devChatModel, type ChatModel, type ReplyTrace } from "../src/chat/replies.ts";
+import { ChatReplies, ConnectionFailed, devChatModel, type ChatModel, type ReplyTrace } from "../src/chat/replies.ts";
 import type { ChatClaim, ChatOutcome, ChatPort, MemoryJob, MemoryNote, MemoryStart } from "../src/chat/port.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "../src/http/types.ts";
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
@@ -74,6 +74,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     finish: async (replyId, _claim, outcome, bodies, _clips, _action, reminders) => {
       finished.push([replyId, outcome, bodies]); reminded.push(reminders); return true;
     },
+    failNote: async (...args) => { calls.push(["failNote", ...args]); return { noted: true }; },
     reachBegin: async (...args) => { calls.push(["reachBegin", ...args]); return { status: "NOT_DUE" }; },
     reminders: async (...args) => { calls.push(["reminders", ...args]); return { items: [] }; },
     cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },
@@ -806,6 +807,32 @@ it("sets, cancels and delivers reminders, and writes first without ever leaving 
   assert.deepEqual(queued.finished, [[messageId, "SENT", ["（开发环境假回复）小光主动来找你了"]]]);
 });
 
+it("says on a failed reply that it was the Owner's own key or agent, and notes in the trace when the platform's backup key answered", async () => {
+  const run = async (chosen: ChatModel, claim: ChatClaim, noteFails = false) => {
+    const { port, finished, calls } = fakePort([claim]);
+    const traces: ReplyTrace[] = [];
+    const used: ChatPort = noteFails ? { ...port, failNote: async () => { throw new Error("database down"); } } : port;
+    await new ChatReplies(chosen, undefined, undefined, undefined, trace => traces.push(trace as ReplyTrace)).drain(chatId, used);
+    return { outcome: finished[0]![1], notes: calls.filter(call => call[0] === "failNote"), trace: traces[0]! };
+  };
+  const failing = (error: Error): ChatModel => ({ reply: async (_turn, context) => { context.via?.("BYOK"); throw error; } });
+
+  const refused = await run(failing(new ConnectionFailed("NO_BALANCE")), turn());
+  assert.deepEqual([refused.outcome, refused.notes, refused.trace.connection, refused.trace.channel], ["ERROR", [["failNote", messageId, "NO_BALANCE"]], "NO_BALANCE", "BYOK"]);
+  // Any other failure is a plain one: nothing says it was the Owner's side.
+  const broken = await run(failing(new Error("the reply was cut off")), turn());
+  assert.deepEqual([broken.outcome, broken.notes, "connection" in broken.trace], ["ERROR", [], false]);
+  // A turn nobody waits for stays quiet, so there is no failed reply to put a note on.
+  const quiet = await run(failing(new ConnectionFailed("AUTH_FAILED")), turn({ optional: true, replyTo: "SELF", reach: { kind: "GREETING" } }));
+  assert.deepEqual([quiet.outcome, quiet.notes, quiet.trace.connection], ["PASSED", [], "AUTH_FAILED"]);
+  // The note is extra: without it the reply is still a failed one that can be tried again.
+  assert.equal((await run(failing(new ConnectionFailed("UNREACHABLE")), turn(), true)).outcome, "ERROR");
+
+  const spare: ChatModel = { reply: async (_turn, context) => { context.backup?.(); return { messages: ["好"] }; } };
+  const plain: ChatModel = { reply: async () => ({ messages: ["好"] }) };
+  assert.deepEqual([(await run(spare, turn())).trace.key, "key" in (await run(plain, turn())).trace], ["BACKUP", false]);
+});
+
 it("checks an Owner's reply rules and runs them under a time limit", () => {
   assert.deepEqual(checkRules([{ pattern: "（[^）]*）" }, { pattern: "a", flags: "gi", replacement: "$&!", enabled: false }]),
     [{ pattern: "（[^）]*）", flags: "g", replacement: "", enabled: true }, { pattern: "a", flags: "gi", replacement: "$&!", enabled: false }],
@@ -934,6 +961,8 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.deepEqual(seen.at(-1), ["select public.own_skill_save($1,$2,$3,$4,$5) as payload", [companion, null, "记账", "帮主人记下来", true]]);
   await adapter.deleteOwnSkill(companion, messageId);
   assert.deepEqual(seen.at(-1), ["select public.own_skill_delete($1,$2) as payload", [companion, messageId]]);
+  await adapter.failNote(messageId, "NO_BALANCE");
+  assert.deepEqual(seen.at(-1), ["select public.chat_fail_note($1,$2) as payload", [messageId, "NO_BALANCE"]]);
   await adapter.sharedSkills(companion, "记账", "2026-11-28T08:00:00Z", messageId);
   assert.deepEqual(seen.at(-1), ["select public.shared_skill_list($1,$2,$3,$4) as payload", [companion, "记账", "2026-11-28T08:00:00Z", messageId]]);
   await adapter.mySharedSkills();

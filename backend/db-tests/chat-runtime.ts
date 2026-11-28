@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool, PgOwnerExecutor } from "../src/persistence/postgres/index.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
-import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
+import { ChatReplies, ConnectionFailed, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import { BackgroundScheduler } from "../src/chat/background-scheduler.ts";
@@ -212,10 +212,20 @@ try {
   assert.equal(await new ChatReplies({ reply: async () => { throw new Error("model down"); } }).drain(fresh.id, portA), 1);
   let read = await latest();
   const failed = read.items[0]!;
-  assert.deepEqual([failed.status, failed.failure, failed.retryable, failed.body], ["FAILED", "ERROR", true, null]);
+  assert.deepEqual([failed.status, failed.failure, failed.retryable, failed.body, failed.connectionFailure], ["FAILED", "ERROR", true, null, null]);
   assert.deepEqual(await portA.retry(fresh.id, failed.id), { typing: [], recording: [], replying: true });
+  // The Owner's own key or agent gave no usable answer: the failed reply says so, for its Owner alone, until it is tried again.
+  assert.equal(await new ChatReplies({ reply: async () => { throw new ConnectionFailed("NO_BALANCE"); } }).drain(fresh.id, portA), 1);
+  assert.deepEqual([(await latest()).items[0]!.id, (await latest()).items[0]!.failure, (await latest()).items[0]!.connectionFailure], [failed.id, "ERROR", "NO_BALANCE"]);
+  assert.deepEqual([await new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).failNote(failed.id, "AUTH_FAILED"), (await latest()).items[0]!.connectionFailure],
+    [{ noted: false }, "NO_BALANCE"], "not another Owner's reply");
+  await assert.rejects(portA.failNote(failed.id, "BROKE" as "ERROR"), { code: "INVALID_INPUT" });
+  assert.deepEqual(await portA.retry(fresh.id, failed.id), { typing: [], recording: [], replying: true });
+  assert.equal((await pool.query("select failure_detail from companion_private.chat_messages where id = $1", [failed.id])).rows[0]!.failure_detail, null,
+    "a retry starts clean");
   await new ChatReplies(devChatModel).drain(fresh.id, portA);
   read = await latest();
+  assert.deepEqual([await portA.failNote(failed.id, "AUTH_FAILED"), read.items[1]!.connectionFailure], [{ noted: false }, null], "nothing to note on a reply that was sent");
   assert.deepEqual(read.items.slice(0, 2).map(m => [m.status, m.body]),
     [["SENT", "收到：「会失败的一句」"], ["SENT", "（开发环境假回复）我是SecondCompanion"]]);
   assert.equal(read.items[1]!.id, failed.id);

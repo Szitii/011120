@@ -86,7 +86,7 @@ export class PlatformChatModel implements ChatModel {
     this.#call = call;
   }
 
-  async reply(turn: ChatClaim, { port, signal, searched }: Parameters<ChatModel["reply"]>[1]): Promise<Answer> {
+  async reply(turn: ChatClaim, { port, signal, searched, backup }: Parameters<ChatModel["reply"]>[1]): Promise<Answer> {
     const model = this.#catalog.pick(turn.companion.settings.model);
     if (model === undefined) return { failed: "UNAVAILABLE" };
     const book = (purpose: "REPLY" | "DECIDE"): Book => booking =>
@@ -111,6 +111,7 @@ export class PlatformChatModel implements ChatModel {
       browses(m) ? replyPrompt(turn, memories, texts, undefined, { world, skills }) : undefined));
     if ("failed" in result) return result;
     if (result.web !== undefined) searched?.(result.web, result.inputTokens);
+    if (result.backupKey) backup?.();
     if (result.refused) return { refused: true };
     return parseReply(result.text, turn.companion.displayName);
   }

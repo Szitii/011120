@@ -1,4 +1,4 @@
-import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type { Clip } from "./voices.ts";
@@ -247,6 +247,8 @@ export interface ChatPort {
    */
   finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[],
     action?: CompanionAction, reminders?: ReminderChange): Promise<boolean>;
+  /** Server only: a reply that just failed did so because the Owner's own key or agent gave no usable answer, and why. */
+  failNote(replyId: string, reason: ConnectionFailure): Promise<unknown>;
   /** Server only: queue a turn of the Companion's own (a reminder that is due, or writing first) if one is due. */
   reachBegin(companionId: string): Promise<ReachStart>;
   /** The reminders the Companion still has to deliver, soonest first ({ items }). */

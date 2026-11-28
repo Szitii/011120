@@ -10,7 +10,7 @@ import { PlatformChatModel } from "../src/chat/platform.ts";
 import type { ChatClaim, ChatPort, ChatReservation, ReservationDecision } from "../src/chat/port.ts";
 import { PASS, agentMessages, decisionPrompt, diaryPrompt, memoryPrompt, parseDecision, parseMemories, parseReply, replyPrompt, splitAction } from "../src/chat/prompt.ts";
 import { related, words } from "../src/chat/recall.ts";
-import { createModelCaller, type CallModel, type ClaudeClient, type ModelRequest } from "../src/chat/providers.ts";
+import { createModelCaller, ProviderError, type CallModel, type ClaudeClient, type ModelRequest } from "../src/chat/providers.ts";
 import { ChatReplies } from "../src/chat/replies.ts";
 import { chatFromEnvironment } from "../src/chat/setup.ts";
 import type { AuthenticatedOwnerSession, OwnerApiPort } from "../src/http/types.ts";
@@ -53,7 +53,15 @@ it("loads and checks the catalog, and picks a usable model", () => {
   const catalog = new ChatCatalog(file, keys);
   assert.deepEqual([catalog.pick(null)?.id, catalog.pick("cheap")?.id, catalog.pick("off")?.id, catalog.pick("nope")?.id], ["big", "cheap", "big", "big"]);
   assert.equal(catalog.decisionModel()?.id, "small");
-  assert.equal(catalog.apiKey(catalog.models[2]!), "ok");
+  assert.deepEqual(catalog.apiKeys(catalog.models[2]!), ["ok"]);
+  // A backup key: after the first; alone when the first is missing; and it must be another variable.
+  const backed = (env: Record<string, string>) => new ChatCatalog({ ...file, providers: { ...file.providers, other: { ...file.providers.other!, backupApiKeyEnv: "OTHER_BACKUP_KEY" } } }, env);
+  assert.deepEqual([backed({ ...keys, OTHER_BACKUP_KEY: " spare " }).apiKeys(file.models[2]!), backed({ OTHER_BACKUP_KEY: "spare" }).apiKeys(file.models[2]!),
+    backed({ OTHER_BACKUP_KEY: "spare" }).pick(null)?.id, backed({ ...keys, OTHER_BACKUP_KEY: " " }).apiKeys(file.models[2]!)],
+  [["ok", "spare"], ["spare"], "cheap", ["ok"]]);
+  for (const backupApiKeyEnv of ["OTHER_KEY", "lower", ""]) {
+    assert.throws(() => new ChatCatalog({ ...file, providers: { ...file.providers, other: { ...file.providers.other!, backupApiKeyEnv } } }, keys), /backupApiKeyEnv/);
+  }
   assert.deepEqual([catalog.has("off"), catalog.has("nope")], [true, false]);
   assert.equal(catalog.cost(catalog.models[0]!, 10_000, 2_000), 8); // 4 + 4 cents
   assert.equal(catalog.cost(catalog.models[1]!, 100, 10), 0.0015, "fractions of a cent; rounding is the caller's");
@@ -426,6 +434,76 @@ it("calls Claude through the SDK and OpenAI-style providers over HTTP", async ()
     "and no word of a web the model does not have");
   const refusing = createModelCaller(catalog, { claude, fetch: (async () => new Response("Content Exists Risk", { status: 400 })) as unknown as typeof fetch });
   await assert.rejects(refusing(searching, { ...request, web }), /HTTP 400/, "refused with and without the tool: an error as before");
+});
+
+it("makes a call with the provider's backup key when the first key cannot, and tries a key that was turned away last for a while", async () => {
+  const providers = { claude: { ...file.providers.claude!, backupApiKeyEnv: "CLAUDE_BACKUP_KEY" }, other: { ...file.providers.other!, backupApiKeyEnv: "OTHER_BACKUP_KEY" } };
+  const catalog = new ChatCatalog({ ...file, providers }, { ...keys, CLAUDE_BACKUP_KEY: "ck2", OTHER_BACKUP_KEY: "ok2" });
+  const cheap = catalog.models[2]!, big = catalog.models[0]!;
+  const good = () => Response.json({ choices: [{ message: { content: "嗨" }, finish_reason: "stop" }], usage: { prompt_tokens: 7, completion_tokens: 2 } });
+  // What each key answers next (a status, or "down" for no answer at all); a key with nothing queued answers well.
+  let answers: Record<string, (number | "down")[]> = {};
+  const used: string[] = [];
+  let clock = 1_000_000;
+  const fetcher = (async (_url: string, init: RequestInit) => {
+    const key = (init.headers as Record<string, string>).authorization!.slice(7);
+    used.push(key);
+    const next = answers[key]?.shift();
+    if (next === "down") throw new TypeError("fetch failed");
+    return next === undefined ? good() : new Response("no", { status: next });
+  }) as unknown as typeof fetch;
+  const claude = (key: string): ClaudeClient => ({ beta: { messages: { create: async () => {
+    used.push(key);
+    const next = answers[key]?.shift();
+    if (next !== undefined) throw Object.assign(new Error("refused"), { status: next });
+    return { content: [{ type: "text", text: "好" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } };
+  } } } }) as unknown as ClaudeClient;
+  const call = createModelCaller(catalog, { fetch: fetcher, claude, now: () => clock });
+  const request: ModelRequest = { system: "S", user: "U", maxTokens: 50, signal: new AbortController().signal };
+  const tried = async (model = cheap) => { used.length = 0; const result = await call(model, request); return [used.join(","), result.backupKey ?? false]; };
+
+  assert.deepEqual(await tried(), ["ok", false], "the first key, while it works");
+  for (const status of [401, 402, 403, 429, 500, 503, "down"] as const) {
+    clock += 10 * 60_000; // long enough for a key that was turned away to be tried first again
+    answers = { ok: [status] };
+    assert.deepEqual(await tried(), ["ok,ok2", true], `${status}: the backup key makes the call, and the result says so`);
+  }
+  // A key that was turned away (401, 402, 403) waits at the back for five minutes; a busy or failing provider does not bench it.
+  clock += 10 * 60_000; answers = { ok: [402] };
+  await tried();
+  assert.deepEqual(await tried(), ["ok2", true], "no waiting for the same refusal with every reply");
+  answers = { ok2: [503] };
+  assert.deepEqual(await tried(), ["ok2,ok", false], "but still there when the backup fails");
+  clock += 5 * 60_000 + 1;
+  assert.deepEqual(await tried(), ["ok", false], "and first again afterwards");
+  answers = { ok: [429] };
+  await tried();
+  assert.deepEqual(await tried(), ["ok", false], "held back once is not turned away");
+
+  // What no key can change is the answer: a request the provider calls wrong, both keys failing, time running out.
+  for (const status of [400, 404]) {
+    answers = { ok: [status] }; used.length = 0;
+    await assert.rejects(call(cheap, request), (error: unknown) => error instanceof ProviderError && error.status === status);
+    assert.equal(used.join(","), "ok", `${status}: the other key would send the same request`);
+  }
+  answers = { ok: [500], ok2: [402] }; used.length = 0;
+  await assert.rejects(call(cheap, request), /HTTP 402/, "both failed: the last error");
+  assert.equal(used.join(","), "ok,ok2");
+  clock += 10 * 60_000;
+  const over = new AbortController();
+  answers = { ok: ["down"] }; used.length = 0; over.abort();
+  await assert.rejects(call(cheap, { ...request, signal: over.signal }), /fetch failed/);
+  assert.equal(used.join(","), "ok", "out of time: no second call");
+
+  // Claude through the SDK: the same, by the status its errors carry.
+  answers = { ck: [401] };
+  assert.deepEqual(await tried(big), ["ck,ck2", true]);
+  assert.deepEqual(await tried(big), ["ck2", true]);
+  // One key only: nothing changes.
+  const single = createModelCaller(new ChatCatalog(file, keys), { fetch: fetcher, claude, now: () => clock });
+  answers = { ok: [402] }; used.length = 0;
+  await assert.rejects(single(cheap, request), /HTTP 402/);
+  assert.equal(used.join(","), "ok");
 });
 
 /** A port that books calls and records settlements; `decisions` are returned by reserve in order. */

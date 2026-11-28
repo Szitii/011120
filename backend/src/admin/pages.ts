@@ -531,11 +531,13 @@ export function modelsPage(zone: string, models: Models, catalog: readonly Catal
   const gift = w.welcomeCredits > 0 ? w.welcomeCredits : 1000;
   return page("模型与额度", "/models", html`
 ${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
-${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td>
-<td>${v.serverKey === null ? html`<span class="tag bad">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
+${vendors.map(v => html`<tr><td>${vendorName(v.key)}${v.backup ? html` <span class="tag">备用 Key</span>` : ""}</td>
+<td>${v.serverKey === null ? html`<span class="tag ${v.backup ? "" : "bad"}">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
     ? html`<span class="muted">看不到:${v.serverKey.why}</span>` : html`<span class="tag">已设置</span> <span class="muted">更新于 ${time(zone, v.serverKey.at)}</span>`}</td>
 <td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
-<p class="muted">后台只看得到 Key 有没有、何时换过,看不到也改不了 Key 本身。要加或换 Key,找 Claude 弹输入框直接存进服务器。</p>`)}
+<p class="muted">后台只看得到 Key 有没有、何时换过,看不到也改不了 Key 本身。要加或换 Key,找 Claude 弹输入框直接存进服务器。</p>
+${vendors.some(v => v.backup) ? html`<p class="muted"><b>备用 Key</b>:第一把 Key 这一次用不了(失效、欠费、被限流,或者厂商出错)时,同一条回复自动改用备用 Key 再发一次,主人感觉不到。
+所以第一把 Key 那一行显示余额不足或者查不到时,说明现在是备用 Key 在顶着,请尽快处理第一把。备用 Key 最好来自另一个账号:同一个账号的两把 Key 会一起欠费。</p>` : ""}`)}
 ${panel("模型开关", html`<div class="scroll"><table><tr><th>开关</th><th>厂商 / 模型名</th><th>现在</th></tr>${switchTargets(catalog).filter(t =>
     // With one company, its switch does exactly what the switch for everything does: shown only if someone turned it off.
     !t.value.startsWith("PROVIDER:") || vendorsUsed > 1 || !ownOn("PROVIDER", t.value.slice(9))).map(t => {

@@ -1,5 +1,5 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type {
@@ -232,6 +232,10 @@ export class PostgresChatAdapter implements ChatPort {
     const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb,$6,$7::jsonb) as payload",
       [replyId, claimId, outcome, bodies, audio, action ?? null, reminders === undefined ? null : JSON.stringify(reminders)]);
     return (payload as { accepted?: unknown }).accepted === true;
+  }
+
+  failNote(replyId: string, reason: ConnectionFailure): Promise<unknown> {
+    return this.#object("select public.chat_fail_note($1,$2) as payload", [replyId, reason]);
   }
 
   async reachBegin(companionId: string): Promise<ReachStart> {

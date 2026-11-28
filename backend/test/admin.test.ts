@@ -395,6 +395,14 @@ it("shows each model company: whether the API server has its key, and its balanc
   assert.match(noCopy, /后台没有这家的 Key\(DEEPSEEK_API_KEY\),查不了余额。/);
   const broken = (await (await start({}, undefined, fly, { vendors, fetch: (async () => new Response("no", { status: 401 })) as typeof fetch })).send("/models")).body;
   assert.match(broken, /读不到余额:DeepSeek 回答 401/);
+  // A backup key is a row of its own right after the first key's, with its own balance; without one the page says nothing about backups.
+  assert.ok(!page.includes("备用 Key"));
+  asked.length = 0;
+  const backed = (await (await start({}, undefined, fly, { vendors: [vendors[2]!, { key: "deepseek", keyEnv: "DEEPSEEK_BACKUP_API_KEY", apiKey: "sk-spare", backup: true }], fetch: get }))
+    .send("/models")).body;
+  assert.deepEqual(asked.map(a => a[1]), ["Bearer fly-ro", "Bearer sk-console", "Bearer sk-spare"]);
+  assert.match(backed, /<td>DeepSeek <span class="tag">备用 Key<\/span><\/td>\s*<td><span class="tag ">没有<\/span> <span class="muted">DEEPSEEK_BACKUP_API_KEY<\/span><\/td>/);
+  assert.match(backed, /同一条回复自动改用备用 Key 再发一次/);
 });
 
 it("shows model switches and the quota, and changes only what the catalog names", async () => {

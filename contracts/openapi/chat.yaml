@@ -1874,6 +1874,16 @@ components:
           description: |
             FAILED only. UNAVAILABLE - no model can answer yet ("coming soon"). DISABLED - the platform
             switched its models off for now. QUOTA - today's free replies are used up. ERROR - something went wrong.
+        connectionFailure:
+          type: [string, 'null']
+          enum: [AUTH_FAILED, NO_BALANCE, RATE_LIMITED, NOT_FOUND, UNREACHABLE, BAD_ANSWER, BLOCKED_ADDRESS, ERROR, null]
+          description: |
+            With failure ERROR, for a Companion that answers through the Owner's own key or agent - it was
+            that key or agent that gave no usable answer, and why. AUTH_FAILED - the key or token was refused.
+            NO_BALANCE - the account has no money left. RATE_LIMITED - too many calls for now, or a quota is
+            used up. NOT_FOUND - the address or the model name does not exist there. UNREACHABLE - no answer in
+            time, or their service failed. BAD_ANSWER - it answered, but not as a chat reply. BLOCKED_ADDRESS -
+            the address may not be called. ERROR - any other refusal. null for every other failure.
         retryable: {type: boolean}
         sentAt: {type: string, format: date-time}
         audio:

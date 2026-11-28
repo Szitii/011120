@@ -743,6 +743,13 @@ select public.test_assert(
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
   'templates, skills and the world book are reachable only through functions, each by the role it is for'
 );
+-- Why a reply through the Owner's own key failed is noted by the API server alone.
+select public.test_assert(
+  has_function_privilege('companion_api', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE'),
+  'only the API server notes why an Owner''s own key or agent failed'
+);
 -- Shared skills: Owners read the shelf, take back and report; handing one in is the API server's
 -- (it scans the texts first); deciding about one is the operators'.
 select public.test_assert(

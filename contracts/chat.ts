@@ -5,6 +5,16 @@
 import type { CompanionAction } from "./companion-actions.ts";
 import type { CommunityActor, CommunityComment, CommunityPost } from "./community.ts";
 
+/**
+ * Why the Owner's own key (自带 Key) or agent gave no usable answer to a reply.
+ * AUTH_FAILED: the key or token was refused (401 / 403). NO_BALANCE: the account has no money left
+ * (402). RATE_LIMITED: too many calls for now, or a quota is used up (429). NOT_FOUND: the address
+ * or the model name does not exist there (404). UNREACHABLE: no answer in time, or their service
+ * failed (5xx). BAD_ANSWER: it answered, but not in the format of a chat reply. BLOCKED_ADDRESS: the
+ * address now points somewhere the server may not call. ERROR: any other refusal.
+ */
+export type ConnectionFailure = "AUTH_FAILED" | "NO_BALANCE" | "RATE_LIMITED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER" | "BLOCKED_ADDRESS" | "ERROR";
+
 export interface ChatMember {
   companionId: string;
   displayName: string;
@@ -43,6 +53,12 @@ export interface ChatMessage {
    * its models off for now. QUOTA: today's free replies are used up. ERROR: something went wrong.
    */
   failure: "UNAVAILABLE" | "DISABLED" | "QUOTA" | "ERROR" | null;
+  /**
+   * With failure ERROR, for a Companion that answers through the Owner's own key or agent: it was
+   * that key or agent that gave no usable answer, and why. Tell the Owner, so they look at their
+   * own side instead of trying again. null (or missing, from an older server) for any other failure.
+   */
+  connectionFailure?: ConnectionFailure | null;
   /** true when POST .../retry may be used (failure ERROR). A BLOCKED reply is final. */
   retryable: boolean;
   sentAt: string;
