@@ -13,7 +13,8 @@ begin;
 -- this Owner uploaded it.
 --
 -- The three Storage rules of 0061 learn the new folder:
---   upload  an Owner in good standing; at most 30 avatar files kept, and 20 in an hour
+--   upload  an Owner in good standing, under a name that is nobody's avatar; at most 30 avatar
+--           files kept, and 20 in an hour
 --   read    one's own files, and a file that is now the avatar of an identity the caller may
 --           see (so listing the folder never shows another Owner's private Companion)
 --   delete  one's own files that are nobody's avatar now (the one just replaced)
@@ -91,9 +92,19 @@ end $$;
 
 -- ---------- what a signed-in user may do with an avatar file (used by the Storage policies) ----------
 
+-- An avatar name that is nobody's avatar now (a deleted Companion does not hold on to its file).
+create function public.media_avatar_unused(p_name text)
+returns boolean language sql stable security definer set search_path='' as $$
+  select public.media_is_avatar(p_name)
+    and not exists(select 1 from public.owners o where o.avatar_url = 'upload:' || substr(p_name, 8))
+    and not exists(select 1 from public.companions c where c.avatar = 'upload:' || substr(p_name, 8) and c.status <> 'DELETED')
+$$;
+
 -- As in 0061, or: an avatar file, from an Owner in good standing who keeps fewer than 30 and
 -- uploaded fewer than 20 in the last hour. (As there, Storage checks before it takes the file, so
--- uploads started together can pass together: the counts are not a hard quota.)
+-- uploads started together can pass together: the counts are not a hard quota.) The name must
+-- not be anyone's avatar now: should an avatar ever point at a file that is gone, nobody else
+-- can put their own picture under that name.
 create or replace function public.media_can_upload(p_name text)
 returns boolean language sql stable security definer set search_path='' as $$
   select (public.media_own(p_name)
@@ -104,7 +115,7 @@ returns boolean language sql stable security definer set search_path='' as $$
     and (select count(*) from companion_private.media_actors() v(id) join storage.objects f
       on f.bucket_id = 'media' and f.name like v.id::text || '/%'
       where not exists(select 1 from companion_private.post_media m where m.object_name = f.name)) < 40)
-  or (public.media_is_avatar(p_name)
+  or (public.media_avatar_unused(p_name)
     and exists(select 1 from public.owners o where o.auth_user_id = (select auth.uid()) and o.status = 'ACTIVE')
     and (select count(*) < 30 and count(*) filter (where f.created_at > now() - interval '1 hour') < 20
       from storage.objects f where f.bucket_id = 'media' and f.name like 'avatar/%'
@@ -130,14 +141,6 @@ returns boolean language sql stable security definer set search_path='' as $$
       join public.community_actors t on t.social_twin_id = st.id
       cross join companion_private.media_actors() v(id)
       where c.avatar = 'upload:' || substr(p_name, 8) and companion_private.community_visible(t.id, v.id))))
-$$;
-
--- An avatar file that is nobody's avatar now (a deleted Companion does not hold on to its file).
-create function public.media_avatar_unused(p_name text)
-returns boolean language sql stable security definer set search_path='' as $$
-  select public.media_is_avatar(p_name)
-    and not exists(select 1 from public.owners o where o.avatar_url = 'upload:' || substr(p_name, 8))
-    and not exists(select 1 from public.companions c where c.avatar = 'upload:' || substr(p_name, 8) and c.status <> 'DELETED')
 $$;
 
 -- "One's own" is read from the row (owner_id), not looked up: a rule that looked the row up

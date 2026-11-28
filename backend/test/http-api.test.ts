@@ -301,10 +301,11 @@ describe("server-only MVP HTTP/API boundary", () => {
   it("reads from a sign-in token when its owner last typed a password, not when it was refreshed", () => {
     const token = (claims: unknown) => `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
     assert.equal(signedInAt(token({ amr: [{ method: "password", timestamp: 1795767712 }] })), 1795767712000);
-    assert.equal(signedInAt(token({ amr: [{ method: "password", timestamp: 100 }, { method: "otp", timestamp: 300 }, { method: "token_refresh", timestamp: 900 }] })), 300_000,
-      "the newest proof counts; a refresh proves nothing");
+    assert.equal(signedInAt(token({ amr: [{ method: "password", timestamp: 100 }, { method: "password", timestamp: 300 }, { method: "totp", timestamp: 700 },
+      { method: "otp", timestamp: 800 }, { method: "recovery", timestamp: 850 }, { method: "token_refresh", timestamp: 900 }] })), 300_000,
+      "only a typed password counts: an authenticator added to a live session, a code from the mailbox or a refresh prove no password");
     for (const claims of [{}, { amr: [] }, { amr: "password" }, { amr: [null, 7, { method: "password" }, { method: "password", timestamp: "1795767712" }] },
-      { amr: [{ method: "token_refresh", timestamp: 900 }] }]) {
+      { amr: [{ method: "token_refresh", timestamp: 900 }] }, { amr: [{ method: "totp", timestamp: 900 }, { method: "otp", timestamp: 900 }] }]) {
       assert.equal(signedInAt(token(claims)), undefined, JSON.stringify(claims));
     }
     for (const broken of ["", "not-a-token", "a.b", "a.%%%.c", `a.${Buffer.from("[1").toString("base64url")}.c`, `a.${Buffer.from("null").toString("base64url")}.c`]) {

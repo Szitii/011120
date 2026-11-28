@@ -15,7 +15,8 @@ begin;
 --     address and token, the keys their agent checks in with): a secret is not something to keep
 --     on file;
 --   - the sign-in is banned and its sessions are ended, so no new token is issued. A token
---     already issued (an hour at most) is refused by this server at once;
+--     already issued (an hour at most) is refused by this server at once; Storage still lets it
+--     fetch its own files until it runs out;
 --   - the time is written down (owners.closed_at) for whoever later decides how long a closed
 --     account stays on file.
 -- The e-mail address stays taken. There is no way back from the app: reopening an account is an
@@ -24,19 +25,32 @@ begin;
 -- Only the API server may call it: the server first makes sure the caller typed their password
 -- within the last few minutes, which the database cannot see.
 
+-- The function below changes rows of the sign-in service as its owner, whoever runs this migration.
+do $$ begin
+  if not has_table_privilege(current_user, 'auth.users', 'UPDATE')
+    or not has_table_privilege(current_user, 'auth.sessions', 'DELETE')
+    or not (select rolsuper or rolbypassrls from pg_catalog.pg_roles where rolname = current_user) then
+    raise exception 'this migration must be run by a role that can change every row of auth.users and auth.sessions';
+  end if;
+end $$;
+
 alter table public.owners add column closed_at timestamptz;
 
 create function public.account_close()
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare o uuid := companion_private.chat_owner(); uid uuid := (select auth.uid());
 begin
-  perform 1 from public.owners where id = o for update;
-  update public.owners set status = 'DELETED', closed_at = now(), updated_at = now() where id = o;
+  -- The update is the lock (the kind every other writer takes on an Owner: audit rows written for
+  -- this Owner meanwhile are not held up). Of two requests at once, the second finds it closed.
+  update public.owners set status = 'DELETED', closed_at = now(), updated_at = now() where id = o and status = 'ACTIVE';
+  if not found then raise exception using errcode='42501', message='authentication required'; end if;
   delete from companion_private.companion_connections x using public.companions c
     where c.id = x.companion_id and c.owner_id = o;
   delete from companion_private.agent_keys where owner_id = o;
   -- A date far away rather than 'infinity', which the sign-in service may not read.
   update auth.users set banned_until = now() + interval '100 years' where id = uid;
+  -- Closed here but still able to sign in would be the worst of both: undo everything instead.
+  if not found then raise exception using errcode='XX000', message='the sign-in could not be banned'; end if;
   delete from auth.sessions where user_id = uid;
   insert into public.audit_events(owner_id, actor_type, actor_id, action, target_type, target_id)
     values (o, 'OWNER', o, 'ACCOUNT_CLOSE', 'OWNER', o);

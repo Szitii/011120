@@ -251,8 +251,8 @@ export interface AuthenticatedOwnerSession {
   readonly community?: import("../community/port.ts").CommunityPort;
   readonly chat?: import("../chat/port.ts").ChatPort;
   /**
-   * When this sign-in last proved who it is (typed the password, or a code from an e-mail), in
-   * milliseconds; a refreshed token keeps the time. Unknown on the dev host, whose token is fixed.
+   * When the password was last typed for this sign-in, in milliseconds; a refreshed token keeps
+   * the time. Unknown on the dev host, whose token is fixed, and for a sign-in without a password.
    */
   readonly signedInAt?: number;
   /** Set when the caller is the Owner's agent with an agent key: it may only check in (agent/heartbeat.ts). */

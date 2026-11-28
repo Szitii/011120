@@ -1018,8 +1018,8 @@ paths:
         model keys, their agent's address and token, agent keys) are destroyed. The e-mail address
         stays taken, and there is no way back from the app.
 
-        The caller must have signed in with their password (or a code from an e-mail) within the
-        last 10 minutes: a token that was only refreshed does not count. Otherwise 403
+        The caller must have signed in with their password within the last 10 minutes: a token
+        that was only refreshed does not count, and neither does any other way of signing in. Otherwise 403
         SIGN_IN_AGAIN: ask for the password, sign in again, and repeat the call with the new token.
         No request body.
       x-capability-status: implemented

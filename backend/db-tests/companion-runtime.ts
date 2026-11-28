@@ -149,6 +149,10 @@ try {
   assert.deepEqual([await canRead(B.subject, faceA), await canRead(B.subject, faceAi)], [false, true]);
   assert.equal((await call(0, `community/blocks/${actorB.id}?${as(ownerA)}`, "DELETE")).status, 200);
   assert.equal(await canRead(B.subject, faceA), true);
+  // Should an avatar ever point at a file that is gone, nobody else can put a picture under its name.
+  await pool.query("delete from storage.objects where bucket_id = 'media' and name = $1", [`avatar/${faceA}`]);
+  await assert.rejects(upload(B.subject, faceA), refusedUpload, "a name that is someone's avatar is not free");
+  await pool.query("insert into storage.objects(bucket_id, name, owner_id) values ('media', $1, $2)", [`avatar/${faceA}`, A.subject]);
   // Deleting: one's own file, once it is nobody's avatar.
   assert.deepEqual([await remove(A.subject, faceA), await remove(B.subject, faceA)], [0, 0], "not while it is an avatar");
   assert.deepEqual((await call(0, "owner/avatar", "PUT", { avatar: "preset:cat_01" })).data, { avatar: "preset:cat_01" });
