@@ -14,7 +14,7 @@ import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, Picture, PostJo
 import { decisionPrompt, diaryPrompt, memoryPrompt, parseDecision, parseMemories, parsePost, parseReply, parseSeen, postPrompt, replyPrompt, seePrompt,
   withPictures } from "./prompt.ts";
 import { usablePromptTexts, type PromptTexts } from "./prompt-texts.ts";
-import type { CallModel, ModelRequest, ModelResult, ToolRound } from "./providers.ts";
+import { ProviderError, type CallModel, type ModelRequest, type ModelResult, type ToolRound } from "./providers.ts";
 import type { Toolbox } from "../tools/box.ts";
 import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer, SeeAnswer, SeeJob } from "./replies.ts";
 
@@ -124,7 +124,14 @@ export class PlatformChatModel implements ChatModel {
       if (tools !== undefined && m.options?.tools === true) {
         return this.#withTools(port, round => book("REPLY", round === 0 ? undefined : `tool:${round}`), m,
           replyPrompt(read, memories, texts, undefined, { world, skills, tools: true }), signal, tools,
-          sees(m) ? pictures.map(picture => picture.picture) : undefined);
+          sees(m) ? pictures.map(picture => picture.picture) : undefined)
+          // A request with tools that the provider calls wrong (a tool described in a way it will not take): the Owner
+          // still gets an answer, written without tools and without a word of them, as a call of its own in the ledger.
+          .catch((error: unknown) => {
+            if (!(error instanceof ProviderError && error.status === 400)) throw error;
+            return this.#run(port, book("REPLY", "plain"), m, replyPrompt(read, memories, texts, undefined, { world, skills }), REPLY_TOKENS, signal,
+              MAX_INPUT_TOKENS, undefined, sees(m) ? pictures.map(picture => picture.picture) : undefined);
+          });
       }
       return this.#run(port, book("REPLY"), m,
         replyPrompt(read, memories, texts, undefined, { web: browses(m), world, skills }), REPLY_TOKENS, signal, MAX_INPUT_TOKENS,

@@ -2409,15 +2409,16 @@ components:
                     confirm: {type: boolean, description: Done only after the Owner says yes to that very call.}
     ToolRequest:
       type: object
-      required: [id, server, tool, arguments, status, result, createdAt]
+      required: [id, server, tool, arguments, status, result, createdAt, decidedAt]
       properties:
         id: {type: string, format: uuid}
         server: {type: string, description: The tool server's name.}
         tool: {type: string}
         arguments: {type: object, description: Exactly what will be sent to the tool.}
         status: {type: string, enum: [PENDING, EXPIRED, RUNNING, DONE, FAILED, DECLINED]}
-        result: {type: [string, 'null'], description: What the tool server answered - for DONE and FAILED.}
+        result: {type: [string, 'null'], description: What the tool server answered - for DONE and FAILED. For FAILED it says whether nothing was done or whether nobody knows; show it as it is.}
         createdAt: {type: string, format: date-time}
+        decidedAt: {type: [string, 'null'], format: date-time, description: When the Owner answered.}
     SharedSkill:
       type: object
       required: [id, title, summary, body, author, usedBy, enabled, mine, sharedAt]

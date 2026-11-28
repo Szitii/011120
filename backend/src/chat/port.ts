@@ -27,7 +27,9 @@ export interface ChatClaim {
     /** The pictures the Owner sent with it; null or left out: none. */
     images?: HistoryImage[] | null;
     /** A call the Companion asked the Owner to confirm with this reply, and what became of it; null or left out: none. */
-    toolRequest?: { server: string; tool: string; status: "PENDING" | "EXPIRED" | "RUNNING" | "DONE" | "FAILED" | "DECLINED"; result: string | null } | null;
+    toolRequest?: { server: string; tool: string; status: "PENDING" | "EXPIRED" | "RUNNING" | "DONE" | "FAILED" | "DECLINED"; result: string | null;
+      /** When the Owner answered; null or left out while it waits. */
+      decidedAt?: string | null } | null;
   }[];
   /** The Companion may use the tools its Owner connected in this turn (the operators' switch, a one-to-one chat, answering the Owner). */
   canUseTools?: boolean;

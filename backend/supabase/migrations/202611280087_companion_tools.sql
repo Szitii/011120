@@ -147,15 +147,18 @@ returns jsonb language sql immutable as $$
 $$;
 
 -- A request as its Owner sees it on the reply. status: PENDING while it waits for the Owner's
--- answer, EXPIRED when none came within 15 minutes, RUNNING while the call is made (a call that did
--- not come back within 2 minutes reads as FAILED), DONE, FAILED, DECLINED. result: what the tool
--- answered, for DONE and FAILED.
+-- answer, EXPIRED when none came within 15 minutes, RUNNING while the call is made, DONE, FAILED,
+-- DECLINED. result: what the tool answered, for DONE and FAILED. A call that did not come back
+-- within 2 minutes (the server stopped in the middle) reads as FAILED with a result that says the
+-- truth: nobody knows whether it was made. decidedAt: when the Owner answered.
 create function companion_private.tool_request_json(t companion_private.tool_requests)
 returns jsonb language sql stable security definer set search_path='' as $$
   select jsonb_build_object('id', t.id, 'server', s.title, 'tool', t.tool, 'arguments', t.arguments,
     'status', case when t.status = 'PENDING' and t.created_at < now() - interval '15 minutes' then 'EXPIRED'
       when t.status = 'RUNNING' and t.decided_at < now() - interval '2 minutes' then 'FAILED' else t.status end,
-    'result', t.result, 'createdAt', t.created_at)
+    'result', case when t.status = 'RUNNING' and t.decided_at < now() - interval '2 minutes'
+      then '结果不确定：执行到一半中断了，可能已经办了，也可能没有。请先到对方那里（App 或订单列表）确认，不要直接再办一次。' else t.result end,
+    'createdAt', t.created_at, 'decidedAt', t.decided_at)
   from companion_private.tool_servers s where s.id = t.server_id
 $$;
 
@@ -359,8 +362,9 @@ returns jsonb language sql stable security definer set search_path='' as $$
     'reach', case m.reply_to when 'SELF' then 'GREETING' when 'REMINDER' then 'REMINDER' end)
 $$;
 
--- As in 0086, plus canUseTools, and on each message of the history its request (the server's
--- name, the tool, how it ended and what it returned).
+-- As in 0086, plus canUseTools, on each message of the history its request (the server's name, the
+-- tool, how it ended, when, and what it returned), and: a request left on the reply being claimed
+-- by an attempt that failed is deleted.
 create or replace function public.chat_claim(p_chat uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare c companion_private.chats%rowtype; m companion_private.chat_messages%rowtype; claim uuid := gen_random_uuid();
@@ -405,6 +409,9 @@ begin
   end loop;
   update companion_private.chat_messages set claim_id = claim, claimed_at = now(), attempts = attempts + 1, compute_tx = null
     where id = m.id;
+  -- A request an earlier attempt at this reply left behind (the attempt failed before anything was
+  -- shown) goes: the reply written now asks for what it asks for, or for nothing.
+  delete from companion_private.tool_requests where message_id = m.id;
   reach := m.reply_to = 'OWNER' and c.direct_companion_id is not null and companion_private.feature_on('COMPANION_REACH');
   return jsonb_build_object('chatId', c.id, 'replyId', m.id, 'claimId', claim, 'replyTo', m.reply_to,
     'optional', m.optional, 'direct', c.direct_companion_id is not null,

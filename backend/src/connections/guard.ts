@@ -87,15 +87,21 @@ export interface RawResult {
   readonly text: string;
 }
 
-/** Like PostJson, for a caller that reads the answer itself (headers, or a body that is not one JSON document). */
-export type PostRaw = (url: URL, headers: Record<string, string>, body: unknown, options: { signal: AbortSignal; timeoutMs: number }) => Promise<RawResult>;
+/**
+ * Like PostJson, for a caller that reads the answer itself (headers, or a body that is not one JSON
+ * document). `enough`: asked after each piece of a body that arrives as an event stream; true ends
+ * the call there with what has come (such a stream may be left open by the other side after it has
+ * said everything).
+ */
+export type PostRaw = (url: URL, headers: Record<string, string>, body: unknown,
+  options: { signal: AbortSignal; timeoutMs: number; enough?: (text: string) => boolean }) => Promise<RawResult>;
 
 const MAX_ANSWER_BYTES = 512 * 1024;
 
 /** POSTs JSON to a checked URL through publicLookup. Rejects on a blocked address, timeout, abort or oversized answer. */
 export function createPostRaw(resolve: Lookup = dnsLookup): PostRaw {
   const lookup = publicLookup(resolve);
-  return (url, headers, body, { signal, timeoutMs }) => new Promise<RawResult>((resolvePost, reject) => {
+  return (url, headers, body, { signal, timeoutMs, enough }) => new Promise<RawResult>((resolvePost, reject) => {
     const payload = Buffer.from(JSON.stringify(body));
     const call = request({
       protocol: "https:", hostname: url.hostname.replace(/^\[|\]$/g, ""), port: 443, path: `${url.pathname}`, method: "POST",
@@ -104,16 +110,19 @@ export function createPostRaw(resolve: Lookup = dnsLookup): PostRaw {
     }, response => {
       const chunks: Buffer[] = [];
       let size = 0;
+      const answered = () => {
+        const seen = Object.fromEntries(Object.entries(response.headers).flatMap(([name, value]) =>
+          (value === undefined ? [] : [[name.toLowerCase(), Array.isArray(value) ? value.join(", ") : value]])));
+        resolvePost({ status: response.statusCode ?? 0, headers: seen, text: Buffer.concat(chunks).toString("utf8") });
+      };
+      const stream = enough !== undefined && String(response.headers["content-type"] ?? "").includes("text/event-stream");
       response.on("data", (chunk: Buffer) => {
         size += chunk.length;
         if (size > MAX_ANSWER_BYTES) { call.destroy(new Error("The answer is too large.")); return; }
         chunks.push(chunk);
+        if (stream && enough(Buffer.concat(chunks).toString("utf8"))) { answered(); call.destroy(); }
       });
-      response.on("end", () => {
-        const seen = Object.fromEntries(Object.entries(response.headers).flatMap(([name, value]) =>
-          (value === undefined ? [] : [[name.toLowerCase(), Array.isArray(value) ? value.join(", ") : value]])));
-        resolvePost({ status: response.statusCode ?? 0, headers: seen, text: Buffer.concat(chunks).toString("utf8") });
-      });
+      response.on("end", answered);
       response.on("error", reject);
     });
     call.on("timeout", () => call.destroy(new Error("The call timed out.")));

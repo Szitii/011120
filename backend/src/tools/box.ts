@@ -14,7 +14,7 @@
 import type { PostRaw } from "../connections/guard.ts";
 import type { SecretBox } from "../connections/secret-box.ts";
 import type { ChatPort } from "../chat/port.ts";
-import { McpError, mcpSession, type McpFailure, type McpSession, type McpTool } from "./mcp.ts";
+import { McpError, mcpSession, uncertain, type McpFailure, type McpSession, type McpTool } from "./mcp.ts";
 
 /** A tool as a model request declares it. */
 export interface ToolSpec { name: string; description: string; parameters: unknown }
@@ -38,6 +38,10 @@ interface Offered {
 const MAX_CALLS = 6;
 const RESULT_CHARS = 4000;
 const CALL_TIMEOUT_MS = 15_000;
+/** A call the Owner confirmed: the handshake and the call, each with room of its own. */
+const RUN_TIMEOUT_MS = 30_000;
+/** How often a turn may change what it asks the Owner to confirm. */
+const MAX_ASKS = 3;
 
 const WHY: Readonly<Record<McpFailure, string>> = {
   AUTH: "主人的令牌失效了或没有权限：请主人到这个家机的工具设置里重新连接",
@@ -72,6 +76,7 @@ export async function openToolbox(port: ChatPort, box: SecretBox, turn: { replyI
   const open = new Map<string, McpSession>();
   const used = { calls: 0, asked: false };
   let left = offered.left;
+  let asks = 0;
   return {
     used,
     specs: [...tools].map(([name, { server, tool }]) => ({ name, parameters: tool.inputSchema,
@@ -85,11 +90,14 @@ export async function openToolbox(port: ChatPort, box: SecretBox, turn: { replyI
       const { server, tool } = found;
       try {
         if (tool.confirm) {
-          if (used.asked) return "这一轮已经请主人确认了一件事。等主人回答了再说下一件。";
+          // One card per reply: asking again in the same turn replaces it, so the card and the words stay the same thing.
+          if (asks >= MAX_ASKS) return "这一轮已经改了几次要请主人确认的事，不能再改了。确认卡上是最后一次成功提交的内容，照那个告诉主人。";
           await port.toolRequestOpen(turn.replyId, turn.claimId, server.id, tool.name, args as Record<string, unknown>);
+          asks += 1;
+          const again = used.asked ? "确认卡已经换成这一次的内容，之前那次作废了。" : "";
           used.asked = true;
-          return `这个操作（${server.title}·${tool.name}）还没有执行：系统已经给主人发了确认卡，主人点了确认才会执行。`
-            + "现在用一两句话告诉主人你准备做什么（关键内容，有金额就说金额），请 TA 确认。不要说已经办好了。";
+          return `${again}这个操作（${server.title}·${tool.name}）还没有执行：系统已经给主人发了确认卡，主人点了确认才会执行。`
+            + "现在用一两句话告诉主人你准备做什么（关键内容，有金额就说金额），请 TA 确认。说的要和这次提交的内容一致；不要说已经办好了。";
         }
         if (left <= 0) return "今天调用工具的次数用完了，明天再来。请照实告诉主人。";
         if (used.calls >= MAX_CALLS) return "这一轮调用工具的次数到上限了。请根据已经查到的信息回答主人。";
@@ -144,13 +152,22 @@ export class Tools {
   /** The tools a server lists for this token. Throws McpError when it cannot be reached or refuses the token. */
   list(url: URL, token: string): Promise<McpTool[]> { return this.session(url, token).tools(AbortSignal.timeout(CALL_TIMEOUT_MS)); }
 
-  /** Makes one call with a sealed token; the text is what is kept as the request's result. */
+  /**
+   * Makes the call of a request the Owner confirmed, with the sealed token; the text is what is
+   * kept as the request's result. When the tool server refused, nothing was done and the text says
+   * why. When it did not answer in time, failed, or answered something else, nobody knows whether
+   * the call was carried out, and the text says that instead: told as a plain failure, the Owner
+   * would ask again and it might be done twice.
+   */
   async run(server: { url: string; secret: string; companionId: string }, tool: string, args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
     try {
-      const result = await this.session(new URL(server.url), this.box.open(server.secret, server.companionId)).call(tool, args, AbortSignal.timeout(CALL_TIMEOUT_MS));
+      const result = await this.session(new URL(server.url), this.box.open(server.secret, server.companionId)).call(tool, args, AbortSignal.timeout(RUN_TIMEOUT_MS));
       return { ok: result.ok, text: cut(result.text.length > 0 ? result.text : "（没有内容）") };
     } catch (error) {
-      return { ok: false, text: `没有调用成功：${WHY[error instanceof McpError ? error.reason : "UNREACHABLE"]}。` };
+      const reason = error instanceof McpError ? error.reason : "UNREACHABLE";
+      return { ok: false, text: uncertain(reason)
+        ? `结果不确定：${WHY[reason]}。可能已经办了，也可能没有。请先到对方那里（App 或订单列表）确认，不要直接再办一次。`
+        : `没有执行：${WHY[reason]}。` };
     }
   }
 }

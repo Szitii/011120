@@ -68,9 +68,10 @@ export interface ToolConnectRefusal {
 /**
  * A call the Companion wants made and the Owner has to confirm. `server` is the tool server's name,
  * `tool` the tool, `arguments` exactly what will be sent. PENDING: waiting for the Owner (15
- * minutes, then EXPIRED). RUNNING: confirmed, the call is being made. DONE / FAILED: it was made;
- * `result` is what the tool server answered (text, up to 4000 characters), and the Companion writes
- * a message about it. DECLINED: the Owner said no.
+ * minutes, then EXPIRED). RUNNING: confirmed, the call is being made. DONE: it was made; `result`
+ * is what the tool server answered (text, up to 4000 characters). FAILED: it was not made, or
+ * nobody knows whether it was (the tool server did not answer in time): `result` says which, show
+ * it as it is. After DONE or FAILED the Companion writes a message about it. DECLINED: the Owner said no.
  * Answer with POST /v0/chats/{chatId}/tool-requests/{id} { decision: "CONFIRM" | "DECLINE" }.
  */
 export interface ToolRequest {
@@ -81,6 +82,8 @@ export interface ToolRequest {
   status: "PENDING" | "EXPIRED" | "RUNNING" | "DONE" | "FAILED" | "DECLINED";
   result: string | null;
   createdAt: string;
+  /** When the Owner answered; null while it waits. */
+  decidedAt: string | null;
 }
 
 /**

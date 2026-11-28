@@ -10,12 +10,19 @@
  * Every call goes through the guard (connections/guard.ts): https, public addresses only, no
  * redirects, the answer capped in size and time.
  */
-import type { PostRaw } from "../connections/guard.ts";
+import { checkUrl, type PostRaw } from "../connections/guard.ts";
 
 export interface McpTool { name: string; description: string; inputSchema: unknown }
 
-/** Why a tool server gave no usable answer. */
+/**
+ * Why a tool server gave no usable answer. AUTH, RATE_LIMITED and NOT_FOUND are refusals: nothing
+ * was done. UNREACHABLE (no answer in time, or the server failed) and BAD_ANSWER leave it open
+ * whether a call that was sent was carried out: see `uncertain`.
+ */
 export type McpFailure = "AUTH" | "RATE_LIMITED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER";
+
+/** After this failure nobody knows whether the call was carried out. */
+export const uncertain = (reason: McpFailure): boolean => reason === "UNREACHABLE" || reason === "BAD_ANSWER";
 
 export class McpError extends Error {
   readonly reason: McpFailure;
@@ -66,10 +73,12 @@ export function mcpSession(post: PostRaw, url: URL, token: string): McpSession {
   async function send(method: string, params: unknown, headers: Record<string, string>, signal: AbortSignal, notify = false):
     Promise<{ result: Record<string, unknown> | undefined; headers: Readonly<Record<string, string>> }> {
     const id = notify ? undefined : nextId++;
+    // Only an address the server may call at all (https, port 443, not a private address written out).
+    if (typeof checkUrl(url.href) === "string") throw new McpError("NOT_FOUND");
     let answer;
     try {
       answer = await post(url, { ...base, ...headers }, { jsonrpc: "2.0", ...(id === undefined ? {} : { id }), method, ...(params === undefined ? {} : { params }) },
-        { signal, timeoutMs: TIMEOUT_MS });
+        { signal, timeoutMs: TIMEOUT_MS, ...(id === undefined ? {} : { enough: (text: string) => rpcAnswer(text, "text/event-stream", id) !== undefined }) });
     } catch {
       throw new McpError("UNREACHABLE");
     }

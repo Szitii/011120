@@ -97,7 +97,8 @@ const FEEDBACK_PLATFORMS: readonly string[] = ["IOS", "ANDROID", "WEB"];
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid chat request."); };
 const notFound = (): never => { throw new PostgresPersistenceError("NOT_FOUND", "Chat route not found."); };
-const id = (value: unknown): string => typeof value === "string" && UUID.test(value) ? value : invalid();
+// In lower case, as the database writes ids: a secret sealed for a Companion is bound to its id letter for letter.
+const id = (value: unknown): string => typeof value === "string" && UUID.test(value) ? value.toLowerCase() : invalid();
 const header = (request: MvpHttpRequest, name: string): string | undefined =>
   Object.entries(request.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
 const ids = (value: unknown, min: number): string[] =>

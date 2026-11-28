@@ -1634,14 +1634,15 @@ Key 是每个家机单独存的。主人给家机 A 配过自带 Key（或自建
 
 ```json
 { "id": "…", "server": "麦当劳", "tool": "create-order", "arguments": { "…": "…" },
-  "status": "PENDING", "result": null, "createdAt": "…" }
+  "status": "PENDING", "result": null, "createdAt": "…", "decidedAt": null }
 ```
 
 - 请在那条消息下面画一张卡：标题用 `server` + `tool`（比如"麦当劳 · 创建订单"），正文可以折叠显示 `arguments`（这是**真正会发出去的内容**，原样展示，不要美化），两个按钮：确认、取消。家机的那条消息本身会用人话说清楚要办什么、多少钱。
 - 主人点按钮：`POST /v0/chats/{chatId}/tool-requests/{id}`，body `{decision: "CONFIRM"}` 或 `{decision: "DECLINE"}`。
   - `CONFIRM`：服务器**当场去调用**，所以这个请求可能要等十几秒，请显示"正在办理"。返回 `{request, typing, replying}`：`request.status` 是 `DONE` 或 `FAILED`，`result` 是对方返回的文字；接着家机会自己发一条消息把结果告诉主人（比如支付链接），所以要像发完消息一样继续轮询会话。
   - `DECLINE`：返回 `{request}`，`status` 是 `DECLINED`。家机不会马上说话，下次聊天时它知道主人取消了。
-- `status` 一共六种：`PENDING` 等主人点（显示按钮）；`EXPIRED` 15 分钟没点，过期了（不显示按钮，可以写"已过期，请让 TA 重新发起"）；`RUNNING` 正在办；`DONE` 办好了；`FAILED` 办了但没成功；`DECLINED` 已取消。只有 `PENDING` 能点。
+- `status` 一共六种：`PENDING` 等主人点（显示按钮）；`EXPIRED` 15 分钟没点，过期了（不显示按钮，可以写"已过期，请让 TA 重新发起"）；`RUNNING` 正在办；`DONE` 办好了；`FAILED` 没办成，**或者不确定办没办成**；`DECLINED` 已取消。只有 `PENDING` 能点。
+- **`FAILED` 时请把 `result` 原样显示出来**，不要统一写成"失败"。它有两种：以"没有执行"开头的，是对方拒绝了（令牌失效等），确实没办；以"结果不确定"开头的，是对方没按时回答或中途断了，**可能已经办了**（比如订单其实已经创建）。后一种如果显示成"失败"，主人会再下一单。家机在下一条消息里也会请主人先去对方那里确认。
 - **409**：这张卡已经不是等待状态了（点过了、过期了、工具被断开了）。重新拉会话刷新卡片就行。**429** `{code:"TOOL_LIMIT"}`：今天的工具调用次数用完了（每位主人每天 100 次），这次没有执行。
 - 同一条回复最多一张卡。点两次确认不会下两单（第二次是 409）。
 - 家机说"办好了"不算数，**以卡片的 `status` 为准**。

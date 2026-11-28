@@ -6,7 +6,7 @@ import { PlatformChatModel } from "../src/chat/platform.ts";
 import type { ChatClaim, ChatPort, ChatReservation } from "../src/chat/port.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
 import { replyPrompt } from "../src/chat/prompt.ts";
-import { createModelCaller, type CallModel, type ModelRequest, type ModelResult } from "../src/chat/providers.ts";
+import { createModelCaller, ProviderError, type CallModel, type ModelRequest, type ModelResult } from "../src/chat/providers.ts";
 import { ChatReplies, type ChatModel, type ReplyTrace } from "../src/chat/replies.ts";
 import type { PostRaw, RawResult } from "../src/connections/guard.ts";
 import { SecretBox } from "../src/connections/secret-box.ts";
@@ -83,6 +83,14 @@ it("speaks to a tool server: one handshake, then its tools and calls, as JSON or
       { name: "query-meals", arguments: { store: "S1" } }], "the session and the version the server chose go with every later request");
   }
 
+  // A stream the server leaves open after it has answered: the client says when it has enough.
+  let asked: ((text: string) => boolean) | undefined;
+  const open = server({ initialize: hello, "tools/list": () => ({ tools: [] }) }, { sse: true });
+  await mcpSession(async (url, headers, body, options) => { asked = options.enough; return open.post(url, headers, body, options); }, new URL("https://tools.example/mcp"), "t").tools(signal);
+  const id = (open.sent.at(-1)!.id as number);
+  assert.deepEqual([asked!(`data: {"jsonrpc":"2.0","method":"notifications/progress"}\n\n`), asked!(`data: {"jsonrpc":"2.0","id":${id},"result":{"tools":[]}}\n\n`),
+    asked!(`data: {"jsonrpc":"2.0","id":${id + 1},"result":{}}\n\n`)], [false, true, false], "the answer to this very request, nothing else");
+
   // What can go wrong, and what it is called.
   const failing = (how: Parameters<typeof server>[1], answers: Parameters<typeof server>[0] = { initialize: hello }) =>
     mcpSession(server(answers, how).post, new URL("https://tools.example/mcp"), "t").tools(signal).then(() => "ok", (error: unknown) => error instanceof McpError ? error.reason : String(error));
@@ -138,8 +146,12 @@ it("opens a Companion's toolbox for a turn: looks things up at once, and keeps w
   const order = await tools.call("mcdonalds-cn__create-order", '{"items":["BM"]}', signal);
   assert.match(order, /还没有执行：系统已经给主人发了确认卡[^]*不要说已经办好了/);
   assert.deepEqual([calls, asked, tools.used], [[["open", "reply", "claim", serverId, "create-order", { items: ["BM"] }]], [], { calls: 1, asked: true }]);
-  assert.match(await tools.call("mcdonalds-cn__create-order", "{}", signal), /这一轮已经请主人确认了一件事/);
-  assert.equal(calls.length, 1);
+  // Asked again in the same turn (the model corrected itself): the card is replaced, so it shows what the words will say.
+  assert.match(await tools.call("mcdonalds-cn__create-order", '{"items":["BM","FF"]}', signal), /^确认卡已经换成这一次的内容，之前那次作废了。[^]*说的要和这次提交的内容一致/);
+  assert.deepEqual(calls.at(-1), ["open", "reply", "claim", serverId, "create-order", { items: ["BM", "FF"] }]);
+  await tools.call("mcdonalds-cn__create-order", "{}", signal);
+  assert.match(await tools.call("mcdonalds-cn__create-order", "{}", signal), /不能再改了/);
+  assert.equal(calls.length, 3, "three times at most");
 
   // What the model gets wrong is told to it, not thrown.
   assert.match(await tools.call("mcdonalds-cn__mall-create-order", "{}", signal), /没有这个工具/);
@@ -179,8 +191,23 @@ it("opens a Companion's toolbox for a turn: looks things up at once, and keeps w
   assert.deepEqual(await service.run({ url: "https://tools.example/mcp", secret: box.seal("member-token", companion), companionId: companion }, "create-order", { items: ["BM"] }),
     { ok: true, text: "订单 A1，支付链接 https://pay.example/a1" });
   assert.equal(sent.at(-1)!.headers.authorization, "Bearer member-token");
-  assert.deepEqual(await new Tools(box, async () => ({ status: 401, headers: {}, text: "" } satisfies RawResult)).run({ url: "https://tools.example/mcp",
-    secret: box.seal("t", companion), companionId: companion }, "create-order", {}), { ok: false, text: "没有调用成功：主人的令牌失效了或没有权限：请主人到这个家机的工具设置里重新连接。" });
+  // A confirmed call that the tool server refuses was not made. One that got no answer, or a broken one, may have been
+  // made: the result says that nobody knows, so that it is checked and not simply asked for again.
+  const confirmed = (post: PostRaw) => new Tools(box, post).run({ url: "https://tools.example/mcp", secret: box.seal("t", companion), companionId: companion }, "create-order", {});
+  assert.deepEqual(await confirmed(async () => ({ status: 401, headers: {}, text: "" } satisfies RawResult)),
+    { ok: false, text: "没有执行：主人的令牌失效了或没有权限：请主人到这个家机的工具设置里重新连接。" });
+  for (const post of [async () => ({ status: 503, headers: {}, text: "" }), async () => { throw new Error("The call timed out."); },
+    async () => ({ status: 200, headers: { "content-type": "application/json" }, text: "<html>" })] as PostRaw[]) {
+    const unknown = await confirmed(post);
+    assert.deepEqual([unknown.ok, /^结果不确定：[^]*可能已经办了，也可能没有。请先到对方那里（App 或订单列表）确认，不要直接再办一次。$/.test(unknown.text)], [false, true], unknown.text);
+  }
+  // An address the guard would not call is not called, whoever put it in the directory.
+  for (const url of ["https://10.0.0.8/mcp", "http://tools.example/mcp", "https://tools.example:8443/mcp"]) {
+    let called = false;
+    const never: PostRaw = async () => { called = true; return { status: 200, headers: {}, text: "" }; };
+    await assert.rejects(mcpSession(never, new URL(url), "t").tools(signal), (error: unknown) => error instanceof McpError && error.reason === "NOT_FOUND", url);
+    assert.equal(called, false, url);
+  }
   assert.deepEqual(Array.from({ length: 12 }, () => service.allow("owner")), [...Array.from({ length: 10 }, () => true), false, false]);
   assert.equal(service.allow("another"), true);
   clock += 600_001;
@@ -275,6 +302,21 @@ it("lets a platform model call tools a few times before it answers, each of its 
   const tight = { ...port, reserve: async () => (++n === 1 ? { decision: "RESERVED", transactionId: "t" } : { decision: "QUOTA" }) } as unknown as ChatPort;
   assert.deepEqual(await platform.reply(turn(history), { port: tight, signal, tools: toolbox }), { failed: "QUOTA" });
 
+  // A provider that calls the request with tools wrong (a tool described in a way it will not take): the reply is written
+  // without tools and without a word of them, as a call of its own. Any other failure is a failure.
+  requests.length = 0; reserved.length = 0; made.length = 0;
+  let refuse: Error | undefined = new ProviderError("other", 400);
+  const picky = new PlatformChatModel(new ChatCatalog(file, keys), async (m, request) => {
+    requests.push([m.model, request]);
+    if (request.tools !== undefined && refuse !== undefined) throw refuse;
+    return { text: "我先不查了，直接说", inputTokens: 100, outputTokens: 10, refused: false, cutOff: false };
+  });
+  assert.deepEqual(await picky.reply(turn(history), { port, signal, tools: toolbox }), { messages: ["我先不查了，直接说"] });
+  assert.deepEqual([requests.map(r => [r[1].tools !== undefined, r[1].system.includes("这一轮你有工具可以用")]), reserved.map(r => r.step), made],
+    [[[true, true], [false, false]], [undefined, "plain"], []]);
+  refuse = new ProviderError("other", 503);
+  await assert.rejects(picky.reply(turn(history), { port, signal, tools: toolbox }), /HTTP 503/);
+
   // A model that calls no functions, and a turn without a toolbox, answer as ever.
   requests.length = 0; script = [];
   await platform.reply(turn(history, { companion: { ...turn([]).companion, settings: { ...settings, model: "plain" } } }), { port, signal, tools: toolbox });
@@ -284,20 +326,35 @@ it("lets a platform model call tools a few times before it answers, each of its 
 
 it("tells the model what became of a call it asked the Owner to confirm", () => {
   const now = new Date("2026-11-28T10:01:00Z");
+  // The Owner answered after the reply was shown (10:00:30 against 10:00:00), and nothing was said since.
+  const decidedAt = "2026-11-28T10:00:30Z";
   const request = (status: NonNullable<Line["toolRequest"]>["status"], result: string | null = null) =>
-    replyPrompt(turn([said("来个巨无霸"), said("好，帮你下单，共 25 元，确认一下", companion, { toolRequest: { server: "麦当劳", tool: "create-order", status, result } })]), [], {}, now).user;
+    replyPrompt(turn([said("来个巨无霸"), said("好，帮你下单，共 25 元，确认一下", companion,
+      { toolRequest: { server: "麦当劳", tool: "create-order", status, result, decidedAt: ["PENDING", "EXPIRED"].includes(status) ? null : decidedAt } })]), [], {}, now).user;
   assert.match(request("PENDING"), /【小光】好，帮你下单，共 25 元，确认一下\n {2}（你请主人确认的操作「麦当劳·create-order」：还在等主人确认，没有执行）\n/);
   assert.match(request("DECLINED"), /主人取消了，没有执行）/);
   assert.match(request("EXPIRED"), /主人没有确认，已经过期，没有执行）/);
   assert.match(request("RUNNING"), /主人确认了，正在执行）/);
   const done = request("DONE", "订单 A1\n支付链接 https://pay.example/a1");
   assert.match(done, /主人确认了，已经执行。返回的数据：订单 A1 支付链接 https:\/\/pay\.example\/a1）/);
-  assert.match(done, /（你请主人确认的操作刚刚有了结果，见上面最后一条。现在把结果告诉主人：[^]*有支付链接就原样发给主人[^]*）$/);
-  assert.match(request("FAILED", "门店已打烊"), /主人确认了，但没有成功。门店已打烊）[^]*刚刚有了结果/);
-  assert.ok(!request("PENDING").includes("刚刚有了结果"));
-  const later = replyPrompt(turn([said("好，帮你下单", companion, { toolRequest: { server: "麦当劳", tool: "create-order", status: "DONE", result: "订单 A1" } }), said("谢谢")]), [], {}, now).user;
-  assert.ok(later.includes("返回的数据：订单 A1") && !later.includes("刚刚有了结果"), "once the talk went on it is only history");
+  assert.match(done, /（你请主人确认的操作刚刚有了结果，见上面聊天记录里那一条。现在把结果告诉主人：[^]*有支付链接就原样发给主人[^]*写着“结果不确定”的[^]*不要重新办一次。）$/);
+  assert.match(request("FAILED", "没有执行：门店已打烊。"), /主人确认了。没有执行：门店已打烊。）[^]*刚刚有了结果/);
+  assert.match(request("FAILED", "结果不确定：对方的服务暂时连不上。可能已经办了，也可能没有。"), /主人确认了。结果不确定：[^]*）[^]*刚刚有了结果/);
+  assert.match(request("FAILED"), /主人确认了。没有成功。）/);
+  assert.ok(!request("PENDING").includes("刚刚有了结果") && !request("DECLINED").includes("刚刚有了结果"));
+  // A reply of several messages: the request sits on the first one, and the hint still comes.
+  const bubbles = replyPrompt(turn([said("来个巨无霸"), said("好，帮你下单", companion, { toolRequest: { server: "麦当劳", tool: "create-order", status: "DONE", result: "订单 A1", decidedAt } }),
+    said("共 25 元", companion), said("点一下确认哦", companion)]), [], {}, now).user;
+  assert.ok(bubbles.includes("刚刚有了结果"), "not only when the request is on the last message");
+  // Once anything was said after the Owner's answer, it is only history.
+  const told = [said("好，帮你下单", companion, { toolRequest: { server: "麦当劳", tool: "create-order", status: "DONE", result: "订单 A1", decidedAt } }),
+    said("下好了，点链接付款", companion, { sentAt: "2026-11-28T10:00:40Z" })];
+  for (const history of [told, [...told, said("谢谢", null, { sentAt: "2026-11-28T10:00:50Z" })]]) {
+    const later = replyPrompt(turn(history), [], {}, now).user;
+    assert.ok(later.includes("返回的数据：订单 A1") && !later.includes("刚刚有了结果"), "the result was told already");
+  }
   assert.equal(Array.from(request("DONE", "长".repeat(3000)).match(/返回的数据：(长+)/)![1]!).length, 1500);
+  assert.match(replyPrompt(turn([said("点餐")]), [], {}, now, { tools: true }).system, /办没办成不确定时[^]*先用查询类的工具核实[^]*不要重新办一次/);
 });
 
 it("opens the toolbox only for a turn that may use tools, and says in the trace what was done with it", async () => {
@@ -350,11 +407,12 @@ it("routes tools: the directory, connecting with a token the server is asked abo
 
   assert.equal((await send(http("tool-servers")))!.status, 200);
   assert.equal((await send(http(base)))!.status, 200);
-  assert.equal((await send(http(`${base}/${serverId.toUpperCase()}`, "PUT", { token: "fresh-member-token", consent: true })))!.status, 200);
+  assert.equal((await send(http(`companions/${companion.toUpperCase()}/tools/${serverId.toUpperCase()}`, "PUT", { token: "fresh-member-token", consent: true })))!.status, 200);
   assert.equal((await send(http(`${base}/${serverId}`, "DELETE")))!.status, 200);
   assert.deepEqual(calls, [["toolServers"], ["companionTools", companion], ["toolServers"],
-    ["saveCompanionTool", companion, serverId.toUpperCase(), "fresh-member-token", "oken", [{ name: "query-meals", description: "菜单", inputSchema: { type: "object" } }]],
-    ["removeCompanionTool", companion, serverId]], "the token is sealed for this Companion; the server's own list of tools is what is kept");
+    ["saveCompanionTool", companion, serverId, "fresh-member-token", "oken", [{ name: "query-meals", description: "菜单", inputSchema: { type: "object" } }]],
+    ["removeCompanionTool", companion, serverId]],
+  "the token is sealed for this Companion under its id as the database writes it (ids typed in capitals too); the server's own list of tools is what is kept");
   assert.equal(rpc.sent[0]!.headers.authorization, "Bearer fresh-member-token");
   calls.length = 0;
   // A token the tool server will not take, or a server that cannot be reached: nothing is saved, and the app is told which.
@@ -383,11 +441,12 @@ it("routes tools: the directory, connecting with a token the server is asked abo
   assert.deepEqual([yes!.status, yes!.body], [200, { request: { id: requestId, status: "DONE" }, typing: [companion], replying: true }]);
   assert.deepEqual(calls, [["toolRequestTake", chatId, requestId], ["toolCallNote", companion, "mcdonalds-cn", "create-order", true], ["toolRequestFinish", requestId, true, "订单 A1"]]);
   assert.deepEqual([rpc.sent.at(-1)!.headers.authorization, rpc.sent.at(-1)!.params, kicks.at(-1)!.slice(0, 2)], ["Bearer member-token", { name: "create-order", arguments: { items: ["BM"] } }, [chatId, port]]);
-  // The tool server failing after the yes: still finished, as a failure the Companion tells of.
+  // The tool server failing after the yes: still finished, and told as what it is. Nobody knows whether the order was made.
   calls.length = 0; status = 503;
   await send(http(`chats/${chatId}/tool-requests/${requestId}`, "POST", { decision: "CONFIRM" }));
   status = undefined;
-  assert.deepEqual(calls.slice(1), [["toolCallNote", companion, "mcdonalds-cn", "create-order", false], ["toolRequestFinish", requestId, false, "没有调用成功：对方的服务暂时连不上。"]]);
+  assert.deepEqual(calls.slice(1), [["toolCallNote", companion, "mcdonalds-cn", "create-order", false],
+    ["toolRequestFinish", requestId, false, "结果不确定：对方的服务暂时连不上。可能已经办了，也可能没有。请先到对方那里（App 或订单列表）确认，不要直接再办一次。"]]);
   // No: nothing is called.
   calls.length = 0; kicks.length = 0;
   const no = await send(http(`chats/${chatId}/tool-requests/${requestId}`, "POST", { decision: "DECLINE" }));

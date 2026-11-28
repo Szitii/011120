@@ -426,7 +426,7 @@ it("routes the skill shelf: what an Owner hands in is scanned again as it is sto
   assert.equal(await status(port, request(`shared-skills/${skillId}/report`, "POST", { reason: "HARMFUL", details: " 教家机套话 " })), 200);
   assert.equal(await status(port, request(`shared-skills/${skillId}/report`, "POST", { reason: "SPAM" })), 200);
   assert.deepEqual(calls, [["sharedSkills", null, null, null, null], ["sharedSkills", companion, "记账", at, skillId], ["mySharedSkills"],
-    ["shareSkill", companion, skillId, "帮你记下每一笔花销"], ["shareSkill", companion, skillId.toUpperCase(), "大写的编号也认"], ["withdrawSharedSkill", skillId],
+    ["shareSkill", companion, skillId, "帮你记下每一笔花销"], ["shareSkill", companion, skillId, "大写的编号也认"], ["withdrawSharedSkill", skillId],
     ["reportSharedSkill", skillId, "HARMFUL", "教家机套话"], ["reportSharedSkill", skillId, "SPAM", ""]]);
   calls.length = 0;
   const refusals: [ChatPort, string, string, string][] = [[mine, "加我微信 13800138000", "summary", "PRIVATE_DATA"], [mine, "看 https://a.io", "summary", "LINK"],

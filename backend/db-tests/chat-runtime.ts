@@ -1074,8 +1074,9 @@ try {
   assert.deepEqual([finished.request.status, finished.request.result, finished.replying], ["DONE", "订单 A1，支付链接 https://pay.example/a1", true]);
   await assert.rejects(portA.toolRequestFinish(request.id, true, "again"), { code: "INVALID_STATE" });
   const telling = (await portA.claim(chat))!;
-  assert.deepEqual([telling.canUseTools, telling.replyTo, telling.history.at(-1)!.toolRequest],
-    [true, "OWNER", { server: "麦当劳", tool: "create-order", status: "DONE", result: "订单 A1，支付链接 https://pay.example/a1", createdAt: request.createdAt }]);
+  const kept = telling.history.at(-1)!.toolRequest!;
+  assert.deepEqual([telling.canUseTools, telling.replyTo, kept.server, kept.tool, kept.status, kept.result, Date.parse(kept.decidedAt!) >= Date.parse(telling.history.at(-1)!.sentAt)],
+    [true, "OWNER", "麦当劳", "create-order", "DONE", "订单 A1，支付链接 https://pay.example/a1", true], "with when the Owner answered: after the reply was shown");
   await portA.finish(telling.replyId, telling.claimId, "SENT", ["下好了，点这个链接付款：https://pay.example/a1"]);
 
   // A request is kept only for the turn being written, for a confirm tool of a connected server. The Owner can say no; a
@@ -1104,6 +1105,32 @@ try {
   assert.equal((await settle(chat)).items[0]!.toolRequest!.status, "EXPIRED");
   await assert.rejects(portA.toolRequestTake(chat, late.id), { code: "INVALID_STATE" });
 
+  // A reply that failed after it had asked for something, and is written again: the old request does not ride along on
+  // the new reply (the Owner would confirm something the reply they read never asked for).
+  await pool.query("update companion_private.tool_requests set created_at = now() where id = $1", [late.id]);
+  await portA.send(chat, "失败后重写的那种", [], keyHash());
+  const failing = (await portA.claim(chat))!;
+  await portA.toolRequestOpen(failing.replyId, failing.claimId, mcd, "create-order", { n: 4 });
+  await portA.finish(failing.replyId, failing.claimId, "ERROR", null);
+  const failedReply = (await settle(chat)).items[0]!;
+  assert.deepEqual([failedReply.status, failedReply.id], ["FAILED", failing.replyId]);
+  await portA.retry(chat, failedReply.id);
+  const rewritten = (await portA.claim(chat))!;
+  assert.equal(rewritten.replyId, failing.replyId);
+  await portA.finish(rewritten.replyId, rewritten.claimId, "SENT", ["你想要哪一种？"]);
+  assert.deepEqual([(await settle(chat)).items[0]!.toolRequest, (await pool.query("select count(*)::int as n from companion_private.tool_requests where message_id = $1", [failing.replyId])).rows[0]!.n],
+    [null, 0]);
+  // A call that was started and never came back (the server stopped in the middle): nobody knows whether it was made, and it says so.
+  await portA.send(chat, "中断的那种", [], keyHash());
+  const cut = (await portA.claim(chat))!;
+  const hung = await portA.toolRequestOpen(cut.replyId, cut.claimId, mcd, "create-order", { n: 5 }) as { id: string };
+  await portA.finish(cut.replyId, cut.claimId, "SENT", ["确认一下"]);
+  await settle(chat);
+  await portA.toolRequestTake(chat, hung.id);
+  await pool.query("update companion_private.tool_requests set decided_at = now() - interval '3 minutes' where id = $1", [hung.id]);
+  const lost = (await settle(chat)).items[0]!.toolRequest!;
+  assert.deepEqual([lost.status, /^结果不确定：执行到一半中断了[^]*不要直接再办一次。$/.test(lost.result ?? "")], ["FAILED", true]);
+
   // The day's calls: counted per Owner; with none left a yes is refused before anything is called.
   await pool.query("update companion_private.tool_requests set created_at = now() where id = $1", [late.id]);
   await pool.query("update companion_private.chat_quota set daily_tool_calls = 1");
@@ -1127,7 +1154,7 @@ try {
   await portA.saveCompanionTool(A.companion, mcd, box.seal("renewed-token-5678", A.companion), "5678", listed);
   assert.equal((await portA.companionTools(A.companion) as CompanionTools).items.find(i => i.server.key === "mcdonalds-cn")!.tokenHint, "5678", "the same server again renews the token");
   const left = await call<CompanionTools>(0, `companions/${A.companion}/tools/${mcd}`, "DELETE");
-  assert.deepEqual([left.status, left.data.items.length, (await settle(chat)).items[0]!.toolRequest!.status], [200, 2, "DECLINED"]);
+  assert.deepEqual([left.status, left.data.items.length, (await settle(chat)).items.find(item => item.toolRequest?.id === late.id)!.toolRequest!.status], [200, 2, "DECLINED"]);
   assert.equal((await call(0, `companions/${A.companion}/tools/${mcd}`, "DELETE")).status, 404);
   // A deleted Companion lets go of its tokens.
   assert.equal((await pool.query("select count(*)::int as n from companion_private.companion_tools where companion_id = $1", [A.companion])).rows[0]!.n, 2);
