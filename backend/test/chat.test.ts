@@ -75,6 +75,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
       finished.push([replyId, outcome, bodies]); reminded.push(reminders); return true;
     },
     failNote: async (...args) => { calls.push(["failNote", ...args]); return { noted: true }; },
+    imageSeen: async (...args) => { calls.push(["imageSeen", ...args]); return { noted: true }; },
     reachBegin: async (...args) => { calls.push(["reachBegin", ...args]); return { status: "NOT_DUE" }; },
     reminders: async (...args) => { calls.push(["reminders", ...args]); return { items: [] }; },
     cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },

@@ -5,6 +5,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import type { CatalogModel, ChatCatalog } from "./models.ts";
+import type { Picture } from "./port.ts";
 
 export interface ModelRequest {
   readonly system: string;
@@ -17,6 +18,8 @@ export interface ModelRequest {
    * provider will not take the tool, so the model is never told of a web it does not have.
    */
   readonly web?: { readonly without: { readonly system: string; readonly user: string } };
+  /** Pictures to go with the user text, in order, for a model that takes them (CatalogModel.options.vision). */
+  readonly images?: readonly Picture[];
 }
 
 export interface ModelResult {
@@ -61,7 +64,9 @@ async function callClaude(client: ClaudeClient, model: CatalogModel, request: Mo
     max_tokens: request.maxTokens,
     // No prompt caching: the system text is far below the smallest prefix Claude caches.
     system: request.system,
-    messages: [{ role: "user", content: request.user }],
+    messages: [{ role: "user", content: request.images?.length ? [{ type: "text" as const, text: request.user },
+      ...request.images.map(image => ({ type: "image" as const, source: { type: "base64" as const, media_type: image.mime, data: image.base64 } }))]
+      : request.user }],
     ...(options.effort ? { output_config: { effort: options.effort } } : {}),
     ...(options.thinking === "disabled" ? { thinking: { type: "disabled" } } : {}),
     ...(options.fallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {}),
@@ -83,6 +88,10 @@ async function callClaude(client: ClaudeClient, model: CatalogModel, request: Mo
  */
 const DEEPSEEK_WEB_TOOLS = [{ type: "deepseek_web_search" }];
 
+/** The user text, or the text with the pictures after it (as data: URLs, so nothing has to be reachable from outside). */
+const userContent = (text: string, images: readonly Picture[] | undefined): unknown => !images?.length ? text
+  : [{ type: "text", text }, ...images.map(image => ({ type: "image_url", image_url: { url: `data:${image.mime};base64,${image.base64}` } }))];
+
 async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiKey: string, model: CatalogModel,
   request: ModelRequest): Promise<ModelResult> {
   const web = request.web !== undefined && model.options?.webTools === "deepseek";
@@ -92,7 +101,7 @@ async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiK
     body: JSON.stringify({
       model: model.model,
       messages: [{ role: "system", content: (web && !tools ? request.web!.without : request).system },
-        { role: "user", content: (web && !tools ? request.web!.without : request).user }],
+        { role: "user", content: userContent((web && !tools ? request.web!.without : request).user, request.images) }],
       [model.options?.maxTokensParam ?? "max_tokens"]: request.maxTokens,
       // DeepSeek thinks by default; a chat reply does not need it (slower, and the thinking is paid output).
       ...(model.options?.thinking === "disabled" ? { thinking: { type: "disabled" } } : {}),

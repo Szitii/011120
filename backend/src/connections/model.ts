@@ -14,7 +14,8 @@ import { diaryPrompt, memoryPrompt, parseMemories, parsePost, parseReply, postPr
 import { memoriesOf, skillsOf, textsOf, worldOf } from "../chat/platform.ts";
 import { readCompletion, type ModelResult } from "../chat/providers.ts";
 import type { ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob } from "../chat/port.ts";
-import { ConnectionFailed, type Answer, type ChatModel, type DiaryAnswer, type MemoryAnswer, type PostAnswer } from "../chat/replies.ts";
+import { ConnectionFailed, type Answer, type ChatModel, type DiaryAnswer, type MemoryAnswer, type PostAnswer, type SeeAnswer,
+  type SeeJob } from "../chat/replies.ts";
 import type { ConnectionFailure, ConnectionInput, ConnectionTest } from "../../../contracts/chat.ts";
 import { BlockedAddressError, checkUrl, createPostJson, type PostJson } from "./guard.ts";
 import type { SecretBox } from "./secret-box.ts";
@@ -156,6 +157,15 @@ export class ConnectedChatModel implements ChatModel {
     // JSON, but with no reply in it (another format, or an error the service sent with a 200): the same as no usable answer.
     if (result.text.trim().length === 0) throw new ConnectionFailed("BAD_ANSWER");
     return parseReply(result.text, turn.companion.displayName);
+  }
+
+  /**
+   * Pictures are described by the platform's picture-reading model whatever the Companion speaks
+   * through: whether an Owner's own model takes pictures is not known, and the description is what
+   * it is given to read. (So the picture goes to the platform's provider, not the Owner's.)
+   */
+  async see(job: SeeJob, context: { port: ChatPort; signal: AbortSignal }): Promise<SeeAnswer> {
+    return this.#platform?.see ? this.#platform.see(job, context) : { failed: "UNAVAILABLE" };
   }
 
   async diary(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer> {

@@ -15,6 +15,29 @@ import type { CommunityActor, CommunityComment, CommunityPost } from "./communit
  */
 export type ConnectionFailure = "AUTH_FAILED" | "NO_BALANCE" | "RATE_LIMITED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER" | "BLOCKED_ADDRESS" | "ERROR";
 
+/**
+ * A picture on a chat message. `path` is its file in the Storage bucket "media" ("chat/<uuid>.jpg");
+ * only the Owner who sent it can read it there. `seen`: true once the Companion knows what is in the
+ * picture, false when it could not be read (say so: "TA 看不到这张图"), null while it has not been
+ * looked at yet (it is looked at when the Companion's turn comes).
+ */
+export interface ChatImage {
+  path: string;
+  width: number | null;
+  height: number | null;
+  seen: boolean | null;
+}
+
+/**
+ * A picture to send with a message: a file the Owner uploaded to "chat/<uuid>.jpg|png|webp" in the
+ * Storage bucket "media" (1 MB at most), on no message yet. width and height in pixels, if known.
+ */
+export interface ChatImageInput {
+  path: string;
+  width?: number;
+  height?: number;
+}
+
 export interface ChatMember {
   companionId: string;
   displayName: string;
@@ -68,6 +91,12 @@ export interface ChatMessage {
    * Always sent; optional here so app code written before it still compiles.
    */
   audio?: { durationMs: number } | null;
+  /**
+   * Pictures the Owner sent with this message (图片), in order; [] for a message without any.
+   * A message of pictures only has the body "[图片]": show the pictures and not that text.
+   * Always sent; optional here so app code written before it still compiles.
+   */
+  images?: ChatImage[];
   /**
    * A reminder the Companion set in this reply (the Owner asked "明天 8 点叫我"): show a small line
    * under the message, like "⏰ 明天 08:00 提醒：叫主人起床". null for every other message. What the
@@ -214,6 +243,16 @@ export interface ChatPage {
   items: ChatMessage[];
   /** Pass as ?cursor= to load older messages; null when there are no more. */
   nextCursor: string | null;
+}
+
+/**
+ * POST /v0/chats/{id}/messages (with an Idempotency-Key). body: 1 to 2000 characters; with pictures
+ * it may be left out. images: 1 to 4 pictures uploaded beforehand. 429 IMAGE_LIMIT past the day's pictures.
+ */
+export interface ChatSendInput {
+  body?: string;
+  mentions?: string[];
+  images?: ChatImageInput[];
 }
 
 export interface ChatSendResult {
@@ -780,6 +819,8 @@ export interface ExportedMessage {
   action: string | null;
   /** It was a voice message; `body` is what was said. */
   voice: boolean;
+  /** The pictures sent with it: their paths in the Storage bucket "media" (the files are not in the export). */
+  images: string[];
   /** The Companion wrote first (GREETING) or delivered a reminder (REMINDER); else null. */
   reach: "GREETING" | "REMINDER" | null;
 }

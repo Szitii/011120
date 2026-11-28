@@ -18,12 +18,14 @@
  */
 import { ACTION_TEXT, MAX_NOTES, answersAction, localStamp, splitAction, splitReminders, splitVoice } from "./prompt.ts";
 import { applyRules } from "./reply-rules.ts";
+import { maskCredentials } from "../companion-import/policy.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { SafetyPipeline } from "./safety.ts";
 import type { ConnectionFailure, DiaryWriteResult } from "../../../contracts/chat.ts";
 import type {
-  ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, PostJob, PostOutcome, PostStart, ReachStart, ReminderChange,
+  ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, Picture, PostJob, PostOutcome, PostStart, ReachStart, ReminderChange,
 } from "./port.ts";
+import type { Pictures } from "./pictures.ts";
 import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
@@ -36,6 +38,13 @@ export type Answer =
   | { pass: true }
   | { refused: true }
   | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
+
+/** A chat picture with its bytes. */
+export interface AttachedPicture { path: string; picture: Picture }
+/** One picture to describe for the turn `replyId` / `claimId`; `said`: what the Owner wrote with it. */
+export interface SeeJob { replyId: string; claimId: string; said: string; picture: Picture }
+/** What the picture shows (null: the model had no words for it), or why it was not looked at. */
+export type SeeAnswer = { description: string | null } | { refused: true } | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
 
 /** A diary entry the model wrote, or why there is none. */
 export type DiaryAnswer = { text: string } | { refused: true } | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
@@ -86,6 +95,9 @@ export interface ReplyTrace {
   webTokens?: number;
   key?: "BACKUP";
   connection?: ConnectionFailure;
+  /** Pictures described for this turn, and pictures handed along for a model that takes them. Left out when none. */
+  seen?: number;
+  shown?: number;
 }
 
 /**
@@ -124,8 +136,12 @@ export interface MemoryTrace {
  * says so with `backup`. A key or agent of the Owner's that gives no usable answer: ConnectionFailed.
  */
 export interface ChatModel {
+  /** `pictures`: the pictures of the last few messages themselves, for a model that takes pictures; others read their descriptions in the turn. */
   reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void;
-    searched?: (searches: number | "REFUSED", inputTokens: number) => void; backup?: () => void }): Promise<Answer>;
+    searched?: (searches: number | "REFUSED", inputTokens: number) => void; backup?: () => void;
+    pictures?: readonly AttachedPicture[] }): Promise<Answer>;
+  /** Says what one picture the Owner sent shows, for the turn (it is booked with it). Without it, pictures stay unseen. */
+  see?(job: SeeJob, context: { port: ChatPort; signal: AbortSignal }): Promise<SeeAnswer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
   /** Writes a community post of its own; without it, such posts fail. */
@@ -143,6 +159,11 @@ class ModelTimeout extends Error {
 }
 
 const MAX_MESSAGES = 3;
+/** All the looking at pictures of one turn; what is not described by then waits for the next turn. */
+const LOOK_TIMEOUT_MS = 25_000;
+/** The pictures of this many latest messages are handed to a model that takes pictures, four at most. */
+const RECENT_MESSAGES = 6;
+const MAX_PICTURES = 4;
 // Under the database's 2-minute claim, so a hung model call ends here before another server could take the turn.
 const MODEL_TIMEOUT_MS = 90_000;
 // Model and speech together stay under the 2-minute claim.
@@ -221,6 +242,7 @@ const speakable = (turn: ChatClaim, voices: Voices | undefined): ChatClaim =>
 export class ChatReplies {
   readonly #model: ChatModel | undefined;
   readonly #timeoutMs: number;
+  readonly #lookTimeoutMs: number;
   readonly #voices: Voices | undefined;
   readonly #speechTimeoutMs: number;
   readonly #trace: (trace: ReplyTrace | MemoryTrace) => void;
@@ -233,8 +255,9 @@ export class ChatReplies {
    * and one per attempt at noting memories down.
    */
   constructor(model?: ChatModel, timeoutMs = MODEL_TIMEOUT_MS, voices?: Voices, speechTimeoutMs = SPEECH_TIMEOUT_MS,
-    trace: (trace: ReplyTrace | MemoryTrace) => void = () => undefined) {
+    trace: (trace: ReplyTrace | MemoryTrace) => void = () => undefined, lookTimeoutMs = LOOK_TIMEOUT_MS) {
     this.#model = model;
+    this.#lookTimeoutMs = lookTimeoutMs;
     this.#timeoutMs = timeoutMs;
     this.#voices = voices;
     this.#speechTimeoutMs = speechTimeoutMs;
@@ -245,17 +268,18 @@ export class ChatReplies {
   get voices(): Voices | undefined { return this.#voices; }
 
   /** Starts writing the chat's queued turns unless this server is already doing so. Never throws. */
-  kick(chatId: string, port: ChatPort): void {
+  kick(chatId: string, port: ChatPort, pictures?: Pictures): void {
     if (this.#running.has(chatId)) return;
     this.#running.add(chatId);
-    void this.drain(chatId, port).catch(() => undefined).finally(() => this.#running.delete(chatId));
+    void this.drain(chatId, port, pictures).catch(() => undefined).finally(() => this.#running.delete(chatId));
   }
 
   /**
    * Writes queued turns until none is left (or another server holds the chat). Then, if the
    * Companion of a one-to-one chat answered, it notes its memories down when that is due.
+   * `pictures` fetches the chat's pictures as the Owner whose request started this.
    */
-  async drain(chatId: string, port: ChatPort): Promise<number> {
+  async drain(chatId: string, port: ChatPort, pictures?: Pictures): Promise<number> {
     let written = 0;
     let remember: string | undefined;
     for (let claim = await port.claim(chatId); claim !== null; claim = await port.claim(chatId)) {
@@ -265,7 +289,9 @@ export class ChatReplies {
         channel: "PLATFORM", outcome: "ERROR", modelMs: 0, speechMs: 0, voice: [], stored: false, web: "OFF",
       };
       const silent = turn.companion.settings.voice ? null : claim.companion.settings.voice ? "VOICE_UNAVAILABLE" : "NO_VOICE";
-      const [outcome, bodies, clips, action, reminders] = await this.#answer(turn, port, trace, silent);
+      const looking = Date.now();
+      const shown = await this.#look(turn, port, pictures, trace);
+      const [outcome, bodies, clips, action, reminders] = await this.#answer(turn, port, trace, silent, shown, Date.now() - looking);
       // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
       // Nobody waits for a message it writes on its own: whatever went wrong with one, nothing is shown.
       const final = (outcome === "ERROR" && answersAction(turn)) || (outcome !== "SENT" && turn.reach) ? "PASSED" : outcome;
@@ -402,9 +428,56 @@ export class ChatReplies {
   }
 
   /** Runs a model call that is aborted (and rejects) after the timeout. */
-  async #timed<T>(call: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  /**
+   * Looks at the conversation's pictures for this turn. Those nobody has described yet (the newest
+   * four; two tries each) are fetched and described by the picture-reading model, and what it says
+   * is kept with the picture and put into the turn. Returns the pictures of the last few messages
+   * themselves, for a model that takes pictures. Without a way to fetch them (a turn no request
+   * started) the turn is written from what is already known. Never throws.
+   */
+  async #look(turn: ChatClaim, port: ChatPort, fetch: Pictures | undefined, trace: ReplyTrace): Promise<AttachedPicture[]> {
+    const sent = turn.history.flatMap(message => (message.companionId === null ? (message.images ?? []).map(image => ({ image, said: message.body ?? "" })) : []));
+    if (fetch === undefined || sent.length === 0) return [];
+    const recent = new Set(turn.history.slice(-RECENT_MESSAGES).flatMap(message => message.images ?? []).map(image => image.path));
+    const unseen = sent.filter(({ image }) => image.description === null && image.tries < 2).slice(-MAX_PICTURES);
+    const hand = sent.filter(({ image }) => recent.has(image.path)).slice(-MAX_PICTURES);
+    const got = new Map<string, Picture | null>();
+    await Promise.all([...new Set([...unseen, ...hand].map(({ image }) => image.path))]
+      .map(async path => { got.set(path, await fetch(path).catch(() => null)); }));
+    const deadline = AbortSignal.timeout(this.#lookTimeoutMs);
+    const model = this.#model;
+    for (const { image, said } of unseen) {
+      const picture = got.get(image.path) ?? null;
+      let description: string | null = null;
+      if (picture !== null) {
+        // Nobody to describe it, or no time left: the picture waits, and that is not held against it.
+        if (model?.see === undefined || deadline.aborted) break;
+        try {
+          const answer = await model.see({ replyId: turn.replyId, claimId: turn.claimId, said, picture }, { port, signal: deadline });
+          // No model for now, switched off, or out of budget: not the picture's fault either.
+          if ("failed" in answer) break;
+          // Kept the way the Owner's own words are read: with keys and passwords masked.
+          const words = "description" in answer && answer.description !== null ? maskCredentials(answer.description).trim() : "";
+          if (words.length > 0) description = words;
+        } catch {
+          if (deadline.aborted) break;
+        }
+      }
+      // A file that is gone or is no picture, a refusal, no words for it: one try used.
+      await port.imageSeen(image.path, description).catch(() => undefined);
+      image.description = description;
+      image.tries += 1;
+      if (description !== null) trace.seen = (trace.seen ?? 0) + 1;
+    }
+    const shown = hand.flatMap(({ image }) => { const picture = got.get(image.path); return picture ? [{ path: image.path, picture }] : []; });
+    if (shown.length > 0) trace.shown = shown.length;
+    return shown;
+  }
+
+  /** Runs a model call under the turn's time limit, less what the turn already spent (it keeps a third at least). */
+  async #timed<T>(call: (signal: AbortSignal) => Promise<T>, spentMs = 0): Promise<T> {
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(new ModelTimeout()), this.#timeoutMs);
+    const timer = setTimeout(() => abort.abort(new ModelTimeout()), Math.max(this.#timeoutMs - spentMs, this.#timeoutMs / 3));
     try {
       const stopped = new Promise<never>((_, reject) => abort.signal.addEventListener("abort", () => reject(abort.signal.reason)));
       return await Promise.race([call(abort.signal), stopped]);
@@ -450,8 +523,9 @@ export class ChatReplies {
   }
 
   /** `silent`: why this Companion has no voice messages now, or null when it has a voice. */
-  async #answer(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
-    const answered = await this.#write(turn, port, trace, silent);
+  async #answer(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null,
+    pictures: readonly AttachedPicture[] = [], spentMs = 0): Promise<Answered> {
+    const answered = await this.#write(turn, port, trace, silent, pictures, spentMs);
     if (turn.reach?.kind !== "REMINDER") return answered;
     // A reminder is delivered whatever happened to the model (none, switched off, out of budget, a
     // refusal, an answer that could not be used): in plain words. Its note passed the scan when it was set.
@@ -460,14 +534,15 @@ export class ChatReplies {
     return bodies?.length ? answered : ["SENT", [plainReminder(turn.reach.note)], undefined, action];
   }
 
-  async #write(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
+  async #write(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null,
+    pictures: readonly AttachedPicture[], spentMs: number): Promise<Answered> {
     const model = this.#model;
     if (model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
     try {
       const started = Date.now();
       const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; },
         searched: (searches, inputTokens) => { trace.web = searches; trace.webTokens = inputTokens; },
-        backup: () => { trace.key = "BACKUP"; } }))
+        backup: () => { trace.key = "BACKUP"; }, ...(pictures.length > 0 ? { pictures } : {}) }), spentMs)
         .finally(() => { trace.modelMs = Date.now() - started; });
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];

@@ -1,6 +1,7 @@
 {
   "defaultModel": "deepseek-flash",
   "decisionModel": "deepseek-flash",
+  "visionModel": "deepseek-flash",
   "providers": {
     "anthropic": { "kind": "anthropic", "apiKeyEnv": "ANTHROPIC_API_KEY" },
     "openai": { "kind": "openai-compatible", "baseUrl": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY" },
@@ -14,7 +15,7 @@
     {
       "id": "deepseek-flash", "name": "DeepSeek Flash", "provider": "deepseek", "model": "deepseek-flash",
       "tier": "ECONOMY", "inputPerMTok": 0.3, "outputPerMTok": 1.2, "enabled": true,
-      "options": { "thinking": "disabled", "webTools": "deepseek" }
+      "options": { "thinking": "disabled", "webTools": "deepseek", "vision": true }
     },
     {
       "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "provider": "deepseek", "model": "deepseek-v4-pro",

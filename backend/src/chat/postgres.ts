@@ -1,5 +1,5 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatImageInput, ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type {
@@ -25,8 +25,13 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_read($1,$2,$3) as payload", [chatId, beforeAt, beforeId]);
   }
 
-  send(chatId: string, body: string, mentions: string[], keyHash: string): Promise<unknown> {
-    return this.#object("select public.chat_send($1,$2,$3::uuid[],$4) as payload", [chatId, body, mentions, keyHash]);
+  send(chatId: string, body: string, mentions: string[], keyHash: string, images?: readonly ChatImageInput[]): Promise<unknown> {
+    return this.#object("select public.chat_send($1,$2,$3::uuid[],$4,$5::jsonb) as payload",
+      [chatId, body, mentions, keyHash, images === undefined || images.length === 0 ? null : JSON.stringify(images)]);
+  }
+
+  imageSeen(path: string, description: string | null): Promise<unknown> {
+    return this.#object("select public.chat_image_seen($1,$2) as payload", [path, description]);
   }
 
   retry(chatId: string, messageId: string): Promise<unknown> {

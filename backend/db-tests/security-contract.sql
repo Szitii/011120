@@ -688,9 +688,9 @@ select public.test_assert(
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_claim(uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text,jsonb)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text,jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text,jsonb)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text,jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
@@ -742,6 +742,18 @@ select public.test_assert(
     where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
   'templates, skills and the world book are reachable only through functions, each by the role it is for'
+);
+-- Chat pictures: what was seen in one is noted by the API server alone; the table is reachable only through functions.
+select public.test_assert(
+  has_function_privilege('companion_api', 'public.chat_image_seen(text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_image_seen(text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_image_seen(text,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.media_is_chat(text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.media_chat_unused(text)'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.chat_images', 'SELECT') or has_table_privilege(r.role, 'companion_private.chat_images', 'INSERT')
+      or has_table_privilege(r.role, 'companion_private.chat_images', 'UPDATE') or has_table_privilege(r.role, 'companion_private.chat_images', 'DELETE')),
+  'chat pictures are described by the API server alone and reachable only through functions'
 );
 -- Why a reply through the Owner's own key failed is noted by the API server alone.
 select public.test_assert(

@@ -1,4 +1,4 @@
-import type { ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatImageInput, ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type { Clip } from "./voices.ts";
@@ -24,6 +24,8 @@ export interface ChatClaim {
     companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string;
     /** A voice message (the body is what was said). */
     voice?: boolean;
+    /** The pictures the Owner sent with it; null or left out: none. */
+    images?: HistoryImage[] | null;
   }[];
   /** The Owner's time zone (an IANA name); left out by an older database: Asia/Shanghai. */
   timeZone?: string;
@@ -51,6 +53,17 @@ export type Reach = { kind: "GREETING" } | { kind: "REMINDER"; note: string; due
 export interface ReminderChange { set?: { at: string; note: string }; cancel?: string[] }
 
 /** chat_reach_begin: a turn was queued in `chatId`, or why none was. */
+/**
+ * A picture in the conversation as a turn gets it. `description`: what the picture-reading model
+ * made of it, null while nobody has looked (after `tries` attempts: 2 and still null, it cannot be
+ * seen). `attached`: set by the API server for a model that takes pictures: this one is handed to
+ * it as picture number n.
+ */
+export interface HistoryImage { path: string; description: string | null; tries: number; attached?: number }
+
+/** A picture's bytes, as a model request carries them. */
+export interface Picture { mime: "image/jpeg" | "image/png" | "image/webp"; base64: string }
+
 export type ReachStart = { status: "QUEUED"; chatId: string } | { status: "OFF" | "BUSY" | "NOT_DUE" };
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
@@ -153,7 +166,10 @@ export interface ChatPort {
   open(companionIds: string[], title: string | null, keyHash: string): Promise<unknown>;
   list(): Promise<unknown>;
   read(chatId: string, beforeAt: string | null, beforeId: string | null): Promise<unknown>;
-  send(chatId: string, body: string, mentions: string[], keyHash: string): Promise<unknown>;
+  /** `images`: pictures the Owner uploaded, to go with the message (then `body` may be empty). */
+  send(chatId: string, body: string, mentions: string[], keyHash: string, images?: readonly ChatImageInput[]): Promise<unknown>;
+  /** Server only: what the picture-reading model made of a chat picture, or null when it could not be read this time. */
+  imageSeen(path: string, description: string | null): Promise<unknown>;
   retry(chatId: string, messageId: string): Promise<unknown>;
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;

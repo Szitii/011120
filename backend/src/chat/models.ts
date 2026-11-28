@@ -49,6 +49,8 @@ export interface CatalogModel {
      * DeepSeek's side and is not billed; what it reads is billed as input tokens).
      */
     readonly webTools?: "deepseek";
+    /** The model takes pictures in a request (JPEG, PNG, WebP), next to the text. */
+    readonly vision?: true;
   };
 }
 
@@ -57,6 +59,11 @@ export interface CatalogFile {
   readonly defaultModel: string;
   /** Cheap model for "should it speak?"; null: the reply model decides by itself. */
   readonly decisionModel: string | null;
+  /**
+   * The model that describes the pictures Owners send in chat, for Companions whose own model takes
+   * none. Left out or null: the first usable model that takes pictures, if any.
+   */
+  readonly visionModel?: string | null;
   readonly providers: Readonly<Record<string, ProviderConfig>>;
   readonly models: readonly CatalogModel[];
 }
@@ -95,6 +102,8 @@ function check(file: CatalogFile): CatalogFile {
   }
   if (!ids.has(file.defaultModel)) fail("defaultModel is not in models.");
   if (file.decisionModel !== null && !ids.has(file.decisionModel)) fail("decisionModel is not in models (use null for none).");
+  if (file.visionModel !== undefined && file.visionModel !== null
+    && file.models.find(model => model.id === file.visionModel)?.options?.vision !== true) fail("visionModel is not a model that takes pictures.");
   return file;
 }
 
@@ -147,6 +156,12 @@ export class ChatCatalog {
   decisionModel(): CatalogModel | undefined {
     const model = this.#file.models.find(m => m.id === this.#file.decisionModel);
     return model && this.usable(model) ? model : undefined;
+  }
+
+  /** The model that describes pictures: the configured one if usable, else the first usable one that takes pictures. */
+  visionModel(): CatalogModel | undefined {
+    const model = this.#file.models.find(m => m.id === this.#file.visionModel);
+    return model && this.usable(model) ? model : this.#file.models.find(m => m.options?.vision === true && this.usable(m));
   }
 
   /** Cost in US cents, with fractions. The ledger counts whole cents; tokens are recorded exactly. */

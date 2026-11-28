@@ -9,7 +9,7 @@
  *   PUT    /v0/chats/{id}/read                         { messageId }  the Owner has read up to here
  *   GET    /v0/badges                                  every unread count for the tab badges
  *   GET|PUT /v0/companions/{id}/anniversary            the day the Owner and the Companion count from
- *   POST   /v0/chats/{id}/messages                     { body, mentions? }       send
+ *   POST   /v0/chats/{id}/messages                     { body?, mentions?, images? }  send (1 to 4 uploaded pictures; then the words may be left out)
  *   POST   /v0/chats/{id}/messages/{messageId}/retry   try a failed reply again
  *   POST   /v0/chats/{id}/voice                        { audio, mime, durationMs }  the Owner's voice message
  *   GET    /v0/chats/{id}/messages/{messageId}/audio   a voice message's audio (supports Range)
@@ -60,7 +60,7 @@ import { sha256 } from "../companion-import/canonical.ts";
 import { MAX_WORLD_BODY_LENGTH, MAX_WORLD_KEY_LENGTH, MAX_WORLD_KEYS, hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
-import type { ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
+import type { ChatImageInput, ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
@@ -145,6 +145,21 @@ function ownSkill(request: MvpHttpRequest): { title: string; body: string; enabl
   const { title, body: skill, enabled } = body(request, ["title", "body", "enabled"]);
   if (!(enabled === undefined || typeof enabled === "boolean")) return invalid();
   return { title: line(title, 20), body: text(skill, SKILL_CHARS), enabled: enabled !== false };
+}
+
+const CHAT_PICTURE = /^chat\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}[.](jpg|png|webp)$/;
+
+/** The pictures sent with a message: none, or up to 4 files of the chat folder, each with its size in pixels if the app knows it. */
+function sentPictures(value: unknown): ChatImageInput[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 4) return invalid();
+  const pixels = (n: unknown): boolean => n === undefined || (Number.isSafeInteger(n) && (n as number) >= 1 && (n as number) <= 99_999);
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["path", "width", "height"].includes(key))) return invalid();
+    const { path, width, height } = item as { path?: unknown; width?: unknown; height?: unknown };
+    if (typeof path !== "string" || !CHAT_PICTURE.test(path) || !pixels(width) || !pixels(height)) return invalid();
+    return { path, ...(width === undefined ? {} : { width: width as number }), ...(height === undefined ? {} : { height: height as number }) };
+  });
 }
 
 /** Why a shared skill is reported: the same reasons as a community report. */
@@ -415,7 +430,7 @@ export async function handleChatRequest(
     if (!ACTIONS.includes(action as CompanionAction)) return invalid();
     const result = await port.act(companionId, action as CompanionAction, retryKey(request, session.ownerId));
     const chatId = (result as { chatId?: unknown }).chatId;
-    if (replying(result) && typeof chatId === "string") replies.kick(chatId, port);
+    if (replying(result) && typeof chatId === "string") replies.kick(chatId, port, session.pictures);
     return response(201, result);
   }
   if (diarySettingsRoute) {
@@ -609,9 +624,19 @@ export async function handleChatRequest(
   } else if (part === "read" && path.length === 4 && method === "PUT") {
     return response(200, await port.markRead(chat, id(body(request, ["messageId"]).messageId)));
   } else if (part === "messages" && messageId === undefined && method === "POST") {
-    const input = body(request, ["body", "mentions"]);
+    const input = body(request, ["body", "mentions", "images"]);
     const mentions = input.mentions === undefined ? [] : ids(input.mentions, 0);
-    result = await port.send(chat, text(input.body, 2000), mentions, retryKey(request, session.ownerId));
+    const images = sentPictures(input.images);
+    // Pictures can go without words (the database then writes "[图片]" for the body).
+    const wordless = images.length > 0 && (input.body === undefined || (typeof input.body === "string" && input.body.trim() === ""));
+    try {
+      result = await port.send(chat, wordless ? "" : text(input.body, 2000), mentions, retryKey(request, session.ownerId), images);
+    } catch (error) {
+      if (error instanceof PostgresPersistenceError && error.code === "INVALID_STATE" && error.message === "image limit reached") {
+        return response(429, { code: "IMAGE_LIMIT" });
+      }
+      throw error;
+    }
   } else if (part === "messages" && action === "retry" && path.length === 6 && method === "POST") {
     result = await port.retry(chat, id(messageId));
   } else if (part === "voice" && path.length === 4 && method === "POST") {
@@ -637,6 +662,6 @@ export async function handleChatRequest(
   } else {
     return notFound();
   }
-  if (replying(result)) replies.kick(chat, port);
+  if (replying(result)) replies.kick(chat, port, session.pictures);
   return response((part === "messages" && action === undefined) || part === "voice" ? 201 : 200, result);
 }

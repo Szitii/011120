@@ -415,7 +415,13 @@ paths:
       summary: Send a message as the Owner
       description: |
         A retry with the same Idempotency-Key returns the first message and queues no new replies;
-        the same key with different text is a 409. At most 300 Owner messages per hour (else 409).
+        the same key with different text or pictures is a 409. At most 300 Owner messages per hour (else 409).
+
+        Pictures (图片) - upload each file first, with the Owner's own sign-in, to the Storage bucket
+        `media` as `chat/<uuid>.jpg|png|webp` (1 MB at most), then name 1 to 4 of them in `images`. With
+        pictures `body` may be left out (the message then has the body "[图片]"). A file that is not
+        there, is not this Owner's or is on a message already is a 400. Past the day's pictures
+        (30 per Owner) the answer is 429 IMAGE_LIMIT and nothing is sent.
       x-capability-status: implemented
       parameters:
       - *idempotency
@@ -426,9 +432,20 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [body]
               properties:
-                body: {type: string, minLength: 1, maxLength: 2000, description: 'Trimmed; 1 to 2000 characters.'}
+                body: {type: string, maxLength: 2000, description: 'Trimmed; 1 to 2000 characters. Required unless there are pictures.'}
+                images:
+                  type: array
+                  maxItems: 4
+                  description: Pictures uploaded beforehand, in the order they are shown.
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [path]
+                    properties:
+                      path: {type: string, pattern: '^chat/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}[.](jpg|png|webp)$'}
+                      width: {type: integer, minimum: 1, maximum: 99999}
+                      height: {type: integer, minimum: 1, maximum: 99999}
                 mentions:
                   type: array
                   maxItems: 8
@@ -452,6 +469,8 @@ paths:
         '403': *problem
         '404': *problem
         '409': *problem
+        '429':
+          description: IMAGE_LIMIT - the day's pictures are used up; nothing was sent
   /chats/{chatId}/messages/{messageId}/retry:
     parameters:
     - *chatId
@@ -1894,6 +1913,22 @@ components:
           required: [durationMs]
           properties:
             durationMs: {type: integer, minimum: 1}
+        images:
+          type: array
+          description: |
+            Pictures the Owner sent with this message, in order; empty for a message without any. Each
+            file is in the Storage bucket `media` at `path`, readable by the Owner who sent it only.
+            seen - true once the Companion knows what the picture shows, false when it could not be read
+            ("TA 看不到这张图"), null while it has not been looked at yet (that happens when the Companion's
+            turn comes). A message of pictures only has the body "[图片]".
+          items:
+            type: object
+            required: [path, width, height, seen]
+            properties:
+              path: {type: string}
+              width: {type: [integer, 'null']}
+              height: {type: [integer, 'null']}
+              seen: {type: [boolean, 'null']}
     Chat:
       type: object
       required: [id, title, direct, members, lastMessage, unreadCount, readUpTo, typing, recording, replying, activeAt]

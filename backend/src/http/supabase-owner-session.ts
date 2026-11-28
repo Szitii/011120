@@ -4,6 +4,7 @@ import { PostgresCommunityAdapter } from "../community/postgres.ts";
 import { PostgresOwnerAdapter } from "../persistence/postgres/adapter.ts";
 import { PgOwnerExecutor } from "../persistence/postgres/client.ts";
 import { ApiAuthenticationError, OwnerSessionError, type AuthenticatedOwnerSession, type OwnerSessionResolver } from "./types.ts";
+import { storagePictures } from "../chat/pictures.ts";
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -30,6 +31,7 @@ export function signedInAt(bearerToken: string): number | undefined {
 export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
   readonly #pool: pg.Pool;
   readonly #userUrl: URL;
+  readonly #project: URL;
   readonly #publishableKey: string;
 
   constructor(input: { pool: pg.Pool; supabaseUrl: string; publishableKey: string }) {
@@ -40,6 +42,7 @@ export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
       throw new Error("A Supabase project URL and publishable key are required.");
     }
     this.#pool = input.pool;
+    this.#project = project;
     this.#userUrl = new URL("/auth/v1/user", project);
     this.#publishableKey = input.publishableKey;
   }
@@ -61,6 +64,7 @@ export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
       owner: new PostgresOwnerAdapter(executor),
       community: new PostgresCommunityAdapter(executor),
       chat: new PostgresChatAdapter(executor),
+      pictures: storagePictures(this.#project, this.#publishableKey, bearerToken),
     };
   }
 
