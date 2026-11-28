@@ -153,6 +153,8 @@ export class ConnectedChatModel implements ChatModel {
     const result = await complete(this.#post, stored, secret, messages, REPLY_TOKENS, context.signal);
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the reply was cut off");
+    // JSON, but with no reply in it (another format, or an error the service sent with a 200): the same as no usable answer.
+    if (result.text.trim().length === 0) throw new ConnectionFailed("BAD_ANSWER");
     return parseReply(result.text, turn.companion.displayName);
   }
 

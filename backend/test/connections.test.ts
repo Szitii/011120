@@ -188,6 +188,8 @@ it("answers through the Owner's key or agent, and through the platform without a
     ["AUTH_FAILED", "AUTH_FAILED", "NO_BALANCE", "RATE_LIMITED", "NOT_FOUND", "UNREACHABLE", "UNREACHABLE", "ERROR", "ERROR"]);
   assert.deepEqual([await failing(async () => ({ status: 200, body: undefined })), await failing(async () => { throw new BlockedAddressError(); }),
     await failing(async () => { throw new Error("The call timed out."); })], ["BAD_ANSWER", "BLOCKED_ADDRESS", "UNREACHABLE"]);
+  assert.deepEqual([await failing(async () => ({ status: 200, body: { error: "model overloaded" } })), await failing(post("  "))], ["BAD_ANSWER", "BAD_ANSWER"],
+    "JSON without a reply in it");
 
   // The operators' kill switch stops Owners' keys and agents too.
   sent.length = 0;

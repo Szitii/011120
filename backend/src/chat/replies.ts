@@ -134,6 +134,14 @@ export interface ChatModel {
   memory?(job: MemoryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<MemoryAnswer>;
 }
 
+/** The model did not answer within the turn's time. */
+class ModelTimeout extends Error {
+  constructor() {
+    super("model timed out");
+    this.name = "ModelTimeout";
+  }
+}
+
 const MAX_MESSAGES = 3;
 // Under the database's 2-minute claim, so a hung model call ends here before another server could take the turn.
 const MODEL_TIMEOUT_MS = 90_000;
@@ -396,7 +404,7 @@ export class ChatReplies {
   /** Runs a model call that is aborted (and rejects) after the timeout. */
   async #timed<T>(call: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(new Error("model timed out")), this.#timeoutMs);
+    const timer = setTimeout(() => abort.abort(new ModelTimeout()), this.#timeoutMs);
     try {
       const stopped = new Promise<never>((_, reject) => abort.signal.addEventListener("abort", () => reject(abort.signal.reason)));
       return await Promise.race([call(abort.signal), stopped]);
@@ -503,7 +511,9 @@ export class ChatReplies {
       trace.voice = results.map(result => result ?? "VOICE_UNAVAILABLE");
       return ["SENT", safe, clips, action, reminders];
     } catch (error) {
+      // The Owner's own key or agent: why it failed, or that it did not answer within the turn's time.
       if (error instanceof ConnectionFailed) trace.connection = error.reason;
+      else if (error instanceof ModelTimeout && trace.channel !== "PLATFORM") trace.connection = "UNREACHABLE";
       return ["ERROR", null]; // the model failed, timed out, or answered in the wrong shape
     }
   }

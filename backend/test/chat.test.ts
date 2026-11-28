@@ -828,6 +828,17 @@ it("says on a failed reply that it was the Owner's own key or agent, and notes i
   // The note is extra: without it the reply is still a failed one that can be tried again.
   assert.equal((await run(failing(new ConnectionFailed("UNREACHABLE")), turn(), true)).outcome, "ERROR");
 
+  // An endpoint of the Owner's that never answers: the turn's own time limit ends it, and that too is told as theirs.
+  const hung = async (channel?: "BYOK") => {
+    const { port, finished, calls } = fakePort([turn()]);
+    const traces: ReplyTrace[] = [];
+    const never: ChatModel = { reply: (_turn, context) => { if (channel) context.via?.(channel); return new Promise(() => undefined); } };
+    await new ChatReplies(never, 20, undefined, undefined, trace => traces.push(trace as ReplyTrace)).drain(chatId, port);
+    return [finished[0]![1], calls.filter(call => call[0] === "failNote").map(call => call[2]), traces[0]!.connection];
+  };
+  assert.deepEqual([await hung("BYOK"), await hung()], [["ERROR", ["UNREACHABLE"], "UNREACHABLE"], ["ERROR", [], undefined]],
+    "a platform model that hangs is a plain failure");
+
   const spare: ChatModel = { reply: async (_turn, context) => { context.backup?.(); return { messages: ["好"] }; } };
   const plain: ChatModel = { reply: async () => ({ messages: ["好"] }) };
   assert.deepEqual([(await run(spare, turn())).trace.key, "key" in (await run(plain, turn())).trace], ["BACKUP", false]);
