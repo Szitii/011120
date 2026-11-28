@@ -827,9 +827,9 @@ select public.test_assert(
   'the admin log cannot be edited or deleted'
 );
 select public.test_assert(
-  not has_function_privilege('authenticated', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  not has_function_privilege('authenticated', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_settle(uuid,bigint,bigint,bigint,boolean)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('companion_api', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text,text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_settle(uuid,bigint,bigint,bigint,boolean)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_models_enabled(text[],text[])'::regprocedure, 'EXECUTE'),
   'chat model calls are booked and settled only by the API server'

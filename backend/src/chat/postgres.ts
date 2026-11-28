@@ -280,9 +280,9 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   async reserve(input: ChatReservation): Promise<ReservationDecision> {
-    return await this.#object("select public.chat_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) as payload", [
+    return await this.#object("select public.chat_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) as payload", [
       input.replyId, input.claimId, input.purpose, input.provider, input.model, input.pricingVersion,
-      input.inputTokens, input.outputTokens, input.costMinor, input.traceId,
+      input.inputTokens, input.outputTokens, input.costMinor, input.traceId, input.step ?? "",
     ]) as ReservationDecision;
   }
 

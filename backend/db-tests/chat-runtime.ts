@@ -943,8 +943,30 @@ try {
     "only what is new or recent is fetched: not the one nobody could read, not the ones from further back");
   assert.deepEqual((await settle(pictured)).items.filter(item => item.images!.length > 0).map(item => item.images!.map(i => i.seen)), [[true], [true, false]]);
 
+  // Through a platform model and the real ledger: two new pictures and the reply are three calls of one turn, each booked
+  // and settled on its own (they used to share one ledger key, and the second was refused).
+  const [first, second2] = [file(), file("png")];
+  for (const name of [first, second2]) await upload(A.subject, name);
+  await settle(pictured);
+  await portA.send(pictured, "再看两张", [], keyHash(), [{ path: first }, { path: second2 }]);
+  const eyes = new ChatCatalog({ defaultModel: "eyes", decisionModel: null, visionModel: "eyes", providers: { seep: { kind: "openai-compatible", baseUrl: "https://see.example/v1", apiKeyEnv: "SEE_KEY" } },
+    models: [{ id: "eyes", name: "Eyes", provider: "seep", model: "see-1", tier: "ECONOMY", inputPerMTok: 1, outputPerMTok: 1, enabled: true, options: { vision: true } }] }, { SEE_KEY: "k" });
+  const asked: number[] = [];
+  const seeing = new PlatformChatModel(eyes, async (_model, request) => {
+    asked.push(request.images?.length ?? 0);
+    return { text: request.system.includes("看不到图片的朋友") ? "一张照片" : "两张都看到了", inputTokens: 1200, outputTokens: 12, refused: false, cutOff: false };
+  });
+  assert.equal(await new ChatReplies(seeing).drain(pictured, portA, async () => ({ mime: "image/jpeg", base64: "/9j/" })), 1);
+  const told = (await settle(pictured)).items;
+  assert.deepEqual([told[0]!.status, told[0]!.body, told[1]!.images!.map(i => i.seen)], ["SENT", "两张都看到了", [true, true]]);
+  assert.equal(asked.filter(n => n === 1).length, 2, "each new picture described by itself");
+  assert.ok(asked.at(-1)! >= 2, "and the reply model handed the recent pictures themselves");
+  const booked = await pool.query<{ s: string }>(`select string_agg(e.status, '>' order by e.sequence) as s from public.compute_transactions x
+      join public.compute_ledger_entries e on e.transaction_id = x.id where x.provider_id = 'seep' group by x.id`);
+  assert.deepEqual(booked.rows.map(row => row.s), ["RESERVED>STARTED>SUCCEEDED", "RESERVED>STARTED>SUCCEEDED", "RESERVED>STARTED>SUCCEEDED"]);
+
   // The day's pictures: 30 by default, counted per Owner; past it nothing is sent.
-  await pool.query("update companion_private.chat_quota set daily_images = 4");
+  await pool.query("update companion_private.chat_quota set daily_images = 6");
   const spare = file();
   await upload(A.subject, spare);
   const over = await call<{ code: string }>(0, `chats/${pictured}/messages`, "POST", { images: [{ path: spare }, { path: unsent.replace(/\.jpg$/, ".png") }] });
@@ -953,7 +975,7 @@ try {
   await upload(A.subject, extra);
   const full = await call<{ code: string }>(0, `chats/${pictured}/messages`, "POST", { images: [{ path: spare }, { path: extra }] });
   assert.deepEqual([full.status, full.data.code], [429, "IMAGE_LIMIT"]);
-  assert.equal((await call(0, `chats/${pictured}/messages`, "POST", { images: [{ path: spare }] })).status, 201, "the fourth of four");
+  assert.equal((await call(0, `chats/${pictured}/messages`, "POST", { images: [{ path: spare }] })).status, 201, "the sixth of six");
   await settle(pictured);
   await pool.query("update companion_private.chat_quota set daily_images = 30");
   // Uploading has its own brakes: 40 files that are on no message.

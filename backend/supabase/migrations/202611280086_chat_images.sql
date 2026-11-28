@@ -232,6 +232,37 @@ begin
   return jsonb_build_object('noted', found);
 end $$;
 
+drop function public.chat_reserve(uuid, uuid, text, text, text, text, bigint, bigint, bigint, text);
+-- As in 0070, plus p_step. Until now a turn made one model call of each purpose, and the ledger
+-- told the calls of a turn apart by purpose alone: a second REPLY call of the same turn with other
+-- numbers was refused as a reused key. A turn with pictures makes more: one to describe each new
+-- picture, then the reply. Each is an entry of its own, named by its step ('' for the reply itself,
+-- so a turn with one call books exactly as before; "see:<file uuid>" for a description). (p_step
+-- comes last with a default, so the API server deployed before this migration keeps working.)
+create function public.chat_reserve(p_reply uuid, p_claim uuid, p_purpose text, p_provider text, p_model text,
+  p_pricing_version text, p_input_tokens bigint, p_output_tokens bigint, p_cost_minor bigint, p_trace text, p_step text default '')
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare c companion_private.chats%rowtype; m companion_private.chat_messages%rowtype; v_chat uuid; result jsonb;
+begin
+  if p_purpose is null or p_purpose not in ('REPLY', 'DECIDE') or p_step is null or p_step !~ '^[a-z0-9:-]{0,60}$' then
+    raise exception using errcode='22023', message='invalid purpose';
+  end if;
+  select chat_id into v_chat from companion_private.chat_messages where id = p_reply;
+  select * into c from companion_private.chats where id = v_chat and owner_id = companion_private.chat_owner() for update;
+  if not found then return jsonb_build_object('decision', 'STALE'); end if;
+  select * into m from companion_private.chat_messages where id = p_reply;
+  if m.status <> 'PENDING' or m.claim_id is distinct from p_claim then return jsonb_build_object('decision', 'STALE'); end if;
+  result := companion_private.compute_book(c.owner_id, m.companion_id,
+    case p_purpose when 'REPLY' then 'OWNER_DIRECT_RESPONSE' else 'CHAT_TURN_DECISION' end, 'CHAT_MESSAGE', m.id, 'CHAT',
+    m.reply_to in ('SELF', 'REMINDER'),
+    p_provider, p_model, p_pricing_version, p_input_tokens, p_output_tokens, p_cost_minor, 'chat/1', 'chat-history/1', 'chat-router/1',
+    p_trace, m.attempts, encode(sha256(convert_to(m.claim_id::text || ':' || p_purpose || case when p_step = '' then '' else ':' || p_step end,'UTF8')), 'hex'));
+  if result->>'decision' = 'RESERVED' then
+    update companion_private.chat_messages set compute_tx = (result->>'transactionId')::uuid where id = m.id;
+  end if;
+  return result;
+end $$;
+
 -- As in 0071, plus images on each message of the history: [{path, description, tries}] (null for
 -- a message without pictures).
 create or replace function public.chat_claim(p_chat uuid)
@@ -325,11 +356,13 @@ returns jsonb language sql stable security definer set search_path='' as $$
 $$;
 
 revoke all on function public.media_is_chat(text), public.media_chat_unused(text), companion_private.chat_images_used(),
-  public.chat_send(uuid, text, uuid[], text, jsonb), public.chat_image_seen(text, text) from public, anon, authenticated;
+  public.chat_send(uuid, text, uuid[], text, jsonb), public.chat_image_seen(text, text),
+  public.chat_reserve(uuid, uuid, text, text, text, text, bigint, bigint, bigint, text, text) from public, anon, authenticated;
 -- The Storage service asks as the signed-in user, so the policy functions are theirs to call.
 grant execute on function public.media_is_chat(text), public.media_chat_unused(text) to authenticated;
 grant execute on function public.chat_send(uuid, text, uuid[], text, jsonb) to authenticated;
-grant execute on function public.chat_image_seen(text, text) to companion_api;
+grant execute on function public.chat_image_seen(text, text),
+  public.chat_reserve(uuid, uuid, text, text, text, text, bigint, bigint, bigint, text, text) to companion_api;
 
 insert into companion_private.schema_migrations(name) values ('202611280086_chat_images');
 

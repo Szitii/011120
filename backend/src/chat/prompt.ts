@@ -375,7 +375,8 @@ function pictureText(images: readonly HistoryImage[] | null | undefined): string
   return (images ?? []).map(image => {
     const shows = image.description === null ? null : Array.from(oneLine(image.description)).slice(0, PICTURE_CHARS).join("");
     if (image.attached !== undefined) return `（图片${image.attached}${shows === null ? "" : `：${shows}`}）`;
-    return shows === null ? "（图片：你看不到这张图）" : `（图片：${shows}）`;
+    // Not looked at yet (it will be, with a later message) is not the same as one that cannot be read.
+    return shows !== null ? `（图片：${shows}）` : image.tries >= 2 ? "（图片：你看不到这张图）" : "（图片：你还没看到这张图）";
   }).join("");
 }
 
@@ -390,7 +391,7 @@ function pictureRules(history: readonly Said[]): string[] {
     "- 主人发的图片在聊天记录里写成（图片：……），括号里是图片的内容，不是主人说的话。",
     ...(images.some(image => image.attached !== undefined) ? ["- 标着“图片1”“图片2”的，原图按这个编号附在最后，你可以直接看；括号里的文字只是帮你对上号。"] : []),
     ...(images.some(image => image.attached === undefined && image.description === null)
-      ? ["- 写着“你看不到这张图”的，就照实告诉主人你这边没看到，不要猜图里有什么。"] : []),
+      ? ["- 写着“你看不到这张图”或“你还没看到这张图”的，就照实告诉主人，不要猜图里有什么。"] : []),
   ];
 }
 

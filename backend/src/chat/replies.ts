@@ -26,6 +26,7 @@ import type {
   ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, Picture, PostJob, PostOutcome, PostStart, ReachStart, ReminderChange,
 } from "./port.ts";
 import type { Pictures } from "./pictures.ts";
+import { ProviderError } from "./providers.ts";
 import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
@@ -41,8 +42,8 @@ export type Answer =
 
 /** A chat picture with its bytes. */
 export interface AttachedPicture { path: string; picture: Picture }
-/** One picture to describe for the turn `replyId` / `claimId`; `said`: what the Owner wrote with it. */
-export interface SeeJob { replyId: string; claimId: string; said: string; picture: Picture }
+/** One picture (the file `path`) to describe for the turn `replyId` / `claimId`; `said`: what the Owner wrote with it. */
+export interface SeeJob { replyId: string; claimId: string; path: string; said: string; picture: Picture }
 /** What the picture shows (null: the model had no words for it), or why it was not looked at. */
 export type SeeAnswer = { description: string | null } | { refused: true } | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
 
@@ -248,6 +249,8 @@ export class ChatReplies {
   readonly #trace: (trace: ReplyTrace | MemoryTrace) => void;
   readonly #safety = new SafetyPipeline();
   readonly #running = new Set<string>();
+  /** For a chat being written: how to fetch its pictures, from the newest request that started or joined the writing. */
+  readonly #fetchers = new Map<string, Pictures>();
 
   /**
    * Without a model, turns that must answer end as FAILED / UNAVAILABLE ("coming soon"); optional ones stay quiet.
@@ -269,9 +272,12 @@ export class ChatReplies {
 
   /** Starts writing the chat's queued turns unless this server is already doing so. Never throws. */
   kick(chatId: string, port: ChatPort, pictures?: Pictures): void {
+    // A loop already writing this chat (one a reminder started, say) takes the Owner's turn too:
+    // it gets this request's way to fetch pictures for the turns still to come.
+    if (pictures !== undefined) this.#fetchers.set(chatId, pictures);
     if (this.#running.has(chatId)) return;
     this.#running.add(chatId);
-    void this.drain(chatId, port, pictures).catch(() => undefined).finally(() => this.#running.delete(chatId));
+    void this.drain(chatId, port, pictures).catch(() => undefined).finally(() => { this.#running.delete(chatId); this.#fetchers.delete(chatId); });
   }
 
   /**
@@ -290,7 +296,7 @@ export class ChatReplies {
       };
       const silent = turn.companion.settings.voice ? null : claim.companion.settings.voice ? "VOICE_UNAVAILABLE" : "NO_VOICE";
       const looking = Date.now();
-      const shown = await this.#look(turn, port, pictures, trace);
+      const shown = await this.#look(turn, port, this.#fetchers.get(chatId) ?? pictures, trace);
       const [outcome, bodies, clips, action, reminders] = await this.#answer(turn, port, trace, silent, shown, Date.now() - looking);
       // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
       // Nobody waits for a message it writes on its own: whatever went wrong with one, nothing is shown.
@@ -434,6 +440,10 @@ export class ChatReplies {
    * is kept with the picture and put into the turn. Returns the pictures of the last few messages
    * themselves, for a model that takes pictures. Without a way to fetch them (a turn no request
    * started) the turn is written from what is already known. Never throws.
+   *
+   * A try is used up only by what is the picture's own fault: the file is gone or is no picture,
+   * the model declines it or has no words for it, the provider calls the request wrong. Storage
+   * or the provider failing, no model, no budget, no time left: the picture waits for another turn.
    */
   async #look(turn: ChatClaim, port: ChatPort, fetch: Pictures | undefined, trace: ReplyTrace): Promise<AttachedPicture[]> {
     const sent = turn.history.flatMap(message => (message.companionId === null ? (message.images ?? []).map(image => ({ image, said: message.body ?? "" })) : []));
@@ -441,35 +451,35 @@ export class ChatReplies {
     const recent = new Set(turn.history.slice(-RECENT_MESSAGES).flatMap(message => message.images ?? []).map(image => image.path));
     const unseen = sent.filter(({ image }) => image.description === null && image.tries < 2).slice(-MAX_PICTURES);
     const hand = sent.filter(({ image }) => recent.has(image.path)).slice(-MAX_PICTURES);
-    const got = new Map<string, Picture | null>();
+    // null: there is no picture to be had under this name. "LATER": it could not be fetched now.
+    const got = new Map<string, Picture | null | "LATER">();
     await Promise.all([...new Set([...unseen, ...hand].map(({ image }) => image.path))]
-      .map(async path => { got.set(path, await fetch(path).catch(() => null)); }));
+      .map(async path => { got.set(path, await fetch(path).catch(() => "LATER" as const)); }));
     const deadline = AbortSignal.timeout(this.#lookTimeoutMs);
     const model = this.#model;
     for (const { image, said } of unseen) {
-      const picture = got.get(image.path) ?? null;
+      const picture = got.get(image.path);
+      if (picture === undefined || picture === "LATER") continue;
       let description: string | null = null;
       if (picture !== null) {
-        // Nobody to describe it, or no time left: the picture waits, and that is not held against it.
         if (model?.see === undefined || deadline.aborted) break;
         try {
-          const answer = await model.see({ replyId: turn.replyId, claimId: turn.claimId, said, picture }, { port, signal: deadline });
-          // No model for now, switched off, or out of budget: not the picture's fault either.
+          const answer = await model.see({ replyId: turn.replyId, claimId: turn.claimId, path: image.path, said, picture }, { port, signal: deadline });
           if ("failed" in answer) break;
           // Kept the way the Owner's own words are read: with keys and passwords masked.
           const words = "description" in answer && answer.description !== null ? maskCredentials(answer.description).trim() : "";
           if (words.length > 0) description = words;
-        } catch {
-          if (deadline.aborted) break;
+        } catch (error) {
+          // A request the provider calls wrong is about this picture. Anything else is not: stop looking for now.
+          if (!(error instanceof ProviderError && [400, 413, 415, 422].includes(error.status))) break;
         }
       }
-      // A file that is gone or is no picture, a refusal, no words for it: one try used.
       await port.imageSeen(image.path, description).catch(() => undefined);
       image.description = description;
       image.tries += 1;
       if (description !== null) trace.seen = (trace.seen ?? 0) + 1;
     }
-    const shown = hand.flatMap(({ image }) => { const picture = got.get(image.path); return picture ? [{ path: image.path, picture }] : []; });
+    const shown = hand.flatMap(({ image }) => { const picture = got.get(image.path); return picture && picture !== "LATER" ? [{ path: image.path, picture }] : []; });
     if (shown.length > 0) trace.shown = shown.length;
     return shown;
   }

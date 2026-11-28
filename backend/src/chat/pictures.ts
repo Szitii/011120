@@ -8,7 +8,11 @@
  */
 import type { Picture } from "./port.ts";
 
-/** Gets a chat picture by its path ("chat/<uuid>.jpg"). null: it cannot be had, or it is not a picture a model takes. */
+/**
+ * Gets a chat picture by its path ("chat/<uuid>.jpg"). null: there is no picture to be had under
+ * that name (the file is gone, or it is not a picture a model takes). Rejects when it could not be
+ * fetched this time (Storage down or slow, the sign-in no longer good): it may be there next time.
+ */
 export type Pictures = (path: string) => Promise<Picture | null>;
 
 const PATH = /^chat\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}[.](jpg|png|webp)$/;
@@ -29,15 +33,17 @@ export function pictureType(bytes: Uint8Array): Picture["mime"] | null {
 export function storagePictures(project: URL, publishableKey: string, bearerToken: string, get: typeof fetch = fetch): Pictures {
   return async path => {
     if (!PATH.test(path)) return null;
-    try {
-      const response = await get(new URL(`/storage/v1/object/authenticated/media/${path}`, project),
-        { headers: { apikey: publishableKey, authorization: `Bearer ${bearerToken}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
-      if (!response.ok) return null;
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const mime = bytes.length > MAX_BYTES ? null : pictureType(bytes);
-      return mime === null ? null : { mime, base64: Buffer.from(bytes).toString("base64") };
-    } catch {
-      return null;
+    const response = await get(new URL(`/storage/v1/object/authenticated/media/${path}`, project),
+      { headers: { apikey: publishableKey, authorization: `Bearer ${bearerToken}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (!response.ok) {
+      // Storage answers 400 for everything it will not serve and says which in the body: "404" is a
+      // file that is not there (or not this Owner's). Anything else may pass.
+      const said = await response.json().catch(() => undefined) as { statusCode?: unknown } | undefined;
+      if (response.status === 404 || String(said?.statusCode) === "404") return null;
+      throw new Error(`Storage answered ${response.status}.`);
     }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const mime = bytes.length > MAX_BYTES ? null : pictureType(bytes);
+    return mime === null ? null : { mime, base64: Buffer.from(bytes).toString("base64") };
   };
 }

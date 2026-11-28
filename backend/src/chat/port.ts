@@ -81,6 +81,11 @@ export interface ChatReservation {
   outputTokens: number;
   costMinor: number;
   traceId: string;
+  /**
+   * Which of the turn's calls of this purpose it is, when there is more than one: left out for the
+   * reply itself, "see:<file uuid>" for the description of a picture. Each step is booked once.
+   */
+  step?: string;
 }
 
 /** RESERVED: go ahead. STALE: the turn moved on. DISABLED: switched off. QUOTA: today's budget is used up. */

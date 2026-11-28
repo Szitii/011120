@@ -998,7 +998,10 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   rows = [{ payload: { decision: "QUOTA" } }];
   assert.deepEqual(await adapter.reserve({ replyId: messageId, claimId: "c", purpose: "REPLY", provider: "p", model: "m",
     pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3, traceId: "t" }), { decision: "QUOTA" });
-  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "REPLY", "p", "m", "v", 1, 2, 3, "t"]);
+  assert.deepEqual(seen.at(-1)![1], [messageId, "c", "REPLY", "p", "m", "v", 1, 2, 3, "t", ""], "the reply itself has no step");
+  await adapter.reserve({ replyId: messageId, claimId: "c", purpose: "REPLY", provider: "p", model: "m", pricingVersion: "v", inputTokens: 1, outputTokens: 2, costMinor: 3,
+    traceId: "t", step: "see:1" });
+  assert.deepEqual(seen.at(-1), ["select public.chat_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) as payload", [messageId, "c", "REPLY", "p", "m", "v", 1, 2, 3, "t", "see:1"]]);
   rows = [{ payload: { settled: true } }];
   await adapter.settle("tx", 1, 2, 3, true);
   assert.deepEqual(seen.at(-1)![1], ["tx", 1, 2, 3, true]);

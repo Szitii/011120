@@ -132,7 +132,9 @@ export class PlatformChatModel implements ChatModel {
   async see(job: SeeJob, { port, signal }: { port: ChatPort; signal: AbortSignal }): Promise<SeeAnswer> {
     const model = this.#catalog.visionModel();
     if (model === undefined) return { failed: "UNAVAILABLE" };
-    const book: Book = booking => port.reserve({ ...booking, replyId: job.replyId, claimId: job.claimId, purpose: "REPLY", traceId: job.replyId });
+    // A ledger entry of its own, named after the file: the turn's reply is booked separately, and so is each other picture.
+    const step = `see:${/[0-9a-f-]{36}/.exec(job.path)?.[0] ?? "picture"}`;
+    const book: Book = booking => port.reserve({ ...booking, replyId: job.replyId, claimId: job.claimId, purpose: "REPLY", traceId: job.replyId, step });
     const result = await this.#run(port, book, model, seePrompt(job.said), SEE_TOKENS, signal, MAX_INPUT_TOKENS, undefined, [job.picture]);
     if ("failed" in result) return result;
     return result.refused ? { refused: true } : { description: parseSeen(result.text) };
