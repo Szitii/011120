@@ -72,6 +72,11 @@ describe("PostgreSQL persistence adapter",()=>{
     const ack=await new PostgresOwnerAdapter(ackDb).acknowledgeLifeEvent(id("20"));
     assert.equal(ack?.readAt,"2026-09-18T00:01:00.000Z");
     assert.match(ackDb.calls[0]?.text??"",/ack_life_event_inbox_item/);
+    const allDb=new FakeExecutor({payload:{read:4}});
+    assert.deepEqual(await new PostgresOwnerAdapter(allDb).readLifeEventInbox("2026-09-19T00:00:00.123456+00:00"),{read:4});
+    assert.deepEqual([allDb.calls[0]?.text,allDb.calls[0]?.values],["select public.read_life_event_inbox($1) as payload",["2026-09-19T00:00:00.123456+00:00"]]);
+    await new PostgresOwnerAdapter(allDb).readLifeEventInbox(null);
+    assert.deepEqual(allDb.calls[1]?.values,[null]);
   });
   it("maps typed revisioned Controls persistence",async()=>{
     const payload={companionId:id("3"),schemaVersion:1,revision:2,settings:{socialTwinVisibility:"FRIENDS",socialAutonomyMode:"NORMAL",memorySharingScope:"PERMISSION_GATED_SOCIAL_ONLY",notificationsEnabled:false},supported:{socialTwinVisibility:["PRIVATE","FRIENDS","PUBLIC"],socialAutonomyMode:["QUIET","NORMAL","ACTIVE","CUSTOM"],memorySharingScope:["PERMISSION_GATED_SOCIAL_ONLY"],notificationsEnabled:true}};

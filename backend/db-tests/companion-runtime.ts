@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool } from "../src/persistence/postgres/index.ts";
+import type { PoolClient } from "pg";
 import type { Chat, ChatPage } from "../../contracts/chat.ts";
 import type { ActorContext, CommunityDetail, CommunityPage, CommunityPost, CommunityProfile } from "../../contracts/community.ts";
 
-// Built-in avatars (migration 0055), deleting a Companion and the limit of 10 per Owner (0054). Runs last: it leaves
+// Built-in avatars (migration 0055), uploaded ones (0082), deleting a Companion and the limit of 10 per Owner (0054). Runs last: it leaves
 // Owner A's extra Companions deleted and never touches the two seeded ones.
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");
@@ -96,6 +97,81 @@ try {
   assert.equal((await call<CommunityProfile>(1, `community/profile/${actorA.id}?${viewerB}`)).data.avatar, null, "null clears it");
   assert.ok(!("avatar" in (await call<{ items: Record<string, unknown>[] }>(0, "companions")).data.items.find(c => c.companionId === A.companion)!));
   passed("built-in avatars: set and cleared by the Owner, shown on profiles, chat members and the Companion list");
+
+  // ---- uploaded avatars (migration 0082). The Storage service is not here: a row in storage.objects, written and read
+  // as the signed-in user, stands for a file. Storage itself records the uploader in owner_id; here the test does. ----
+  const asUser = async <T>(subject: string, run: (c: PoolClient) => Promise<T>): Promise<T> => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin"); await c.query("set local role authenticated");
+      await c.query("select set_config('request.jwt.claim.sub',$1,true)", [subject]);
+      const result = await run(c);
+      await c.query("commit");
+      return result;
+    } catch (error) { await c.query("rollback"); throw error; } finally { c.release(); }
+  };
+  const picture = (type = "jpg") => `${randomUUID()}.${type}`;
+  const upload = (subject: string, file: string) => asUser(subject, c =>
+    c.query("insert into storage.objects(bucket_id, name, owner_id) values ('media', $1, $2)", [`avatar/${file}`, subject]));
+  const canRead = (subject: string, file: string) => asUser(subject, async c =>
+    (await c.query("select 1 from storage.objects where bucket_id = 'media' and name = $1", [`avatar/${file}`])).rowCount === 1);
+  const remove = (subject: string, file: string) => asUser(subject, async c =>
+    (await c.query("delete from storage.objects where bucket_id = 'media' and name = $1", [`avatar/${file}`])).rowCount);
+  const refusedUpload = (e: unknown) => (e as { code?: string }).code === "42501";
+  const [faceA, faceAi, faceB, facePrivate] = [picture(), picture("webp"), picture("png"), picture()];
+  for (const [subject, file] of [[A.subject, faceA], [A.subject, faceAi], [B.subject, faceB], [A.subject, facePrivate]] as const) await upload(subject, file);
+  for (const bad of ["holiday.jpg", randomUUID(), `${randomUUID()}.gif`, `${randomUUID()}.JPG`, `mine/${randomUUID()}.jpg`]) {
+    await assert.rejects(upload(A.subject, bad), refusedUpload, bad);
+  }
+  assert.deepEqual([await canRead(A.subject, faceA), await canRead(B.subject, faceA)], [true, false], "an upload is its owner's alone until it is someone's avatar");
+  // Only a file the Owner uploaded themselves, and only one that is there.
+  for (const [who, file] of [[1, faceA], [0, faceB], [0, picture()]] as const) {
+    assert.equal((await call(who, "owner/avatar", "PUT", { avatar: `upload:${file}` })).status, 400);
+    assert.equal((await call(who, `companions/${who === 0 ? A.companion : B.companion}/avatar`, "PUT", { avatar: `upload:${file}` })).status, 400);
+  }
+  assert.deepEqual((await call(0, "owner/avatar", "PUT", { avatar: `upload:${faceA}` })).data, { avatar: `upload:${faceA}` });
+  assert.deepEqual((await call(0, `companions/${A.companion}/avatar`, "PUT", { avatar: `upload:${faceAi}` })).data, { avatar: `upload:${faceAi}` });
+  assert.equal((await call<CommunityProfile>(1, `community/profile/${actorA.id}?${viewerB}`)).data.avatar, `upload:${faceA}`);
+  assert.equal((await call<CommunityProfile>(1, `community/profile/${actorAi.id}?${viewerB}`)).data.avatar, `upload:${faceAi}`);
+  assert.equal((await call<{ items: { companionId: string; avatar?: string }[] }>(0, "companions")).data.items.find(c => c.companionId === A.companion)!.avatar, `upload:${faceAi}`);
+  assert.deepEqual([await canRead(B.subject, faceA), await canRead(B.subject, faceAi)], [true, true], "whoever may see the identity may fetch its avatar");
+  // A Companion that is not in the community: its avatar is its Owner's alone, and a look at the folder does not show it.
+  const shy = await makeCompanion("Shy");
+  assert.equal((await call(0, `companions/${shy}/avatar`, "PUT", { avatar: `upload:${facePrivate}` })).status, 200);
+  assert.deepEqual([await canRead(A.subject, facePrivate), await canRead(B.subject, facePrivate)], [true, false]);
+  const folder = await asUser(B.subject, async c =>
+    (await c.query<{ name: string }>("select name from storage.objects where bucket_id = 'media' and name like 'avatar/%' order by name")).rows.map(r => r.name));
+  assert.deepEqual(folder, [faceA, faceAi, faceB].map(f => `avatar/${f}`).sort(), "B sees their own file and the two avatars they may see");
+  // Blocked: the avatar goes with the profile of the identity that blocked; the Owner's Companion did not block anyone.
+  const actorB = (await call<CommunityProfile>(1, `community/profile?${viewerB}`)).data;
+  assert.equal((await call(0, `community/blocks/${actorB.id}?${as(ownerA)}`, "PUT")).status, 200);
+  assert.equal((await call(1, `community/profile/${actorA.id}?${viewerB}`)).status, 404);
+  assert.deepEqual([await canRead(B.subject, faceA), await canRead(B.subject, faceAi)], [false, true]);
+  assert.equal((await call(0, `community/blocks/${actorB.id}?${as(ownerA)}`, "DELETE")).status, 200);
+  assert.equal(await canRead(B.subject, faceA), true);
+  // Deleting: one's own file, once it is nobody's avatar.
+  assert.deepEqual([await remove(A.subject, faceA), await remove(B.subject, faceA)], [0, 0], "not while it is an avatar");
+  assert.deepEqual((await call(0, "owner/avatar", "PUT", { avatar: "preset:cat_01" })).data, { avatar: "preset:cat_01" });
+  assert.equal(await canRead(B.subject, faceA), false, "replaced: nobody else reads it any more");
+  assert.deepEqual([await remove(B.subject, faceA), await remove(A.subject, faceA)], [0, 1], "and only its owner deletes it");
+  assert.equal(await remove(A.subject, facePrivate), 0);
+  assert.equal((await call(0, `companions/${shy}`, "DELETE")).status, 200);
+  assert.equal(await remove(A.subject, facePrivate), 1, "a deleted Companion does not hold on to its file");
+  // At most 20 uploads an hour and 30 files kept. A has one file left (the seeded Companion's).
+  const more = (n: number, age: string) => pool.query(`insert into storage.objects(bucket_id, name, owner_id, created_at)
+    select 'media', 'avatar/' || gen_random_uuid() || '.jpg', $1, now() - $3::interval from generate_series(1, $2)`, [A.subject, n, age]);
+  await more(18, "1 minute");
+  await upload(A.subject, picture());
+  await assert.rejects(upload(A.subject, picture()), refusedUpload, "the 21st in an hour");
+  await upload(B.subject, picture());
+  await pool.query("update storage.objects set created_at = now() - interval '2 hours' where bucket_id = 'media' and name like 'avatar/%' and owner_id = $1", [A.subject]);
+  await more(9, "2 hours");
+  await upload(A.subject, picture());
+  await assert.rejects(upload(A.subject, picture()), refusedUpload, "the 31st kept");
+  assert.deepEqual((await call(0, "owner/avatar", "PUT", { avatar: null })).data, { avatar: null });
+  assert.deepEqual((await call(0, `companions/${A.companion}/avatar`, "PUT", { avatar: null })).data, { avatar: null });
+  await pool.query("delete from storage.objects where bucket_id = 'media' and name like 'avatar/%'");
+  passed("uploaded avatars: one's own file only, fetched by whoever may see the identity, deletable once replaced, bounded");
 
   // ---- a Companion with everything: chats, memory, keys, a connection, a community life ----
   const doomed = await makeCompanion("Doomed", true), friend = await makeCompanion("Friend");

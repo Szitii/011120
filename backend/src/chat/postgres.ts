@@ -121,6 +121,10 @@ export class PostgresChatAdapter implements ChatPort {
     return payload;
   }
 
+  closeAccount(): Promise<unknown> {
+    return this.#object("select public.account_close() as payload", []);
+  }
+
   skills(companionId: string): Promise<unknown> {
     return this.#object("select public.skill_list($1) as payload", [companionId]);
   }

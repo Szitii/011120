@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { handleCommunityRequest } from "../src/community/http.ts";
 import { PostgresCommunityAdapter } from "../src/community/postgres.ts";
-import type { CommunityCommand, CommunityRead, CommunityPort, FollowList } from "../src/community/port.ts";
+import type { CommunityCommand, CommunityRead, CommunityPort, CommunitySearch, FollowList } from "../src/community/port.ts";
 import type { AuthenticatedOwnerSession, OwnerApiPort, MvpHttpRequest } from "../src/http/types.ts";
 import { PostgresPersistenceError, type SqlExecutor } from "../src/persistence/postgres/types.ts";
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
@@ -11,7 +11,7 @@ const ownerId = "00000000-0000-0000-0000-0000000001a1";
 const target = "00000000-0000-0000-0000-0000000005a1";
 const query = `actorKind=OWNER&actorId=${ownerId}`;
 const reads: CommunityRead[] = []; const commands: CommunityCommand[] = []; const follows: FollowList[] = [];
-const likes: unknown[][] = [];
+const likes: unknown[][] = []; const searches: CommunitySearch[] = []; const readAll: unknown[][] = [];
 const community: CommunityPort = {
   read: async input => { reads.push(input); return { items: [], nextCursor: null }; },
   command: async input => { commands.push(input); return { id: target }; },
@@ -19,6 +19,8 @@ const community: CommunityPort = {
   humanProfileSettings: async () => ({ displayName: "Sample", bio: "", revision: 1 }),
   saveHumanProfile: async (_actor, settings) => settings,
   followList: async input => { follows.push(input); return { items: [], nextCursor: null }; },
+  search: async input => { searches.push(input); return { items: [], nextCursor: null }; },
+  readNotifications: async (...args) => { readAll.push(args); return { read: 2 }; },
   agentSettings: async () => ({}),
   saveAgentSettings: async () => ({}),
   agentCommand: async () => ({}),
@@ -178,6 +180,11 @@ it("parameterizes all PostgreSQL community inputs and validates payload shape", 
   await adapter.read(reads[0]!); await adapter.command(commands[0]!);
   await adapter.like({ kind: "OWNER", id: ownerId }, target, true);
   assert.deepEqual([calls[2]!.text, calls[2]!.values], ["select public.community_like($1,$2,$3,$4) as payload", ["OWNER", ownerId, target, true]]);
+  await adapter.search({ actor: { kind: "OWNER", id: ownerId }, query: "100%_'; drop", category: "POST", beforeAt: "2026-11-21T12:00:00Z", beforeId: target });
+  assert.deepEqual([calls.at(-1)!.text, calls.at(-1)!.values], ["select public.community_search($1,$2,$3,$4,$5,$6) as payload",
+    ["OWNER", ownerId, "100%_'; drop", "POST", "2026-11-21T12:00:00Z", target]], "the words go as a value, never into the statement");
+  await adapter.readNotifications({ kind: "OWNER", id: ownerId }, null);
+  assert.deepEqual([calls.at(-1)!.text, calls.at(-1)!.values], ["select public.community_read_notifications($1,$2,$3) as payload", ["OWNER", ownerId, null]]);
   assert.equal(calls[0]!.values[1], ownerId);
   // A post goes through the wrapper that also takes the visibility and the mentions.
   assert.deepEqual([calls[1]!.text, calls[1]!.values.slice(2, 6)],
@@ -223,6 +230,50 @@ it("validates protection commands and binds reports and the block list to the ve
     { reason: "OTHER", details: "" }), headers: { "Idempotency-Key": "stable-community-test-key" } }, session, "t"),
     (e: unknown) => e instanceof PostgresPersistenceError && e.code === "INVALID_INPUT");
   assert.equal((await handleCommunityRequest(request(`reports/unknown/${target}`, "POST"), session, "t"))?.status, 404);
+});
+
+it("searches identities and posts: the words, a category, and the cursor of the posts", async () => {
+  const run = async (path: string) => {
+    assert.equal((await handleCommunityRequest(request(path), session, "t"))?.status, 200, path);
+    return searches.at(-1)!;
+  };
+  assert.deepEqual(await run(`search?q=${encodeURIComponent(" @小光 ")}`),
+    { actor: { kind: "OWNER", id: ownerId }, query: "@小光", category: "ALL", beforeAt: null, beforeId: null });
+  const paged = await run(`search?q=rain&category=POST&cursor=2026-11-21T12:00:00Z|${target}`);
+  assert.deepEqual([paged.category, paged.beforeAt, paged.beforeId], ["POST", "2026-11-21T12:00:00Z", target]);
+  for (const category of ["HUMAN", "AI"]) assert.equal((await run(`search?q=a&category=${category}`)).category, category);
+  assert.equal((await run(`search?q=${"\u{1F600}".repeat(64)}`)).query.length, 128, "64 characters, counted like the database counts");
+  const before = searches.length;
+  for (const path of ["search", "search?q=", "search?q=%20%20", "search?q=@", "search?q=@%20", `search?q=${"a".repeat(65)}`,
+    "search?q=a&category=TAG", "search?q=a%00b", "search?q=a&cursor=bad", `search?q=a&cursor=bad|${target}`]) {
+    await assert.rejects(handleCommunityRequest(request(path), session, "t"), { code: "INVALID_INPUT" }, path);
+  }
+  assert.equal(searches.length, before, "a refused search never reaches the database");
+  assert.equal((await handleCommunityRequest(request("search?q=a", "POST", {}), session, "t"))?.status, 404);
+  assert.equal((await handleCommunityRequest(request("search/more?q=a"), session, "t"))?.status, 404);
+});
+
+it("marks every notice read up to the moment the app names, or up to now", async () => {
+  const put = (body?: unknown) => handleCommunityRequest(request("notifications/read", "PUT", body), session, "t");
+  const all = await put();
+  assert.deepEqual([all?.status, all?.body, readAll.at(-1)], [200, { read: 2 }, [{ kind: "OWNER", id: ownerId }, null]]);
+  await put({});
+  assert.equal(readAll.at(-1)![1], null);
+  // Passed on as the app sent it: PostgreSQL's microseconds must survive.
+  await put({ before: "2026-11-27T08:21:51.998307+00:00" });
+  assert.equal(readAll.at(-1)![1], "2026-11-27T08:21:51.998307+00:00");
+  await put({ before: "2026-11-27T08:21:51.998Z" });
+  assert.equal(readAll.at(-1)![1], "2026-11-27T08:21:51.998Z");
+  const before = readAll.length;
+  for (const body of [[], "now", { before: 1795767712 }, { before: "yesterday" }, { before: "2026-11-27" }, { before: "2026-13-41T00:00:00Z" },
+    { before: "2026-11-27T08:21:51+16:00" }, { before: null }, { before: "2026-11-27T08:21:51Z", all: true }]) {
+    await assert.rejects(put(body), { code: "INVALID_INPUT" }, JSON.stringify(body));
+  }
+  await assert.rejects(handleCommunityRequest({ ...request("notifications/read", "PUT", { before: "2026-11-27T08:21:51Z" }), headers: {} }, session, "t"),
+    { code: "INVALID_INPUT" }, "a body needs its content type");
+  assert.equal(readAll.length, before);
+  assert.equal(commands.at(-1)?.action === "READ_NOTIFICATION" && commands.at(-1)?.targetId === "read", false, "never taken for one notice named read");
+  assert.equal((await handleCommunityRequest(request("notifications/read", "POST", {}), session, "t"))?.status, 404);
 });
 
 it("lists the caller's own following and followers with the shared keyset cursor", async () => {

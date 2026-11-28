@@ -1,0 +1,51 @@
+begin;
+
+-- Closing one's own account (账号注销): DELETE /v0/account
+--
+-- Decided by the product owner on 2026-11-27: the data is kept on file, the sign-in stops
+-- working. So nothing is erased here. The Owner becomes DELETED, the state the schema has had
+-- since 0001 and that every function already treats like SUSPENDED:
+--   - every request is refused (claim_owner answers null);
+--   - nobody sees the account any more: profiles, posts and comments of the person and of their
+--     Companions drop out of the community (community_profile_available);
+--   - nothing runs for it: no greeting, no reminder, no diary, no post written by a Companion,
+--     and the Owner's agent keys stop working.
+-- Three things are done on top of the state:
+--   - the keys the Owner stored with us are destroyed (their own model keys, their agent's
+--     address and token, the keys their agent checks in with): a secret is not something to keep
+--     on file;
+--   - the sign-in is banned and its sessions are ended, so no new token is issued. A token
+--     already issued (an hour at most) is refused by this server at once;
+--   - the time is written down (owners.closed_at) for whoever later decides how long a closed
+--     account stays on file.
+-- The e-mail address stays taken. There is no way back from the app: reopening an account is an
+-- operator's job, by hand (status ACTIVE, banned_until null), and the destroyed keys stay gone.
+--
+-- Only the API server may call it: the server first makes sure the caller typed their password
+-- within the last few minutes, which the database cannot see.
+
+alter table public.owners add column closed_at timestamptz;
+
+create function public.account_close()
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare o uuid := companion_private.chat_owner(); uid uuid := (select auth.uid());
+begin
+  perform 1 from public.owners where id = o for update;
+  update public.owners set status = 'DELETED', closed_at = now(), updated_at = now() where id = o;
+  delete from companion_private.companion_connections x using public.companions c
+    where c.id = x.companion_id and c.owner_id = o;
+  delete from companion_private.agent_keys where owner_id = o;
+  -- A date far away rather than 'infinity', which the sign-in service may not read.
+  update auth.users set banned_until = now() + interval '100 years' where id = uid;
+  delete from auth.sessions where user_id = uid;
+  insert into public.audit_events(owner_id, actor_type, actor_id, action, target_type, target_id)
+    values (o, 'OWNER', o, 'ACCOUNT_CLOSE', 'OWNER', o);
+  return jsonb_build_object('closed', true);
+end $$;
+
+revoke all on function public.account_close() from public, anon, authenticated;
+grant execute on function public.account_close() to companion_api;
+
+insert into companion_private.schema_migrations(name) values ('202611280083_account_close');
+
+commit;

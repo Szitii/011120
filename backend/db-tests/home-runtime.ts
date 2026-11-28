@@ -103,6 +103,55 @@ try {
   assert.ok((await call<Badges>(1, "badges")).data.community.every(c => c.actorId !== A.owner && c.actorId !== A.companion));
   passed("community badges per identity match the notification list; followers say who is followed back");
 
+  // ---- "全部已读" (migration 0080): every notice up to a moment, for one identity and for the Owner's own inbox ----
+  const aiA = (await call<CommunityProfile>(0, `community/profile?actorKind=COMPANION&actorId=${A.companion}`)).data;
+  const aiB = (await call<CommunityProfile>(1, `community/profile?actorKind=COMPANION&actorId=${B.companion}`)).data;
+  const readNotes = (who: 0 | 1, body?: unknown) =>
+    call<{ read: number }>(who, `community/notifications/read?actorKind=OWNER&actorId=${A.owner}`, "PUT", body);
+  const unreadNotes = async () => (await badges()).community[0]!.unread;
+  const wasUnread = (await pool.query<{ id: string }>("select id from public.community_notifications where recipient_id = $1 and read_at is null", [humanA.id])).rows.map(r => r.id);
+  const baseNotes = await unreadNotes();
+  await pool.query("delete from public.community_follows where target_id = $1 and actor_id in ($2, $3)", [humanA.id, aiA.id, aiB.id]);
+  await pool.query("delete from public.community_notifications where recipient_id = $1 and actor_id in ($2, $3)", [humanA.id, aiA.id, aiB.id]);
+  // One old notice the list shows (B's Companion follows A), and an older one it does not (a follow that was taken back).
+  await pool.query("insert into public.community_follows(actor_id, target_id) values ($1, $2)", [aiB.id, humanA.id]);
+  await pool.query(`insert into public.community_notifications(recipient_id, actor_id, kind, created_at) values
+    ($1, $2, 'FOLLOW', '2026-01-02T00:00:00.123456Z'), ($1, $3, 'FOLLOW', '2026-01-01T00:00:00Z')`, [humanA.id, aiB.id, aiA.id]);
+  assert.equal(await unreadNotes(), baseNotes + 1, "the hidden one is not counted");
+  assert.equal((await readNotes(1)).status, 404, "another Owner cannot speak for this identity");
+  for (const before of ["yesterday", "2026-01-02", 1767312000]) assert.equal((await readNotes(0, { before })).status, 400, String(before));
+  assert.deepEqual((await readNotes(0, { before: "2026-01-01T23:59:59Z" })).data, { read: 0 }, "nothing the list shows is that old");
+  // The app names the newest notice it shows, cut to milliseconds: that notice is still covered, later ones are not.
+  assert.deepEqual((await readNotes(0, { before: "2026-01-02T00:00:00.123Z" })).data, { read: 1 });
+  assert.equal(await unreadNotes(), baseNotes, "everything newer stays unread");
+  await pool.query("insert into public.community_follows(actor_id, target_id) values ($1, $2)", [aiA.id, humanA.id]);
+  assert.equal(await unreadNotes(), baseNotes + 1, "the hidden notice was not read behind the Owner's back: shown again, it is unread");
+  assert.deepEqual((await readNotes(0)).data, { read: baseNotes + 1 }, "without a moment: everything up to now");
+  assert.equal(await unreadNotes(), 0);
+  assert.deepEqual((await readNotes(0, {})).data, { read: 0 }, "again changes nothing");
+  await pool.query("delete from public.community_follows where target_id = $1 and actor_id in ($2, $3)", [humanA.id, aiA.id, aiB.id]);
+  await pool.query("delete from public.community_notifications where recipient_id = $1 and actor_id in ($2, $3)", [humanA.id, aiA.id, aiB.id]);
+  await pool.query("update public.community_notifications set read_at = null where id = any($1::uuid[])", [wasUnread]);
+
+  const inboxUnread = (await pool.query<{ id: string }>("select id from public.life_event_inbox where owner_id in ($1, $2) and read_at is null", [A.owner, B.owner])).rows.map(r => r.id);
+  const baseInbox = (await badges()).ownerInbox;
+  const otherInbox = (await call<Badges>(1, "badges")).data.ownerInbox;
+  const [oldDraft, newDraft] = (await pool.query<{ id: string }>(`insert into companion_private.agent_drafts(actor_id, body, key_hash)
+    select $1, '等审核', encode(sha256(convert_to(gen_random_uuid()::text, 'UTF8')), 'hex') from generate_series(1, 2) returning id`, [aiProfile.id])).rows.map(r => r.id);
+  await pool.query("update public.life_event_inbox set created_at = '2026-01-02T00:00:00.123456Z' where kind = 'AGENT_DRAFT' and target_id = $1", [oldDraft]);
+  assert.equal((await badges()).ownerInbox, baseInbox + 2);
+  assert.deepEqual((await call<{ read: number }>(0, "life-event-inbox/read", "PUT", { before: "2026-01-02T00:00:00.123Z" })).data, { read: 1 });
+  assert.equal((await badges()).ownerInbox, baseInbox + 1, "the notice that came later stays unread");
+  assert.equal((await call(0, "life-event-inbox/read", "PUT", { before: "soon" })).status, 400);
+  assert.equal((await call<{ read: number }>(1, "life-event-inbox/read", "PUT")).data.read, otherInbox, "each Owner reads their own");
+  assert.equal((await badges()).ownerInbox, baseInbox + 1, "and nobody else's");
+  assert.deepEqual((await call<{ read: number }>(0, "life-event-inbox/read", "PUT")).data, { read: baseInbox + 1 });
+  assert.equal((await badges()).ownerInbox, 0);
+  assert.equal((await call<{ items: LifeEventInboxItemView[] }>(0, "life-event-inbox?limit=50")).data.items.every(i => i.readAt !== undefined), true);
+  await pool.query("update companion_private.agent_drafts set status = 'DISCARDED' where id = any($1::uuid[])", [[oldDraft, newDraft]]);
+  await pool.query("update public.life_event_inbox set read_at = null where id = any($1::uuid[])", [inboxUnread]);
+  passed("read all: up to the moment the app names, only what the lists show, each identity and each Owner their own");
+
   // ---- anniversary ----
   const path = `companions/${A.companion}/anniversary`;
   const first = (await call<Anniversary>(0, path)).data;

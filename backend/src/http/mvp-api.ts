@@ -4,7 +4,7 @@ import { handleAgentRequest, Heartbeats } from "../agent/heartbeat.ts";
 import type { Connections } from "../connections/model.ts";
 import type { ChatCatalog } from "../chat/models.ts";
 import { ChatReplies } from "../chat/replies.ts";
-import { handleCommunityRequest } from "../community/http.ts";
+import { handleCommunityRequest, readBefore } from "../community/http.ts";
 import { canonicalJson, contentHash, sha256 } from "../companion-import/canonical.ts";
 import { parseCharacterCard, parserMetadata } from "../companion-import/parser.ts";
 import { ImportPolicyError } from "../companion-import/errors.ts";
@@ -348,6 +348,9 @@ const listLifeEventInbox: Handler = async ({ query, session }) => {
 const acknowledgeLifeEvent: Handler = async ({ params, session }) =>
   [200, await session.owner.acknowledgeLifeEvent(requireUuid(params[0], "itemId"))];
 
+const readLifeEventInbox: Handler = async ({ request, session }) =>
+  [200, await session.owner.readLifeEventInbox(readBefore(request))];
+
 const createCompanionImport: Handler = async (context) => {
   const idempotencyKeyHash = idempotencyHash(context, "companion-import");
   const rawPayload = canonicalJson(requireAnyObject(context.request));
@@ -438,6 +441,7 @@ const ROUTES: readonly (readonly [method: string, path: RegExp, handler: Handler
   ["GET", /^\/v0\/companions\/([^/]+)\/profile$/, getCompanionProfile],
   ["GET", /^\/v0\/life-continuity$/, listLifeContinuity],
   ["GET", /^\/v0\/life-event-inbox$/, listLifeEventInbox],
+  ["PUT", /^\/v0\/life-event-inbox\/read$/, readLifeEventInbox],
   ["PUT", /^\/v0\/life-event-inbox\/([^/]+)\/read$/, acknowledgeLifeEvent],
   ["POST", /^\/v0\/companion-imports$/, createCompanionImport],
   ["GET", /^\/v0\/companion-imports\/([^/]+)$/, getCompanionImportReview],

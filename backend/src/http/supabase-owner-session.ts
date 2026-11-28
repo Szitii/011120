@@ -7,6 +7,25 @@ import { ApiAuthenticationError, OwnerSessionError, type AuthenticatedOwnerSessi
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
+/**
+ * When the sign-in behind this token last proved who it is, in milliseconds: the newest entry of
+ * the token's `amr` list (password, a code from an e-mail, ...). Supabase keeps that time when it
+ * refreshes a token, so an old sign-in does not look new. Read only from a token Supabase has
+ * just accepted.
+ */
+export function signedInAt(bearerToken: string): number | undefined {
+  try {
+    const claims = JSON.parse(Buffer.from(bearerToken.split(".")[1] ?? "", "base64url").toString("utf8")) as { amr?: unknown };
+    const times = (Array.isArray(claims.amr) ? claims.amr : []).flatMap((entry: unknown) => {
+      const { method, timestamp } = (entry ?? {}) as { method?: unknown; timestamp?: unknown };
+      return method !== "token_refresh" && typeof timestamp === "number" && Number.isFinite(timestamp) ? [timestamp * 1000] : [];
+    });
+    return times.length === 0 ? undefined : Math.max(...times);
+  } catch {
+    return undefined;
+  }
+}
+
 export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
   readonly #pool: pg.Pool;
   readonly #userUrl: URL;
@@ -34,8 +53,10 @@ export class SupabaseOwnerSessionResolver implements OwnerSessionResolver {
     ).catch(() => { throw new OwnerSessionError("SERVICE_UNAVAILABLE"); });
     const ownerId = result.rows[0]?.id;
     if (!ownerId) throw new OwnerSessionError("FORBIDDEN");
+    const at = signedInAt(bearerToken);
     return {
       ownerId,
+      ...(at === undefined ? {} : { signedInAt: at }),
       owner: new PostgresOwnerAdapter(executor),
       community: new PostgresCommunityAdapter(executor),
       chat: new PostgresChatAdapter(executor),

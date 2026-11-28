@@ -1,7 +1,7 @@
 import { sha256 } from "../companion-import/canonical.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
-import type { CommunityCommand, CommunityPort, CommunityRead } from "./port.ts";
+import type { CommunityCommand, CommunityPort, CommunityRead, CommunitySearch } from "./port.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, runAgentTool, type AgentArgs, type AgentTool } from "../agent/tools.ts";
 import type { AgentSettings, HumanProfileSettings, PostMediaInput, PostVisibility } from "../../../contracts/community.ts";
 
@@ -42,6 +42,35 @@ function cursorOf(url: URL): [string | null, string | null] {
   const parts = cursor.split("|");
   if (parts.length !== 2 || !parts[0] || !Number.isFinite(Date.parse(parts[0]))) invalid();
   return [parts[0]!, id(parts[1]!)];
+}
+
+// PostgreSQL accepts UTC offsets only up to 15:59.
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:0\d|1[0-5]):[0-5]\d)$/;
+
+/**
+ * The body of a "read all" call: nothing, or { before } with the createdAt of the newest notice
+ * the app is showing (passed on as it is: a Date would cut PostgreSQL's microseconds).
+ */
+export function readBefore(request: MvpHttpRequest): string | null {
+  const input = request.body;
+  if (input === undefined) return null;
+  if (!isJson(request) || !input || typeof input !== "object" || Array.isArray(input)
+    || Object.keys(input).some(key => key !== "before")) return invalid();
+  const { before } = input as { before?: unknown };
+  if (before === undefined) return null;
+  return typeof before === "string" && ISO_DATE_TIME.test(before) && Number.isFinite(Date.parse(before)) ? before : invalid();
+}
+
+const SEARCH_CATEGORIES: readonly CommunitySearch["category"][] = ["ALL", "HUMAN", "AI", "POST"];
+
+/** GET search?q=&category=&cursor=: 1 to 64 characters after a leading @, counted the way the database counts. */
+function search(url: URL, actor: CommunitySearch["actor"]): CommunitySearch {
+  const query = (url.searchParams.get("q") ?? "").trim();
+  const category = (url.searchParams.get("category") ?? "ALL") as CommunitySearch["category"];
+  const length = Array.from(query.replace(/^@+/, "").trimStart()).length;
+  if (length < 1 || length > 64 || /\p{Cc}/u.test(query) || !SEARCH_CATEGORIES.includes(category)) return invalid();
+  const [beforeAt, beforeId] = cursorOf(url);
+  return { actor, query, category, beforeAt, beforeId };
 }
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share replay storage. */
@@ -150,6 +179,10 @@ export async function handleCommunityRequest(
     return response(200, await port.followList({
       actor, direction: route[0] === "following" ? "FOLLOWING" : "FOLLOWERS", beforeAt, beforeId,
     }));
+  }
+  if (method === "GET" && route[0] === "search" && route.length === 1) return response(200, await port.search(search(url, actor)));
+  if (method === "PUT" && route[0] === "notifications" && route[1] === "read" && route.length === 2) {
+    return response(200, await port.readNotifications(actor, readBefore(request)));
   }
   let resource: CommunityRead["resource"] | undefined;
   let targetId: string | null = null;

@@ -120,6 +120,10 @@ export class PostgresOwnerAdapter implements OwnerApiPort {
     return r && json<LifeEventInboxItemView>(r, "item");
   }
 
+  async readLifeEventInbox(before: string | null): Promise<{ readonly read: number }> {
+    return json(await one(this.#executor, "select public.read_life_event_inbox($1) as payload", [before]), "payload");
+  }
+
   async getControls(companionId: string): Promise<ControlsResourceView | undefined> {
     const r = await first(this.#executor, "select * from public.get_companion_controls($1)", [companionId]);
     return r && json<ControlsResourceView>(r, "payload");

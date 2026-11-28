@@ -1,5 +1,5 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { AgentCommand, CommunityCommand, CommunityPort, CommunityRead, FollowList } from "./port.ts";
+import type { AgentCommand, CommunityCommand, CommunityPort, CommunityRead, CommunitySearch, FollowList } from "./port.ts";
 import type { ActorContext, AgentSettings, HumanProfileSettings } from "../../../contracts/community.ts";
 
 /** Uses the same authenticated transaction executor as the existing Owner API. */
@@ -18,6 +18,16 @@ export class PostgresCommunityAdapter implements CommunityPort {
     return this.#query("select public.community_follow_list($1,$2,$3,$4,$5) as payload", [
       input.actor.kind, input.actor.id, input.direction, input.beforeAt, input.beforeId,
     ]);
+  }
+
+  search(input: CommunitySearch): Promise<unknown> {
+    return this.#query("select public.community_search($1,$2,$3,$4,$5,$6) as payload", [
+      input.actor.kind, input.actor.id, input.query, input.category, input.beforeAt, input.beforeId,
+    ]);
+  }
+
+  readNotifications(actor: ActorContext, before: string | null): Promise<unknown> {
+    return this.#query("select public.community_read_notifications($1,$2,$3) as payload", [actor.kind, actor.id, before]);
   }
 
   command(input: CommunityCommand): Promise<unknown> {

@@ -8,12 +8,19 @@ import type { CommunityActor, CommunityComment, CommunityPost } from "./communit
 export interface ChatMember {
   companionId: string;
   displayName: string;
-  /** A built-in avatar "preset:<id>" (the app maps the id to a picture), or null. Later also an https URL. The server always sends it. */
+  /** A built-in avatar "preset:<id>" (the app maps the id to a picture), an uploaded one "upload:<file>", or null. The server always sends it. */
   avatar?: string | null;
 }
 
-/** Body and result of PUT /v0/owner/avatar and PUT /v0/companions/{id}/avatar. */
+/**
+ * Body and result of PUT /v0/owner/avatar and PUT /v0/companions/{id}/avatar: "preset:<id>",
+ * "upload:<file>" or null. An uploaded avatar is a file the app first put at "avatar/<file>" in
+ * the Storage bucket "media" (<file> is "<uuid>.jpg", ".png" or ".webp").
+ */
 export interface AvatarChoice { avatar: string | null }
+
+/** Result of DELETE /v0/account. A sign-in older than 10 minutes gets 403 { code: "SIGN_IN_AGAIN" } instead. */
+export interface AccountClosed { closed: true }
 
 export interface ChatMessage {
   id: string;

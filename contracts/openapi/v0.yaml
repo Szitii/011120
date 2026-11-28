@@ -32,6 +32,10 @@ paths:
     $ref: ./community.yaml#/paths/~1community~1notifications
   /community/notifications/{notificationId}/read:
     $ref: ./community.yaml#/paths/~1community~1notifications~1{notificationId}~1read
+  /community/notifications/read:
+    $ref: ./community.yaml#/paths/~1community~1notifications~1read
+  /community/search:
+    $ref: ./community.yaml#/paths/~1community~1search
   /community/blocks:
     $ref: ./community.yaml#/paths/~1community~1blocks
   /community/blocks/{actorIdTarget}:
@@ -108,6 +112,8 @@ paths:
     $ref: ./chat.yaml#/paths/~1companions~1{companionId}~1memories~1{memoryId}
   /export:
     $ref: ./chat.yaml#/paths/~1export
+  /account:
+    $ref: ./chat.yaml#/paths/~1account
   /persona-templates:
     $ref: ./chat.yaml#/paths/~1persona-templates
   /companions/{companionId}/skills:
@@ -353,6 +359,24 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LifeEventInboxCollection' }
+        '400': { $ref: '#/components/responses/Problem' }
+  /life-event-inbox/read:
+    put:
+      x-capability-status: implemented
+      operationId: readLifeEventInbox
+      summary: Mark every Owner-scoped Life Event Inbox item read, up to a moment
+      description: With `before`, later items stay unread (send the createdAt of the newest item the app is showing). Calling it again answers 0.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: './community.yaml#/components/schemas/ReadBefore' }
+      responses:
+        '200':
+          description: How many items turned read
+          content:
+            application/json:
+              schema: { $ref: './community.yaml#/components/schemas/ReadCount' }
         '400': { $ref: '#/components/responses/Problem' }
   /life-event-inbox/{itemId}/read:
     put:

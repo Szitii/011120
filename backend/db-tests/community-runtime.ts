@@ -403,6 +403,84 @@ try {
   await pool.query("delete from storage.objects where bucket_id = 'media' and name like $1", [`${cb.id}/%`]);
   passed("images on posts: own uploads only, seen with the post, taken down one by one, deletable once off a live post");
 
+  // ---- search (migration 0081): identities by name or @handle, public posts by their text ----
+  type Found = { type: "ACTOR"; actor: CommunityProfile; following: boolean }
+    | { type: "POST"; id: string; author: CommunityProfile; excerpt: string; visibility: string; createdAt: string };
+  const search = async (who: 0 | 1, actor: ActorContext, q: string, more = "") => {
+    const r = await call<CommunityPage<Found>>(who, actor, `search?q=${encodeURIComponent(q)}${more}`);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    return r.data;
+  };
+  const people = (page: CommunityPage<Found>) => page.items.flatMap(i => i.type === "ACTOR" ? [i.actor.id] : []);
+  const posts = (page: CommunityPage<Found>) => page.items.flatMap(i => i.type === "POST" ? [i] : []);
+  const [meA, meB, botA, botB] = [await profile(0, humanA), await profile(1, humanB), await profile(0, aiA), await profile(1, aiB)];
+  assert.equal((await call(0, humanA, `profile/${botB.id}`)).status, 200, "nothing blocked when this part starts");
+  // A Companion by its @handle: whole, shouted, with the @, or its beginning.
+  for (const q of [botB.handle, `@${botB.handle.toUpperCase()}`, ` @ ${botB.handle} `, botB.handle.slice(0, 5)]) {
+    const page = await search(0, humanA, q);
+    assert.ok(people(page).includes(botB.id), q);
+    assert.equal(page.nextCursor, null);
+  }
+  const exact = await search(0, humanA, botB.handle);
+  assert.equal(people(exact)[0], botB.id, "an exact match comes first");
+  const top = exact.items[0] as Extract<Found, { type: "ACTOR" }>;
+  assert.deepEqual([top.actor.kind, top.actor.handle, top.actor.displayName, typeof top.following], ["AI", botB.handle, botB.displayName, "boolean"]);
+  assert.doesNotMatch(JSON.stringify(exact), /ownerId|owner_id|auth_user|companionId/);
+  // Kinds, and whose handle counts.
+  assert.ok(!people(await search(0, humanA, botB.handle, "&category=HUMAN")).includes(botB.id));
+  assert.ok(people(await search(0, humanA, botB.handle, "&category=AI")).includes(botB.id));
+  assert.deepEqual(people(await search(0, humanA, botB.handle, "&category=POST")), []);
+  assert.ok(people(await search(0, humanA, meB.displayName.toLowerCase(), "&category=HUMAN")).includes(meB.id), "a person by their name");
+  assert.ok(!people(await search(0, humanA, meB.displayName, "&category=AI")).includes(meB.id));
+  assert.ok(!people(await search(0, humanA, meB.handle)).includes(meB.id), "a person's handle is made from their id: not searched");
+  assert.ok(!people(await search(0, humanA, meA.displayName)).includes(meA.id), "the caller's own identity is left out");
+  assert.ok(people(await search(1, humanB, meA.displayName)).includes(meA.id), "others find it");
+  // A name that starts with the words before one that only contains them.
+  const ranked = people(await search(1, humanB, "sample", "&category=AI"));
+  assert.ok(ranked.includes(botA.id) && ranked.indexOf(botA.id) < ranked.indexOf(botB.id), JSON.stringify(ranked));
+  assert.deepEqual(people(await search(0, humanA, "%")), [], "% is a character, not a wildcard");
+  assert.equal((await call(0, humanA, "search?q=")).status, 400);
+  assert.equal((await call(0, humanA, "search?q=a&category=TAG")).status, 400);
+  assert.equal((await call(1, humanA, "search?q=a")).status, 404, "only as one's own identity");
+
+  // Posts: 23 public ones that carry the word, and four that must never come up.
+  const word = `needle${randomUUID().slice(0, 8)}`;
+  await pool.query(`insert into public.community_posts(actor_id, body, source, created_at)
+    select $1, '第 ' || n || ' 条 ' || $2, 'HUMAN_MANUAL', now() - interval '3 hours' + n * interval '1 second' from generate_series(1, 22) n`, [ha.id, word]);
+  await pool.query(`insert into public.community_posts(actor_id, body, source, created_at)
+    values ($1, repeat('前', 100) || upper($2) || repeat('后', 200), 'HUMAN_MANUAL', now() - interval '2 hours')`, [ha.id, word]);
+  await pool.query(`insert into public.community_posts(actor_id, body, source, visibility, deleted_at, created_at) values
+    ($1, '只给关注的人 ' || $2, 'HUMAN_MANUAL', 'FOLLOWERS', null, now() - interval '1 hour'),
+    ($1, '只给自己 ' || $2, 'HUMAN_MANUAL', 'PRIVATE', null, now() - interval '1 hour'),
+    ($1, '删掉了 ' || $2, 'HUMAN_MANUAL', 'PUBLIC', now(), now() - interval '1 hour'),
+    ($1, 'x' || left($2, 6) || 'y', 'HUMAN_MANUAL', 'PUBLIC', null, now() - interval '1 hour')`, [ha.id, word]);
+  for (const [who, actor] of [[1, humanB], [0, humanA]] as const) {
+    const page1 = await search(who, actor, word.toUpperCase(), "&category=POST");
+    assert.equal(page1.items.length, 20); assert.ok(page1.nextCursor);
+    const page2 = await search(who, actor, word, `&category=POST&cursor=${encodeURIComponent(page1.nextCursor!)}`);
+    assert.deepEqual([page2.items.length, page2.nextCursor], [3, null]);
+    const all = [...posts(page1), ...posts(page2)];
+    assert.equal(new Set(all.map(i => i.id)).size, 23, "every public post once; not the followers-only, private or deleted one, not even for their author");
+    assert.ok(all.every(i => i.visibility === "PUBLIC" && i.author.id === ha.id && i.excerpt.toLowerCase().includes(word)));
+    assert.ok(all.every((i, n) => n === 0 || all[n - 1]!.createdAt > i.createdAt), "newest first");
+    const long = all[0]!.excerpt;
+    assert.ok(long.startsWith("…前") && long.endsWith("后…") && Array.from(long).length === 122, long);
+    assert.equal(all[1]!.excerpt, `第 22 条 ${word}`, "a short post is its own excerpt");
+  }
+  const mixed = await search(1, humanB, word);
+  assert.deepEqual([people(mixed).length, posts(mixed).length, typeof mixed.nextCursor], [0, 20, "string"], "ALL: identities first, then posts; the cursor pages the posts");
+  assert.deepEqual(await search(1, humanB, word, "&category=HUMAN"), { items: [], nextCursor: null });
+  // Blocked either way: neither the person, their Companion nor their posts come up.
+  assert.equal((await call(0, humanA, `blocks/${meB.id}`, "PUT")).status, 200);
+  assert.deepEqual(people(await search(0, humanA, botB.handle)), []);
+  assert.ok(!people(await search(0, humanA, meB.displayName)).includes(meB.id));
+  assert.deepEqual(posts(await search(1, humanB, word, "&category=POST")), []);
+  assert.ok(!people(await search(1, humanB, meA.displayName)).includes(meA.id));
+  assert.equal((await call(0, humanA, `blocks/${meB.id}`, "DELETE")).status, 200);
+  assert.ok(people(await search(0, humanA, botB.handle)).includes(botB.id));
+  await pool.query("delete from public.community_posts where actor_id = $1 and body like '%' || $2 || '%'", [ha.id, word.slice(0, 6)]);
+  passed("search: identities by name or @handle, public posts by text and paged, nothing blocked, private or deleted");
+
   await pool.query("delete from companion_private.agent_settings"); // later suites start from the defaults
   passed("AI text tools publish, read, comment and see notifications under the same rules, blocks included");
   console.log(`Community PostgreSQL/HTTP integration passed: ${groups} scenario groups.`);

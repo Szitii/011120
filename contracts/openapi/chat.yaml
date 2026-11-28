@@ -1006,6 +1006,45 @@ paths:
                 required: [code]
                 properties:
                   code: {type: string, enum: [EXPORT_LIMIT]}
+  /account:
+    delete:
+      operationId: closeAccount
+      summary: The Owner closes their account
+      description: |
+        账号注销 - the data is kept on file and nothing is erased, but from this moment: every
+        request with this account is refused, its sign-in is banned and every signed-in device is
+        signed out, nobody sees the person or their Companions in the community any more, nothing
+        runs for it (no greeting, reminder, diary or post), and the keys the Owner stored (their own
+        model keys, their agent's address and token, agent keys) are destroyed. The e-mail address
+        stays taken, and there is no way back from the app.
+
+        The caller must have signed in with their password (or a code from an e-mail) within the
+        last 10 minutes: a token that was only refreshed does not count. Otherwise 403
+        SIGN_IN_AGAIN: ask for the password, sign in again, and repeat the call with the new token.
+        No request body.
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Closed. The app signs out locally; later requests answer 401 or 403.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [closed]
+                properties:
+                  closed: {const: true}
+        '400': *problem
+        '401': *problem
+        '403':
+          description: SIGN_IN_AGAIN - the last sign-in is older than 10 minutes (always, on the development server).
+            Any other 403 is the usual problem body (the account is already closed or suspended).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code]
+                properties:
+                  code: {type: string, enum: [SIGN_IN_AGAIN, FORBIDDEN]}
   /persona-templates:
     get:
       operationId: listPersonaTemplates
@@ -1328,11 +1367,14 @@ paths:
   /owner/avatar:
     put:
       operationId: setOwnerAvatar
-      summary: The Owner picks one of the app's built-in avatars, or clears it
+      summary: The Owner picks a built-in avatar or one they uploaded, or clears it
       description: |
-        `avatar` is "preset:<id>" (id: 1 to 40 of a-z, 0-9, _ and -, starting with a letter or digit) or
-        null. The app owns the pictures and maps the id to one; the server only stores the id. It is
-        returned as `avatar` wherever the Owner's human identity is shown.
+        `avatar` is "preset:<id>" (id: 1 to 40 of a-z, 0-9, _ and -, starting with a letter or digit),
+        "upload:<file>" or null. For a built-in one the app owns the pictures and maps the id to one;
+        the server only stores the id. An uploaded one is a file the app put, with the Owner's own
+        sign-in, at "avatar/<file>" in the Storage bucket "media" (<file> is "<uuid>.jpg", ".png" or
+        ".webp", 1 MB at most); the server checks that it is there and that this Owner uploaded it
+        (400 otherwise). It is returned as `avatar` wherever the Owner's human identity is shown.
       x-capability-status: implemented
       requestBody: &avatarBody
         required: true
@@ -1661,7 +1703,9 @@ components:
       required: [avatar]
       additionalProperties: false
       properties:
-        avatar: {type: [string, 'null'], pattern: '^preset:[a-z0-9][a-z0-9_-]{0,39}$'}
+        avatar:
+          type: [string, 'null']
+          pattern: '^(preset:[a-z0-9][a-z0-9_-]{0,39}|upload:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}[.](jpg|png|webp))$'
     ChatMessage:
       type: object
       required: [id, companionId, body, action, mentions, status, failure, retryable, sentAt, audio, reminder, reach]

@@ -10,7 +10,14 @@ create extension pgcrypto schema extensions;
 
 create table auth.users (
   id uuid primary key,
-  email text
+  email text,
+  banned_until timestamptz
+);
+
+-- Supabase keeps one row per signed-in device; deleting it ends that sign-in.
+create table auth.sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade
 );
 
 create or replace function auth.uid()
