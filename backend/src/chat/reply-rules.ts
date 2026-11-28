@@ -109,7 +109,9 @@ const RUN = new vm.Script(`(() => {
 /**
  * The texts of one reply after every rule that is on, in order. A rule that cannot be run on them
  * (not a usable rule, out of time, adds too much) changes nothing; when the time for the whole reply
- * is used up, the rules that are left are not run.
+ * is used up, the rules that are left are not run. A rule that was stopped by what was left for the
+ * reply, rather than by its own limit, has used the time up: the clock is not asked again, or a
+ * fraction of a millisecond would decide whether the next rule runs.
  */
 export function applyRules(texts: readonly string[], rules: unknown, budgetMs = REPLY_BUDGET_MS): string[] {
   let current = [...texts];
@@ -126,8 +128,9 @@ export function applyRules(texts: readonly string[], rules: unknown, budgetMs = 
       Object.assign(scope, { texts: current, pattern: rule.pattern, flags: rule.flags, pieces: pieces(rule.replacement ?? ""), max: MAX_ADDED_CHARS });
       const next: unknown = RUN.runInContext(context, { timeout: Math.max(1, Math.floor(Math.min(left, RULE_TIMEOUT_MS))) });
       if (Array.isArray(next) && next.length === current.length && next.every(text => typeof text === "string")) current = next as string[];
-    } catch {
+    } catch (error) {
       // Out of time, too much added, or a pattern that stopped compiling: this rule is skipped.
+      if (left < RULE_TIMEOUT_MS && (error as { code?: unknown } | null)?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") break;
     }
   }
   return current;
