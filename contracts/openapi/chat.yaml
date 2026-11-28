@@ -1207,6 +1207,137 @@ paths:
         '401': *problem
         '403': *problem
         '404': *problem
+  /shared-skills:
+    get:
+      operationId: listSharedSkills
+      summary: The shelf of skills Owners shared and the operators approved, newest first, 20 a page
+      description: |
+        技能广场 - each skill is shown with its whole wording, so the Owner reads what a Companion will be
+        told before switching it on with PUT /companions/{companionId}/skills/{skillId}. Skills of someone
+        on the other side of a block are left out.
+      x-capability-status: implemented
+      parameters:
+      - name: companionId
+        in: query
+        required: false
+        description: Say for each skill whether this Companion has it on (`enabled`).
+        schema: {type: string, format: uuid}
+      - name: q
+        in: query
+        required: false
+        description: Keep those whose title or introduction contains these words.
+        schema: {type: string, maxLength: 40}
+      - name: cursor
+        in: query
+        required: false
+        schema: {type: string}
+      responses:
+        '200':
+          description: One page of the shelf
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SharedSkillPage'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+    post:
+      operationId: shareSkill
+      summary: Hand in a copy of one of a Companion's own skills for the shelf; it waits for the operators
+      description: |
+        The copy is the own skill's title and text as they are now, with one line of introduction.
+        The same title and text handed in again return the one already waiting or on the shelf.
+        409 when 3 are waiting, 20 are waiting or on the shelf, or 5 were handed in within a day
+        (GET /shared-skills/mine says how much room is left).
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SharedSkillInput'}
+      responses:
+        '201':
+          description: Handed in
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SharedSkillSubmission'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: The introduction, the title or the text holds something that may not be kept; nothing was handed in
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SharedSkillRefusal'}
+  /shared-skills/mine:
+    get:
+      operationId: listMySharedSkills
+      summary: What the Owner handed in for the shelf (the newest 100) with what became of each, and the room left
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The Owner's handed-in skills
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SharedSkillMine'}
+        '401': *problem
+        '403': *problem
+  /shared-skills/{skillId}:
+    parameters:
+    - name: skillId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    delete:
+      operationId: withdrawSharedSkill
+      summary: The author takes a handed-in skill back, whatever its state; the Companions that had it on lose it
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Taken back
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {type: boolean}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /shared-skills/{skillId}/report:
+    parameters:
+    - name: skillId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      operationId: reportSharedSkill
+      summary: Tell the operators about someone else's skill on the shelf; a second report by the same Owner changes nothing
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SharedSkillReportInput'}
+      responses:
+        '200':
+          description: Reported
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reported]
+                properties:
+                  reported: {type: boolean}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
   /companions/{companionId}/world-entries:
     parameters:
     - name: companionId
@@ -1962,7 +2093,7 @@ components:
     AccountExport:
       type: object
       description: See AccountExport in contracts/chat.ts for the shape of every part.
-      required: [format, exportedAt, owner, companions, groupChats, community, feedback, wallet]
+      required: [format, exportedAt, owner, companions, sharedSkills, groupChats, community, feedback, wallet]
       properties:
         format: {const: 011120-export/1}
         exportedAt: {type: string, format: date-time}
@@ -1974,6 +2105,7 @@ components:
             createdAt: {type: string, format: date-time}
             profile: {type: [object, 'null']}
         companions: {type: array, items: {type: object}}
+        sharedSkills: {type: array, items: {$ref: '#/components/schemas/SharedSkillSubmission'}}
         groupChats: {type: array, items: {type: object}}
         community: {type: array, items: {type: object}}
         feedback: {type: array, items: {type: object}}
@@ -2002,9 +2134,13 @@ components:
                 mes_example: {type: string}
     CompanionSkills:
       type: object
-      required: [maxEnabled, official, own]
+      required: [maxEnabled, official, shared, own]
       properties:
-        maxEnabled: {type: integer, description: How many skills may be on at a time (official and own together).}
+        maxEnabled: {type: integer, description: How many skills may be on at a time (official and shared ones and its own together).}
+        shared:
+          description: The skills from the shelf this Companion has on, in the order they were switched on.
+          type: array
+          items: {$ref: '#/components/schemas/SharedSkill'}
         official:
           type: array
           items:
@@ -2041,6 +2177,80 @@ components:
         code: {type: string, enum: [SKILL_REFUSED]}
         field: {type: string, enum: [title, body]}
         reason: {type: string, enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]}
+    SharedSkill:
+      type: object
+      required: [id, title, summary, body, author, usedBy, enabled, mine, sharedAt]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string, minLength: 1, maxLength: 20}
+        summary: {type: string, minLength: 1, maxLength: 100}
+        body: {type: string, minLength: 1, maxLength: 600, description: What the model is told.}
+        author:
+          description: The author's own community identity (as in the community API); null when they have none.
+          type: [object, 'null']
+          required: [id, kind, displayName, handle, bio, avatar]
+          properties:
+            id: {type: string, format: uuid}
+            kind: {type: string, enum: [HUMAN, AI]}
+            displayName: {type: string}
+            handle: {type: string}
+            bio: {type: string}
+            avatar: {type: [string, 'null']}
+        usedBy: {type: integer, description: How many Companions have it on.}
+        enabled: {type: boolean, description: On for the Companion the request named; false when it named none.}
+        mine: {type: boolean, description: The signed-in Owner wrote it.}
+        sharedAt: {type: string, format: date-time}
+    SharedSkillPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/SharedSkill'}}
+        nextCursor: {type: [string, 'null']}
+    SharedSkillSubmission:
+      type: object
+      required: [id, title, summary, body, status, note, usedBy, createdAt, reviewedAt]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        summary: {type: string}
+        body: {type: string}
+        status: {type: string, enum: [PENDING, APPROVED, REJECTED, REMOVED]}
+        note: {type: [string, 'null'], description: What the operators wrote when they turned it down or took it off the shelf.}
+        usedBy: {type: integer}
+        createdAt: {type: string, format: date-time}
+        reviewedAt: {type: [string, 'null'], format: date-time}
+    SharedSkillMine:
+      type: object
+      required: [items, waiting, maxWaiting, shared, maxShared, todayLeft]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/SharedSkillSubmission'}}
+        waiting: {type: integer}
+        maxWaiting: {type: integer}
+        shared: {type: integer, description: Waiting or on the shelf.}
+        maxShared: {type: integer}
+        todayLeft: {type: integer, description: How many more may be handed in within the day.}
+    SharedSkillInput:
+      type: object
+      required: [companionId, skillId, summary]
+      additionalProperties: false
+      properties:
+        companionId: {type: string, format: uuid}
+        skillId: {type: string, format: uuid, description: One of that Companion's own skills.}
+        summary: {type: string, minLength: 1, maxLength: 100}
+    SharedSkillRefusal:
+      type: object
+      required: [code, field, reason]
+      properties:
+        code: {type: string, enum: [SKILL_REFUSED]}
+        field: {type: string, enum: [title, body, summary]}
+        reason: {type: string, enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]}
+    SharedSkillReportInput:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason: {type: string, enum: [SPAM, HARASSMENT, HARMFUL, PRIVACY, OTHER]}
+        details: {type: string, maxLength: 1000}
     WorldEntry:
       type: object
       required: [id, keys, body, enabled, source, createdAt, updatedAt]

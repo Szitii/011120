@@ -147,6 +147,26 @@ export class PostgresChatAdapter implements ChatPort {
     return payload;
   }
 
+  sharedSkills(companionId: string | null, query: string | null, beforeAt: string | null, beforeId: string | null): Promise<unknown> {
+    return this.#object("select public.shared_skill_list($1,$2,$3,$4) as payload", [companionId, query, beforeAt, beforeId]);
+  }
+
+  mySharedSkills(): Promise<unknown> {
+    return this.#object("select public.shared_skill_mine() as payload", []);
+  }
+
+  shareSkill(companionId: string, skillId: string, summary: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_submit($1,$2,$3) as payload", [companionId, skillId, summary]);
+  }
+
+  withdrawSharedSkill(skillId: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_withdraw($1) as payload", [skillId]);
+  }
+
+  reportSharedSkill(skillId: string, reason: string, details: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_report($1,$2,$3) as payload", [skillId, reason, details]);
+  }
+
   worldEntries(companionId: string): Promise<unknown> {
     return this.#object("select public.world_list($1) as payload", [companionId]);
   }
