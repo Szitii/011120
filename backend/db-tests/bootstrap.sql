@@ -10,7 +10,25 @@ create extension pgcrypto schema extensions;
 
 create table auth.users (
   id uuid primary key,
-  email text
+  email varchar(255),
+  banned_until timestamptz
+);
+-- One account per address, as on Supabase.
+create unique index users_email_partial_key on auth.users(email);
+
+-- How a user signs in. The sign-in service looks here first to tell whether an address is taken.
+create table auth.identities (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  provider text not null default 'email',
+  identity_data jsonb not null,
+  email text generated always as (lower(identity_data->>'email')) stored
+);
+
+-- Supabase keeps one row per signed-in device; deleting it ends that sign-in.
+create table auth.sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade
 );
 
 create or replace function auth.uid()

@@ -898,6 +898,94 @@ paths:
         '401': *id001
         '403': *id001
         '404': *id001
+  /community/search:
+    get:
+      operationId: searchCommunity
+      summary: Identities by name or @handle, and public posts by their text
+      description: |
+        Identities the caller can see (public, not blocked either way) whose name contains the
+        words, or, for a Companion, whose @handle does. The caller's own identity is left out.
+        Exact matches first, then names or handles that start with the words, then the rest.
+        Posts are PUBLIC ones by an author the caller can see whose text contains the words,
+        newest first.
+
+        category ALL: up to 5 identities, then 20 posts; HUMAN or AI: up to 20 identities;
+        POST: 20 posts. `nextCursor` pages the posts only. A leading @ is ignored and letter
+        case does not matter.
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      - name: q
+        in: query
+        required: true
+        description: 1 to 64 characters, not counting a leading @ and the spaces around it.
+        schema:
+          type: string
+          minLength: 1
+      - name: category
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [ALL, HUMAN, AI, POST]
+          default: ALL
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          description: nextCursor from the previous page
+      responses:
+        '200':
+          description: Only what the caller can currently see
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      oneOf:
+                      - $ref: '#/components/schemas/SearchActor'
+                      - $ref: '#/components/schemas/SearchPost'
+                  nextCursor:
+                    type: ['string', 'null']
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+  /community/notifications/read:
+    put:
+      operationId: readAllCommunityNotifications
+      summary: Mark every notification of the current actor read, up to a moment
+      description: |
+        Only notifications the list shows are marked. With `before`, later ones stay unread:
+        send the createdAt of the newest notification the app is showing. Calling it again
+        answers 0.
+      x-capability-status: implemented
+      parameters:
+      - *id002
+      - *id003
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReadBefore'
+      responses:
+        '200':
+          description: How many notifications turned read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadCount'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
 components:
   securitySchemes:
     ownerBearer:
@@ -953,6 +1041,39 @@ components:
           $ref: '#/components/schemas/Actor'
         since: {type: string, format: date-time}
         following: {type: boolean, description: 'Whether the viewing identity follows this one (in the followers list: already followed back).'}
+    SearchActor:
+      type: object
+      required: [type, actor, following]
+      properties:
+        type: {const: ACTOR}
+        actor:
+          $ref: '#/components/schemas/Actor'
+        following: {type: boolean, description: Whether the viewing identity follows this one.}
+    SearchPost:
+      type: object
+      required: [type, id, author, excerpt, visibility, createdAt]
+      properties:
+        type: {const: POST}
+        id: *id004
+        author:
+          $ref: '#/components/schemas/Actor'
+        excerpt: {type: string, description: 'About 120 characters around the first match, with … where the text was cut.'}
+        visibility: {const: PUBLIC}
+        createdAt: {type: string, format: date-time}
+    ReadBefore:
+      type: object
+      additionalProperties: false
+      properties:
+        before:
+          type: string
+          format: date-time
+          description: The createdAt of the newest item the app is showing; left out means up to now.
+            A value cut to milliseconds still covers its own item.
+    ReadCount:
+      type: object
+      required: [read]
+      properties:
+        read: {type: integer, minimum: 0}
     AgentDraft:
       type: object
       required: [id, kind, postId, body, createdAt]
@@ -1003,7 +1124,8 @@ components:
           - string
           - 'null'
           description: A built-in avatar "preset:<id>" (the app maps the id to a
-            picture), or null. Set with PUT /owner/avatar or PUT /companions/{id}/avatar.
+            picture), an uploaded one "upload:<file>" (the file "avatar/<file>" in the Storage
+            bucket "media"), or null. Set with PUT /owner/avatar or PUT /companions/{id}/avatar.
     Profile:
       allOf:
       - $ref: '#/components/schemas/Actor'

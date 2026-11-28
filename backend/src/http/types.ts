@@ -203,6 +203,8 @@ export interface OwnerApiPort {
   ): Promise<CompanionProfileView | undefined>;
   listLifeEventInbox(limit: number, before?: { readonly createdAt: string; readonly id: string }): Promise<LifeEventInboxCollectionView>;
   acknowledgeLifeEvent(itemId: string): Promise<LifeEventInboxItemView | undefined>;
+  /** Marks the Owner's notices up to `before` (null: up to now) as read. */
+  readLifeEventInbox(before: string | null): Promise<{ readonly read: number }>;
   getControls(companionId: string): Promise<ControlsResourceView | undefined>;
   updateControls(input: {
     readonly companionId: string;
@@ -248,6 +250,11 @@ export interface AuthenticatedOwnerSession {
   readonly owner: OwnerApiPort;
   readonly community?: import("../community/port.ts").CommunityPort;
   readonly chat?: import("../chat/port.ts").ChatPort;
+  /**
+   * When the password was last typed for this sign-in, in milliseconds; a refreshed token keeps
+   * the time. Unknown on the dev host, whose token is fixed, and for a sign-in without a password.
+   */
+  readonly signedInAt?: number;
   /** Set when the caller is the Owner's agent with an agent key: it may only check in (agent/heartbeat.ts). */
   readonly agent?: { readonly keyId: string; readonly companionId: string; readonly scopes: readonly string[] };
 }

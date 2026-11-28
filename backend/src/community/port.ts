@@ -35,9 +35,22 @@ export interface FollowList {
   beforeId: string | null;
 }
 
+/** GET search: identities and public posts that contain the words. */
+export interface CommunitySearch {
+  actor: ActorContext;
+  query: string;
+  category: "ALL" | "HUMAN" | "AI" | "POST";
+  beforeAt: string | null;
+  beforeId: string | null;
+}
+
 export interface CommunityPort {
   read(input: CommunityRead): Promise<unknown>;
   followList(input: FollowList): Promise<unknown>;
+  /** A page of { type: "ACTOR" | "POST", ... }; the cursor pages the posts. */
+  search(input: CommunitySearch): Promise<unknown>;
+  /** Marks this identity's notices up to `before` (null: up to now) as read; { read }. */
+  readNotifications(actor: ActorContext, before: string | null): Promise<unknown>;
   command(input: CommunityCommand): Promise<unknown>;
   /** Like a post or take the like back; { liked, likeCount }. */
   like(actor: ActorContext, postId: string, liked: boolean): Promise<unknown>;

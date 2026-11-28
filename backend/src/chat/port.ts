@@ -158,7 +158,7 @@ export interface ChatPort {
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;
   remove(chatId: string): Promise<unknown>;
-  /** A built-in avatar ("preset:<id>") or null, for the Owner (companionId null) or one of their Companions. */
+  /** A built-in avatar ("preset:<id>"), an uploaded one ("upload:<file>") or null, for the Owner (companionId null) or one of their Companions. */
   saveAvatar(companionId: string | null, avatar: string | null): Promise<unknown>;
   /** Deletes the Owner's Companion and what was private to it (chats, diary, memories, keys). */
   deleteCompanion(companionId: string): Promise<unknown>;
@@ -197,6 +197,8 @@ export interface ChatPort {
    * being built. Each one is audited.
    */
   exportAccount(): Promise<string | null>;
+  /** Closes the Owner's account for good: kept on file, signed out, invisible to everyone (migration 0083). */
+  closeAccount(): Promise<unknown>;
   /** The official skills on offer with whether the Companion has each on, and its own skills ({ maxEnabled, official, own }). */
   skills(companionId: string): Promise<unknown>;
   /** Switches an official skill on or off for the Companion; returns skills(). */

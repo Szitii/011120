@@ -45,7 +45,8 @@
  *   GET|PUT|DELETE /v0/companions/{id}/connection      how it speaks: the platform, the Owner's own key, or own agent
  *                                                      (PUT { copyFrom } takes over another of the Owner's Companions' connection)
  *   DELETE /v0/companions/{id}                         delete the Companion and what was private to it
- *   PUT    /v0/owner/avatar, /v0/companions/{id}/avatar { avatar }  a built-in avatar ("preset:<id>") or null
+ *   PUT    /v0/owner/avatar, /v0/companions/{id}/avatar { avatar }  a built-in avatar ("preset:<id>"), an uploaded one ("upload:<file>") or null
+ *   DELETE /v0/account                                 close the account (needs a sign-in from the last 10 minutes)
  *
  * POST /v0/chats, POST .../messages, POST .../voice, POST .../actions and POST /v0/feedback(...) need an Idempotency-Key. After a send, a retry, or a read
  * while replies are on the way, the replies are written in the background (see replies.ts).
@@ -231,8 +232,13 @@ function recording(request: MvpHttpRequest): { mime: RecordingType; durationMs: 
 }
 
 const DATE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
-/** A built-in avatar: the app owns the pictures and maps the id to one (checked again by the database). */
-const AVATAR = /^preset:[a-z0-9][a-z0-9_-]{0,39}$/;
+/**
+ * A built-in avatar (the app owns the pictures and maps the id to one), or a file the Owner
+ * uploaded to "avatar/" in the Storage bucket "media". The database checks again, and that the file is theirs.
+ */
+const AVATAR = /^(?:preset:[a-z0-9][a-z0-9_-]{0,39}|upload:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.(?:jpg|png|webp))$/;
+/** Closing the account asks for a sign-in this recent: long enough to type a password and confirm. */
+const FRESH_SIGN_IN_MS = 10 * 60 * 1000;
 
 /** startDate "YYYY-MM-DD" or null; the database checks the day exists, the range and the time zone. */
 function anniversary(request: MvpHttpRequest): [string | null, string, number] {
@@ -313,6 +319,7 @@ export async function handleChatRequest(
   const worldRoute = path[1] === "companions" && path[3] === "world-entries" && (path.length === 4 || path.length === 5);
   const templatesRoute = path[1] === "persona-templates" && path.length === 2;
   const exportRoute = path[1] === "export" && path.length === 2;
+  const accountRoute = path[1] === "account" && path.length === 2;
   const skillsRoute = path[1] === "companions" && ((path[3] === "skills" && (path.length === 4 || path.length === 5))
     || (path[3] === "own-skills" && (path.length === 4 || path.length === 5)));
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
@@ -323,7 +330,7 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute, exportRoute,
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute, exportRoute, accountRoute,
     personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
@@ -470,6 +477,15 @@ export async function handleChatRequest(
     return response(201, await port.addMemory(companionId, memory, retryKey(request, session.ownerId)));
   }
   if (templatesRoute) return method === "GET" ? response(200, await port.personaTemplates()) : notFound();
+  if (accountRoute) {
+    if (method !== "DELETE") return notFound();
+    if (request.body !== undefined) return invalid();
+    // Whoever holds an unlocked phone must not be able to do this: the password, typed just now.
+    if (session.signedInAt === undefined || Date.now() - session.signedInAt > FRESH_SIGN_IN_MS) {
+      return response(403, { code: "SIGN_IN_AGAIN" });
+    }
+    return response(200, await port.closeAccount());
+  }
   if (exportRoute) {
     if (method !== "GET") return notFound();
     const copy = await port.exportAccount();

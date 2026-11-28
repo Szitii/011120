@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { MvpApiBoundary, ApiAuthenticationError, type MvpHttpRequest, type OwnerApiPort } from "../src/http/index.ts";
 import { PostgresPersistenceError } from "../src/persistence/postgres/index.ts";
+import { signedInAt } from "../src/http/supabase-owner-session.ts";
 
 const id = (n: string) => `00000000-0000-4000-8000-${n.padStart(12, "0")}`;
 const ownerId = id("1");
@@ -72,6 +73,10 @@ class OwnerPort implements OwnerApiPort {
   async acknowledgeLifeEvent(itemId: string) {
     this.calls.push({ name: "life-read", input: itemId });
     return { id: itemId, kind: "LIFE_EVENT" as const, lifeEventId: id("41"), companionId: id("3"), title: "A new day", createdAt: "2026-09-18T00:00:00.000Z", readAt: "2026-09-18T00:01:00.000Z", linkedObject: { type: "LIFE_EVENT" as const, id: id("41") } };
+  }
+  async readLifeEventInbox(before: string | null) {
+    this.calls.push({ name: "life-read-all", input: before });
+    return { read: 3 };
   }
   async getControls(companionId: string) {
     this.calls.push({ name: "controls-get", input: companionId });
@@ -291,6 +296,34 @@ describe("server-only MVP HTTP/API boundary", () => {
     assert.equal(first.status, 200);
     assert.deepEqual(second.body, first.body);
     assert.equal(owner.calls.filter((call) => call.name === "life-read").length, 2);
+  });
+
+  it("reads from a sign-in token when its owner last typed a password, not when it was refreshed", () => {
+    const token = (claims: unknown) => `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
+    assert.equal(signedInAt(token({ amr: [{ method: "password", timestamp: 1795767712 }] })), 1795767712000);
+    assert.equal(signedInAt(token({ amr: [{ method: "password", timestamp: 100 }, { method: "password", timestamp: 300 }, { method: "totp", timestamp: 700 },
+      { method: "otp", timestamp: 800 }, { method: "recovery", timestamp: 850 }, { method: "token_refresh", timestamp: 900 }] })), 300_000,
+      "only a typed password counts: an authenticator added to a live session, a code from the mailbox or a refresh prove no password");
+    for (const claims of [{}, { amr: [] }, { amr: "password" }, { amr: [null, 7, { method: "password" }, { method: "password", timestamp: "1795767712" }] },
+      { amr: [{ method: "token_refresh", timestamp: 900 }] }, { amr: [{ method: "totp", timestamp: 900 }, { method: "otp", timestamp: 900 }] }]) {
+      assert.equal(signedInAt(token(claims)), undefined, JSON.stringify(claims));
+    }
+    for (const broken of ["", "not-a-token", "a.b", "a.%%%.c", `a.${Buffer.from("[1").toString("base64url")}.c`, `a.${Buffer.from("null").toString("base64url")}.c`]) {
+      assert.equal(signedInAt(broken), undefined, broken);
+    }
+  });
+
+  it("marks the whole Owner inbox read, up to the moment the app names", async () => {
+    const { api, owner } = harness();
+    const all = await api.handle(request("PUT", "/v0/life-event-inbox/read"));
+    assert.deepEqual([all.status, all.body], [200, { read: 3 }]);
+    assert.equal((await api.handle(request("PUT", "/v0/life-event-inbox/read", { before: "2026-11-27T08:21:51.998307+00:00" }))).status, 200);
+    assert.deepEqual(owner.calls.filter((call) => call.name === "life-read-all").map((call) => call.input), [null, "2026-11-27T08:21:51.998307+00:00"]);
+    assert.equal(owner.calls.some((call) => call.name === "life-read"), false, "never taken for one notice named read");
+    for (const body of [{ before: "yesterday" }, { before: 7 }, { before: "2026-11-27T08:21:51Z", extra: 1 }, []]) {
+      assert.equal((await api.handle(request("PUT", "/v0/life-event-inbox/read", body))).status, 400, JSON.stringify(body));
+    }
+    assert.equal(owner.calls.filter((call) => call.name === "life-read-all").length, 2);
   });
 
   it("validates revisioned Controls and sends exact replay identity to persistence", async () => {

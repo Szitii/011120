@@ -79,6 +79,7 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },
     personaTemplates: async () => { calls.push(["personaTemplates"]); return { items: [] }; },
     exportAccount: async () => { calls.push(["exportAccount"]); return '{"format": "011120-export/1", "companions": ["小光"]}'; },
+    closeAccount: async () => { calls.push(["closeAccount"]); return { closed: true }; },
     skills: async (...args) => { calls.push(["skills", ...args]); return { maxEnabled: 5, official: [], own: [] }; },
     setSkill: async (...args) => { calls.push(["setSkill", ...args]); return { maxEnabled: 5, official: [], own: [] }; },
     saveOwnSkill: async (...args) => { calls.push(["saveOwnSkill", ...args]); return { id: "s1" }; },
@@ -389,6 +390,40 @@ it("routes persona templates and skills: an Owner's own skill is scanned like a 
     assert.equal(await refusal(port, req), "NOT_FOUND");
   }
   assert.equal(calls.length, 0, "nothing refused reaches the database");
+});
+
+it("sets an uploaded avatar by the name of its file", async () => {
+  const { port, calls } = fakePort();
+  const file = "upload:00000000-0000-4000-8000-000000000001.jpg";
+  assert.equal(await status(port, request("owner/avatar", "PUT", { avatar: file })), 200);
+  assert.equal(await status(port, request(`companions/${companion}/avatar`, "PUT", { avatar: file.replace(".jpg", ".webp") })), 200);
+  assert.deepEqual(calls, [["saveAvatar", null, file], ["saveAvatar", companion, file.replace(".jpg", ".webp")]]);
+  for (const avatar of ["upload:", "upload:a.jpg", file.replace(".jpg", ".gif"), file.toUpperCase(), `upload:avatar/${file.slice(7)}`,
+    `upload:../${file.slice(7)}`, `${file}?x=1`, file.replace("upload:", "media:")]) {
+    assert.equal(await refusal(port, request("owner/avatar", "PUT", { avatar })), "INVALID_INPUT", avatar);
+  }
+});
+
+it("closes the account only for a sign-in from the last ten minutes", async () => {
+  const { port, calls } = fakePort();
+  const close = (signedInAt?: number, req = request("account", "DELETE")) =>
+    handleChatRequest(req, { ...session(port), ...(signedInAt === undefined ? {} : { signedInAt }) }, "trace", replies);
+  // The dev host's fixed token, or an hour-old sign-in whose token was only refreshed: type the password again.
+  for (const stale of [undefined, Date.now() - 11 * 60_000, 0]) {
+    const refused = await close(stale);
+    assert.deepEqual([refused?.status, refused?.body], [403, { code: "SIGN_IN_AGAIN" }], String(stale));
+  }
+  assert.deepEqual(calls, [], "nothing is closed without a fresh sign-in");
+  const closed = await close(Date.now() - 9 * 60_000);
+  assert.deepEqual([closed?.status, closed?.body, closed?.headers["cache-control"]], [200, { closed: true }, "no-store"]);
+  assert.deepEqual(calls, [["closeAccount"]]);
+  const fresh = { ...session(port), signedInAt: Date.now() };
+  await assert.rejects(handleChatRequest(request("account", "DELETE", { confirm: true }), fresh, "trace", replies), { code: "INVALID_INPUT" });
+  for (const method of ["GET", "POST", "PUT"]) {
+    await assert.rejects(handleChatRequest(request("account", method), fresh, "trace", replies), { code: "NOT_FOUND" }, method);
+  }
+  assert.equal(await handleChatRequest(request("account/close", "DELETE"), fresh, "trace", replies), undefined, "not a route of this module");
+  assert.deepEqual(calls, [["closeAccount"]]);
 });
 
 it("routes the export: the Owner's copy, or 429 past the limit", async () => {
@@ -834,6 +869,8 @@ it("maps database payloads and errors in the Postgres adapter", async () => {
   assert.equal(await adapter.exportAccount(), null, "past the limit");
   rows = [{ payload: { ok: true } }];
   await assert.rejects(adapter.exportAccount(), (error: unknown) => error instanceof PostgresPersistenceError && error.code === "DATABASE_ERROR");
+  await adapter.closeAccount();
+  assert.deepEqual(seen.at(-1), ["select public.account_close() as payload", []]);
   await adapter.skills(companion);
   assert.deepEqual(seen.at(-1), ["select public.skill_list($1) as payload", [companion]]);
   await adapter.setSkill(companion, messageId, true);

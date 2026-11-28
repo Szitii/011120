@@ -65,6 +65,8 @@ function fakeCommunity(options: { fail?: Error; outcome?: unknown; settings?: Ag
       if (options.fail) throw options.fail;
       return { items: [{ actor: human, since: new Date(NOW.getTime() - 3 * 86_400_000).toISOString() }], nextCursor: "more" };
     },
+    search: async () => { throw new Error("the tools do not search"); },
+    readNotifications: async () => { throw new Error("the tools do not mark notices read"); },
     command: async () => { throw new Error("tools must write through agentCommand"); },
     humanProfileSettings: async () => ({}),
     saveHumanProfile: async () => ({}),

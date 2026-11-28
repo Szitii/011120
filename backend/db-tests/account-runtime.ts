@@ -168,8 +168,15 @@ try {
 
   if (!realAuth) {
     // A verified Supabase user with no Owner row yet: the first request creates exactly one Owner.
-    const subject = randomUUID();
-    await pool.query("insert into auth.users(id) values ($1)", [subject]);
+    // Signing up, as the sign-in service leaves it: a user and the identity that holds the address a second time.
+    const signUp = async (email: string) => {
+      const id = randomUUID();
+      await pool.query("insert into auth.users(id, email) values ($1, $2)", [id, email]);
+      await pool.query("insert into auth.identities(user_id, identity_data) values ($1::uuid, jsonb_build_object('sub', $1::uuid::text, 'email', $2::text))", [id, email]);
+      return id;
+    };
+    const address = `closing-${randomUUID()}@account-fixture.test`;
+    const subject = await signUp(address);
     stubUsers.set("token-new", subject);
     const first = await call<ActiveIdentityContext>("token-new", "identity-context");
     const second = await call<ActiveIdentityContext>("token-new", "identity-context");
@@ -179,6 +186,112 @@ try {
     const owners = await pool.query("select id, status from public.owners where auth_user_id = $1", [subject]);
     assert.deepEqual(owners.rows, [{ id: first.data.activeSubject.id, status: "ACTIVE" }]);
     console.log("Account integration 4b: first sign-in creates one ACTIVE Owner and is idempotent");
+
+    // ---- closing the account (migration 0083): kept on file, signed out for good, gone for everyone else ----
+    // A sign-in token says when the password was last typed (`amr`); the Auth double accepts these two for the new user.
+    const jwt = (typedAt: number, sub = subject) => {
+      const token = `e30.${Buffer.from(JSON.stringify({ sub,
+        amr: [{ method: "password", timestamp: Math.floor(typedAt / 1000) }] })).toString("base64url")}.signature`;
+      stubUsers.set(token, sub);
+      return token;
+    };
+    const stale = jwt(Date.now() - 11 * 60_000), fresh = jwt(Date.now() - 60_000);
+    const closing = first.data.activeSubject.id;
+    const me: ActorContext = { kind: "OWNER", id: closing };
+    const mine = await community<CommunityProfile>(fresh, me, "profile");
+    const said = await community<CommunityPost>(fresh, me, "posts", "POST", { body: "注销前说的话" });
+    assert.deepEqual([mine.status, said.status], [200, 201]);
+    const lookFor = `search?category=HUMAN&q=${encodeURIComponent(mine.data.displayName)}`;
+    const finds = async () => (await community<CommunityPage<{ type: string; actor?: CommunityProfile }>>(tokenA, A, lookFor)).data.items
+      .some(item => item.actor?.id === mine.data.id);
+    assert.deepEqual([(await community(tokenA, A, `profile/${mine.data.id}`)).status, await finds()], [200, true]);
+    // What it owns: a Companion with a stored model key and a key for its agent, two signed-in devices, an avatar file.
+    const companion = randomUUID();
+    await pool.query("insert into public.companions (id, owner_id, status, origin_type) values ($1, $2, 'ACTIVE', 'IMPORTED_CARD')", [companion, closing]);
+    await pool.query(`insert into companion_private.companion_connections(companion_id, kind, provider, base_url, model, secret, secret_hint, consented_at)
+      values ($1, 'BYOK', 'custom', 'https://example.com/v1', 'm', 'v1.a.b.c', 'abcd', now())`, [companion]);
+    await pool.query(`insert into companion_private.agent_keys(owner_id, companion_id, name, token_hash, scopes, expires_at)
+      values ($1, $2, 'k', repeat('c', 64), array['COMMUNITY_READ'], now() + interval '1 day')`, [closing, companion]);
+    await pool.query("insert into auth.sessions(user_id) values ($1), ($1)", [subject]);
+    const asSubject = async (sql: string, values: unknown[] = []) => {
+      const client = await pool.connect();
+      try {
+        await client.query("begin"); await client.query("set local role authenticated");
+        await client.query("select set_config('request.jwt.claim.sub', $1, true)", [subject]);
+        return await client.query(sql, values);
+      } finally { await client.query("rollback"); client.release(); }
+    };
+    const uploadAvatar = () => asSubject("insert into storage.objects(bucket_id, name, owner_id) values ('media', $1, $2)",
+      [`avatar/${randomUUID()}.jpg`, subject]);
+    await uploadAvatar();
+
+    // The password must have been typed within ten minutes: an older sign-in, or a token that does not say, is sent back.
+    for (const token of [stale, "token-new"]) {
+      const sentBack = await call<{ code: string }>(token, "account", "DELETE");
+      assert.deepEqual([sentBack.status, sentBack.data.code], [403, "SIGN_IN_AGAIN"]);
+    }
+    assert.equal((await call(fresh, "account", "DELETE", { confirm: true })).status, 400, "it takes no body");
+    // Only the server may call it: going around the server (Supabase's own API) is refused by the database.
+    await assert.rejects(asSubject("select public.account_close()"), (error: unknown) => (error as { code?: string }).code === "42501");
+    assert.equal((await pool.query("select status from public.owners where id = $1", [closing])).rows[0].status, "ACTIVE");
+
+    const taken = async (email: string) => (await pool.query(`select (select count(*)::int from auth.identities where email = lower($1))
+      + (select count(*)::int from auth.users where lower(email) = lower($1)) as n`, [email])).rows[0].n;
+    assert.equal(await taken(address), 2, "while the account is open its address is taken: by the user and by its identity");
+    const closed = await call<{ closed: boolean }>(fresh, "account", "DELETE");
+    assert.deepEqual([closed.status, closed.data], [200, { closed: true }]);
+    const after = (await pool.query(`select o.status, o.closed_at is not null as dated, u.banned_until > now() + interval '99 years' as banned,
+        (select count(*)::int from auth.sessions s where s.user_id = u.id) as sessions,
+        (select count(*)::int from companion_private.companion_connections x where x.companion_id = $2) as connections,
+        (select count(*)::int from companion_private.agent_keys k where k.owner_id = o.id) as keys,
+        (select count(*)::int from public.audit_events e where e.owner_id = o.id and e.action = 'ACCOUNT_CLOSE') as audited,
+        (select count(*)::int from public.community_posts p where p.id = $3 and p.deleted_at is null) as posts,
+        (select count(*)::int from public.companions c where c.id = $2 and c.status = 'ACTIVE') as companions
+      from public.owners o join auth.users u on u.id = o.auth_user_id where o.id = $1`, [closing, companion, said.data.id])).rows[0];
+    assert.deepEqual(after, { status: "DELETED", dated: true, banned: true, sessions: 0, connections: 0, keys: 0, audited: 1, posts: 1, companions: 1 },
+      "signed out and its keys destroyed; what it wrote and made is kept on file");
+    // No way back in, not even with the token that closed it; nobody else is touched.
+    for (const token of [fresh, stale, "token-new"]) {
+      const refused = await call<{ code: string }>(token, "identity-context");
+      assert.deepEqual([refused.status, refused.data.code], [403, "FORBIDDEN"]);
+    }
+    assert.equal((await call(fresh, "account", "DELETE")).status, 403);
+    assert.equal((await call(tokenA, "identity-context")).status, 200);
+    await assert.rejects(uploadAvatar(), (error: unknown) => (error as { code?: string }).code === "42501", "a closed account uploads nothing");
+    // Gone from the community: the profile, the post, the search.
+    assert.deepEqual([(await community(tokenA, A, `profile/${mine.data.id}`)).status, (await community(tokenA, A, `posts/${said.data.id}`)).status, await finds()],
+      [404, 404, false]);
+    assert.ok(!(await community<CommunityPage<CommunityPost>>(tokenA, A, "feed")).data.items.some(item => item.id === said.data.id));
+    console.log("Account integration 4c: closing an account needs a fresh sign-in, keeps the data, ends every sign-in and hides the account");
+
+    // ---- the address is given back: it can sign up again, as a new and empty account ----
+    // The sign-in service calls an address taken when an identity or a user has it (`taken`); the closed account has it in neither.
+    const mark = (id: string) => `.closed-${id.replaceAll("-", "")}.invalid`;
+    const kept = async (id: string) => (await pool.query(`select u.email::text as "user", i.email as identity, i.identity_data->>'sub' as sub
+      from auth.users u join auth.identities i on i.user_id = u.id where u.id = $1`, [id])).rows;
+    assert.equal(await taken(address), 0);
+    // Still on file under the old sign-in, marked, and the rest of the identity untouched.
+    assert.deepEqual(await kept(subject), [{ user: address + mark(subject), identity: address + mark(subject), sub: subject }]);
+    const again = await signUp(address);
+    const back = await call<ActiveIdentityContext>(jwt(Date.now() - 60_000, again), "identity-context");
+    assert.equal(back.status, 200);
+    assert.notEqual(back.data.activeSubject.id, closing, "a new Owner, not the closed one reopened");
+    assert.deepEqual((await pool.query(`select (select count(*)::int from public.companions c where c.owner_id = o.id) as companions,
+        (select count(*)::int from public.community_posts p join public.community_actors a on a.id = p.actor_id where a.owner_id = o.id) as posts
+      from public.owners o where o.id = $1`, [back.data.activeSubject.id])).rows, [{ companions: 0, posts: 0 }], "nothing of the closed account comes with it");
+    assert.equal((await pool.query("select status from public.owners where id = $1", [closing])).rows[0].status, "DELETED");
+    // Closed a second time, the same address is on file twice, each under its own mark, and free once more.
+    assert.equal((await call(jwt(Date.now() - 60_000, again), "account", "DELETE")).status, 200);
+    assert.deepEqual([await taken(address), (await kept(again))[0].user], [0, address + mark(again)]);
+    // The longest address the sign-in service stores (255 characters) still closes: it loses its end to the mark.
+    const long = `${"a".repeat(64)}@${"b".repeat(60)}.${"c".repeat(60)}.${"d".repeat(60)}.test`.padEnd(255, "x");
+    const longUser = await signUp(long);
+    const longToken = jwt(Date.now() - 60_000, longUser);
+    assert.deepEqual([(await call(longToken, "identity-context")).status, (await call(longToken, "account", "DELETE")).status], [200, 200]);
+    const longKept = (await kept(longUser))[0];
+    assert.deepEqual([longKept.user.length, longKept.user, longKept.identity, await taken(long)],
+      [255, long.slice(0, 255 - mark(longUser).length) + mark(longUser), longKept.user, 0]);
+    console.log("Account integration 4d: a closed account gives its e-mail address back; signing up with it again starts a new, empty account");
   }
 
   if (sessionA && sessionB) {

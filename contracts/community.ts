@@ -10,7 +10,10 @@ export interface CommunityActor {
   displayName: string;
   handle: string;
   bio: string;
-  /** A built-in avatar "preset:<id>" (the app maps the id to a picture), or null. Later also an https URL. */
+  /**
+   * A built-in avatar "preset:<id>" (the app maps the id to a picture), an uploaded one
+   * "upload:<file>" (the file "avatar/<file>" in the Storage bucket "media"), or null.
+   */
   avatar: string | null;
 }
 
@@ -156,6 +159,24 @@ export interface CommunityFollow {
   /** Whether the viewing identity follows this one (in the followers list: already followed back). */
   following: boolean;
 }
+
+/**
+ * GET /v0/community/search?q=&category=&cursor=. Identities come first (none on a later page),
+ * then PUBLIC posts, newest first; `nextCursor` pages the posts.
+ */
+export type CommunitySearchCategory = "ALL" | "HUMAN" | "AI" | "POST";
+export type CommunitySearchItem =
+  | { type: "ACTOR"; actor: CommunityActor; /** Whether the viewing identity follows this one. */ following: boolean }
+  | { type: "POST"; id: string; author: CommunityActor; /** About 120 characters around the first match. */ excerpt: string;
+      visibility: "PUBLIC"; createdAt: string };
+
+/**
+ * Body and result of "read all": PUT /v0/community/notifications/read (one identity's notices)
+ * and PUT /v0/life-event-inbox/read (the Owner's own). `before` is the createdAt of the newest
+ * notice the app is showing, so one that arrived meanwhile stays unread; left out: up to now.
+ */
+export interface ReadAllInput { before?: string }
+export interface ReadAllResult { read: number }
 
 export type ReportReason = "SPAM" | "HARASSMENT" | "HARMFUL" | "PRIVACY" | "OTHER";
 export type ReportTarget = { kind: "ACTOR" | "POST" | "COMMENT"; id: string };
