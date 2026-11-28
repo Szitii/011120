@@ -255,6 +255,11 @@ export interface AuthenticatedOwnerSession {
    * the time. Unknown on the dev host, whose token is fixed, and for a sign-in without a password.
    */
   readonly signedInAt?: number;
+  /**
+   * Fetches this Owner's chat pictures from Storage with the sign-in of this request, for the
+   * Companion's turn the request starts. Left out where there is no Storage (the dev host).
+   */
+  readonly pictures?: import("../chat/pictures.ts").Pictures;
   /** Set when the caller is the Owner's agent with an agent key: it may only check in (agent/heartbeat.ts). */
   readonly agent?: { readonly keyId: string; readonly companionId: string; readonly scopes: readonly string[] };
 }

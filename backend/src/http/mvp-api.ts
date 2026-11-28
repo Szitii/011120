@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { handleChatRequest } from "../chat/http.ts";
 import { handleAgentRequest, Heartbeats } from "../agent/heartbeat.ts";
 import type { Connections } from "../connections/model.ts";
+import type { Tools } from "../tools/box.ts";
 import type { ChatCatalog } from "../chat/models.ts";
 import { ChatReplies } from "../chat/replies.ts";
 import { handleCommunityRequest, readBefore } from "../community/http.ts";
@@ -456,6 +457,7 @@ export class MvpApiBoundary {
   readonly #replies: ChatReplies;
   readonly #catalog: ChatCatalog | undefined;
   readonly #connections: Connections | undefined;
+  readonly #tools: Tools | undefined;
   readonly #heartbeats = new Heartbeats();
 
   constructor(input: {
@@ -467,12 +469,15 @@ export class MvpApiBoundary {
     readonly catalog?: ChatCatalog;
     /** Owners' own keys and agents; without it, PUT .../connection answers 501. */
     readonly connections?: Connections;
+    /** Tool servers; without it, connecting one and confirming a call answer 501. */
+    readonly tools?: Tools;
   }) {
     this.#sessions = input.sessions;
     this.#id = input.id ?? randomUUID;
     this.#replies = input.replies ?? new ChatReplies();
     this.#catalog = input.catalog;
     this.#connections = input.connections;
+    this.#tools = input.tools;
   }
 
   async handle(request: MvpHttpRequest): Promise<MvpHttpResponse> {
@@ -485,7 +490,7 @@ export class MvpApiBoundary {
       if (session.agent !== undefined) return await handleAgentRequest(request, session, traceId, this.#heartbeats);
       const community = await handleCommunityRequest(request, session, traceId);
       if (community) return community;
-      const chat = await handleChatRequest(request, session, traceId, this.#replies, this.#catalog, this.#connections);
+      const chat = await handleChatRequest(request, session, traceId, this.#replies, this.#catalog, this.#connections, this.#tools);
       if (chat) return chat;
 
       for (const [routeMethod, path, handler] of ROUTES) {

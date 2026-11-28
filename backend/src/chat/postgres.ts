@@ -1,5 +1,5 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatImageInput, ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type {
@@ -25,8 +25,13 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_read($1,$2,$3) as payload", [chatId, beforeAt, beforeId]);
   }
 
-  send(chatId: string, body: string, mentions: string[], keyHash: string): Promise<unknown> {
-    return this.#object("select public.chat_send($1,$2,$3::uuid[],$4) as payload", [chatId, body, mentions, keyHash]);
+  send(chatId: string, body: string, mentions: string[], keyHash: string, images?: readonly ChatImageInput[]): Promise<unknown> {
+    return this.#object("select public.chat_send($1,$2,$3::uuid[],$4,$5::jsonb) as payload",
+      [chatId, body, mentions, keyHash, images === undefined || images.length === 0 ? null : JSON.stringify(images)]);
+  }
+
+  imageSeen(path: string, description: string | null): Promise<unknown> {
+    return this.#object("select public.chat_image_seen($1,$2) as payload", [path, description]);
   }
 
   retry(chatId: string, messageId: string): Promise<unknown> {
@@ -147,6 +152,26 @@ export class PostgresChatAdapter implements ChatPort {
     return payload;
   }
 
+  sharedSkills(companionId: string | null, query: string | null, beforeAt: string | null, beforeId: string | null): Promise<unknown> {
+    return this.#object("select public.shared_skill_list($1,$2,$3,$4) as payload", [companionId, query, beforeAt, beforeId]);
+  }
+
+  mySharedSkills(): Promise<unknown> {
+    return this.#object("select public.shared_skill_mine() as payload", []);
+  }
+
+  shareSkill(companionId: string, skillId: string, summary: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_submit($1,$2,$3) as payload", [companionId, skillId, summary]);
+  }
+
+  withdrawSharedSkill(skillId: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_withdraw($1) as payload", [skillId]);
+  }
+
+  reportSharedSkill(skillId: string, reason: string, details: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_report($1,$2,$3) as payload", [skillId, reason, details]);
+  }
+
   worldEntries(companionId: string): Promise<unknown> {
     return this.#object("select public.world_list($1) as payload", [companionId]);
   }
@@ -214,6 +239,51 @@ export class PostgresChatAdapter implements ChatPort {
     return (payload as { accepted?: unknown }).accepted === true;
   }
 
+  failNote(replyId: string, reason: ConnectionFailure): Promise<unknown> {
+    return this.#object("select public.chat_fail_note($1,$2) as payload", [replyId, reason]);
+  }
+
+  toolServers(): Promise<unknown> {
+    return this.#object("select public.tool_server_list() as payload", []);
+  }
+
+  companionTools(companionId: string): Promise<unknown> {
+    return this.#object("select public.companion_tool_list($1) as payload", [companionId]);
+  }
+
+  saveCompanionTool(companionId: string, serverId: string, sealedToken: string, hint: string, tools: unknown): Promise<unknown> {
+    return this.#object("select public.companion_tool_save($1,$2,$3,$4,$5::jsonb) as payload", [companionId, serverId, sealedToken, hint, JSON.stringify(tools)]);
+  }
+
+  removeCompanionTool(companionId: string, serverId: string): Promise<unknown> {
+    return this.#object("select public.companion_tool_delete($1,$2) as payload", [companionId, serverId]);
+  }
+
+  companionToolSecrets(companionId: string): Promise<unknown> {
+    return this.#object("select public.companion_tool_secrets($1) as payload", [companionId]);
+  }
+
+  async toolCallNote(companionId: string, serverKey: string, tool: string, ok: boolean): Promise<unknown> {
+    await this.#payload("select public.tool_call_note($1,$2,$3,$4) as payload", [companionId, serverKey, tool, ok]);
+    return undefined;
+  }
+
+  toolRequestOpen(replyId: string, claimId: string, serverId: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.#object("select public.tool_request_open($1,$2,$3,$4,$5::jsonb) as payload", [replyId, claimId, serverId, tool, JSON.stringify(args)]);
+  }
+
+  toolRequestTake(chatId: string, requestId: string): Promise<unknown> {
+    return this.#object("select public.tool_request_take($1,$2) as payload", [chatId, requestId]);
+  }
+
+  toolRequestFinish(requestId: string, ok: boolean, result: string): Promise<unknown> {
+    return this.#object("select public.tool_request_finish($1,$2,$3) as payload", [requestId, ok, result]);
+  }
+
+  toolRequestDecline(chatId: string, requestId: string): Promise<unknown> {
+    return this.#object("select public.tool_request_decline($1,$2) as payload", [chatId, requestId]);
+  }
+
   async reachBegin(companionId: string): Promise<ReachStart> {
     return await this.#object("select public.chat_reach_begin($1) as payload", [companionId]) as ReachStart;
   }
@@ -251,9 +321,9 @@ export class PostgresChatAdapter implements ChatPort {
   }
 
   async reserve(input: ChatReservation): Promise<ReservationDecision> {
-    return await this.#object("select public.chat_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) as payload", [
+    return await this.#object("select public.chat_reserve($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) as payload", [
       input.replyId, input.claimId, input.purpose, input.provider, input.model, input.pricingVersion,
-      input.inputTokens, input.outputTokens, input.costMinor, input.traceId,
+      input.inputTokens, input.outputTokens, input.costMinor, input.traceId, input.step ?? "",
     ]) as ReservationDecision;
   }
 

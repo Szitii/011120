@@ -23,11 +23,11 @@ async function connect(connectionString: string) {
   return { db: new PgAdminDb(pool), who };
 }
 const chat = ChatCatalog.load(), catalog = chat.models;
-// Each model company once, and the console's own copy of its key (only used to read the balance).
-const vendors = [...new Map(catalog.map(m => {
-  const keyEnv = chat.provider(m).apiKeyEnv;
-  return [m.provider, { key: m.provider, keyEnv, apiKey: process.env[keyEnv]?.trim() || undefined }] as const;
-})).values()];
+// Each model company once, and the console's own copy of its key (only used to read the balance);
+// right after it the company's backup key, when the catalog names one.
+const vendors = [...new Map(catalog.map(m => [m.provider, chat.provider(m)] as const)).entries()].flatMap(([key, provider]) =>
+  [{ keyEnv: provider.apiKeyEnv, backup: false }, ...(provider.backupApiKeyEnv === undefined ? [] : [{ keyEnv: provider.backupApiKeyEnv, backup: true }])]
+    .map(({ keyEnv, backup }) => ({ key, keyEnv, backup, apiKey: process.env[keyEnv]?.trim() || undefined })));
 // The 系统 page: a read-only Fly token (fly tokens create readonly) and the apps to show.
 const fly = process.env.FLY_READ_TOKEN ? { token: process.env.FLY_READ_TOKEN,
   apps: (process.env.ADMIN_FLY_APPS ?? "companion-social-api,companion-social-admin").split(",").map(a => a.trim()).filter(Boolean) } : undefined;

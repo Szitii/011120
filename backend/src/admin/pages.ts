@@ -58,6 +58,7 @@ export const FEATURES: Readonly<Record<string, string>> = {
   COMPANION_ACTIONS: "家机在私聊里主动做小家动作，比如抱抱主人（新版 App 上线后再开）",
   VOICE_INPUT: "主人发语音（语音转文字的账户充值后再开；关着时 App 不显示按住说话）",
   COMPANION_WEB: "家机联网搜索（只有平台的 DeepSeek Flash 能搜；模型自己决定搜不搜，搜了的回复会贵一些，先开一小段时间看花费）",
+  COMPANION_TOOLS: "家机使用工具（主人给家机接了工具服务器、填了自己的令牌后，家机回复主人时可以查菜单、算价格；下单这类操作要主人点确认才执行。一条用了工具的回复最多是平时 5 倍的模型花费，先开一小段时间看）",
   COMPANION_REACH: "家机主动找主人：主人打开了“主动找你”的家机会自己发消息，主人让它到点提醒的会按时提醒（关掉后两样都停，已设的提醒留着）",
 };
 export interface Spend {
@@ -128,6 +129,8 @@ const ACTIONS: Readonly<Record<string, string>> = {
   FIXED_COST: "固定月费", VOICE_PRICES: "语音单价", PROMPT_SET: "修改提示词",
   FEEDBACK_REPLY: "回复反馈", FEEDBACK_CLOSE: "关闭反馈", FEEDBACK_REOPEN: "重新打开反馈",
   TEMPLATE_SET: "保存人设模板", TEMPLATE_DELETE: "删除人设模板", SKILL_SET: "保存技能", SKILL_DELETE: "删除技能",
+  TOOL_SERVER_SET: "保存工具服务器",
+  SHARED_SKILL_APPROVE: "通过投稿技能", SHARED_SKILL_REJECT: "退回投稿技能", SHARED_SKILL_REMOVE: "下架投稿技能", SHARED_SKILL_KEEP: "保留被举报的技能",
 };
 const MESSAGE_STATUS: Readonly<Record<string, string>> = {
   PENDING: "(正在回复)", FAILED: "(回复失败)", BLOCKED: "(被安全扫描拦下)", PASSED: "(选择不说话)",
@@ -530,11 +533,13 @@ export function modelsPage(zone: string, models: Models, catalog: readonly Catal
   const gift = w.welcomeCredits > 0 ? w.welcomeCredits : 1000;
   return page("模型与额度", "/models", html`
 ${vendors.length === 0 ? "" : panel("模型厂商", html`<div class="scroll"><table><tr><th>厂商</th><th>线上服务器的 Key</th><th>余额(实时)</th><th></th></tr>
-${vendors.map(v => html`<tr><td>${vendorName(v.key)}</td>
-<td>${v.serverKey === null ? html`<span class="tag bad">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
+${vendors.map(v => html`<tr><td>${vendorName(v.key)}${v.backup ? html` <span class="tag">备用 Key</span>` : ""}</td>
+<td>${v.serverKey === null ? html`<span class="tag ${v.backup ? "" : "bad"}">没有</span> <span class="muted">${v.keyEnv}</span>` : "why" in v.serverKey
     ? html`<span class="muted">看不到:${v.serverKey.why}</span>` : html`<span class="tag">已设置</span> <span class="muted">更新于 ${time(zone, v.serverKey.at)}</span>`}</td>
 <td>${v.balance === null ? html`<span class="muted">${v.balanceNote}</span>` : balanceText(v.balance)}</td><td class="links">${billingLink(v.key)}</td></tr>`)}</table></div>
-<p class="muted">后台只看得到 Key 有没有、何时换过,看不到也改不了 Key 本身。要加或换 Key,找 Claude 弹输入框直接存进服务器。</p>`)}
+<p class="muted">后台只看得到 Key 有没有、何时换过,看不到也改不了 Key 本身。要加或换 Key,找 Claude 弹输入框直接存进服务器。</p>
+${vendors.some(v => v.backup) ? html`<p class="muted"><b>备用 Key</b>:第一把 Key 这一次用不了(失效、欠费、被限流,或者厂商出错)时,同一条回复自动改用备用 Key 再发一次,主人感觉不到。
+所以第一把 Key 那一行显示余额不足或者查不到时,说明现在是备用 Key 在顶着,请尽快处理第一把。备用 Key 最好来自另一个账号:同一个账号的两把 Key 会一起欠费。</p>` : ""}`)}
 ${panel("模型开关", html`<div class="scroll"><table><tr><th>开关</th><th>厂商 / 模型名</th><th>现在</th></tr>${switchTargets(catalog).filter(t =>
     // With one company, its switch does exactly what the switch for everything does: shown only if someone turned it off.
     !t.value.startsWith("PROVIDER:") || vendorsUsed > 1 || !ownOn("PROVIDER", t.value.slice(9))).map(t => {
@@ -1063,6 +1068,10 @@ export interface Kit {
   templates: { id: string; title: string; summary: string; name: string; description: string; personality: string; example: string;
     position: number; enabled: boolean; updatedAt: string }[];
   skills: { id: string; title: string; summary: string; body: string; position: number; enabled: boolean; updatedAt: string; usedBy: number }[];
+  /** What Owners handed in for the shelf (migration 0084): the ones waiting first, then the reported ones, then the rest. */
+  shared: { id: string; title: string; summary: string; body: string; status: "PENDING" | "APPROVED" | "REJECTED" | "REMOVED";
+    note: string | null; authorId: string; author: string | null; authorStatus: string; createdAt: string; reviewedAt: string | null; usedBy: number;
+    reports: { reason: string; details: string; at: string }[] }[];
   ownSkills: number;
 }
 
@@ -1082,9 +1091,48 @@ ${kind === "template" ? html`<label>默认名字 <input name="name" required max
 <label><input type="checkbox" name="enabled" value="on"${item === undefined || item.enabled ? html` checked` : ""}> 上架</label>`;
 };
 
-export function kitPage(zone: string, kit: Kit, done: boolean): string {
+/** companion_admin.tool_servers (migration 0087): the directory of tool servers. */
+export interface ToolServerRow {
+  id: string; key: string; title: string; summary: string; url: string; tokenHelp: string; readTools: string[]; confirmTools: string[];
+  enabled: boolean; position: number; updatedAt: string; connected: number; calls: number; failed: number;
+}
+
+/** The fields of a tool server, filled in with what it has now (nothing: a new one). */
+const toolFields = (s?: ToolServerRow): Safe => html`${s === undefined ? "" : hidden("id", s.id)}
+<label>代号 <input name="key" required maxlength="31" size="14" pattern="[a-z][a-z0-9-]{1,30}" value="${s?.key ?? ""}" placeholder="如:mcdonalds-cn"></label>
+<label>名称 <input name="title" required maxlength="20" size="10" value="${s?.title ?? ""}"></label>
+<label>一句话介绍 <input name="summary" required maxlength="100" size="40" value="${s?.summary ?? ""}"></label>
+<label>地址 <input name="url" required maxlength="300" size="40" value="${s?.url ?? ""}" placeholder="https://"></label>
+<textarea name="tokenHelp" required maxlength="500" rows="2" placeholder="告诉主人去哪里拿自己的令牌(最多 500 字)" aria-label="怎么拿令牌">${s?.tokenHelp ?? ""}</textarea>
+<textarea name="readTools" rows="3" placeholder="可以直接用的工具(只查不改),工具名用空格或换行分开" aria-label="可以直接用的工具">${(s?.readTools ?? []).join(" ")}</textarea>
+<textarea name="confirmTools" rows="2" placeholder="要主人点确认才执行的工具(下单、取消、新增这类会改东西的)" aria-label="要主人确认的工具">${(s?.confirmTools ?? []).join(" ")}</textarea>
+<label>排序 <input name="position" type="number" min="0" max="9999" required size="4" value="${s?.position ?? 0}"></label>
+<label><input type="checkbox" name="enabled" value="on"${s === undefined || s.enabled ? html` checked` : ""}> 提供给主人</label>`;
+
+const SHARED_STATUS: Readonly<Record<string, string>> = { PENDING: "等待审核", APPROVED: "上架中", REJECTED: "已退回", REMOVED: "已下架" };
+
+/** One skill an Owner handed in, with what can be decided about it now. */
+const sharedCard = (zone: string, s: Kit["shared"][number]): Safe => {
+  const decide = (decision: string, label: string, danger = false) =>
+    act("/kit/shared", label, "/kit", html`${hidden("id", s.id)}${hidden("decision", decision)}${decision === "KEEP" ? hidden("seen", s.reports.at(-1)?.at ?? "") : ""}`, danger);
+  return html`<div class="card">
+<p><b>${s.title}</b> <span class="tag ${s.status === "APPROVED" ? "good" : s.status === "PENDING" ? "" : "bad"}">${word(SHARED_STATUS, s.status)}</span>
+${s.reports.length === 0 ? "" : html`<span class="tag bad">${count(s.reports.length)} 条举报</span>`}
+${s.authorStatus === "ACTIVE" ? "" : html`<span class="tag bad">作者账号${s.authorStatus === "SUSPENDED" ? "被封禁" : "已注销"},技能暂不显示</span>`}
+<span class="muted">作者 ${ownerLink(s.authorId, s.author)} · 投稿于 ${time(zone, s.createdAt)}${s.reviewedAt === null ? "" : ` · 处理于 ${time(zone, s.reviewedAt)}`} · ${count(s.usedBy)} 个家机打开了</span></p>
+<p class="muted">${s.summary}</p><pre>${s.body}</pre>
+${s.note === null ? "" : html`<p class="muted">告诉作者的原因:${s.note}</p>`}
+${s.reports.length === 0 ? "" : html`<ul>${s.reports.map(r => html`<li>${word(REASONS, r.reason)}${r.details === "" ? "" : `:${r.details}`} <span class="muted">${time(zone, r.at)}</span></li>`)}</ul>`}
+${s.status === "PENDING" ? html`${edit("通过", decide("APPROVE", "通过,放上技能广场"))}${edit("退回", decide("REJECT", "退回(原因会给作者看)"))}` : ""}
+${s.status === "APPROVED" ? html`${edit("下架", decide("REMOVE", "下架(原因会给作者看)", true))}${s.reports.length === 0 ? "" : edit("不处理举报", decide("KEEP", "保留技能,关闭举报"))}` : ""}
+${s.status === "REJECTED" || s.status === "REMOVED" ? edit("重新通过", decide("APPROVE", "通过,放上技能广场")) : ""}</div>`;
+};
+
+export function kitPage(zone: string, kit: Kit, done: boolean, servers: readonly ToolServerRow[] = []): string {
   const back = "/kit";
   const shelf = (enabled: boolean) => enabled ? html`<span class="tag good">上架中</span>` : html`<span class="tag bad">已下架</span>`;
+  const waiting = kit.shared.filter(s => s.status === "PENDING"), reported = kit.shared.filter(s => s.status !== "PENDING" && s.reports.length > 0);
+  const rest = kit.shared.filter(s => s.status !== "PENDING" && s.reports.length === 0);
   return page("模板与技能", "/kit", html`
 <p>这里是平台提供给主人的两样东西。<b>人设模板</b>是写好的角色,主人新建家机时挑一个当起点,之后可以随便改。
 <b>技能</b>是一段写给模型的话(什么时候、怎么做一件事),主人给自己的家机打开后,每次聊天回复都会带上。App 里主人只看得到技能的名称和一句话介绍。内容不是秘密:它和其他说明一起发给模型,主人接了自己的模型时会发到主人自己的服务上,所以不要写需要保密的东西。</p>
@@ -1105,7 +1153,26 @@ ${panel("官方技能", html`${kit.skills.length === 0 ? html`<p class="muted">�
 ${edit("修改", act("/kit/skill", "保存", back, kitFields("skill", s)))}
 ${edit("删除", act("/kit/skill/delete", "删除这个技能", back, hidden("id", s.id), true))}</div>`)}
 ${edit("新增一个技能", act("/kit/skill", "新增", back, kitFields("skill")))}
-<p class="muted">改完从下一条回复起生效。技能写在人设后面、平台的规则前面:它不能推翻回答的格式、安全和隐私这些固定的规则。删除一个技能,打开它的家机就没有它了;只是暂时不用请下架。</p>`)}`, done);
+<p class="muted">改完从下一条回复起生效。技能写在人设后面、平台的规则前面:它不能推翻回答的格式、安全和隐私这些固定的规则。删除一个技能,打开它的家机就没有它了;只是暂时不用请下架。</p>`)}
+${panel("工具服务器", html`
+<p class="muted">主人可以给家机接这里列出的工具服务器(填他自己在对方那里的令牌),家机回复主人时就能用上面的工具。总开关在<a href="/models">模型与额度</a>页的功能开关里(“家机使用工具”),默认关。
+<b>两栏工具名就是全部权限</b>:左边的家机可以直接调用(只查不改的),右边的每次都要主人在聊天里点确认才执行;两栏都没写的工具,家机用不了。
+对方以后新增的工具不会自动生效,要在这里加上名字。写名字之前请看清这个工具是做什么的:拿不准会不会花钱、会不会改东西的,一律放右边或者不写。</p>
+${servers.length === 0 ? html`<p class="muted">还没有工具服务器。</p>` : servers.map(s => html`<div class="card">
+<p><b>${s.title}</b> ${s.enabled ? html`<span class="tag good">提供中</span>` : html`<span class="tag bad">已停用</span>`}
+<span class="muted">${s.key} · ${count(s.connected)} 个家机接了 · 最近 7 天调用 ${count(s.calls)} 次${s.failed > 0 ? `,其中 ${count(s.failed)} 次没成功` : ""} · 更新于 ${time(zone, s.updatedAt)}</span></p>
+<p class="muted">${s.summary} · ${s.url}</p>
+<dl class="detail"><dt>直接可用</dt><dd>${s.readTools.join(" ") || "(无)"}</dd><dt>要主人确认</dt><dd>${s.confirmTools.join(" ") || "(无)"}</dd><dt>怎么拿令牌</dt><dd>${s.tokenHelp}</dd></dl>
+${edit("修改", act("/kit/tool", "保存", back, toolFields(s)))}</div>`)}
+${edit("新增一个工具服务器", act("/kit/tool", "新增", back, toolFields()))}
+<p class="muted">停用以后它不再提供给主人,家机也不再用它的工具;主人已经填的令牌留着,重新提供就恢复。后台看不到任何主人的令牌,也看不到家机发给工具的内容和工具返回的内容,只有“哪个家机调用了哪个工具、成没成功”的记录。</p>`)}
+${panel(html`主人投稿的技能 <span class="muted">${count(waiting.length)} 个等待审核 · ${count(reported.length)} 个被举报</span>`, html`
+<p class="muted">主人可以把自己写的技能投稿到技能广场。<b>通过之前别人看不到</b>;通过以后所有主人都能看到全文,并给自己的家机打开。
+技能是写给模型的话,会进到别人家机的提示词里,所以请整段读完再通过:有没有让家机套取隐私、引导花钱、冒充平台或推翻规则的话。
+这里不能改投稿的文字:不合适就退回,作者改完会重新投稿。退回和下架时填的原因会原样给作者看;下架会让所有打开它的家机立刻关掉它。
+“不处理举报”只关掉这一页上显示出来的举报,之后新来的会留着。作者被封禁或注销期间,他的技能不在广场上、也不发给任何家机;解封后自动恢复。</p>
+${kit.shared.length === 0 ? html`<p class="muted">还没有人投稿。</p>` : html`${waiting.map(s => sharedCard(zone, s))}${reported.map(s => sharedCard(zone, s))}
+${rest.length === 0 ? "" : html`<details class="edit"><summary>已处理的 ${count(rest.length)} 个</summary>${rest.map(s => sharedCard(zone, s))}</details>`}`}`)}`, done);
 }
 
 export function logPage(zone: string, log: LogPage, owner: string | null): string {

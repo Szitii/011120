@@ -18,12 +18,16 @@
  */
 import { ACTION_TEXT, MAX_NOTES, answersAction, localStamp, splitAction, splitReminders, splitVoice } from "./prompt.ts";
 import { applyRules } from "./reply-rules.ts";
+import { maskCredentials } from "../companion-import/policy.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import { SafetyPipeline } from "./safety.ts";
-import type { DiaryWriteResult } from "../../../contracts/chat.ts";
+import type { ConnectionFailure, DiaryWriteResult } from "../../../contracts/chat.ts";
 import type {
-  ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, PostJob, PostOutcome, PostStart, ReachStart, ReminderChange,
+  ChatClaim, ChatOutcome, ChatPort, DiaryJob, MemoryJob, MemoryNote, MemoryStart, Picture, PostJob, PostOutcome, PostStart, ReachStart, ReminderChange,
 } from "./port.ts";
+import type { Pictures } from "./pictures.ts";
+import { ProviderError } from "./providers.ts";
+import type { Toolbox } from "../tools/box.ts";
 import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
@@ -36,6 +40,16 @@ export type Answer =
   | { pass: true }
   | { refused: true }
   | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
+
+/** Opens the Companion's toolbox for a turn; undefined when it has no tools to use now. */
+export type Toolboxes = (turn: ChatClaim, port: ChatPort) => Promise<Toolbox | undefined>;
+
+/** A chat picture with its bytes. */
+export interface AttachedPicture { path: string; picture: Picture }
+/** One picture (the file `path`) to describe for the turn `replyId` / `claimId`; `said`: what the Owner wrote with it. */
+export interface SeeJob { replyId: string; claimId: string; path: string; said: string; picture: Picture }
+/** What the picture shows (null: the model had no words for it), or why it was not looked at. */
+export type SeeAnswer = { description: string | null } | { refused: true } | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
 
 /** A diary entry the model wrote, or why there is none. */
 export type DiaryAnswer = { text: string } | { refused: true } | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
@@ -67,6 +81,8 @@ export type VoiceResult = "SPOKEN" | "NO_VOICE" | "VOICE_UNAVAILABLE" | "NO_MARK
  * REFUSED when the provider would not take the tool and the reply was written without.
  * `webTokens`: for a reply that was offered the web, the input tokens it was billed, which hold
  * what the searches brought back (16,000 are booked for a reply; a searched one may come back with more).
+ * `key` BACKUP: the platform's first key for the provider could not make the call and the backup did
+ * (time to look at the first one). `connection`: why the Owner's own key or agent gave no usable answer.
  */
 export interface ReplyTrace {
   event: "chat_reply";
@@ -82,6 +98,27 @@ export interface ReplyTrace {
   stored: boolean;
   web: number | "REFUSED" | "OFF";
   webTokens?: number;
+  key?: "BACKUP";
+  connection?: ConnectionFailure;
+  /** Pictures described for this turn, and pictures handed along for a model that takes them. Left out when none. */
+  seen?: number;
+  shown?: number;
+  /** Calls made to tool servers in this turn, and that the Owner was asked to confirm one. Left out when the turn had no tools. */
+  tools?: number;
+  asked?: true;
+}
+
+/**
+ * The Owner's own key or agent gave no usable answer, and why: thrown by a model that answers
+ * through one, so the failed reply can tell the Owner it was their side and what to look at.
+ */
+export class ConnectionFailed extends Error {
+  readonly reason: ConnectionFailure;
+  constructor(reason: ConnectionFailure) {
+    super(`The connection failed: ${reason}.`);
+    this.name = "ConnectionFailed";
+    this.reason = reason;
+  }
 }
 
 /**
@@ -103,11 +140,19 @@ export interface MemoryTrace {
  * Something that can speak as a Companion. `signal` aborts when it takes too long: pass it on.
  * A model that answers through the Owner's own key or agent says so with `via`, for the trace;
  * one that was offered the web says with `searched` how many searches it ran (or that it was refused)
- * and how many input tokens the answer was billed.
+ * and how many input tokens the answer was billed; one that had to use the platform's backup key
+ * says so with `backup`. A key or agent of the Owner's that gives no usable answer: ConnectionFailed.
  */
 export interface ChatModel {
+  /**
+   * `pictures`: the pictures of the last few messages themselves, for a model that takes pictures; others read their descriptions in the turn.
+   * `tools`: what the Companion may look up and do in this turn, for a model that calls functions; others answer without.
+   */
   reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void;
-    searched?: (searches: number | "REFUSED", inputTokens: number) => void }): Promise<Answer>;
+    searched?: (searches: number | "REFUSED", inputTokens: number) => void; backup?: () => void;
+    pictures?: readonly AttachedPicture[]; tools?: Toolbox }): Promise<Answer>;
+  /** Says what one picture the Owner sent shows, for the turn (it is booked with it). Without it, pictures stay unseen. */
+  see?(job: SeeJob, context: { port: ChatPort; signal: AbortSignal }): Promise<SeeAnswer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
   diary?(job: DiaryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<DiaryAnswer>;
   /** Writes a community post of its own; without it, such posts fail. */
@@ -116,7 +161,20 @@ export interface ChatModel {
   memory?(job: MemoryJob, context: { port: ChatPort; signal: AbortSignal }): Promise<MemoryAnswer>;
 }
 
+/** The model did not answer within the turn's time. */
+class ModelTimeout extends Error {
+  constructor() {
+    super("model timed out");
+    this.name = "ModelTimeout";
+  }
+}
+
 const MAX_MESSAGES = 3;
+/** All the looking at pictures of one turn; what is not described by then waits for the next turn. */
+const LOOK_TIMEOUT_MS = 25_000;
+/** The pictures of this many latest messages are handed to a model that takes pictures, four at most. */
+const RECENT_MESSAGES = 6;
+const MAX_PICTURES = 4;
 // Under the database's 2-minute claim, so a hung model call ends here before another server could take the turn.
 const MODEL_TIMEOUT_MS = 90_000;
 // Model and speech together stay under the 2-minute claim.
@@ -195,11 +253,15 @@ const speakable = (turn: ChatClaim, voices: Voices | undefined): ChatClaim =>
 export class ChatReplies {
   readonly #model: ChatModel | undefined;
   readonly #timeoutMs: number;
+  readonly #lookTimeoutMs: number;
+  readonly #toolboxes: Toolboxes | undefined;
   readonly #voices: Voices | undefined;
   readonly #speechTimeoutMs: number;
   readonly #trace: (trace: ReplyTrace | MemoryTrace) => void;
   readonly #safety = new SafetyPipeline();
   readonly #running = new Set<string>();
+  /** For a chat being written: how to fetch its pictures, from the newest request that started or joined the writing. */
+  readonly #fetchers = new Map<string, Pictures>();
 
   /**
    * Without a model, turns that must answer end as FAILED / UNAVAILABLE ("coming soon"); optional ones stay quiet.
@@ -207,8 +269,10 @@ export class ChatReplies {
    * and one per attempt at noting memories down.
    */
   constructor(model?: ChatModel, timeoutMs = MODEL_TIMEOUT_MS, voices?: Voices, speechTimeoutMs = SPEECH_TIMEOUT_MS,
-    trace: (trace: ReplyTrace | MemoryTrace) => void = () => undefined) {
+    trace: (trace: ReplyTrace | MemoryTrace) => void = () => undefined, lookTimeoutMs = LOOK_TIMEOUT_MS, toolboxes?: Toolboxes) {
     this.#model = model;
+    this.#toolboxes = toolboxes;
+    this.#lookTimeoutMs = lookTimeoutMs;
     this.#timeoutMs = timeoutMs;
     this.#voices = voices;
     this.#speechTimeoutMs = speechTimeoutMs;
@@ -219,17 +283,21 @@ export class ChatReplies {
   get voices(): Voices | undefined { return this.#voices; }
 
   /** Starts writing the chat's queued turns unless this server is already doing so. Never throws. */
-  kick(chatId: string, port: ChatPort): void {
+  kick(chatId: string, port: ChatPort, pictures?: Pictures): void {
+    // A loop already writing this chat (one a reminder started, say) takes the Owner's turn too:
+    // it gets this request's way to fetch pictures for the turns still to come.
+    if (pictures !== undefined) this.#fetchers.set(chatId, pictures);
     if (this.#running.has(chatId)) return;
     this.#running.add(chatId);
-    void this.drain(chatId, port).catch(() => undefined).finally(() => this.#running.delete(chatId));
+    void this.drain(chatId, port, pictures).catch(() => undefined).finally(() => { this.#running.delete(chatId); this.#fetchers.delete(chatId); });
   }
 
   /**
    * Writes queued turns until none is left (or another server holds the chat). Then, if the
    * Companion of a one-to-one chat answered, it notes its memories down when that is due.
+   * `pictures` fetches the chat's pictures as the Owner whose request started this.
    */
-  async drain(chatId: string, port: ChatPort): Promise<number> {
+  async drain(chatId: string, port: ChatPort, pictures?: Pictures): Promise<number> {
     let written = 0;
     let remember: string | undefined;
     for (let claim = await port.claim(chatId); claim !== null; claim = await port.claim(chatId)) {
@@ -239,13 +307,19 @@ export class ChatReplies {
         channel: "PLATFORM", outcome: "ERROR", modelMs: 0, speechMs: 0, voice: [], stored: false, web: "OFF",
       };
       const silent = turn.companion.settings.voice ? null : claim.companion.settings.voice ? "VOICE_UNAVAILABLE" : "NO_VOICE";
-      const [outcome, bodies, clips, action, reminders] = await this.#answer(turn, port, trace, silent);
+      const looking = Date.now();
+      const shown = await this.#look(turn, port, this.#fetchers.get(chatId) ?? pictures, trace);
+      const [outcome, bodies, clips, action, reminders] = await this.#answer(turn, port, trace, silent, shown, Date.now() - looking);
       // A Companion was free to ignore a home-room action, so a failed answer to one just stays quiet.
       // Nobody waits for a message it writes on its own: whatever went wrong with one, nothing is shown.
       const final = (outcome === "ERROR" && answersAction(turn)) || (outcome !== "SENT" && turn.reach) ? "PASSED" : outcome;
       trace.outcome = final;
       try {
         trace.stored = await port.finish(turn.replyId, turn.claimId, final, bodies, clips, action, reminders);
+        // The failed reply says it was the Owner's own key or agent, and why. Without the note it is a plain failure.
+        if (trace.stored && final === "ERROR" && trace.connection !== undefined) {
+          await port.failNote(turn.replyId, trace.connection).catch(() => undefined);
+        }
       } finally {
         this.#trace(trace);
       }
@@ -372,9 +446,60 @@ export class ChatReplies {
   }
 
   /** Runs a model call that is aborted (and rejects) after the timeout. */
-  async #timed<T>(call: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  /**
+   * Looks at the conversation's pictures for this turn. Those nobody has described yet (the newest
+   * four; two tries each) are fetched and described by the picture-reading model, and what it says
+   * is kept with the picture and put into the turn. Returns the pictures of the last few messages
+   * themselves, for a model that takes pictures. Without a way to fetch them (a turn no request
+   * started) the turn is written from what is already known. Never throws.
+   *
+   * A try is used up only by what is the picture's own fault: the file is gone or is no picture,
+   * the model declines it or has no words for it, the provider calls the request wrong. Storage
+   * or the provider failing, no model, no budget, no time left: the picture waits for another turn.
+   */
+  async #look(turn: ChatClaim, port: ChatPort, fetch: Pictures | undefined, trace: ReplyTrace): Promise<AttachedPicture[]> {
+    const sent = turn.history.flatMap(message => (message.companionId === null ? (message.images ?? []).map(image => ({ image, said: message.body ?? "" })) : []));
+    if (fetch === undefined || sent.length === 0) return [];
+    const recent = new Set(turn.history.slice(-RECENT_MESSAGES).flatMap(message => message.images ?? []).map(image => image.path));
+    const unseen = sent.filter(({ image }) => image.description === null && image.tries < 2).slice(-MAX_PICTURES);
+    const hand = sent.filter(({ image }) => recent.has(image.path)).slice(-MAX_PICTURES);
+    // null: there is no picture to be had under this name. "LATER": it could not be fetched now.
+    const got = new Map<string, Picture | null | "LATER">();
+    await Promise.all([...new Set([...unseen, ...hand].map(({ image }) => image.path))]
+      .map(async path => { got.set(path, await fetch(path).catch(() => "LATER" as const)); }));
+    const deadline = AbortSignal.timeout(this.#lookTimeoutMs);
+    const model = this.#model;
+    for (const { image, said } of unseen) {
+      const picture = got.get(image.path);
+      if (picture === undefined || picture === "LATER") continue;
+      let description: string | null = null;
+      if (picture !== null) {
+        if (model?.see === undefined || deadline.aborted) break;
+        try {
+          const answer = await model.see({ replyId: turn.replyId, claimId: turn.claimId, path: image.path, said, picture }, { port, signal: deadline });
+          if ("failed" in answer) break;
+          // Kept the way the Owner's own words are read: with keys and passwords masked.
+          const words = "description" in answer && answer.description !== null ? maskCredentials(answer.description).trim() : "";
+          if (words.length > 0) description = words;
+        } catch (error) {
+          // A request the provider calls wrong is about this picture. Anything else is not: stop looking for now.
+          if (!(error instanceof ProviderError && [400, 413, 415, 422].includes(error.status))) break;
+        }
+      }
+      await port.imageSeen(image.path, description).catch(() => undefined);
+      image.description = description;
+      image.tries += 1;
+      if (description !== null) trace.seen = (trace.seen ?? 0) + 1;
+    }
+    const shown = hand.flatMap(({ image }) => { const picture = got.get(image.path); return picture && picture !== "LATER" ? [{ path: image.path, picture }] : []; });
+    if (shown.length > 0) trace.shown = shown.length;
+    return shown;
+  }
+
+  /** Runs a model call under the turn's time limit, less what the turn already spent (it keeps a third at least). */
+  async #timed<T>(call: (signal: AbortSignal) => Promise<T>, spentMs = 0): Promise<T> {
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(new Error("model timed out")), this.#timeoutMs);
+    const timer = setTimeout(() => abort.abort(new ModelTimeout()), Math.max(this.#timeoutMs - spentMs, this.#timeoutMs / 3));
     try {
       const stopped = new Promise<never>((_, reject) => abort.signal.addEventListener("abort", () => reject(abort.signal.reason)));
       return await Promise.race([call(abort.signal), stopped]);
@@ -420,8 +545,9 @@ export class ChatReplies {
   }
 
   /** `silent`: why this Companion has no voice messages now, or null when it has a voice. */
-  async #answer(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
-    const answered = await this.#write(turn, port, trace, silent);
+  async #answer(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null,
+    pictures: readonly AttachedPicture[] = [], spentMs = 0): Promise<Answered> {
+    const answered = await this.#write(turn, port, trace, silent, pictures, spentMs);
     if (turn.reach?.kind !== "REMINDER") return answered;
     // A reminder is delivered whatever happened to the model (none, switched off, out of budget, a
     // refusal, an answer that could not be used): in plain words. Its note passed the scan when it was set.
@@ -430,14 +556,21 @@ export class ChatReplies {
     return bodies?.length ? answered : ["SENT", [plainReminder(turn.reach.note)], undefined, action];
   }
 
-  async #write(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null): Promise<Answered> {
+  async #write(turn: ChatClaim, port: ChatPort, trace: ReplyTrace, silent: VoiceResult | null,
+    pictures: readonly AttachedPicture[], spentMs: number): Promise<Answered> {
     const model = this.#model;
     if (model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
     try {
       const started = Date.now();
+      // The Companion's tools, where the turn may use them. Without them (none connected, or they cannot be read now) it answers as ever.
+      const tools = turn.canUseTools === true ? await this.#toolboxes?.(turn, port).catch(() => undefined) : undefined;
       const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; },
-        searched: (searches, inputTokens) => { trace.web = searches; trace.webTokens = inputTokens; } }))
-        .finally(() => { trace.modelMs = Date.now() - started; });
+        searched: (searches, inputTokens) => { trace.web = searches; trace.webTokens = inputTokens; },
+        backup: () => { trace.key = "BACKUP"; }, ...(pictures.length > 0 ? { pictures } : {}), ...(tools === undefined ? {} : { tools }) }), spentMs)
+        .finally(() => {
+          trace.modelMs = Date.now() - started;
+          if (tools !== undefined) { trace.tools = tools.used.calls; if (tools.used.asked) trace.asked = true; }
+        });
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];
       // An optional turn that cannot be made simply stays quiet; one that must answer says why.
@@ -479,7 +612,10 @@ export class ChatReplies {
       const clips = await this.#speak(turn, port, safe, marked.map(part => part.voice || null), results, trace);
       trace.voice = results.map(result => result ?? "VOICE_UNAVAILABLE");
       return ["SENT", safe, clips, action, reminders];
-    } catch {
+    } catch (error) {
+      // The Owner's own key or agent: why it failed, or that it did not answer within the turn's time.
+      if (error instanceof ConnectionFailed) trace.connection = error.reason;
+      else if (error instanceof ModelTimeout && trace.channel !== "PLATFORM") trace.connection = "UNREACHABLE";
       return ["ERROR", null]; // the model failed, timed out, or answered in the wrong shape
     }
   }

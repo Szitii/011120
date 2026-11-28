@@ -198,6 +198,8 @@ try {
     const stale = jwt(Date.now() - 11 * 60_000), fresh = jwt(Date.now() - 60_000);
     const closing = first.data.activeSubject.id;
     const me: ActorContext = { kind: "OWNER", id: closing };
+    // A name of its own: the search below returns 20 identities, and a new account's default name is shared by every other fresh one.
+    await pool.query("update public.owners set display_name = $2 where id = $1", [closing, `注销前${closing.slice(0, 8)}`]);
     const mine = await community<CommunityProfile>(fresh, me, "profile");
     const said = await community<CommunityPost>(fresh, me, "posts", "POST", { body: "注销前说的话" });
     assert.deepEqual([mine.status, said.status], [200, 201]);

@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Connections } from "../connections/model.ts";
+import type { Tools } from "../tools/box.ts";
 import { MAX_IMPORT_BYTES } from "../companion-import/policy.ts";
 import { MAX_VOICE_REQUEST_BYTES } from "../chat/http.ts";
 import type { ChatCatalog } from "../chat/models.ts";
@@ -84,7 +85,7 @@ const writeTransportProblem = (response: ServerResponse, error: unknown): void =
 export const createMobileHttpServer = (
   sessions: OwnerSessionResolver,
   mode: "stage1-mobile-dev" | "supabase-auth",
-  chat: { readonly replies: ChatReplies; readonly catalog?: ChatCatalog; readonly connections?: Connections } =
+  chat: { readonly replies: ChatReplies; readonly catalog?: ChatCatalog; readonly connections?: Connections; readonly tools?: Tools } =
     { replies: mode === "stage1-mobile-dev" ? new ChatReplies(devChatModel, undefined, new Voices(VoiceCatalog.load(), devSpeaker, devTranscriber)) : new ChatReplies() },
 ) => {
   const api = new MvpApiBoundary({
@@ -92,6 +93,7 @@ export const createMobileHttpServer = (
     replies: chat.replies,
     ...(chat.catalog === undefined ? {} : { catalog: chat.catalog }),
     ...(chat.connections === undefined ? {} : { connections: chat.connections }),
+    ...(chat.tools === undefined ? {} : { tools: chat.tools }),
   });
 
   return createServer(async (request, response) => {

@@ -3,8 +3,8 @@ import type { LookupAddress } from "node:dns";
 import { it } from "node:test";
 import { handleChatRequest } from "../src/chat/http.ts";
 import type { ChatClaim, ChatPort, DiaryJob, MemoryJob } from "../src/chat/port.ts";
-import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
-import { checkUrl, createPostJson, isPublicAddress, publicLookup, type PostJson } from "../src/connections/guard.ts";
+import { ChatReplies, ConnectionFailed, devChatModel } from "../src/chat/replies.ts";
+import { BlockedAddressError, checkUrl, createPostJson, isPublicAddress, publicLookup, type PostJson } from "../src/connections/guard.ts";
 import { checkConnection, ConnectedChatModel, Connections, testConnection, type Connection, type ConnectionCheck } from "../src/connections/model.ts";
 import { SecretBox } from "../src/connections/secret-box.ts";
 import { chatFromEnvironment } from "../src/chat/setup.ts";
@@ -180,8 +180,16 @@ it("answers through the Owner's key or agent, and through the platform without a
   assert.deepEqual(await new ConnectedChatModel(undefined, box, async () => ({ status: 200, body: { choices: [{ message: { content: "" },
     finish_reason: "content_filter" }] } })).reply(turn(), { port: storePort(byok), signal }), { refused: true });
   await assert.rejects(new ConnectedChatModel(undefined, box, post("半句", "length")).reply(turn(), { port: storePort(byok), signal }), /cut off/);
-  await assert.rejects(new ConnectedChatModel(undefined, box, async () => ({ status: 502, body: {} })).reply(turn(), { port: storePort(byok), signal }), /502/);
-  await assert.rejects(new ConnectedChatModel(undefined, box, async () => ({ status: 200, body: undefined })).reply(turn(), { port: storePort(byok), signal }), /JSON/);
+  // No usable answer from the Owner's side: the error says which kind, so the failed reply can tell the Owner.
+  const failing = (post: PostJson) => new ConnectedChatModel(undefined, box, post).reply(turn(), { port: storePort(byok), signal })
+    .then(() => "answered", (error: unknown) => error instanceof ConnectionFailed ? error.reason : `other: ${String(error)}`);
+  const answering = (status: number): PostJson => async () => ({ status, body: {} });
+  assert.deepEqual(await Promise.all([401, 403, 402, 429, 404, 500, 502, 400, 301].map(status => failing(answering(status)))),
+    ["AUTH_FAILED", "AUTH_FAILED", "NO_BALANCE", "RATE_LIMITED", "NOT_FOUND", "UNREACHABLE", "UNREACHABLE", "ERROR", "ERROR"]);
+  assert.deepEqual([await failing(async () => ({ status: 200, body: undefined })), await failing(async () => { throw new BlockedAddressError(); }),
+    await failing(async () => { throw new Error("The call timed out."); })], ["BAD_ANSWER", "BLOCKED_ADDRESS", "UNREACHABLE"]);
+  assert.deepEqual([await failing(async () => ({ status: 200, body: { error: "model overloaded" } })), await failing(post("  "))], ["BAD_ANSWER", "BAD_ANSWER"],
+    "JSON without a reply in it");
 
   // The operators' kill switch stops Owners' keys and agents too.
   sent.length = 0;

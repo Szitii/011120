@@ -9,7 +9,7 @@
  *   PUT    /v0/chats/{id}/read                         { messageId }  the Owner has read up to here
  *   GET    /v0/badges                                  every unread count for the tab badges
  *   GET|PUT /v0/companions/{id}/anniversary            the day the Owner and the Companion count from
- *   POST   /v0/chats/{id}/messages                     { body, mentions? }       send
+ *   POST   /v0/chats/{id}/messages                     { body?, mentions?, images? }  send (1 to 4 uploaded pictures; then the words may be left out)
  *   POST   /v0/chats/{id}/messages/{messageId}/retry   try a failed reply again
  *   POST   /v0/chats/{id}/voice                        { audio, mime, durationMs }  the Owner's voice message
  *   GET    /v0/chats/{id}/messages/{messageId}/audio   a voice message's audio (supports Range)
@@ -30,6 +30,16 @@
  *   PUT    /v0/companions/{id}/skills/{skillId}        { enabled }  switch an official skill on or off
  *   POST   /v0/companions/{id}/own-skills              { title, body, enabled? }  a skill of its own
  *   PUT|DELETE /v0/companions/{id}/own-skills/{skillId}  rewrite or delete one
+ *   GET    /v0/tool-servers                            the tool servers a Companion can be connected to
+ *   GET    /v0/companions/{id}/tools                   what it is connected to, and the tools it may use
+ *   PUT    /v0/companions/{id}/tools/{serverId}        { token, consent: true }  connect (the server is asked for its tools first)
+ *   DELETE /v0/companions/{id}/tools/{serverId}        disconnect
+ *   POST   /v0/chats/{id}/tool-requests/{requestId}    { decision: "CONFIRM" | "DECLINE" }  answer a call the Companion asked to make
+ *   GET    /v0/shared-skills?companionId=&q=&cursor=   the shelf of skills Owners shared, newest first
+ *   POST   /v0/shared-skills                           { companionId, skillId, summary }  hand in one of a Companion's own skills
+ *   GET    /v0/shared-skills/mine                      what the Owner handed in, and the room left
+ *   DELETE /v0/shared-skills/{skillId}                 take one back
+ *   POST   /v0/shared-skills/{skillId}/report          { reason, details? }  report someone else's
  *   GET|POST /v0/companions/{id}/world-entries         its world book; { keys, body, enabled? } adds an entry
  *   PUT|DELETE /v0/companions/{id}/world-entries/{entryId}  rewrite or delete one
  *   GET    /v0/companions/{id}/reminders               the reminders it still has to deliver
@@ -55,14 +65,17 @@ import { sha256 } from "../companion-import/canonical.ts";
 import { MAX_WORLD_BODY_LENGTH, MAX_WORLD_KEY_LENGTH, MAX_WORLD_KEYS, hasActiveContent, hasCredential, hasPii, hasPromptInjection } from "../companion-import/policy.ts";
 import { PostgresPersistenceError } from "../persistence/postgres/types.ts";
 import type { AuthenticatedOwnerSession, MvpHttpRequest, MvpHttpResponse } from "../http/types.ts";
-import type { ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
+import type { ChatImageInput, ChatModelList, ChatSettings, DiarySettings, PlatformFeatures, VoiceList } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
 import type {
-  CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, SkillRefusal, WorldEntryRefusal,
+  CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, SharedSkillRefusal, SkillRefusal, ToolConnectRefusal,
+  WorldEntryRefusal,
 } from "../../../contracts/chat.ts";
+import type { Tools } from "../tools/box.ts";
+import { McpError } from "../tools/mcp.ts";
 import { PERSONA_KEYS, SKILL_CHARS, personaLimit, personaTexts, skillLine, type PersonaKey } from "./prompt.ts";
 import { checkRules } from "./reply-rules.ts";
 import { AGENT_SCOPES, type AgentScope, type ChatPort } from "./port.ts";
@@ -84,7 +97,8 @@ const FEEDBACK_PLATFORMS: readonly string[] = ["IOS", "ANDROID", "WEB"];
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const invalid = (): never => { throw new PostgresPersistenceError("INVALID_INPUT", "Invalid chat request."); };
 const notFound = (): never => { throw new PostgresPersistenceError("NOT_FOUND", "Chat route not found."); };
-const id = (value: unknown): string => typeof value === "string" && UUID.test(value) ? value : invalid();
+// In lower case, as the database writes ids: a secret sealed for a Companion is bound to its id letter for letter.
+const id = (value: unknown): string => typeof value === "string" && UUID.test(value) ? value.toLowerCase() : invalid();
 const header = (request: MvpHttpRequest, name: string): string | undefined =>
   Object.entries(request.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
 const ids = (value: unknown, min: number): string[] =>
@@ -141,6 +155,26 @@ function ownSkill(request: MvpHttpRequest): { title: string; body: string; enabl
   if (!(enabled === undefined || typeof enabled === "boolean")) return invalid();
   return { title: line(title, 20), body: text(skill, SKILL_CHARS), enabled: enabled !== false };
 }
+
+/** A tool server's token: 8 to 512 printable characters, no spaces. */
+const TOOL_TOKEN = /^[\x21-\x7e]{8,512}$/;
+const CHAT_PICTURE = /^chat\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}[.](jpg|png|webp)$/;
+
+/** The pictures sent with a message: none, or up to 4 files of the chat folder, each with its size in pixels if the app knows it. */
+function sentPictures(value: unknown): ChatImageInput[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 4) return invalid();
+  const pixels = (n: unknown): boolean => n === undefined || (Number.isSafeInteger(n) && (n as number) >= 1 && (n as number) <= 99_999);
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["path", "width", "height"].includes(key))) return invalid();
+    const { path, width, height } = item as { path?: unknown; width?: unknown; height?: unknown };
+    if (typeof path !== "string" || !CHAT_PICTURE.test(path) || !pixels(width) || !pixels(height)) return invalid();
+    return { path, ...(width === undefined ? {} : { width: width as number }), ...(height === undefined ? {} : { height: height as number }) };
+  });
+}
+
+/** Why a shared skill is reported: the same reasons as a community report. */
+const REPORT_REASONS: readonly string[] = ["SPAM", "HARASSMENT", "HARMFUL", "PRIVACY", "OTHER"];
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
 function retryKey(request: MvpHttpRequest, ownerId: string): string {
@@ -300,7 +334,7 @@ const replying = (payload: unknown): boolean => {
 
 export async function handleChatRequest(
   request: MvpHttpRequest, session: AuthenticatedOwnerSession, traceId: string, replies: ChatReplies, catalog?: ChatCatalog,
-  connections?: Connections,
+  connections?: Connections, tools?: Tools,
 ): Promise<MvpHttpResponse | undefined> {
   const url = new URL(request.url, "https://chat.invalid");
   const path = url.pathname.replace(/\/$/, "").split("/").slice(1); // ["v0", ...]
@@ -322,6 +356,9 @@ export async function handleChatRequest(
   const accountRoute = path[1] === "account" && path.length === 2;
   const skillsRoute = path[1] === "companions" && ((path[3] === "skills" && (path.length === 4 || path.length === 5))
     || (path[3] === "own-skills" && (path.length === 4 || path.length === 5)));
+  const sharedSkillsRoute = path[1] === "shared-skills" && path.length >= 2 && path.length <= 4;
+  const toolsRoute = (path[1] === "tool-servers" && path.length === 2)
+    || (path[1] === "companions" && path[3] === "tools" && (path.length === 4 || path.length === 5));
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
@@ -330,7 +367,7 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute, exportRoute, accountRoute,
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute, sharedSkillsRoute, toolsRoute, exportRoute, accountRoute,
     personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
@@ -367,7 +404,9 @@ export async function handleChatRequest(
   if (featuresRoute) {
     if (method !== "GET") return notFound();
     const switches = await port.features() as Omit<PlatformFeatures, "connections">;
+    // Tools: the operators' switch, on a server that can seal an Owner's token for a tool server.
     return response(200, { ...switches, voiceInput: switches.voiceInput === true && replies.voices?.listening === true,
+      companionTools: switches.companionTools === true && tools !== undefined,
       connections: connections !== undefined } satisfies PlatformFeatures);
   }
   if (voicesRoute) {
@@ -406,7 +445,7 @@ export async function handleChatRequest(
     if (!ACTIONS.includes(action as CompanionAction)) return invalid();
     const result = await port.act(companionId, action as CompanionAction, retryKey(request, session.ownerId));
     const chatId = (result as { chatId?: unknown }).chatId;
-    if (replying(result) && typeof chatId === "string") replies.kick(chatId, port);
+    if (replying(result) && typeof chatId === "string") replies.kick(chatId, port, session.pictures);
     return response(201, result);
   }
   if (diarySettingsRoute) {
@@ -516,6 +555,59 @@ export async function handleChatRequest(
     if (whole !== null) return response(422, { code: "SKILL_REFUSED", field: "body", reason: whole } satisfies SkillRefusal);
     return response(skillId === null ? 201 : 200, await port.saveOwnSkill(companionId, skillId, skill.title, skill.body, skill.enabled));
   }
+  if (toolsRoute) {
+    if (path[1] === "tool-servers") return method === "GET" ? response(200, await port.toolServers()) : notFound();
+    const companionId = id(path[2]);
+    if (path.length === 4) return method === "GET" ? response(200, await port.companionTools(companionId)) : notFound();
+    const serverId = id(path[4]);
+    if (method === "DELETE") return response(200, await port.removeCompanionTool(companionId, serverId));
+    if (method !== "PUT") return notFound();
+    if (tools === undefined) return response(501, { code: "TOOLS_UNAVAILABLE" });
+    const { token, consent } = body(request, ["token", "consent"]);
+    // consent: the Owner was told that the token is kept (sealed) on this server and used to act for them there.
+    if (consent !== true || typeof token !== "string" || !TOOL_TOKEN.test(token)) return invalid();
+    const offered = ((await port.toolServers()) as { items?: { id?: unknown; url?: unknown }[] }).items
+      ?.find(server => typeof server.id === "string" && server.id.toLowerCase() === serverId.toLowerCase());
+    if (offered === undefined || typeof offered.url !== "string") return notFound();
+    // The same brake as connection tests: this makes the server call out.
+    if (!tools.allow(session.ownerId)) return response(429, { code: "TOOL_CONNECT_LIMIT" });
+    let listed;
+    try {
+      listed = await tools.list(new URL(offered.url), token);
+    } catch (error) {
+      return response(422, { code: "TOOL_CONNECT_FAILED", reason: error instanceof McpError ? error.reason : "UNREACHABLE" } satisfies ToolConnectRefusal);
+    }
+    return response(200, await port.saveCompanionTool(companionId, serverId, tools.box.seal(token, companionId), token.length >= 12 ? token.slice(-4) : "", listed));
+  }
+  if (sharedSkillsRoute) {
+    if (path.length === 2 && method === "GET") {
+      const companion = url.searchParams.get("companionId"), words = url.searchParams.get("q")?.trim() ?? "";
+      if (Array.from(words).length > 40) return invalid();
+      return response(200, await port.sharedSkills(companion === null ? null : id(companion), words === "" ? null : words, ...cursor(url)));
+    }
+    if (path.length === 2 && method === "POST") {
+      const sent = body(request, ["companionId", "skillId", "summary"]);
+      const companionId = id(sent.companionId), skillId = id(sent.skillId), summary = line(sent.summary, 100);
+      // What goes on the shelf is the skill as it is stored now, so that is what is scanned (again), with the new line.
+      const own = ((await port.skills(companionId)) as { own?: { id?: unknown; title?: unknown; body?: unknown }[] }).own
+        ?.find(skill => typeof skill.id === "string" && skill.id.toLowerCase() === skillId.toLowerCase());
+      if (own === undefined || typeof own.title !== "string" || typeof own.body !== "string") return notFound();
+      const told = skillLine(own.title, own.body);
+      if (told === null) return invalid();
+      for (const [field, value] of [["summary", summary], ["title", own.title], ["body", own.body], ["body", told], ["summary", `${own.title} ${summary}`]] as const) {
+        const reason = personaRefusal(value);
+        if (reason !== null) return response(422, { code: "SKILL_REFUSED", field, reason } satisfies SharedSkillRefusal);
+      }
+      return response(201, await port.shareSkill(companionId, skillId, summary));
+    }
+    if (path.length === 3 && path[2] === "mine") return method === "GET" ? response(200, await port.mySharedSkills()) : notFound();
+    if (path.length === 3) return method === "DELETE" ? response(200, await port.withdrawSharedSkill(id(path[2]))) : notFound();
+    if (path.length !== 4 || path[3] !== "report" || method !== "POST") return notFound();
+    const { reason, details } = body(request, ["reason", "details"]);
+    if (typeof reason !== "string" || !REPORT_REASONS.includes(reason) || !(details === undefined || typeof details === "string")
+      || Array.from(details?.trim() ?? "").length > 1000) return invalid();
+    return response(200, await port.reportSharedSkill(id(path[2]), reason, details?.trim() ?? ""));
+  }
   if (worldRoute) {
     const companionId = id(path[2]);
     if (path.length === 4 && method === "GET") return response(200, await port.worldEntries(companionId));
@@ -571,9 +663,39 @@ export async function handleChatRequest(
   } else if (part === "read" && path.length === 4 && method === "PUT") {
     return response(200, await port.markRead(chat, id(body(request, ["messageId"]).messageId)));
   } else if (part === "messages" && messageId === undefined && method === "POST") {
-    const input = body(request, ["body", "mentions"]);
+    const input = body(request, ["body", "mentions", "images"]);
     const mentions = input.mentions === undefined ? [] : ids(input.mentions, 0);
-    result = await port.send(chat, text(input.body, 2000), mentions, retryKey(request, session.ownerId));
+    const images = sentPictures(input.images);
+    // Pictures can go without words (the database then writes "[图片]" for the body).
+    const wordless = images.length > 0 && (input.body === undefined || (typeof input.body === "string" && input.body.trim() === ""));
+    try {
+      result = await port.send(chat, wordless ? "" : text(input.body, 2000), mentions, retryKey(request, session.ownerId), images);
+    } catch (error) {
+      if (error instanceof PostgresPersistenceError && error.code === "INVALID_STATE" && error.message === "image limit reached") {
+        return response(429, { code: "IMAGE_LIMIT" });
+      }
+      throw error;
+    }
+  } else if (part === "tool-requests" && path.length === 5 && method === "POST") {
+    const { decision } = body(request, ["decision"]);
+    const requestId = id(path[4]);
+    if (decision === "DECLINE") return response(200, { request: await port.toolRequestDecline(chat, requestId) });
+    if (decision !== "CONFIRM") return invalid();
+    if (tools === undefined) return response(501, { code: "TOOLS_UNAVAILABLE" });
+    let taken;
+    try {
+      // From here the request is RUNNING: the call is made once, whatever is sent again.
+      taken = await port.toolRequestTake(chat, requestId) as { companionId: string; serverKey: string; url: string; secret: string; tool: string; arguments: Record<string, unknown> };
+    } catch (error) {
+      if (error instanceof PostgresPersistenceError && error.code === "INVALID_STATE" && error.message === "tool call limit reached") {
+        return response(429, { code: "TOOL_LIMIT" });
+      }
+      throw error;
+    }
+    const outcome = await tools.run(taken, taken.tool, taken.arguments);
+    await port.toolCallNote(taken.companionId, taken.serverKey, taken.tool, outcome.ok).catch(() => undefined);
+    // The result is kept with the request, and the Companion gets a turn to tell the Owner.
+    result = await port.toolRequestFinish(requestId, outcome.ok, outcome.text);
   } else if (part === "messages" && action === "retry" && path.length === 6 && method === "POST") {
     result = await port.retry(chat, id(messageId));
   } else if (part === "voice" && path.length === 4 && method === "POST") {
@@ -599,6 +721,6 @@ export async function handleChatRequest(
   } else {
     return notFound();
   }
-  if (replying(result)) replies.kick(chat, port);
+  if (replying(result)) replies.kick(chat, port, session.pictures);
   return response((part === "messages" && action === undefined) || part === "voice" ? 201 : 200, result);
 }

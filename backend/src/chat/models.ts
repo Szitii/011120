@@ -15,6 +15,11 @@ export interface ProviderConfig {
   /** openai-compatible only, e.g. https://api.deepseek.com/v1 */
   readonly baseUrl?: string;
   readonly apiKeyEnv: string;
+  /**
+   * A second key for the same provider, best from another account (a second key of one account
+   * runs out of money together with the first). A call the first key cannot make is made with it.
+   */
+  readonly backupApiKeyEnv?: string;
 }
 
 export interface CatalogModel {
@@ -44,6 +49,10 @@ export interface CatalogModel {
      * DeepSeek's side and is not billed; what it reads is billed as input tokens).
      */
     readonly webTools?: "deepseek";
+    /** The model takes pictures in a request (JPEG, PNG, WebP), next to the text. */
+    readonly vision?: true;
+    /** openai-compatible: the model calls functions declared in `tools` (so a Companion on it can use tools). */
+    readonly tools?: true;
   };
 }
 
@@ -52,6 +61,11 @@ export interface CatalogFile {
   readonly defaultModel: string;
   /** Cheap model for "should it speak?"; null: the reply model decides by itself. */
   readonly decisionModel: string | null;
+  /**
+   * The model that describes the pictures Owners send in chat, for Companions whose own model takes
+   * none. Left out or null: the first usable model that takes pictures, if any.
+   */
+  readonly visionModel?: string | null;
   readonly providers: Readonly<Record<string, ProviderConfig>>;
   readonly models: readonly CatalogModel[];
 }
@@ -71,6 +85,9 @@ function check(file: CatalogFile): CatalogFile {
     if (provider.kind !== "anthropic" && provider.kind !== "openai-compatible") fail(`provider ${name} has an unknown kind.`);
     if (provider.kind === "openai-compatible" && !/^https:\/\/\S+$/.test(provider.baseUrl ?? "")) fail(`provider ${name} needs an https baseUrl.`);
     if (!/^[A-Z][A-Z0-9_]*$/.test(provider.apiKeyEnv ?? "")) fail(`provider ${name} needs apiKeyEnv, an environment variable name.`);
+    if (provider.backupApiKeyEnv !== undefined && (!/^[A-Z][A-Z0-9_]*$/.test(provider.backupApiKeyEnv) || provider.backupApiKeyEnv === provider.apiKeyEnv)) {
+      fail(`provider ${name} needs backupApiKeyEnv to be another environment variable name.`);
+    }
   }
   const ids = new Set<string>();
   for (const model of file.models) {
@@ -84,9 +101,14 @@ function check(file: CatalogFile): CatalogFile {
     if (model.options?.webTools !== undefined && (model.options.webTools !== "deepseek" || file.providers[model.provider]!.kind !== "openai-compatible")) {
       fail(`model ${model.id} has webTools its provider cannot serve.`);
     }
+    if (model.options?.tools !== undefined && file.providers[model.provider]!.kind !== "openai-compatible") {
+      fail(`model ${model.id} has tools its provider cannot serve.`);
+    }
   }
   if (!ids.has(file.defaultModel)) fail("defaultModel is not in models.");
   if (file.decisionModel !== null && !ids.has(file.decisionModel)) fail("decisionModel is not in models (use null for none).");
+  if (file.visionModel !== undefined && file.visionModel !== null
+    && file.models.find(model => model.id === file.visionModel)?.options?.vision !== true) fail("visionModel is not a model that takes pictures.");
   return file;
 }
 
@@ -108,13 +130,17 @@ export class ChatCatalog {
 
   provider(model: CatalogModel): ProviderConfig { return this.#file.providers[model.provider]!; }
 
-  apiKey(model: CatalogModel): string | undefined {
-    const key = this.#env[this.provider(model).apiKeyEnv]?.trim();
-    return key ? key : undefined;
+  /** The keys configured for the model's provider: the first one, then the backup. None: the model cannot be called. */
+  apiKeys(model: CatalogModel): string[] {
+    const provider = this.provider(model);
+    return [provider.apiKeyEnv, provider.backupApiKeyEnv].flatMap(name => {
+      const key = name === undefined ? "" : this.#env[name]?.trim() ?? "";
+      return key === "" ? [] : [key];
+    });
   }
 
-  /** Enabled in the file and its key is configured. (The database switches are checked per call.) */
-  usable(model: CatalogModel): boolean { return model.enabled && this.apiKey(model) !== undefined; }
+  /** Enabled in the file and a key is configured. (The database switches are checked per call.) */
+  usable(model: CatalogModel): boolean { return model.enabled && this.apiKeys(model).length > 0; }
 
   /** Whether the Owner may store this id. */
   has(id: string): boolean { return this.#file.models.some(model => model.id === id); }
@@ -135,6 +161,12 @@ export class ChatCatalog {
   decisionModel(): CatalogModel | undefined {
     const model = this.#file.models.find(m => m.id === this.#file.decisionModel);
     return model && this.usable(model) ? model : undefined;
+  }
+
+  /** The model that describes pictures: the configured one if usable, else the first usable one that takes pictures. */
+  visionModel(): CatalogModel | undefined {
+    const model = this.#file.models.find(m => m.id === this.#file.visionModel);
+    return model && this.usable(model) ? model : this.#file.models.find(m => m.options?.vision === true && this.usable(m));
   }
 
   /** Cost in US cents, with fractions. The ledger counts whole cents; tokens are recorded exactly. */

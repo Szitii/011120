@@ -12,12 +12,16 @@
 import type { FlyAccess } from "./fly.ts";
 
 /** One company the catalog uses, the environment variable its key lives in, and the console's copy of it. */
-export interface VendorKey { readonly key: string; readonly keyEnv: string; readonly apiKey: string | undefined }
+export interface VendorKey { readonly key: string; readonly keyEnv: string; readonly apiKey: string | undefined;
+  /** The company's backup key (the API server uses it for a call the first key cannot make). */
+  readonly backup?: boolean }
 
 export interface Money { currency: string; total: number; granted: number; toppedUp: number }
 export type Balance = { ok: true; enough: boolean; money: Money[] } | { ok: false; why: string };
 export interface VendorStatus {
   key: string; keyEnv: string;
+  /** This row is the company's backup key. */
+  backup: boolean;
   /** On the API server: when its key last changed; null when it has none; a reason when that cannot be read. */
   serverKey: { at: string } | null | { why: string };
   /** null: this company has no balance API (or the console has no copy of its key; `why` says which). */
@@ -65,10 +69,11 @@ export async function vendorStatus(vendors: readonly VendorKey[], fly: FlyAccess
   return Promise.all(vendors.map(async v => {
     const check = BALANCE[v.key];
     const serverKey = secrets instanceof Map ? (secrets.has(v.keyEnv) ? { at: secrets.get(v.keyEnv)! } : null) : secrets;
-    if (check === undefined) return { key: v.key, keyEnv: v.keyEnv, serverKey, balance: null, balanceNote: "这家没有查余额的接口,去它的控制台看。" };
-    if (v.apiKey === undefined) return { key: v.key, keyEnv: v.keyEnv, serverKey, balance: null, balanceNote: `后台没有这家的 Key(${v.keyEnv}),查不了余额。` };
+    const row = { key: v.key, keyEnv: v.keyEnv, backup: v.backup === true, serverKey };
+    if (check === undefined) return { ...row, balance: null, balanceNote: "这家没有查余额的接口,去它的控制台看。" };
+    if (v.apiKey === undefined) return { ...row, balance: null, balanceNote: `后台没有这家的 Key(${v.keyEnv}),查不了余额。` };
     const balance = await check(v.apiKey, get).catch((error: unknown) =>
       ({ ok: false, why: error instanceof Error ? error.message : String(error) }) satisfies Balance);
-    return { key: v.key, keyEnv: v.keyEnv, serverKey, balance, balanceNote: null };
+    return { ...row, balance, balanceNote: null };
   }));
 }
