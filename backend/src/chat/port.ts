@@ -208,6 +208,15 @@ export interface ChatPort {
   deleteOwnSkill(companionId: string, skillId: string): Promise<unknown>;
   /** Server only: the skills that are on, as the model is told them ([{ title, body }], 5 at most). */
   skillTexts(companionId: string): Promise<unknown>;
+  /** The shelf of shared skills, newest first ({ items, nextCursor }). `companionId`: say for each whether that Companion has it on. */
+  sharedSkills(companionId: string | null, query: string | null, beforeAt: string | null, beforeId: string | null): Promise<unknown>;
+  /** What the Owner handed in for the shelf, and the room left ({ items, waiting, maxWaiting, shared, maxShared, todayLeft }). */
+  mySharedSkills(): Promise<unknown>;
+  /** Server only (the texts are scanned first): hands in a copy of the Companion's own skill with one line of introduction. */
+  shareSkill(companionId: string, skillId: string, summary: string): Promise<unknown>;
+  /** The author takes a shared skill back; the Companions that had it on lose it. */
+  withdrawSharedSkill(skillId: string): Promise<unknown>;
+  reportSharedSkill(skillId: string, reason: string, details: string): Promise<unknown>;
   /** Every world book entry of the Companion, in the order they were written ({ items }). */
   worldEntries(companionId: string): Promise<unknown>;
   /** Server only (the texts are scanned first): a new entry (`entryId` null) or that entry rewritten. */

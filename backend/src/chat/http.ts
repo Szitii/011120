@@ -30,6 +30,11 @@
  *   PUT    /v0/companions/{id}/skills/{skillId}        { enabled }  switch an official skill on or off
  *   POST   /v0/companions/{id}/own-skills              { title, body, enabled? }  a skill of its own
  *   PUT|DELETE /v0/companions/{id}/own-skills/{skillId}  rewrite or delete one
+ *   GET    /v0/shared-skills?companionId=&q=&cursor=   the shelf of skills Owners shared, newest first
+ *   POST   /v0/shared-skills                           { companionId, skillId, summary }  hand in one of a Companion's own skills
+ *   GET    /v0/shared-skills/mine                      what the Owner handed in, and the room left
+ *   DELETE /v0/shared-skills/{skillId}                 take one back
+ *   POST   /v0/shared-skills/{skillId}/report          { reason, details? }  report someone else's
  *   GET|POST /v0/companions/{id}/world-entries         its world book; { keys, body, enabled? } adds an entry
  *   PUT|DELETE /v0/companions/{id}/world-entries/{entryId}  rewrite or delete one
  *   GET    /v0/companions/{id}/reminders               the reminders it still has to deliver
@@ -61,7 +66,7 @@ import type { ChatCatalog } from "./models.ts";
 import { checkConnection, type Connections } from "../connections/model.ts";
 import { newAgentToken } from "../agent/heartbeat.ts";
 import type {
-  CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, SkillRefusal, WorldEntryRefusal,
+  CompanionPersona, ConnectionInput, ConnectionSaveResult, CompanionConnection, PersonaRefusal, SharedSkillRefusal, SkillRefusal, WorldEntryRefusal,
 } from "../../../contracts/chat.ts";
 import { PERSONA_KEYS, SKILL_CHARS, personaLimit, personaTexts, skillLine, type PersonaKey } from "./prompt.ts";
 import { checkRules } from "./reply-rules.ts";
@@ -141,6 +146,9 @@ function ownSkill(request: MvpHttpRequest): { title: string; body: string; enabl
   if (!(enabled === undefined || typeof enabled === "boolean")) return invalid();
   return { title: line(title, 20), body: text(skill, SKILL_CHARS), enabled: enabled !== false };
 }
+
+/** Why a shared skill is reported: the same reasons as a community report. */
+const REPORT_REASONS: readonly string[] = ["SPAM", "HARASSMENT", "HARMFUL", "PRIVACY", "OTHER"];
 
 /** The caller's Idempotency-Key, scoped to the Owner so two accounts never share it. */
 function retryKey(request: MvpHttpRequest, ownerId: string): string {
@@ -322,6 +330,7 @@ export async function handleChatRequest(
   const accountRoute = path[1] === "account" && path.length === 2;
   const skillsRoute = path[1] === "companions" && ((path[3] === "skills" && (path.length === 4 || path.length === 5))
     || (path[3] === "own-skills" && (path.length === 4 || path.length === 5)));
+  const sharedSkillsRoute = path[1] === "shared-skills" && path.length >= 2 && path.length <= 4;
   const personaRoute = path[1] === "companions" && path[3] === "persona" && path.length === 4;
   const connectionRoute = path[1] === "companions" && path[3] === "connection" && path.length === 4;
   const voicesRoute = path[1] === "voices" && (path.length === 2 || (path.length === 4 && path[3] === "sample"));
@@ -330,7 +339,7 @@ export async function handleChatRequest(
   const avatarRoute = (path[1] === "owner" && path[2] === "avatar" && path.length === 3)
     || (path[1] === "companions" && path[3] === "avatar" && path.length === 4);
   const chatRoute = path[1] === "chats" || [deleteCompanionRoute, avatarRoute, settingsRoute, modelsRoute, actionsRoute, diaryRoute, diarySettingsRoute, anniversaryRoute,
-    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute, exportRoute, accountRoute,
+    badgesRoute, featuresRoute, walletRoute, feedbackRoute, memoriesRoute, remindersRoute, worldRoute, templatesRoute, skillsRoute, sharedSkillsRoute, exportRoute, accountRoute,
     personaRoute, connectionRoute, voicesRoute, agentKeysRoute].includes(true);
   if (path[0] !== "v0" || !chatRoute) return undefined;
   const port = session.chat;
@@ -515,6 +524,34 @@ export async function handleChatRequest(
     const whole = personaRefusal(told);
     if (whole !== null) return response(422, { code: "SKILL_REFUSED", field: "body", reason: whole } satisfies SkillRefusal);
     return response(skillId === null ? 201 : 200, await port.saveOwnSkill(companionId, skillId, skill.title, skill.body, skill.enabled));
+  }
+  if (sharedSkillsRoute) {
+    if (path.length === 2 && method === "GET") {
+      const companion = url.searchParams.get("companionId"), words = url.searchParams.get("q")?.trim() ?? "";
+      if (Array.from(words).length > 40) return invalid();
+      return response(200, await port.sharedSkills(companion === null ? null : id(companion), words === "" ? null : words, ...cursor(url)));
+    }
+    if (path.length === 2 && method === "POST") {
+      const sent = body(request, ["companionId", "skillId", "summary"]);
+      const companionId = id(sent.companionId), skillId = id(sent.skillId), summary = line(sent.summary, 100);
+      // What goes on the shelf is the skill as it is stored now, so that is what is scanned (again), with the new line.
+      const own = ((await port.skills(companionId)) as { own?: { id?: unknown; title?: unknown; body?: unknown }[] }).own?.find(skill => skill.id === skillId);
+      if (own === undefined || typeof own.title !== "string" || typeof own.body !== "string") return notFound();
+      const told = skillLine(own.title, own.body);
+      if (told === null) return invalid();
+      for (const [field, value] of [["summary", summary], ["title", own.title], ["body", own.body], ["body", told], ["summary", `${own.title} ${summary}`]] as const) {
+        const reason = personaRefusal(value);
+        if (reason !== null) return response(422, { code: "SKILL_REFUSED", field, reason } satisfies SharedSkillRefusal);
+      }
+      return response(201, await port.shareSkill(companionId, skillId, summary));
+    }
+    if (path.length === 3 && path[2] === "mine") return method === "GET" ? response(200, await port.mySharedSkills()) : notFound();
+    if (path.length === 3) return method === "DELETE" ? response(200, await port.withdrawSharedSkill(id(path[2]))) : notFound();
+    if (path.length !== 4 || path[3] !== "report" || method !== "POST") return notFound();
+    const { reason, details } = body(request, ["reason", "details"]);
+    if (typeof reason !== "string" || !REPORT_REASONS.includes(reason) || !(details === undefined || typeof details === "string")
+      || Array.from(details?.trim() ?? "").length > 1000) return invalid();
+    return response(200, await port.reportSharedSkill(id(path[2]), reason, details?.trim() ?? ""));
   }
   if (worldRoute) {
     const companionId = id(path[2]);

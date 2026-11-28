@@ -886,6 +886,7 @@ try {
   assert.deepEqual([mine.officialSkills, Object.keys(mine.agentKeys.at(-1)!).sort()],
     [[{ id: official.id, title: official.title, summary: official.summary }], ["active", "companionId", "createdAt", "expiresAt", "id", "lastUsedAt", "name", "scopes"]],
     "an official skill by name, an agent key without what stands for its token");
+  assert.deepEqual([copy.sharedSkills, mine.sharedSkills], [[], []], "nothing handed in for the shelf, nothing from it switched on");
   const shown = (await pool.query<{ n: number; voiced: number }>(`select count(*)::int as n, count(a.message_id)::int as voiced
     from companion_private.chat_messages m left join companion_private.chat_audio a on a.message_id = m.id
     where m.chat_id = $1 and m.status = 'SENT'`, [mine.chat!.id])).rows[0]!;

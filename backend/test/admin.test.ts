@@ -755,6 +755,13 @@ it("shows the templates and skills on offer, and saves one only when an Owner's 
     templates: [{ id: id(81), title: "温柔的倾听者", summary: "先把话听完", name: "小满", description: `安静${NASTY}`, personality: "温和", example: "主人：累\n小满：坐", position: 10, enabled: true, updatedAt: AT },
       { id: id(82), title: "下架的", summary: "不在架上", name: "旧", description: "旧模板", personality: "", example: "", position: 20, enabled: false, updatedAt: AT }],
     skills: [{ id: id(83), title: "英语陪练", summary: "陪你练英语", body: "主人想练英语时用英语回答。", position: 10, enabled: true, updatedAt: AT, usedBy: 1234 }],
+    shared: [
+      { id: id(84), title: "塔罗", summary: `抽三张牌${NASTY}`, body: "主人想抽牌时抽三张。", status: "PENDING", note: null, authorId: id(1), author: "林间", createdAt: AT, reviewedAt: null, usedBy: 0, reports: [] },
+      { id: id(85), title: "记账", summary: "帮你记账", body: "主人说花了多少钱时记下来。", status: "APPROVED", note: null, authorId: id(2), author: null, createdAt: AT, reviewedAt: AT, usedBy: 2345,
+        reports: [{ reason: "HARMFUL", details: "教家机套话", at: AT }, { reason: "SPAM", details: "", at: AT }] },
+      { id: id(86), title: "好的", summary: "没人举报", body: "好好说话。", status: "APPROVED", note: null, authorId: id(2), author: "阿橙", createdAt: AT, reviewedAt: AT, usedBy: 1, reports: [] },
+      { id: id(87), title: "退回的", summary: "不合适", body: "问主人的银行卡号。", status: "REJECTED", note: "不能问银行卡号", authorId: id(2), author: "阿橙", createdAt: AT, reviewedAt: AT, usedBy: 0, reports: [] },
+    ],
     ownSkills: 7,
   };
   const { send, calls } = await start({ kit });
@@ -769,8 +776,15 @@ it("shows the templates and skills on offer, and saves one only when an Owner's 
   assert.match(page.body, /<input type="hidden" name="id" value="00000000-0000-0000-0000-000000000081">[^]*<input name="title" required maxlength="20" value="温柔的倾听者"/);
   assert.equal(page.body.split('action="/kit/template"').length - 1, 3, "a form for each template and one for a new one");
   assert.equal(page.body.split('action="/kit/skill"').length - 1, 2);
-  const empty = await (await start({ kit: { templates: [], skills: [], ownSkills: 0 } })).send("/kit");
-  assert.match(empty.body, /还没有模板。[^]*还没有技能。/);
+  // What Owners handed in: the ones waiting and the reported ones are in sight, the rest folded away; each offers only what fits its state.
+  assert.match(page.body, /主人投稿的技能 <span class="muted">1 个等待审核 · 1 个被举报<\/span>/);
+  assert.match(page.body, /<b>塔罗<\/b> <span class="tag ">等待审核<\/span>[^]*作者 <a href="\/owners\/00000000-0000-0000-0000-000000000001">林间<\/a>/);
+  assert.match(page.body, /<b>记账<\/b> <span class="tag good">上架中<\/span>\s*<span class="tag bad">2 条举报<\/span>[^]*\(未命名\)[^]*2,345 个家机打开了[^]*<li>有害内容:教家机套话 /);
+  assert.match(page.body, /<details class="edit"><summary>已处理的 2 个<\/summary>[^]*<b>退回的<\/b> <span class="tag bad">已退回<\/span>[^]*告诉作者的原因:不能问银行卡号/);
+  const decisions = [...page.body.matchAll(/name="id" value="[0-9-]*0(\d\d)"><input type="hidden" name="decision" value="([A-Z]+)"/g)].map(m => `${m[1]}${m[2]}`);
+  assert.deepEqual(decisions, ["84APPROVE", "84REJECT", "85REMOVE", "85KEEP", "86REMOVE", "87APPROVE"]);
+  const empty = await (await start({ kit: { templates: [], skills: [], shared: [], ownSkills: 0 } })).send("/kit");
+  assert.match(empty.body, /还没有模板。[^]*还没有技能。[^]*还没有人投稿。/);
 
   const template = { title: " 元气的搭子 ", summary: "爱聊吃的玩的", name: "阿橙", description: "精力充沛\r\n爱聊新鲜事", personality: "", example: "主人：周末干嘛\n阿橙：出门！", position: "20", enabled: "on" };
   calls.length = 0;
@@ -805,6 +819,16 @@ it("shows the templates and skills on offer, and saves one only when an Owner's 
   assert.equal((await send("/kit/skill/delete", { form: change({ id: id(83) }) })).status, 303);
   assert.equal((await send("/kit/template/delete", { form: change({ id: id(81) }) })).status, 303);
   assert.deepEqual(calls, [["skill_delete", id(83), "because"], ["template_delete", id(81), "because"]]);
+  calls.length = 0;
+  assert.equal((await send("/kit/shared", { form: change({ id: id(84), decision: "REJECT", back: "/kit" }) })).status, 303);
+  assert.equal((await send("/kit/shared", { form: change({ id: id(85), decision: "REMOVE" }) })).status, 303);
+  assert.deepEqual(calls, [["shared_skill_review", id(84), "REJECT", "because"], ["shared_skill_review", id(85), "REMOVE", "because"]]);
+  for (const bad of [{ id: "x", decision: "APPROVE" }, { id: id(84), decision: "DELETE" }, { id: id(84) }]) {
+    assert.equal((await send("/kit/shared", { form: change(bad as Record<string, string>) })).status, 409, JSON.stringify(bad));
+  }
+  assert.equal((await send("/kit/shared", { form: { id: id(85), decision: "REMOVE", reason: "r" } })).status, 409, "no tick, no change");
+  assert.equal(calls.length, 2, "nothing refused reaches the database");
+  assert.match((explain({ code: "55000", message: "skill is not in that state" }) as Error).message, /这次没有执行/);
   assert.equal((await send("/kit/skill/delete", { form: change({ id: "x" }) })).status, 409);
   assert.equal((await send("/kit/template/delete", { form: { id: id(81), reason: "r" } })).status, 409, "no tick, no change");
   assert.deepEqual([(explain({ code: "P0001", message: "skill not found" }) as Error).message, (explain({ code: "P0001", message: "template not found" }) as Error).message],

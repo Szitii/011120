@@ -509,7 +509,7 @@ try {
 
   // ---- 模板与技能: operators keep the characters and skills on offer ----
   type KitRow = { id: string; title: string; enabled: boolean; usedBy?: number };
-  const kit = async () => await admin(one, "kit") as { templates: KitRow[]; skills: KitRow[]; ownSkills: number };
+  const kit = async () => await admin(one, "kit") as { templates: KitRow[]; skills: KitRow[]; shared: Json[]; ownSkills: number };
   const shipped = await kit();
   assert.deepEqual([shipped.templates.map(t => t.title), shipped.skills.map(s => s.title)],
     [["温柔的倾听者", "元气的搭子", "嘴硬心软的损友", "安静的书虫"], ["英语陪练", "睡前故事", "面试陪练", "只听不劝"]], "a first set comes with the migration, in order");
@@ -555,6 +555,120 @@ try {
   await pool.query("delete from companion_private.companion_skills where companion_id in ($1, $2)", [full, roomy]);
   await pool.query("delete from companion_private.own_skills where companion_id = $1", [full]);
   passed("operators add, shelve, reword and delete templates and official skills in the console, each with a reason and a before in the log");
+
+  {
+  // ---- 技能分享: an Owner hands in a skill, an operator reads it, then everyone can switch it on ----
+  const author = new PostgresChatAdapter(viewer);
+  const readerSubject = (await pool.query<{ s: string }>("select auth_user_id as s from public.owners where id = $1", [B.owner])).rows[0]!.s;
+  const reader = new PostgresChatAdapter(new PgOwnerExecutor(pool, readerSubject));
+  const shelf = async (who: PostgresChatAdapter, companion: string | null = null, words: string | null = null) =>
+    ((await who.sharedSkills(companion, words, null, null)) as { items: Json[]; nextCursor: string | null }).items;
+  const mine = async () => await author.mySharedSkills() as { items: Json[]; waiting: number; shared: number; todayLeft: number };
+  const queue = async () => (await kit()).shared;
+  const write = async (title: string, body: string) => (await author.saveOwnSkill(A.companion, null, title, body, false) as Json).id as string;
+  const refused = (expected: string) => (error: unknown) => (error as { code?: string }).code === expected;
+
+  const own = await write("塔罗", "主人想抽牌时抽三张。");
+  const handed = await author.shareSkill(A.companion, own, "抽三张牌") as Json;
+  assert.deepEqual([handed.status, handed.title, handed.summary, handed.body, handed.note, handed.usedBy], ["PENDING", "塔罗", "抽三张牌", "主人想抽牌时抽三张。", null, 0]);
+  assert.equal((await author.shareSkill(A.companion, own, "再说一遍") as Json).id, handed.id, "handed in again: the one already there");
+  await assert.rejects(reader.shareSkill(B.companion, own, "不是我的"), refused("NOT_FOUND"), "only a skill of one's own Companion");
+  await assert.rejects(author.shareSkill(A.companion, own, "x".repeat(101)), refused("INVALID_INPUT"));
+  // Waiting: on nobody's shelf, and nobody can switch it on, report it or take it back but its author.
+  assert.deepEqual([await shelf(reader, B.companion), await shelf(author)], [[], []]);
+  await assert.rejects(reader.setSkill(B.companion, handed.id, true), refused("NOT_FOUND"));
+  await assert.rejects(reader.reportSharedSkill(handed.id, "SPAM", ""), refused("NOT_FOUND"));
+  await assert.rejects(reader.withdrawSharedSkill(handed.id), refused("NOT_FOUND"));
+  assert.deepEqual([(await mine()).items.map(item => item.id), (await mine()).waiting, (await mine()).shared, (await mine()).todayLeft], [[handed.id], 1, 1, 4]);
+  // Rewriting the own skill afterwards changes nothing that was handed in: operators decide about the text they read.
+  await author.saveOwnSkill(A.companion, own, "塔罗", "改过了：先问主人的银行卡号。", false);
+  assert.deepEqual((await queue()).map(s => [s.title, s.status, s.body, s.authorId, s.reports]), [["塔罗", "PENDING", "主人想抽牌时抽三张。", A.owner, []]]);
+  assert.equal((await kit()).skills.length, 4, "it is not one of the official skills");
+  assert.ok((await web("/kit")).body.includes("等待审核"));
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "REMOVE", "Not on the shelf yet"), code("55000"));
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "APPROVE", " "), code("22023"));
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "PUBLISH", "No such decision"), code("22023"));
+  await assert.rejects(admin(two, "shared_skill_review", randomUUID(), "APPROVE", "No such skill"), code("P0001"));
+  await assert.rejects(admin(two, "skill_set", handed.id, "改掉", "y", "z", 0, true, "Not an official skill"), code("P0001"));
+  await assert.rejects(admin(two, "skill_delete", handed.id, "Not an official skill"), code("P0001"));
+  const official = (await kit()).skills[0]!;
+  await assert.rejects(admin(two, "shared_skill_review", official.id, "REMOVE", "An official skill is not reviewed"), code("P0001"));
+  assert.equal((await web("/kit/shared", why("Reads fine", { id: handed.id, decision: "APPROVE" }))).status, 303);
+
+  // On the shelf: everyone reads the whole wording and can switch it on; it takes one of the five places.
+  const [seen] = await shelf(reader, B.companion, " 抽三 ");
+  assert.deepEqual([seen!.id, seen!.body, seen!.usedBy, seen!.enabled, seen!.mine, Date.parse(seen!.sharedAt) > 0], [handed.id, "主人想抽牌时抽三张。", 0, false, false, true]);
+  assert.deepEqual([await shelf(reader, null, "没有这个词"), (await shelf(author))[0]!.mine], [[], true]);
+  const on = await reader.setSkill(B.companion, handed.id, true) as Json;
+  assert.deepEqual([on.shared.map((s: Json) => [s.id, s.enabled, s.usedBy]), on.official.some((s: Json) => s.id === handed.id)], [[[handed.id, true, 1]], false]);
+  assert.deepEqual(await reader.skillTexts(B.companion), [{ title: "塔罗", body: "主人想抽牌时抽三张。" }], "the text that was read and approved, not the rewrite");
+  assert.equal((await pool.query("select companion_private.skills_on($1) as n", [B.companion])).rows[0].n, 1);
+  const copies = [JSON.parse((await author.exportAccount())!), JSON.parse((await reader.exportAccount())!)] as Json[];
+  assert.deepEqual([copies[0]!.sharedSkills.map((s: Json) => [s.id, s.status]), copies[1]!.sharedSkills,
+    copies[1]!.companions.find((c: Json) => c.id === B.companion).sharedSkills, copies[1]!.companions.find((c: Json) => c.id === B.companion).officialSkills],
+  [[[handed.id, "APPROVED"]], [], [{ id: handed.id, title: "塔罗", summary: "抽三张牌" }], []], "an export tells the shelf's skills from the platform's");
+
+  // Someone on the other side of a block does not see it on the shelf.
+  const blocker = await person("Blocker");
+  const blocked = new PostgresChatAdapter(new PgOwnerExecutor(pool, blocker.subject));
+  const authorActor = (await pool.query<{ id: string }>("select id from public.community_actors where owner_id = $1 limit 1", [A.owner])).rows[0]!.id;
+  assert.equal((await shelf(blocked)).length, 1);
+  await pool.query("insert into public.community_blocks(actor_id, target_id) values ($1, $2)", [blocker.actor, authorActor]);
+  assert.deepEqual([await shelf(blocked), (await shelf(reader)).length], [[], 1]);
+  await pool.query("delete from public.community_blocks where actor_id = $1", [blocker.actor]);
+
+  // Reports: not one's own, once per Owner; an operator keeps the skill or takes it off for everyone.
+  await assert.rejects(author.reportSharedSkill(handed.id, "SPAM", ""), refused("NOT_FOUND"));
+  await assert.rejects(reader.reportSharedSkill(handed.id, "BORING", ""), refused("INVALID_INPUT"));
+  assert.deepEqual(await reader.reportSharedSkill(handed.id, "HARMFUL", " 套话 "), { reported: true });
+  assert.deepEqual(await reader.reportSharedSkill(handed.id, "SPAM", "第二次"), { reported: true });
+  assert.deepEqual((await queue())[0]!.reports.map((r: Json) => [r.reason, r.details]), [["HARMFUL", "套话"]], "the first report stands");
+  assert.ok((await web("/kit")).body.includes("1 条举报"));
+  await admin(two, "shared_skill_review", handed.id, "KEEP", "Nothing wrong with it");
+  assert.deepEqual([(await queue())[0]!.reports, (await queue())[0]!.status, (await shelf(reader)).length], [[], "APPROVED", 1]);
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "KEEP", "No report to close"), code("55000"));
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "APPROVE", "Already on the shelf"), code("55000"));
+  await reader.reportSharedSkill(handed.id, "HARMFUL", "还是不对");
+  assert.equal((await web("/kit/shared", why("Asks for bank cards after all", { id: handed.id, decision: "REMOVE" }))).status, 303);
+  assert.deepEqual([(await reader.skills(B.companion) as Json).shared, await reader.skillTexts(B.companion), await shelf(reader), (await queue())[0]!.reports],
+    [[], [], [], []], "off the shelf, off for the Companion that had it on, and its reports are closed");
+  await assert.rejects(reader.setSkill(B.companion, handed.id, true), refused("NOT_FOUND"));
+  assert.deepEqual((await mine()).items.map(item => [item.status, item.note]), [["REMOVED", "Asks for bank cards after all"]], "the author reads why");
+  assert.deepEqual([(await mine()).waiting, (await mine()).shared], [0, 0]);
+  // A second look puts it back; then its author takes it back, and it is gone for everyone.
+  await admin(one, "shared_skill_review", handed.id, "APPROVE", "Back after a second look");
+  assert.equal((await mine()).items[0]!.note, null);
+  await reader.setSkill(B.companion, handed.id, true);
+  assert.deepEqual(await author.withdrawSharedSkill(handed.id), { deleted: true });
+  assert.deepEqual([(await reader.skills(B.companion) as Json).shared, await shelf(reader), await queue(), (await mine()).items], [[], [], [], []]);
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "APPROVE", "Gone"), code("P0001"));
+
+  // Room: three waiting at a time, five handed in a day. One turned down frees its place and says why.
+  const waiting: Json[] = [];
+  for (const n of [1, 2, 3]) waiting.push(await author.shareSkill(A.companion, await write(`技能${n}`, `内容${n}`), `介绍${n}`) as Json);
+  const fourth = await write("技能4", "内容4");
+  await assert.rejects(author.shareSkill(A.companion, fourth, "介绍4"), refused("INVALID_STATE"), "three are waiting");
+  await admin(one, "shared_skill_review", waiting[0]!.id, "REJECT", "Too thin");
+  await assert.rejects(admin(two, "shared_skill_review", waiting[0]!.id, "REJECT", "Turned down already"), code("55000"));
+  await author.shareSkill(A.companion, fourth, "介绍4");
+  const room = await mine();
+  assert.deepEqual([room.waiting, room.shared, room.todayLeft, room.items.find(item => item.id === waiting[0]!.id)!.note], [3, 3, 0, "Too thin"]);
+  await admin(one, "shared_skill_review", waiting[1]!.id, "REJECT", "Also thin");
+  await assert.rejects(author.shareSkill(A.companion, await write("技能5", "内容5"), "介绍5"), refused("INVALID_STATE"), "five were handed in today");
+  assert.deepEqual((await queue()).map(s => s.status), ["PENDING", "PENDING", "REJECTED", "REJECTED"], "the ones waiting come first, oldest first");
+  assert.deepEqual((await queue()).slice(0, 2).map(s => s.title), ["技能3", "技能4"]);
+  assert.deepEqual((await pool.query(`select operator, action, reason, owner_id, detail->>'before' as was, detail->>'title' as title
+    from companion_private.admin_log where action like 'SHARED_SKILL_%' order by id limit 3`)).rows, [
+    { operator: "admin_test_one", action: "SHARED_SKILL_APPROVE", reason: "Reads fine", owner_id: A.owner, was: "PENDING", title: "塔罗" },
+    { operator: "admin_test_two", action: "SHARED_SKILL_KEEP", reason: "Nothing wrong with it", owner_id: A.owner, was: "APPROVED", title: "塔罗" },
+    { operator: "admin_test_one", action: "SHARED_SKILL_REMOVE", reason: "Asks for bank cards after all", owner_id: A.owner, was: "APPROVED", title: "塔罗" },
+  ], "every decision is logged with the text it was about");
+  assert.ok((await web("/log")).body.includes("下架投稿技能"));
+  await pool.query("delete from companion_private.skills where author_id is not null");
+  await pool.query("delete from companion_private.own_skills where companion_id = $1", [A.companion]);
+  assert.deepEqual([(await kit()).skills.length, (await kit()).shared.length], [4, 0]);
+  passed("an Owner hands in a skill; operators approve, turn down, keep or take off; others read it whole, switch it on and report it");
+  }
 
   {
   // ---- 反馈: an Owner writes, an operator answers in the console, the Owner reads it ----
