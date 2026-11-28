@@ -1015,8 +1015,9 @@ paths:
         request with this account is refused, its sign-in is banned and every signed-in device is
         signed out, nobody sees the person or their Companions in the community any more, nothing
         runs for it (no greeting, reminder, diary or post), and the keys the Owner stored (their own
-        model keys, their agent's address and token, agent keys) are destroyed. The e-mail address
-        stays taken, and there is no way back from the app.
+        model keys, their agent's address and token, agent keys) are destroyed. There is no way back
+        from the app. The e-mail address is free again: signing up with it starts a new, empty
+        account, and nothing of the closed one comes with it.
 
         The caller must have signed in with their password within the last 10 minutes: a token
         that was only refreshed does not count, and neither does any other way of signing in. Otherwise 403
