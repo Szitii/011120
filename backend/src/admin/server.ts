@@ -298,10 +298,13 @@ export function createAdminServer(options: AdminServerOptions): Server {
         await db.call("skill_set", ...shared, text("body"), ...tail);
       }
     } else if (path === "/kit/shared") {
-      if (!ROUTES.uuid.test(form.id ?? "") || !["APPROVE", "REJECT", "REMOVE", "KEEP"].includes(form.decision ?? "")) {
+      // KEEP closes the reports this operator was shown: `seen` is the moment of the newest one on their page.
+      const seen = form.decision === "KEEP" ? form.seen ?? "" : null;
+      if (!ROUTES.uuid.test(form.id ?? "") || !["APPROVE", "REJECT", "REMOVE", "KEEP"].includes(form.decision ?? "")
+        || (seen !== null && !Number.isFinite(Date.parse(seen)))) {
         throw new AdminRefusal("没有选中要处理的投稿。");
       }
-      await db.call("shared_skill_review", form.id, form.decision, reason);
+      await db.call("shared_skill_review", form.id, form.decision, reason, seen);
     } else if (path === "/kit/template/delete" || path === "/kit/skill/delete") {
       if (!ROUTES.uuid.test(form.id ?? "")) throw new AdminRefusal("没有选中要删除的那一个。");
       await db.call(path === "/kit/template/delete" ? "template_delete" : "skill_delete", form.id, reason);

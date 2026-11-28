@@ -753,9 +753,9 @@ select public.test_assert(
   and not has_function_privilege('anon', 'public.shared_skill_list(uuid,text,timestamptz,uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.shared_skill_submit(uuid,uuid,text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.shared_skill_submit(uuid,uuid,text)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('authenticated', 'companion_admin.shared_skill_review(uuid,text,text)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('companion_api', 'companion_admin.shared_skill_review(uuid,text,text)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('companion_admin', 'companion_admin.shared_skill_review(uuid,text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('companion_api', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_admin', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
   and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
     where has_table_privilege(r.role, 'companion_private.skill_reports', 'SELECT') or has_table_privilege(r.role, 'companion_private.skill_reports', 'INSERT')
       or has_table_privilege(r.role, 'companion_private.skill_reports', 'UPDATE') or has_table_privilege(r.role, 'companion_private.skill_reports', 'DELETE')),

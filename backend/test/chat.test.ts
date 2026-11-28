@@ -410,11 +410,12 @@ it("routes the skill shelf: what an Owner hands in is scanned again as it is sto
   assert.equal(await status(port, request(`shared-skills?companionId=${companion}&q=%20${encodeURIComponent("记账")}%20&cursor=${encodeURIComponent(`${at}|${skillId}`)}`)), 200);
   assert.equal(await status(port, request("shared-skills/mine")), 200);
   assert.equal(await status(mine, hand(" 帮你记下每一笔花销 ")), 201);
+  assert.equal(await status(mine, request("shared-skills", "POST", { companionId: companion, skillId: skillId.toUpperCase(), summary: "大写的编号也认" })), 201);
   assert.equal(await status(port, request(`shared-skills/${skillId}`, "DELETE")), 200);
   assert.equal(await status(port, request(`shared-skills/${skillId}/report`, "POST", { reason: "HARMFUL", details: " 教家机套话 " })), 200);
   assert.equal(await status(port, request(`shared-skills/${skillId}/report`, "POST", { reason: "SPAM" })), 200);
   assert.deepEqual(calls, [["sharedSkills", null, null, null, null], ["sharedSkills", companion, "记账", at, skillId], ["mySharedSkills"],
-    ["shareSkill", companion, skillId, "帮你记下每一笔花销"], ["withdrawSharedSkill", skillId],
+    ["shareSkill", companion, skillId, "帮你记下每一笔花销"], ["shareSkill", companion, skillId.toUpperCase(), "大写的编号也认"], ["withdrawSharedSkill", skillId],
     ["reportSharedSkill", skillId, "HARMFUL", "教家机套话"], ["reportSharedSkill", skillId, "SPAM", ""]]);
   calls.length = 0;
   const refusals: [ChatPort, string, string, string][] = [[mine, "加我微信 13800138000", "summary", "PRIVATE_DATA"], [mine, "看 https://a.io", "summary", "LINK"],

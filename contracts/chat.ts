@@ -344,7 +344,7 @@ export interface SharedSkill {
   summary: string;
   /** What the model is told, 1 to 600 characters. */
   body: string;
-  /** The author's own community identity; null when they have none or their account is closed or suspended. */
+  /** The author's own community identity; null when they have none. */
   author: CommunityActor | null;
   /** How many Companions have it on. */
   usedBy: number;
@@ -359,7 +359,8 @@ export interface SharedSkill {
 /**
  * GET /v0/shared-skills?companionId=&q=&cursor=: the shelf, newest first, 20 a page. `q` (up to 40
  * characters) keeps those whose title or introduction contains the words. Skills of someone the
- * Owner blocked, or who blocked the Owner, are left out.
+ * Owner blocked, or who blocked the Owner, are left out. So are the skills of an author whose
+ * account is suspended or closed: they are off the shelf and off for every Companion meanwhile.
  */
 export interface SharedSkillPage {
   items: SharedSkill[];

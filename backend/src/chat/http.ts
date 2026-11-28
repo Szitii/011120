@@ -535,7 +535,8 @@ export async function handleChatRequest(
       const sent = body(request, ["companionId", "skillId", "summary"]);
       const companionId = id(sent.companionId), skillId = id(sent.skillId), summary = line(sent.summary, 100);
       // What goes on the shelf is the skill as it is stored now, so that is what is scanned (again), with the new line.
-      const own = ((await port.skills(companionId)) as { own?: { id?: unknown; title?: unknown; body?: unknown }[] }).own?.find(skill => skill.id === skillId);
+      const own = ((await port.skills(companionId)) as { own?: { id?: unknown; title?: unknown; body?: unknown }[] }).own
+        ?.find(skill => typeof skill.id === "string" && skill.id.toLowerCase() === skillId.toLowerCase());
       if (own === undefined || typeof own.title !== "string" || typeof own.body !== "string") return notFound();
       const told = skillLine(own.title, own.body);
       if (told === null) return invalid();

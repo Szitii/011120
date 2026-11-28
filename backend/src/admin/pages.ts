@@ -1066,7 +1066,7 @@ export interface Kit {
   skills: { id: string; title: string; summary: string; body: string; position: number; enabled: boolean; updatedAt: string; usedBy: number }[];
   /** What Owners handed in for the shelf (migration 0084): the ones waiting first, then the reported ones, then the rest. */
   shared: { id: string; title: string; summary: string; body: string; status: "PENDING" | "APPROVED" | "REJECTED" | "REMOVED";
-    note: string | null; authorId: string; author: string | null; createdAt: string; reviewedAt: string | null; usedBy: number;
+    note: string | null; authorId: string; author: string | null; authorStatus: string; createdAt: string; reviewedAt: string | null; usedBy: number;
     reports: { reason: string; details: string; at: string }[] }[];
   ownSkills: number;
 }
@@ -1092,10 +1092,11 @@ const SHARED_STATUS: Readonly<Record<string, string>> = { PENDING: "等待审核
 /** One skill an Owner handed in, with what can be decided about it now. */
 const sharedCard = (zone: string, s: Kit["shared"][number]): Safe => {
   const decide = (decision: string, label: string, danger = false) =>
-    act("/kit/shared", label, "/kit", html`${hidden("id", s.id)}${hidden("decision", decision)}`, danger);
+    act("/kit/shared", label, "/kit", html`${hidden("id", s.id)}${hidden("decision", decision)}${decision === "KEEP" ? hidden("seen", s.reports.at(-1)?.at ?? "") : ""}`, danger);
   return html`<div class="card">
 <p><b>${s.title}</b> <span class="tag ${s.status === "APPROVED" ? "good" : s.status === "PENDING" ? "" : "bad"}">${word(SHARED_STATUS, s.status)}</span>
 ${s.reports.length === 0 ? "" : html`<span class="tag bad">${count(s.reports.length)} 条举报</span>`}
+${s.authorStatus === "ACTIVE" ? "" : html`<span class="tag bad">作者账号${s.authorStatus === "SUSPENDED" ? "被封禁" : "已注销"},技能暂不显示</span>`}
 <span class="muted">作者 ${ownerLink(s.authorId, s.author)} · 投稿于 ${time(zone, s.createdAt)}${s.reviewedAt === null ? "" : ` · 处理于 ${time(zone, s.reviewedAt)}`} · ${count(s.usedBy)} 个家机打开了</span></p>
 <p class="muted">${s.summary}</p><pre>${s.body}</pre>
 ${s.note === null ? "" : html`<p class="muted">告诉作者的原因:${s.note}</p>`}
@@ -1134,7 +1135,8 @@ ${edit("新增一个技能", act("/kit/skill", "新增", back, kitFields("skill"
 ${panel(html`主人投稿的技能 <span class="muted">${count(waiting.length)} 个等待审核 · ${count(reported.length)} 个被举报</span>`, html`
 <p class="muted">主人可以把自己写的技能投稿到技能广场。<b>通过之前别人看不到</b>;通过以后所有主人都能看到全文,并给自己的家机打开。
 技能是写给模型的话,会进到别人家机的提示词里,所以请整段读完再通过:有没有让家机套取隐私、引导花钱、冒充平台或推翻规则的话。
-这里不能改投稿的文字:不合适就退回,作者改完会重新投稿。退回和下架时填的原因会原样给作者看;下架会让所有打开它的家机立刻关掉它。</p>
+这里不能改投稿的文字:不合适就退回,作者改完会重新投稿。退回和下架时填的原因会原样给作者看;下架会让所有打开它的家机立刻关掉它。
+“不处理举报”只关掉这一页上显示出来的举报,之后新来的会留着。作者被封禁或注销期间,他的技能不在广场上、也不发给任何家机;解封后自动恢复。</p>
 ${kit.shared.length === 0 ? html`<p class="muted">还没有人投稿。</p>` : html`${waiting.map(s => sharedCard(zone, s))}${reported.map(s => sharedCard(zone, s))}
 ${rest.length === 0 ? "" : html`<details class="edit"><summary>已处理的 ${count(rest.length)} 个</summary>${rest.map(s => sharedCard(zone, s))}</details>`}`}`)}`, done);
 }

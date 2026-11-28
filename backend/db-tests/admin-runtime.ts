@@ -608,6 +608,17 @@ try {
     copies[1]!.companions.find((c: Json) => c.id === B.companion).sharedSkills, copies[1]!.companions.find((c: Json) => c.id === B.companion).officialSkills],
   [[[handed.id, "APPROVED"]], [], [{ id: handed.id, title: "塔罗", summary: "抽三张牌" }], []], "an export tells the shelf's skills from the platform's");
 
+  // While its author is suspended it is off the shelf and told to nobody; nothing is lost, and it is back when the suspension is lifted.
+  await pool.query("update public.owners set status = 'SUSPENDED' where id = $1", [A.owner]);
+  assert.deepEqual([await shelf(reader, B.companion), (await reader.skills(B.companion) as Json).shared, await reader.skillTexts(B.companion),
+    (await pool.query("select companion_private.skills_on($1) as n", [B.companion])).rows[0].n, (await queue())[0]!.authorStatus], [[], [], [], 0, "SUSPENDED"]);
+  await assert.rejects(reader.setSkill(B.companion, handed.id, false), refused("NOT_FOUND"));
+  await assert.rejects(reader.reportSharedSkill(handed.id, "SPAM", ""), refused("NOT_FOUND"));
+  assert.ok((await web("/kit")).body.includes("作者账号被封禁,技能暂不显示"));
+  await pool.query("update public.owners set status = 'ACTIVE' where id = $1", [A.owner]);
+  assert.deepEqual([(await shelf(reader, B.companion)).map(s => [s.id, s.enabled]), await reader.skillTexts(B.companion)],
+    [[[handed.id, true]], [{ title: "塔罗", body: "主人想抽牌时抽三张。" }]]);
+
   // Someone on the other side of a block does not see it on the shelf.
   const blocker = await person("Blocker");
   const blocked = new PostgresChatAdapter(new PgOwnerExecutor(pool, blocker.subject));
@@ -624,9 +635,16 @@ try {
   assert.deepEqual(await reader.reportSharedSkill(handed.id, "SPAM", "第二次"), { reported: true });
   assert.deepEqual((await queue())[0]!.reports.map((r: Json) => [r.reason, r.details]), [["HARMFUL", "套话"]], "the first report stands");
   assert.ok((await web("/kit")).body.includes("1 条举报"));
-  await admin(two, "shared_skill_review", handed.id, "KEEP", "Nothing wrong with it");
-  assert.deepEqual([(await queue())[0]!.reports, (await queue())[0]!.status, (await shelf(reader)).length], [[], "APPROVED", 1]);
-  await assert.rejects(admin(two, "shared_skill_review", handed.id, "KEEP", "No report to close"), code("55000"));
+  // KEEP closes the reports the operator was shown, and no report that came in after they opened the page.
+  const shown = (await queue())[0]!.reports.at(-1)!.at as string;
+  const late = await person("LateReporter");
+  assert.deepEqual(await new PostgresChatAdapter(new PgOwnerExecutor(pool, late.subject)).reportSharedSkill(handed.id, "PRIVACY", "后来的"), { reported: true });
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "KEEP", "Which reports?"), code("22023"));
+  await admin(two, "shared_skill_review", handed.id, "KEEP", "Nothing wrong with it", shown);
+  assert.deepEqual([(await queue())[0]!.reports.map((r: Json) => r.details), (await queue())[0]!.status, (await shelf(reader)).length], [["后来的"], "APPROVED", 1]);
+  await assert.rejects(admin(two, "shared_skill_review", handed.id, "KEEP", "Nothing new before that moment", shown), code("55000"));
+  assert.equal((await web("/kit/shared", why("Read the late one too", { id: handed.id, decision: "KEEP", seen: (await queue())[0]!.reports[0]!.at }))).status, 303);
+  assert.deepEqual((await queue())[0]!.reports, []);
   await assert.rejects(admin(two, "shared_skill_review", handed.id, "APPROVE", "Already on the shelf"), code("55000"));
   await reader.reportSharedSkill(handed.id, "HARMFUL", "还是不对");
   assert.equal((await web("/kit/shared", why("Asks for bank cards after all", { id: handed.id, decision: "REMOVE" }))).status, 303);
@@ -657,12 +675,16 @@ try {
   await assert.rejects(author.shareSkill(A.companion, await write("技能5", "内容5"), "介绍5"), refused("INVALID_STATE"), "five were handed in today");
   assert.deepEqual((await queue()).map(s => s.status), ["PENDING", "PENDING", "REJECTED", "REJECTED"], "the ones waiting come first, oldest first");
   assert.deepEqual((await queue()).slice(0, 2).map(s => s.title), ["技能3", "技能4"]);
-  assert.deepEqual((await pool.query(`select operator, action, reason, owner_id, detail->>'before' as was, detail->>'title' as title
-    from companion_private.admin_log where action like 'SHARED_SKILL_%' order by id limit 3`)).rows, [
-    { operator: "admin_test_one", action: "SHARED_SKILL_APPROVE", reason: "Reads fine", owner_id: A.owner, was: "PENDING", title: "塔罗" },
-    { operator: "admin_test_two", action: "SHARED_SKILL_KEEP", reason: "Nothing wrong with it", owner_id: A.owner, was: "APPROVED", title: "塔罗" },
-    { operator: "admin_test_one", action: "SHARED_SKILL_REMOVE", reason: "Asks for bank cards after all", owner_id: A.owner, was: "APPROVED", title: "塔罗" },
-  ], "every decision is logged with the text it was about");
+  assert.deepEqual((await pool.query(`select operator, action, reason, owner_id, detail->>'before' as was, detail->>'title' as title, detail->'closed' as closed
+    from companion_private.admin_log where action like 'SHARED_SKILL_%' order by id limit 4`)).rows, [
+    { operator: "admin_test_one", action: "SHARED_SKILL_APPROVE", reason: "Reads fine", owner_id: A.owner, was: "PENDING", title: "塔罗", closed: [] },
+    { operator: "admin_test_two", action: "SHARED_SKILL_KEEP", reason: "Nothing wrong with it", owner_id: A.owner, was: "APPROVED", title: "塔罗",
+      closed: [{ reason: "HARMFUL", details: "套话" }] },
+    { operator: "admin_test_one", action: "SHARED_SKILL_KEEP", reason: "Read the late one too", owner_id: A.owner, was: "APPROVED", title: "塔罗",
+      closed: [{ reason: "PRIVACY", details: "后来的" }] },
+    { operator: "admin_test_one", action: "SHARED_SKILL_REMOVE", reason: "Asks for bank cards after all", owner_id: A.owner, was: "APPROVED", title: "塔罗",
+      closed: [{ reason: "HARMFUL", details: "还是不对" }] },
+  ], "every decision is logged with the text it was about and the reports it closed");
   assert.ok((await web("/log")).body.includes("下架投稿技能"));
   await pool.query("delete from companion_private.skills where author_id is not null");
   await pool.query("delete from companion_private.own_skills where companion_id = $1", [A.companion]);

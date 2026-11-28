@@ -21,6 +21,11 @@ begin;
 -- Therefore: an operator reads every one before it is shown; a reader sees the whole wording
 -- before switching it on; anyone can report one; and an operator takes it off for everyone at once.
 -- Limits per Owner: 3 waiting, 20 waiting or on the shelf, 5 handed in a day, 20 reports a day.
+--
+-- While its author is suspended, and after its author closed the account, a shared skill is off the
+-- shelf and told to nobody, like everything else of that account. Nothing is deleted: when a
+-- suspension is lifted it is back, also for the Companions that had it on. (One of them may have
+-- filled its five places meanwhile and then has six switched on; five are told, see skill_texts.)
 
 alter table companion_private.skills
   add column author_id uuid references public.owners(id) on delete cascade,
@@ -46,15 +51,23 @@ alter table companion_private.skill_reports enable row level security;
 alter table companion_private.skill_reports force row level security;
 revoke all on companion_private.skill_reports from public, anon, authenticated;
 
+-- Whether a skill can be switched on and is told to the model: on offer, approved, and, for one an
+-- Owner handed in, its author's account in good standing.
+create function companion_private.skill_live(s companion_private.skills)
+returns boolean language sql stable security definer set search_path='' as $$
+  select s.enabled and s.status = 'APPROVED'
+    and (s.author_id is null or exists(select 1 from public.owners w where w.id = s.author_id and w.status = 'ACTIVE'))
+$$;
+
 -- ---------- for the Owner ----------
 
 -- A skill on the shelf as a reader sees it. author: the person's community identity, or null when
--- they have none or their account is not in good standing. enabled: on for p_companion.
+-- they have none. enabled: on for p_companion.
 create function companion_private.shared_skill_json(s companion_private.skills, p_viewer uuid, p_companion uuid)
 returns jsonb language sql stable security definer set search_path='' as $$
   select jsonb_build_object('id', s.id, 'title', s.title, 'summary', s.summary, 'body', s.body,
-    'author', (select companion_private.community_actor_json(a.id) from public.community_actors a join public.owners w on w.id = a.owner_id
-      where a.owner_id = s.author_id and a.kind = 'HUMAN' and w.status = 'ACTIVE'),
+    'author', (select companion_private.community_actor_json(a.id) from public.community_actors a
+      where a.owner_id = s.author_id and a.kind = 'HUMAN'),
     'usedBy', (select count(*) from companion_private.companion_skills k where k.skill_id = s.id),
     'enabled', p_companion is not null
       and exists(select 1 from companion_private.companion_skills k where k.companion_id = p_companion and k.skill_id = s.id),
@@ -75,7 +88,7 @@ $$;
 create or replace function companion_private.skills_on(p_companion uuid)
 returns integer language sql stable security definer set search_path='' as $$
   select (select count(*) from companion_private.companion_skills k join companion_private.skills s on s.id = k.skill_id
-      where k.companion_id = p_companion and s.enabled and s.status = 'APPROVED')::integer
+      where k.companion_id = p_companion and companion_private.skill_live(s))::integer
     + (select count(*) from companion_private.own_skills o where o.companion_id = p_companion and o.enabled)::integer
 $$;
 
@@ -92,7 +105,7 @@ begin
       from companion_private.skills s where s.enabled and s.author_id is null), '[]'),
     'shared', coalesce((select jsonb_agg(companion_private.shared_skill_json(s, o, c) order by k.created_at, s.id)
       from companion_private.companion_skills k join companion_private.skills s on s.id = k.skill_id
-      where k.companion_id = c and s.author_id is not null and s.enabled and s.status = 'APPROVED'), '[]'),
+      where k.companion_id = c and s.author_id is not null and companion_private.skill_live(s)), '[]'),
     'own', coalesce((select jsonb_agg(companion_private.own_skill_json(w) order by w.created_at, w.id)
       from companion_private.own_skills w where w.companion_id = c), '[]'));
 end $$;
@@ -104,9 +117,10 @@ declare c uuid := companion_private.locked_companion(p_companion); -- first, so 
   o uuid := companion_private.chat_owner();
 begin
   if p_enabled is null then raise exception using errcode='22023', message='invalid skill'; end if;
-  if not exists(select 1 from companion_private.skills where id = p_skill and enabled and status = 'APPROVED') then
-    raise exception using errcode='P0001', message='skill not found';
-  end if;
+  -- Locked against being taken off the shelf or taken back at this moment: a switch-on that waited
+  -- for that sees it gone, instead of leaving a row behind for a skill nobody can see.
+  perform 1 from companion_private.skills s where s.id = p_skill and companion_private.skill_live(s) for share;
+  if not found then raise exception using errcode='P0001', message='skill not found'; end if;
   if p_enabled then
     if not exists(select 1 from companion_private.companion_skills where companion_id = c and skill_id = p_skill) then
       if companion_private.skills_on(c) >= 5 then raise exception using errcode='55000', message='skill limit reached'; end if;
@@ -131,7 +145,7 @@ begin
       select case when s.author_id is null then 0 else 1 end as rank,
           case when s.author_id is null then s.position::numeric else extract(epoch from k.created_at) end as place, s.id, s.title, s.body
         from companion_private.companion_skills k join companion_private.skills s on s.id = k.skill_id
-        where k.companion_id = c and s.enabled and s.status = 'APPROVED'
+        where k.companion_id = c and companion_private.skill_live(s)
       union all
       select 2, extract(epoch from w.created_at), w.id, w.title, w.body from companion_private.own_skills w
         where w.companion_id = c and w.enabled) x
@@ -153,7 +167,7 @@ begin
   if p_companion is not null then c := companion_private.owned_companion(p_companion); end if;
   select coalesce(jsonb_agg(companion_private.shared_skill_json(q.s, o, c) order by (q.s).reviewed_at desc, (q.s).id desc), '[]') into items
   from (select s from companion_private.skills s
-    where s.author_id is not null and s.status = 'APPROVED' and s.enabled
+    where s.author_id is not null and companion_private.skill_live(s)
       and (v_query = '' or position(v_query in lower(s.title || E'\n' || s.summary)) > 0)
       and (p_before_at is null or (s.reviewed_at, s.id) < (p_before_at, p_before_id))
       and not exists(select 1 from public.community_blocks b
@@ -225,7 +239,8 @@ begin
 end $$;
 
 -- Reports someone else's skill on the shelf to the operators. A second report of the same skill
--- by the same Owner changes nothing.
+-- by the same Owner changes nothing. 20 a day, counted in the audit log (so closing reports does
+-- not give the day's allowance back).
 create function public.shared_skill_report(p_skill uuid, p_reason text, p_details text default '')
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare o uuid := companion_private.chat_owner(); v_details text := btrim(coalesce(p_details, ''), E' \t\r\n');
@@ -233,14 +248,21 @@ begin
   if p_reason is null or p_reason not in ('SPAM', 'HARASSMENT', 'HARMFUL', 'PRIVACY', 'OTHER') or char_length(v_details) > 1000 then
     raise exception using errcode='22023', message='invalid report';
   end if;
-  if not exists(select 1 from companion_private.skills where id = p_skill and author_id <> o and status = 'APPROVED') then
-    raise exception using errcode='P0001', message='skill not found';
+  -- One at a time per Owner, so the count below holds; and the skill locked against being taken off
+  -- at this moment, so no report is left on a skill that is no longer on the shelf.
+  perform pg_advisory_xact_lock(hashtextextended('skill_report:' || o::text, 0));
+  perform 1 from companion_private.skills s where s.id = p_skill and s.author_id <> o and companion_private.skill_live(s) for share;
+  if not found then raise exception using errcode='P0001', message='skill not found'; end if;
+  if exists(select 1 from companion_private.skill_reports where skill_id = p_skill and owner_id = o) then
+    return jsonb_build_object('reported', true);
   end if;
-  if (select count(*) from companion_private.skill_reports where owner_id = o and created_at > now() - interval '1 day') >= 20 then
+  if (select count(*) from public.audit_events where actor_id = o and action = 'SKILL_REPORT'
+      and occurred_at > now() - interval '1 day') >= 20 then
     raise exception using errcode='55000', message='report limit reached';
   end if;
-  insert into companion_private.skill_reports(skill_id, owner_id, reason, details) values (p_skill, o, p_reason, v_details)
-    on conflict (skill_id, owner_id) do nothing;
+  insert into companion_private.skill_reports(skill_id, owner_id, reason, details) values (p_skill, o, p_reason, v_details);
+  insert into public.audit_events(owner_id, actor_type, actor_id, action, target_type, target_id)
+    values (o, 'OWNER', o, 'SKILL_REPORT', 'SKILL', p_skill);
   return jsonb_build_object('reported', true);
 end $$;
 
@@ -299,7 +321,7 @@ begin
         -- The skills from the shelf it has on, of those still there.
         'sharedSkills', coalesce((select jsonb_agg(jsonb_build_object('id', k.id, 'title', k.title, 'summary', k.summary) order by x.created_at, k.id)
           from companion_private.companion_skills x join companion_private.skills k on k.id = x.skill_id
-          where x.companion_id = c.id and k.enabled and k.author_id is not null and k.status = 'APPROVED'), '[]'),
+          where x.companion_id = c.id and k.author_id is not null and companion_private.skill_live(k)), '[]'),
         'reminders', coalesce((select jsonb_agg(companion_private.chat_reminder_json(r) order by r.due_at, r.id)
           from companion_private.chat_reminders r where r.companion_id = c.id and r.status <> 'CANCELLED'), '[]'),
         'diary', coalesce((select jsonb_agg(companion_private.diary_entry_json(e) order by e.created_at, e.id)
@@ -365,6 +387,7 @@ returns jsonb language sql stable security definer set search_path='' as $$
       from companion_private.skills s where s.author_id is null), '[]'),
     'shared', coalesce((select jsonb_agg(jsonb_build_object('id', s.id, 'title', s.title, 'summary', s.summary, 'body', s.body,
         'status', s.status, 'note', s.review_note, 'authorId', s.author_id,
+        'authorStatus', (select w.status from public.owners w where w.id = s.author_id),
         'author', (select companion_private.community_actor_json(a.id)->>'displayName' from public.community_actors a
           where a.owner_id = s.author_id and a.kind = 'HUMAN'),
         'createdAt', s.created_at, 'reviewedAt', s.reviewed_at,
@@ -415,44 +438,52 @@ end $$;
 -- REMOVE it is also what the author reads.
 --   APPROVE  one that waits, was turned down or was taken off: onto the shelf.
 --   REJECT   one that waits: turned down.
---   REMOVE   one on the shelf: off, and off for every Companion that had it on.
---   KEEP     one on the shelf that was reported: it stays, the reports are closed.
-create function companion_admin.shared_skill_review(p_id uuid, p_decision text, p_reason text)
+--   REMOVE   one on the shelf: off, and off for every Companion that had it on; its reports are closed.
+--   KEEP     one on the shelf that was reported: it stays, and the reports the operator was shown are
+--            closed: those made up to p_seen, the moment of the newest one on their page. One that
+--            came in after that stays open.
+-- The log keeps the reports that were closed, word for word.
+create function companion_admin.shared_skill_review(p_id uuid, p_decision text, p_reason text, p_seen timestamptz default null)
 returns void language plpgsql security definer set search_path='' as $$
-declare s companion_private.skills%rowtype; v_reason text := companion_private.admin_reason(p_reason); v_used bigint; v_reports bigint;
+declare s companion_private.skills%rowtype; v_reason text := companion_private.admin_reason(p_reason); v_used bigint; v_closed jsonb := '[]';
 begin
+  if p_decision is null or p_decision not in ('APPROVE', 'REJECT', 'REMOVE', 'KEEP') or (p_decision = 'KEEP' and p_seen is null) then
+    raise exception using errcode='22023', message='invalid decision';
+  end if;
   select * into s from companion_private.skills where id = p_id and author_id is not null for update;
   if not found then raise exception using errcode='P0001', message='skill not found'; end if;
   select count(*) into v_used from companion_private.companion_skills where skill_id = p_id;
-  select count(*) into v_reports from companion_private.skill_reports where skill_id = p_id;
   if p_decision = 'APPROVE' and s.status <> 'APPROVED' then
     update companion_private.skills set status = 'APPROVED', review_note = null, reviewed_at = now() where id = p_id;
   elsif p_decision = 'REJECT' and s.status = 'PENDING' then
     update companion_private.skills set status = 'REJECTED', review_note = v_reason, reviewed_at = now() where id = p_id;
-  elsif p_decision = 'REMOVE' and s.status = 'APPROVED' then
-    update companion_private.skills set status = 'REMOVED', review_note = v_reason, reviewed_at = now() where id = p_id;
-    delete from companion_private.companion_skills where skill_id = p_id;
-    delete from companion_private.skill_reports where skill_id = p_id;
-  elsif p_decision = 'KEEP' and s.status = 'APPROVED' and v_reports > 0 then
-    delete from companion_private.skill_reports where skill_id = p_id;
-  elsif p_decision in ('APPROVE', 'REJECT', 'REMOVE', 'KEEP') then
-    raise exception using errcode='55000', message='skill is not in that state';
+  elsif p_decision in ('REMOVE', 'KEEP') and s.status = 'APPROVED' then
+    with gone as (delete from companion_private.skill_reports r
+        where r.skill_id = p_id and (p_decision = 'REMOVE' or r.created_at <= p_seen) returning r.reason, r.details, r.created_at)
+      select coalesce(jsonb_agg(jsonb_build_object('reason', g.reason, 'details', g.details) order by g.created_at), '[]') into v_closed from gone g;
+    if p_decision = 'REMOVE' then
+      update companion_private.skills set status = 'REMOVED', review_note = v_reason, reviewed_at = now() where id = p_id;
+      delete from companion_private.companion_skills where skill_id = p_id;
+    elsif jsonb_array_length(v_closed) = 0 then
+      raise exception using errcode='55000', message='skill is not in that state';
+    end if;
   else
-    raise exception using errcode='22023', message='invalid decision';
+    raise exception using errcode='55000', message='skill is not in that state';
   end if;
   perform companion_private.admin_note('SHARED_SKILL_' || p_decision, 'SKILL', p_id::text, s.author_id, p_reason,
-    jsonb_build_object('title', s.title, 'summary', s.summary, 'body', s.body, 'before', s.status, 'usedBy', v_used, 'reports', v_reports));
+    jsonb_build_object('title', s.title, 'summary', s.summary, 'body', s.body, 'before', s.status, 'usedBy', v_used, 'closed', v_closed));
 end $$;
 
-revoke all on function companion_private.shared_skill_json(companion_private.skills, uuid, uuid),
+revoke all on function companion_private.skill_live(companion_private.skills),
+  companion_private.shared_skill_json(companion_private.skills, uuid, uuid),
   companion_private.shared_skill_mine_json(companion_private.skills),
   public.shared_skill_list(uuid, text, timestamptz, uuid), public.shared_skill_mine(), public.shared_skill_submit(uuid, uuid, text),
   public.shared_skill_withdraw(uuid), public.shared_skill_report(uuid, text, text),
-  companion_admin.shared_skill_review(uuid, text, text) from public, anon, authenticated;
+  companion_admin.shared_skill_review(uuid, text, text, timestamptz) from public, anon, authenticated;
 grant execute on function public.shared_skill_list(uuid, text, timestamptz, uuid), public.shared_skill_mine(),
   public.shared_skill_withdraw(uuid), public.shared_skill_report(uuid, text, text) to authenticated;
 grant execute on function public.shared_skill_submit(uuid, uuid, text) to companion_api;
-grant execute on function companion_admin.shared_skill_review(uuid, text, text) to companion_admin;
+grant execute on function companion_admin.shared_skill_review(uuid, text, text, timestamptz) to companion_admin;
 
 insert into companion_private.schema_migrations(name) values ('202611280084_skill_sharing');
 

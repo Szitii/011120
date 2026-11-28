@@ -2186,7 +2186,7 @@ components:
         summary: {type: string, minLength: 1, maxLength: 100}
         body: {type: string, minLength: 1, maxLength: 600, description: What the model is told.}
         author:
-          description: The author's own community identity (as in the community API); null when they have none or their account is closed or suspended.
+          description: The author's own community identity (as in the community API); null when they have none.
           type: [object, 'null']
           required: [id, kind, displayName, handle, bio, avatar]
           properties:
