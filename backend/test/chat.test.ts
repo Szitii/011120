@@ -788,14 +788,17 @@ it("checks an Owner's reply rules and runs them under a time limit", () => {
   // A pattern that would run forever on this text is cut off, and the text goes on unchanged to the next rule.
   const slow = { pattern: "(a+)+$", flags: "g", replacement: "" };
   let started = performance.now();
-  assert.equal(one(`${"a".repeat(40)}!`, [slow, { pattern: "!", flags: "g", replacement: "?" }], 80), `${"a".repeat(40)}?`);
-  assert.ok(performance.now() - started < 1000, "within its time limit");
+  assert.equal(one(`${"a".repeat(40)}!`, [slow, { pattern: "!", flags: "g", replacement: "?" }], 2000), `${"a".repeat(40)}?`);
+  assert.ok(performance.now() - started < 1000, "stopped by its own limit, long before the time of the reply is up");
   // All the rules of a reply share one limit, however many rules and lines there are.
   started = performance.now();
   const lines = Array.from({ length: 12 }, () => `${"a".repeat(40)}!`);
   assert.deepEqual(applyRules(lines, Array(10).fill(slow), 60), lines);
   assert.ok(performance.now() - started < 1000, `ten slow rules over twelve lines took ${Math.round(performance.now() - started)} ms`);
-  assert.equal(one(`${"a".repeat(40)}!`, [slow, slow, { pattern: "!", replacement: "?" }], 40), `${"a".repeat(40)}!`, "no time left: the rules that are left are not run");
+  // The second slow rule gets what the first left of the reply's time and is stopped by it: that ends the run.
+  // (Not a limit of exactly two rules' time: then a timer firing a moment early would decide the outcome.)
+  assert.equal(one(`${"a".repeat(40)}!`, [slow, slow, { pattern: "!", replacement: "?" }], 30), `${"a".repeat(40)}!`, "no time left: the rules that are left are not run");
+  assert.equal(one("a!", [{ pattern: "!", replacement: "?" }], 0), "a!", "nor is any rule when there is no time at all");
   // A rule may not blow a reply up, and is stopped while it tries (not after the text was built).
   assert.equal(one("ab", [{ pattern: "(?:)", flags: "g", replacement: "x".repeat(200) }]), `${"x".repeat(200)}a${"x".repeat(200)}b${"x".repeat(200)}`);
   assert.equal(one("a".repeat(2000), [{ pattern: "a", flags: "g", replacement: "bbb" }]), "a".repeat(2000), "more than 4000 characters added: skipped");
@@ -808,9 +811,8 @@ it("checks an Owner's reply rules and runs them under a time limit", () => {
   const cut = [{ pattern: "a", replacement: "" }];
   assert.deepEqual(applyRules(Array(13).fill("a"), cut), Array(13).fill("a"));
   assert.equal(one("a".repeat(6001), cut), "a".repeat(6001));
-  started = performance.now();
-  applyRules(Array.from({ length: 12_000 }, () => `${"a".repeat(40)}!`), Array(10).fill(slow));
-  assert.ok(performance.now() - started < 100, "what an agent sent back at full size is not run through the rules");
+  const full = Array.from({ length: 12_000 }, () => `${"a".repeat(40)}!`);
+  assert.deepEqual(applyRules(full, cut), full, "what an agent sent back at full size is not run through the rules");
 });
 
 it("runs one background writer per chat and never throws from kick", async () => {
