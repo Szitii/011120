@@ -1,10 +1,11 @@
 {
   "defaultModel": "deepseek-flash",
   "decisionModel": "deepseek-flash",
+  "visionModel": "deepseek-flash",
   "providers": {
     "anthropic": { "kind": "anthropic", "apiKeyEnv": "ANTHROPIC_API_KEY" },
     "openai": { "kind": "openai-compatible", "baseUrl": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY" },
-    "deepseek": { "kind": "openai-compatible", "baseUrl": "https://api.deepseek.com", "apiKeyEnv": "DEEPSEEK_API_KEY" },
+    "deepseek": { "kind": "openai-compatible", "baseUrl": "https://api.deepseek.com", "apiKeyEnv": "DEEPSEEK_API_KEY", "backupApiKeyEnv": "DEEPSEEK_BACKUP_API_KEY" },
     "qwen": { "kind": "openai-compatible", "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1", "apiKeyEnv": "DASHSCOPE_API_KEY" },
     "moonshot": { "kind": "openai-compatible", "baseUrl": "https://api.moonshot.cn/v1", "apiKeyEnv": "MOONSHOT_API_KEY" },
     "zhipu": { "kind": "openai-compatible", "baseUrl": "https://open.bigmodel.cn/api/paas/v4", "apiKeyEnv": "ZHIPU_API_KEY" },
@@ -14,7 +15,7 @@
     {
       "id": "deepseek-flash", "name": "DeepSeek Flash", "provider": "deepseek", "model": "deepseek-flash",
       "tier": "ECONOMY", "inputPerMTok": 0.3, "outputPerMTok": 1.2, "enabled": true,
-      "options": { "thinking": "disabled", "webTools": "deepseek" }
+      "options": { "thinking": "disabled", "webTools": "deepseek", "vision": true }
     },
     {
       "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "provider": "deepseek", "model": "deepseek-v4-pro",

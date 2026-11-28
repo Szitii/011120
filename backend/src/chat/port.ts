@@ -1,4 +1,4 @@
-import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatImageInput, ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type { Clip } from "./voices.ts";
@@ -24,6 +24,8 @@ export interface ChatClaim {
     companionId: string | null; body: string | null; action: CompanionAction | null; mentions: string[]; sentAt: string;
     /** A voice message (the body is what was said). */
     voice?: boolean;
+    /** The pictures the Owner sent with it; null or left out: none. */
+    images?: HistoryImage[] | null;
   }[];
   /** The Owner's time zone (an IANA name); left out by an older database: Asia/Shanghai. */
   timeZone?: string;
@@ -51,6 +53,17 @@ export type Reach = { kind: "GREETING" } | { kind: "REMINDER"; note: string; due
 export interface ReminderChange { set?: { at: string; note: string }; cancel?: string[] }
 
 /** chat_reach_begin: a turn was queued in `chatId`, or why none was. */
+/**
+ * A picture in the conversation as a turn gets it. `description`: what the picture-reading model
+ * made of it, null while nobody has looked (after `tries` attempts: 2 and still null, it cannot be
+ * seen). `attached`: set by the API server for a model that takes pictures: this one is handed to
+ * it as picture number n.
+ */
+export interface HistoryImage { path: string; description: string | null; tries: number; attached?: number }
+
+/** A picture's bytes, as a model request carries them. */
+export interface Picture { mime: "image/jpeg" | "image/png" | "image/webp"; base64: string }
+
 export type ReachStart = { status: "QUEUED"; chatId: string } | { status: "OFF" | "BUSY" | "NOT_DUE" };
 
 export type ChatOutcome = "SENT" | "PASSED" | "BLOCKED" | "ERROR" | "UNAVAILABLE" | "DISABLED" | "QUOTA";
@@ -68,6 +81,11 @@ export interface ChatReservation {
   outputTokens: number;
   costMinor: number;
   traceId: string;
+  /**
+   * Which of the turn's calls of this purpose it is, when there is more than one: left out for the
+   * reply itself, "see:<file uuid>" for the description of a picture. Each step is booked once.
+   */
+  step?: string;
 }
 
 /** RESERVED: go ahead. STALE: the turn moved on. DISABLED: switched off. QUOTA: today's budget is used up. */
@@ -153,7 +171,10 @@ export interface ChatPort {
   open(companionIds: string[], title: string | null, keyHash: string): Promise<unknown>;
   list(): Promise<unknown>;
   read(chatId: string, beforeAt: string | null, beforeId: string | null): Promise<unknown>;
-  send(chatId: string, body: string, mentions: string[], keyHash: string): Promise<unknown>;
+  /** `images`: pictures the Owner uploaded, to go with the message (then `body` may be empty). */
+  send(chatId: string, body: string, mentions: string[], keyHash: string, images?: readonly ChatImageInput[]): Promise<unknown>;
+  /** Server only: what the picture-reading model made of a chat picture, or null when it could not be read this time. */
+  imageSeen(path: string, description: string | null): Promise<unknown>;
   retry(chatId: string, messageId: string): Promise<unknown>;
   /** A home-room action, recorded in the one-to-one chat with the Companion. */
   act(companionId: string, action: CompanionAction, keyHash: string): Promise<unknown>;
@@ -208,6 +229,15 @@ export interface ChatPort {
   deleteOwnSkill(companionId: string, skillId: string): Promise<unknown>;
   /** Server only: the skills that are on, as the model is told them ([{ title, body }], 5 at most). */
   skillTexts(companionId: string): Promise<unknown>;
+  /** The shelf of shared skills, newest first ({ items, nextCursor }). `companionId`: say for each whether that Companion has it on. */
+  sharedSkills(companionId: string | null, query: string | null, beforeAt: string | null, beforeId: string | null): Promise<unknown>;
+  /** What the Owner handed in for the shelf, and the room left ({ items, waiting, maxWaiting, shared, maxShared, todayLeft }). */
+  mySharedSkills(): Promise<unknown>;
+  /** Server only (the texts are scanned first): hands in a copy of the Companion's own skill with one line of introduction. */
+  shareSkill(companionId: string, skillId: string, summary: string): Promise<unknown>;
+  /** The author takes a shared skill back; the Companions that had it on lose it. */
+  withdrawSharedSkill(skillId: string): Promise<unknown>;
+  reportSharedSkill(skillId: string, reason: string, details: string): Promise<unknown>;
   /** Every world book entry of the Companion, in the order they were written ({ items }). */
   worldEntries(companionId: string): Promise<unknown>;
   /** Server only (the texts are scanned first): a new entry (`entryId` null) or that entry rewritten. */
@@ -238,6 +268,8 @@ export interface ChatPort {
    */
   finish(replyId: string, claimId: string, outcome: ChatOutcome, bodies: string[] | null, clips?: readonly (Clip | null)[],
     action?: CompanionAction, reminders?: ReminderChange): Promise<boolean>;
+  /** Server only: a reply that just failed did so because the Owner's own key or agent gave no usable answer, and why. */
+  failNote(replyId: string, reason: ConnectionFailure): Promise<unknown>;
   /** Server only: queue a turn of the Companion's own (a reminder that is due, or writing first) if one is due. */
   reachBegin(companionId: string): Promise<ReachStart>;
   /** The reminders the Companion still has to deliver, soonest first ({ items }). */

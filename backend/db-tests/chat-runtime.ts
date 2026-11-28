@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import type { PoolClient } from "pg";
 import { createMobileDevHttpServer } from "../src/dev/mobile-http-server.ts";
 import { createPgPool, PgOwnerExecutor } from "../src/persistence/postgres/index.ts";
 import { PostgresChatAdapter } from "../src/chat/postgres.ts";
-import { ChatReplies, devChatModel } from "../src/chat/replies.ts";
+import { ChatReplies, ConnectionFailed, devChatModel } from "../src/chat/replies.ts";
 import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import { BackgroundScheduler } from "../src/chat/background-scheduler.ts";
@@ -212,10 +213,20 @@ try {
   assert.equal(await new ChatReplies({ reply: async () => { throw new Error("model down"); } }).drain(fresh.id, portA), 1);
   let read = await latest();
   const failed = read.items[0]!;
-  assert.deepEqual([failed.status, failed.failure, failed.retryable, failed.body], ["FAILED", "ERROR", true, null]);
+  assert.deepEqual([failed.status, failed.failure, failed.retryable, failed.body, failed.connectionFailure], ["FAILED", "ERROR", true, null, null]);
   assert.deepEqual(await portA.retry(fresh.id, failed.id), { typing: [], recording: [], replying: true });
+  // The Owner's own key or agent gave no usable answer: the failed reply says so, for its Owner alone, until it is tried again.
+  assert.equal(await new ChatReplies({ reply: async () => { throw new ConnectionFailed("NO_BALANCE"); } }).drain(fresh.id, portA), 1);
+  assert.deepEqual([(await latest()).items[0]!.id, (await latest()).items[0]!.failure, (await latest()).items[0]!.connectionFailure], [failed.id, "ERROR", "NO_BALANCE"]);
+  assert.deepEqual([await new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject)).failNote(failed.id, "AUTH_FAILED"), (await latest()).items[0]!.connectionFailure],
+    [{ noted: false }, "NO_BALANCE"], "not another Owner's reply");
+  await assert.rejects(portA.failNote(failed.id, "BROKE" as "ERROR"), { code: "INVALID_INPUT" });
+  assert.deepEqual(await portA.retry(fresh.id, failed.id), { typing: [], recording: [], replying: true });
+  assert.equal((await pool.query("select failure_detail from companion_private.chat_messages where id = $1", [failed.id])).rows[0]!.failure_detail, null,
+    "a retry starts clean");
   await new ChatReplies(devChatModel).drain(fresh.id, portA);
   read = await latest();
+  assert.deepEqual([await portA.failNote(failed.id, "AUTH_FAILED"), read.items[1]!.connectionFailure], [{ noted: false }, null], "nothing to note on a reply that was sent");
   assert.deepEqual(read.items.slice(0, 2).map(m => [m.status, m.body]),
     [["SENT", "收到：「会失败的一句」"], ["SENT", "（开发环境假回复）我是SecondCompanion"]]);
   assert.equal(read.items[1]!.id, failed.id);
@@ -846,6 +857,141 @@ try {
   passed("reply rules: kept with the settings, run in order over each message, refused when they cannot be used");
 
   {
+  // ---- 聊天里发图片 (migration 0086). The Storage service is not here: a row in storage.objects stands for an
+  // uploaded file, and the rules on that table are the real ones. ----
+  const asUser = async <T>(subject: string, run: (c: PoolClient) => Promise<T>): Promise<T> => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin"); await c.query("set local role authenticated");
+      await c.query("select set_config('request.jwt.claim.sub',$1,true)", [subject]);
+      const result = await run(c);
+      await c.query("commit");
+      return result;
+    } catch (error) { await c.query("rollback"); throw error; } finally { c.release(); }
+  };
+  const file = (type = "jpg") => `chat/${randomUUID()}.${type}`;
+  const upload = (subject: string, name: string) => asUser(subject, c =>
+    c.query("insert into storage.objects(bucket_id, name, owner_id) values ('media', $1, $2)", [name, subject]));
+  const canRead = (subject: string, name: string) => asUser(subject, async c =>
+    (await c.query("select 1 from storage.objects where bucket_id = 'media' and name = $1", [name])).rowCount === 1);
+  const remove = (subject: string, name: string) => asUser(subject, async c =>
+    (await c.query("delete from storage.objects where bucket_id = 'media' and name = $1", [name])).rowCount);
+  const refusedUpload = (e: unknown) => (e as { code?: string }).code === "42501";
+  const [noodles, cat, note, theirs, unsent] = [file(), file("png"), file("webp"), file(), file()];
+  for (const [subject, name] of [[A.subject, noodles], [A.subject, cat], [A.subject, note], [B.subject, theirs], [A.subject, unsent]] as const) await upload(subject, name);
+  for (const bad of ["chat/holiday.jpg", `chat/${randomUUID()}`, `chat/${randomUUID()}.gif`, `chat/${randomUUID()}.JPG`, `chat/mine/${randomUUID()}.jpg`]) {
+    await assert.rejects(upload(A.subject, bad), refusedUpload, bad);
+  }
+  assert.deepEqual([await canRead(A.subject, noodles), await canRead(B.subject, noodles), await canRead(B.subject, theirs)], [true, false, true],
+    "a chat picture is read by the Owner who uploaded it and nobody else");
+
+  const pictured = (await call<Chat>(0, "chats", "POST", { companionIds: [A.companion] })).data.id;
+  const sent = await call<ChatSendResult>(0, `chats/${pictured}/messages`, "POST", { body: "看我做的面", images: [{ path: noodles, width: 800, height: 600 }, { path: cat }] }, "picture-key-00000001");
+  assert.equal(sent.status, 201, JSON.stringify(sent.data));
+  assert.deepEqual([sent.data.message.body, sent.data.message.images], ["看我做的面",
+    [{ path: noodles, width: 800, height: 600, seen: null }, { path: cat, width: null, height: null, seen: null }]]);
+  assert.equal((await call<ChatSendResult>(0, `chats/${pictured}/messages`, "POST", { body: "看我做的面", images: [{ path: noodles, width: 800, height: 600 }, { path: cat }] },
+    "picture-key-00000001")).data.message.id, sent.data.message.id, "sent again with the same key: the same message");
+  assert.equal((await call(0, `chats/${pictured}/messages`, "POST", { body: "看我做的面", images: [{ path: cat }, { path: noodles }] }, "picture-key-00000001")).status, 409,
+    "the same key with other pictures is a conflict");
+  await settle(pictured);
+  // What may not be sent: a file that is not there, someone else's, one that is on a message already, the same one twice.
+  for (const [why, images] of [["not uploaded", [{ path: file() }]], ["another Owner's file", [{ path: theirs }]], ["on a message already", [{ path: noodles }]],
+    ["twice", [{ path: note }, { path: note }]]] as const) {
+    assert.equal((await call(0, `chats/${pictured}/messages`, "POST", { body: "x", images })).status, 400, why);
+  }
+  assert.deepEqual([await remove(A.subject, noodles), await remove(A.subject, unsent), await remove(B.subject, unsent)], [0, 1, 0],
+    "a picture on a message stays; one that was not sent after all can be deleted, by its Owner");
+
+  // Pictures alone: the body says so. The Companion's turn gets each picture with what is known of it.
+  // (Sent through the port from here on: the dev host would answer a message sent over HTTP before this test can.)
+  const alone = await portA.send(pictured, "", [], keyHash(), [{ path: note }]) as ChatSendResult;
+  assert.deepEqual([alone.message.body, alone.message.images!.length], ["[图片]", 1]);
+  const claimed = await portA.claim(pictured) as ChatClaim;
+  assert.deepEqual(claimed.history.filter(line => line.images).map(line => [line.body, line.images]), [
+    ["看我做的面", [{ path: noodles, description: null, tries: 0 }, { path: cat, description: null, tries: 0 }]],
+    ["[图片]", [{ path: note, description: null, tries: 0 }]]]);
+  assert.equal(claimed.history.find(line => line.companionId !== null)!.images, null, "a message without pictures has none");
+  await portA.finish(claimed.replyId, claimed.claimId, "SENT", ["看到啦"]);
+  // What the picture-reading model made of them is kept: for the Owner alone, once, and two failed tries mean it cannot be seen.
+  const portB = new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject));
+  assert.deepEqual([await portB.imageSeen(noodles, "别人写的"), await portA.imageSeen(noodles, " 一碗牛肉面 "), await portA.imageSeen(noodles, "再写一遍")],
+    [{ noted: false }, { noted: true }, { noted: false }]);
+  assert.deepEqual([await portA.imageSeen(cat, null), await portA.imageSeen(cat, null), await portA.imageSeen(file(), "没有这张")], [{ noted: true }, { noted: true }, { noted: false }]);
+  await assert.rejects(portA.imageSeen(note, "长".repeat(1001)), { code: "INVALID_INPUT" });
+  await assert.rejects(portA.imageSeen(note, "  "), { code: "INVALID_INPUT" });
+  const shown = (await settle(pictured)).items.filter(item => item.images!.length > 0).reverse();
+  assert.deepEqual(shown.map(item => item.images!.map(i => i.seen)), [[true, false], [null]], "seen, cannot be seen, not looked at yet");
+  await settle(pictured);
+  await portA.send(pictured, "好看吗", [], keyHash());
+  const next = await portA.claim(pictured) as ChatClaim;
+  assert.deepEqual(next.history.flatMap(line => line.images ?? []), [{ path: noodles, description: "一碗牛肉面", tries: 1 }, { path: cat, description: null, tries: 2 },
+    { path: note, description: null, tries: 0 }]);
+  await portA.finish(next.replyId, next.claimId, "SENT", ["好看"]);
+
+  // A whole turn: the picture is fetched as the Owner, described (booked with the turn), kept, and the reply model reads it.
+  const read: unknown[] = [];
+  const looking = new ChatReplies({
+    reply: async (turn, context) => { read.push([turn.history.flatMap(line => line.images ?? []).at(-1), (context.pictures ?? []).map(p => p.path)]); return { messages: ["是便签"] }; },
+    see: async job => ({ description: `一张便签（${job.said}）` }),
+  });
+  await settle(pictured);
+  await portA.send(pictured, "这张呢", [], keyHash());
+  const fetched: string[] = [];
+  assert.equal(await looking.drain(pictured, portA, async path => { fetched.push(path); return { mime: "image/webp", base64: "UklGRg==" }; }), 1);
+  assert.deepEqual([fetched, read], [[note], [[{ path: note, description: "一张便签（[图片]）", tries: 1 }, [note]]]],
+    "only what is new or recent is fetched: not the one nobody could read, not the ones from further back");
+  assert.deepEqual((await settle(pictured)).items.filter(item => item.images!.length > 0).map(item => item.images!.map(i => i.seen)), [[true], [true, false]]);
+
+  // Through a platform model and the real ledger: two new pictures and the reply are three calls of one turn, each booked
+  // and settled on its own (they used to share one ledger key, and the second was refused).
+  const [first, second2] = [file(), file("png")];
+  for (const name of [first, second2]) await upload(A.subject, name);
+  await settle(pictured);
+  await portA.send(pictured, "再看两张", [], keyHash(), [{ path: first }, { path: second2 }]);
+  const eyes = new ChatCatalog({ defaultModel: "eyes", decisionModel: null, visionModel: "eyes", providers: { seep: { kind: "openai-compatible", baseUrl: "https://see.example/v1", apiKeyEnv: "SEE_KEY" } },
+    models: [{ id: "eyes", name: "Eyes", provider: "seep", model: "see-1", tier: "ECONOMY", inputPerMTok: 1, outputPerMTok: 1, enabled: true, options: { vision: true } }] }, { SEE_KEY: "k" });
+  const asked: number[] = [];
+  const seeing = new PlatformChatModel(eyes, async (_model, request) => {
+    asked.push(request.images?.length ?? 0);
+    return { text: request.system.includes("看不到图片的朋友") ? "一张照片" : "两张都看到了", inputTokens: 1200, outputTokens: 12, refused: false, cutOff: false };
+  });
+  assert.equal(await new ChatReplies(seeing).drain(pictured, portA, async () => ({ mime: "image/jpeg", base64: "/9j/" })), 1);
+  const told = (await settle(pictured)).items;
+  assert.deepEqual([told[0]!.status, told[0]!.body, told[1]!.images!.map(i => i.seen)], ["SENT", "两张都看到了", [true, true]]);
+  assert.equal(asked.filter(n => n === 1).length, 2, "each new picture described by itself");
+  assert.ok(asked.at(-1)! >= 2, "and the reply model handed the recent pictures themselves");
+  const booked = await pool.query<{ s: string }>(`select string_agg(e.status, '>' order by e.sequence) as s from public.compute_transactions x
+      join public.compute_ledger_entries e on e.transaction_id = x.id where x.provider_id = 'seep' group by x.id`);
+  assert.deepEqual(booked.rows.map(row => row.s), ["RESERVED>STARTED>SUCCEEDED", "RESERVED>STARTED>SUCCEEDED", "RESERVED>STARTED>SUCCEEDED"]);
+
+  // The day's pictures: 30 by default, counted per Owner; past it nothing is sent.
+  await pool.query("update companion_private.chat_quota set daily_images = 6");
+  const spare = file();
+  await upload(A.subject, spare);
+  const over = await call<{ code: string }>(0, `chats/${pictured}/messages`, "POST", { images: [{ path: spare }, { path: unsent.replace(/\.jpg$/, ".png") }] });
+  assert.equal(over.status, 400, "a file that is not there is refused before anything is counted");
+  const extra = file("png");
+  await upload(A.subject, extra);
+  const full = await call<{ code: string }>(0, `chats/${pictured}/messages`, "POST", { images: [{ path: spare }, { path: extra }] });
+  assert.deepEqual([full.status, full.data.code], [429, "IMAGE_LIMIT"]);
+  assert.equal((await call(0, `chats/${pictured}/messages`, "POST", { images: [{ path: spare }] })).status, 201, "the sixth of six");
+  await settle(pictured);
+  await pool.query("update companion_private.chat_quota set daily_images = 30");
+  // Uploading has its own brakes: 40 files that are on no message.
+  await pool.query(`insert into storage.objects(bucket_id, name, owner_id) select 'media', 'chat/' || gen_random_uuid() || '.jpg', $1 from generate_series(1, 39)`, [A.subject]);
+  await assert.rejects(upload(A.subject, file()), refusedUpload, "40 unsent pictures are kept at most");
+  assert.equal((await pool.query("delete from storage.objects where bucket_id = 'media' and name like 'chat/%' and owner_id = $1 and not exists(select 1 from companion_private.chat_images i where i.object_name = name)", [A.subject])).rowCount, 40);
+  await upload(A.subject, file());
+  // When a message goes (its chat or its Companion was deleted), its pictures go off it; the files are then the Owner's to delete.
+  assert.equal(await remove(A.subject, note), 0);
+  await pool.query("delete from companion_private.chat_messages where id in (select message_id from companion_private.chat_images)");
+  assert.deepEqual([(await pool.query("select count(*)::int as n from companion_private.chat_images")).rows[0]!.n, await remove(A.subject, note), await remove(A.subject, noodles)], [0, 1, 1]);
+  await pool.query("delete from storage.objects where bucket_id = 'media' and name like 'chat/%'");
+  passed("pictures in chat: own uploads only, 1 to 4 with a message, described once for the Companion's turn, a daily limit, read by their Owner alone");
+  }
+
+  {
   // ---- 数据导出: everything of the Owner's in one document, and nothing that is not theirs to have ----
   // Planted where it could leak from: another Owner's chat and post, and this Owner's own key and token.
   const theirChat = randomUUID();
@@ -886,6 +1032,7 @@ try {
   assert.deepEqual([mine.officialSkills, Object.keys(mine.agentKeys.at(-1)!).sort()],
     [[{ id: official.id, title: official.title, summary: official.summary }], ["active", "companionId", "createdAt", "expiresAt", "id", "lastUsedAt", "name", "scopes"]],
     "an official skill by name, an agent key without what stands for its token");
+  assert.deepEqual([copy.sharedSkills, mine.sharedSkills], [[], []], "nothing handed in for the shelf, nothing from it switched on");
   const shown = (await pool.query<{ n: number; voiced: number }>(`select count(*)::int as n, count(a.message_id)::int as voiced
     from companion_private.chat_messages m left join companion_private.chat_audio a on a.message_id = m.id
     where m.chat_id = $1 and m.status = 'SENT'`, [mine.chat!.id])).rows[0]!;

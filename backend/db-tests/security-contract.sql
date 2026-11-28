@@ -688,9 +688,9 @@ select public.test_assert(
 select public.test_assert(
   not has_function_privilege('authenticated', 'public.chat_claim(uuid)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text,jsonb)'::regprocedure, 'EXECUTE')
-  and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_send(uuid,text,uuid[],text,jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_finish(uuid,uuid,text,text[],jsonb,text,jsonb)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.chat_send(uuid,text,uuid[],text,jsonb)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('anon', 'public.chat_act(uuid,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_voice_left()'::regprocedure, 'EXECUTE')
@@ -743,6 +743,43 @@ select public.test_assert(
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
   'templates, skills and the world book are reachable only through functions, each by the role it is for'
 );
+-- Chat pictures: what was seen in one is noted by the API server alone; the table is reachable only through functions.
+select public.test_assert(
+  has_function_privilege('companion_api', 'public.chat_image_seen(text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_image_seen(text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_image_seen(text,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.media_is_chat(text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.media_chat_unused(text)'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.chat_images', 'SELECT') or has_table_privilege(r.role, 'companion_private.chat_images', 'INSERT')
+      or has_table_privilege(r.role, 'companion_private.chat_images', 'UPDATE') or has_table_privilege(r.role, 'companion_private.chat_images', 'DELETE')),
+  'chat pictures are described by the API server alone and reachable only through functions'
+);
+-- Why a reply through the Owner's own key failed is noted by the API server alone.
+select public.test_assert(
+  has_function_privilege('companion_api', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE'),
+  'only the API server notes why an Owner''s own key or agent failed'
+);
+-- Shared skills: Owners read the shelf, take back and report; handing one in is the API server's
+-- (it scans the texts first); deciding about one is the operators'.
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.shared_skill_list(uuid,text,timestamptz,uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.shared_skill_mine()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.shared_skill_withdraw(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.shared_skill_report(uuid,text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.shared_skill_list(uuid,text,timestamptz,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.shared_skill_submit(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.shared_skill_submit(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('companion_api', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_admin', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.skill_reports', 'SELECT') or has_table_privilege(r.role, 'companion_private.skill_reports', 'INSERT')
+      or has_table_privilege(r.role, 'companion_private.skill_reports', 'UPDATE') or has_table_privilege(r.role, 'companion_private.skill_reports', 'DELETE')),
+  'the skill shelf is reachable only through functions, each by the role it is for'
+);
 -- The export: a signed-in Owner asks for their own copy; the piece that reads a chat's messages by
 -- id is nobody's to call.
 select public.test_assert(
@@ -790,9 +827,9 @@ select public.test_assert(
   'the admin log cannot be edited or deleted'
 );
 select public.test_assert(
-  not has_function_privilege('authenticated', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  not has_function_privilege('authenticated', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text,text)'::regprocedure, 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.chat_settle(uuid,bigint,bigint,bigint,boolean)'::regprocedure, 'EXECUTE')
-  and has_function_privilege('companion_api', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.chat_reserve(uuid,uuid,text,text,text,text,bigint,bigint,bigint,text,text)'::regprocedure, 'EXECUTE')
   and has_function_privilege('companion_api', 'public.chat_settle(uuid,bigint,bigint,bigint,boolean)'::regprocedure, 'EXECUTE')
   and has_function_privilege('authenticated', 'public.chat_models_enabled(text[],text[])'::regprocedure, 'EXECUTE'),
   'chat model calls are booked and settled only by the API server'
