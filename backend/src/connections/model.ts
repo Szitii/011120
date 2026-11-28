@@ -14,8 +14,8 @@ import { diaryPrompt, memoryPrompt, parseMemories, parsePost, parseReply, postPr
 import { memoriesOf, skillsOf, textsOf, worldOf } from "../chat/platform.ts";
 import { readCompletion, type ModelResult } from "../chat/providers.ts";
 import type { ChatClaim, ChatPort, DiaryJob, MemoryJob, PostJob } from "../chat/port.ts";
-import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer } from "../chat/replies.ts";
-import type { ConnectionInput, ConnectionTest } from "../../../contracts/chat.ts";
+import { ConnectionFailed, type Answer, type ChatModel, type DiaryAnswer, type MemoryAnswer, type PostAnswer } from "../chat/replies.ts";
+import type { ConnectionFailure, ConnectionInput, ConnectionTest } from "../../../contracts/chat.ts";
 import { BlockedAddressError, checkUrl, createPostJson, type PostJson } from "./guard.ts";
 import type { SecretBox } from "./secret-box.ts";
 
@@ -86,11 +86,18 @@ const ask = (post: PostJson, connection: Connection, secret: string, messages: M
   timeoutMs: number) => post(endpoint(connection), secret ? { authorization: `Bearer ${secret}` } : {},
   { ...(connection.model ? { model: connection.model } : {}), messages, max_tokens: maxTokens, stream: false }, { signal, timeoutMs });
 
+/** What an HTTP error from the Owner's provider or agent means for the Owner. */
+const failureOf = (status: number): ConnectionFailure => status === 401 || status === 403 ? "AUTH_FAILED" : status === 402 ? "NO_BALANCE"
+  : status === 429 ? "RATE_LIMITED" : status === 404 ? "NOT_FOUND" : status >= 500 ? "UNREACHABLE" : "ERROR";
+
+/** One call through the Owner's key or agent. No usable answer: ConnectionFailed, with the reason the Owner is told. */
 async function complete(post: PostJson, connection: Connection, secret: string, messages: Message[], maxTokens: number,
   signal: AbortSignal): Promise<ModelResult> {
-  const answer = await ask(post, connection, secret, messages, maxTokens, signal, CALL_TIMEOUT_MS);
-  if (answer.status < 200 || answer.status > 299) throw new Error(`The connection answered HTTP ${answer.status}.`);
-  if (answer.body === undefined) throw new Error("The connection did not answer in JSON.");
+  const answer = await ask(post, connection, secret, messages, maxTokens, signal, CALL_TIMEOUT_MS).catch((error: unknown) => {
+    throw new ConnectionFailed(error instanceof BlockedAddressError ? "BLOCKED_ADDRESS" : "UNREACHABLE");
+  });
+  if (answer.status < 200 || answer.status > 299) throw new ConnectionFailed(failureOf(answer.status));
+  if (answer.body === undefined) throw new ConnectionFailed("BAD_ANSWER");
   return readCompletion(answer.body);
 }
 
@@ -146,6 +153,8 @@ export class ConnectedChatModel implements ChatModel {
     const result = await complete(this.#post, stored, secret, messages, REPLY_TOKENS, context.signal);
     if (result.refused) return { refused: true };
     if (result.cutOff) throw new Error("the reply was cut off");
+    // JSON, but with no reply in it (another format, or an error the service sent with a 200): the same as no usable answer.
+    if (result.text.trim().length === 0) throw new ConnectionFailed("BAD_ANSWER");
     return parseReply(result.text, turn.companion.displayName);
   }
 

@@ -743,6 +743,31 @@ select public.test_assert(
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
   'templates, skills and the world book are reachable only through functions, each by the role it is for'
 );
+-- Why a reply through the Owner's own key failed is noted by the API server alone.
+select public.test_assert(
+  has_function_privilege('companion_api', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.chat_fail_note(uuid,text)'::regprocedure, 'EXECUTE'),
+  'only the API server notes why an Owner''s own key or agent failed'
+);
+-- Shared skills: Owners read the shelf, take back and report; handing one in is the API server's
+-- (it scans the texts first); deciding about one is the operators'.
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.shared_skill_list(uuid,text,timestamptz,uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.shared_skill_mine()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.shared_skill_withdraw(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.shared_skill_report(uuid,text,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.shared_skill_list(uuid,text,timestamptz,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.shared_skill_submit(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_api', 'public.shared_skill_submit(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('companion_api', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_admin', 'companion_admin.shared_skill_review(uuid,text,text,timestamptz)'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, 'companion_private.skill_reports', 'SELECT') or has_table_privilege(r.role, 'companion_private.skill_reports', 'INSERT')
+      or has_table_privilege(r.role, 'companion_private.skill_reports', 'UPDATE') or has_table_privilege(r.role, 'companion_private.skill_reports', 'DELETE')),
+  'the skill shelf is reachable only through functions, each by the role it is for'
+);
 -- The export: a signed-in Owner asks for their own copy; the piece that reads a chat's messages by
 -- id is nobody's to call.
 select public.test_assert(

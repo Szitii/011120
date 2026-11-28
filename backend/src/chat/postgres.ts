@@ -1,5 +1,5 @@
 import { PostgresPersistenceError, persistenceError, type SqlExecutor } from "../persistence/postgres/types.ts";
-import type { ChatSettings, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
+import type { ChatSettings, ConnectionFailure, DiaryEntry, DiarySettings } from "../../../contracts/chat.ts";
 import type { CompanionAction } from "../../../contracts/companion-actions.ts";
 import type { Connection } from "../connections/model.ts";
 import type {
@@ -147,6 +147,26 @@ export class PostgresChatAdapter implements ChatPort {
     return payload;
   }
 
+  sharedSkills(companionId: string | null, query: string | null, beforeAt: string | null, beforeId: string | null): Promise<unknown> {
+    return this.#object("select public.shared_skill_list($1,$2,$3,$4) as payload", [companionId, query, beforeAt, beforeId]);
+  }
+
+  mySharedSkills(): Promise<unknown> {
+    return this.#object("select public.shared_skill_mine() as payload", []);
+  }
+
+  shareSkill(companionId: string, skillId: string, summary: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_submit($1,$2,$3) as payload", [companionId, skillId, summary]);
+  }
+
+  withdrawSharedSkill(skillId: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_withdraw($1) as payload", [skillId]);
+  }
+
+  reportSharedSkill(skillId: string, reason: string, details: string): Promise<unknown> {
+    return this.#object("select public.shared_skill_report($1,$2,$3) as payload", [skillId, reason, details]);
+  }
+
   worldEntries(companionId: string): Promise<unknown> {
     return this.#object("select public.world_list($1) as payload", [companionId]);
   }
@@ -212,6 +232,10 @@ export class PostgresChatAdapter implements ChatPort {
     const payload = await this.#object("select public.chat_finish($1,$2,$3,$4::text[],$5::jsonb,$6,$7::jsonb) as payload",
       [replyId, claimId, outcome, bodies, audio, action ?? null, reminders === undefined ? null : JSON.stringify(reminders)]);
     return (payload as { accepted?: unknown }).accepted === true;
+  }
+
+  failNote(replyId: string, reason: ConnectionFailure): Promise<unknown> {
+    return this.#object("select public.chat_fail_note($1,$2) as payload", [replyId, reason]);
   }
 
   async reachBegin(companionId: string): Promise<ReachStart> {

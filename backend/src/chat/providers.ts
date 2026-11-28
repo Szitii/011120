@@ -33,6 +33,18 @@ export interface ModelResult {
    * ran for this answer, or REFUSED when it would not take the tool and the answer was made without.
    */
   readonly web?: number | "REFUSED";
+  /** The provider's first key could not make this call; the backup key made it. */
+  readonly backupKey?: true;
+}
+
+/** A provider answered a call with an HTTP error. */
+export class ProviderError extends Error {
+  readonly status: number;
+  constructor(provider: string, status: number) {
+    super(`${provider} answered HTTP ${status}`);
+    this.name = "ProviderError";
+    this.status = status;
+  }
 }
 
 export type CallModel = (model: CatalogModel, request: ModelRequest) => Promise<ModelResult>;
@@ -93,7 +105,7 @@ async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiK
   // answer, made without the web, and the result says so.
   const refused = web && response.status === 400;
   if (refused) response = await post(false);
-  if (!response.ok) throw new Error(`${model.provider} answered HTTP ${response.status}`);
+  if (!response.ok) throw new ProviderError(model.provider, response.status);
   const result = readCompletion(await response.json());
   return web ? { ...result, web: refused ? "REFUSED" : result.web ?? 0 } : result;
 }
@@ -117,17 +129,40 @@ export function readCompletion(answer: unknown): ModelResult {
   };
 }
 
-/** One caller for the whole catalog. Claude clients are made once per key. */
+/** The HTTP status a failed call ended with, from our own error or the Claude SDK's; undefined when there was no answer at all. */
+const statusOf = (error: unknown): number | undefined => {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : undefined;
+};
+/** The key itself was turned away (unknown, no money left, not allowed): it will be again a moment later. */
+const keyTurnedAway = (status: number | undefined): boolean => status === 401 || status === 402 || status === 403;
+/**
+ * Whether the same call may succeed with the provider's other key: when this key was turned away or
+ * held back (429), or the provider failed or could not be reached. Not for a request the provider
+ * calls wrong (400, 404): the other key would send the same request.
+ */
+const worthAnotherKey = (status: number | undefined): boolean => status === undefined || keyTurnedAway(status) || status === 429 || status >= 500;
+/** How long a key that was turned away is tried last instead of first. */
+const BENCH_MS = 5 * 60_000;
+
+/**
+ * One caller for the whole catalog. Claude clients are made once per key.
+ *
+ * A provider with a backup key: a call the first key cannot make is made again with the backup,
+ * and the result says so (`backupKey`). A key the provider turned away is tried last for the next
+ * five minutes, so replies do not each wait for the same refusal first.
+ */
 export function createModelCaller(catalog: ChatCatalog, deps: {
   readonly fetch?: typeof fetch;
   readonly claude?: (apiKey: string) => ClaudeClient;
+  readonly now?: () => number;
 } = {}): CallModel {
   const fetcher = deps.fetch ?? fetch;
   const makeClaude = deps.claude ?? ((apiKey: string) => new Anthropic({ apiKey, maxRetries: 1 }));
+  const now = deps.now ?? Date.now;
   const clients = new Map<string, ClaudeClient>();
-  return async (model, request) => {
-    const apiKey = catalog.apiKey(model);
-    if (apiKey === undefined) throw new Error(`no API key for ${model.provider}`);
+  const benched = new Map<string, number>();
+  const callWith = (apiKey: string, model: CatalogModel, request: ModelRequest): Promise<ModelResult> => {
     const provider = catalog.provider(model);
     if (provider.kind === "openai-compatible") return callOpenAiCompatible(fetcher, provider.baseUrl!, apiKey, model, request);
     let client = clients.get(apiKey);
@@ -136,5 +171,25 @@ export function createModelCaller(catalog: ChatCatalog, deps: {
       clients.set(apiKey, client);
     }
     return callClaude(client, model, request);
+  };
+  return async (model, request) => {
+    const keys = catalog.apiKeys(model);
+    if (keys.length === 0) throw new Error(`no API key for ${model.provider}`);
+    const resting = (key: string) => (benched.get(key) ?? 0) > now();
+    const order = keys.filter(key => !resting(key)).concat(keys.filter(resting));
+    for (const key of order.slice(0, -1)) {
+      try {
+        const result = await callWith(key, model, request);
+        return key === keys[0] ? result : { ...result, backupKey: true };
+      } catch (error) {
+        const status = statusOf(error);
+        // Out of time, or a request no key can make: this is the answer.
+        if (request.signal.aborted || !worthAnotherKey(status)) throw error;
+        if (keyTurnedAway(status)) benched.set(key, now() + BENCH_MS);
+      }
+    }
+    const last = order.at(-1)!;
+    const result = await callWith(last, model, request);
+    return last === keys[0] ? result : { ...result, backupKey: true };
   };
 }

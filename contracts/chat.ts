@@ -5,6 +5,16 @@
 import type { CompanionAction } from "./companion-actions.ts";
 import type { CommunityActor, CommunityComment, CommunityPost } from "./community.ts";
 
+/**
+ * Why the Owner's own key (自带 Key) or agent gave no usable answer to a reply.
+ * AUTH_FAILED: the key or token was refused (401 / 403). NO_BALANCE: the account has no money left
+ * (402). RATE_LIMITED: too many calls for now, or a quota is used up (429). NOT_FOUND: the address
+ * or the model name does not exist there (404). UNREACHABLE: no answer in time, or their service
+ * failed (5xx). BAD_ANSWER: it answered, but not in the format of a chat reply. BLOCKED_ADDRESS: the
+ * address now points somewhere the server may not call. ERROR: any other refusal.
+ */
+export type ConnectionFailure = "AUTH_FAILED" | "NO_BALANCE" | "RATE_LIMITED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER" | "BLOCKED_ADDRESS" | "ERROR";
+
 export interface ChatMember {
   companionId: string;
   displayName: string;
@@ -43,6 +53,12 @@ export interface ChatMessage {
    * its models off for now. QUOTA: today's free replies are used up. ERROR: something went wrong.
    */
   failure: "UNAVAILABLE" | "DISABLED" | "QUOTA" | "ERROR" | null;
+  /**
+   * With failure ERROR, for a Companion that answers through the Owner's own key or agent: it was
+   * that key or agent that gave no usable answer, and why. Tell the Owner, so they look at their
+   * own side instead of trying again. null (or missing, from an older server) for any other failure.
+   */
+  connectionFailure?: ConnectionFailure | null;
   /** true when POST .../retry may be used (failure ERROR). A BLOCKED reply is final. */
   retryable: boolean;
   sentAt: string;
@@ -296,6 +312,12 @@ export interface CompanionSkills {
   maxEnabled: number;
   /** The platform's skills: switch one on or off with PUT /v0/companions/{id}/skills/{skillId}. Their wording is not shown. */
   official: { id: string; title: string; summary: string; enabled: boolean }[];
+  /**
+   * The skills from the shelf (技能广场) this Companion has on, in the order they were switched on;
+   * switch one off with the same PUT. One the operators took off the shelf, or its author took
+   * back, is simply no longer here.
+   */
+  shared: SharedSkill[];
   /** Skills the Owner wrote for this Companion (at most 10). */
   own: OwnSkill[];
 }
@@ -323,6 +345,98 @@ export interface SkillRefusal {
   code: "SKILL_REFUSED";
   field: "title" | "body";
   reason: PersonaRefusal["reason"];
+}
+
+/**
+ * 技能广场: a skill another Owner (or this one) wrote and the operators approved. Its whole wording
+ * is shown, so the Owner reads what their Companion will be told before switching it on with
+ * PUT /v0/companions/{id}/skills/{skillId}; it then takes one of the `maxEnabled` places like any
+ * other skill.
+ */
+export interface SharedSkill {
+  id: string;
+  title: string;
+  /** One line of introduction by its author, up to 100 characters. */
+  summary: string;
+  /** What the model is told, 1 to 600 characters. */
+  body: string;
+  /** The author's own community identity; null when they have none. */
+  author: CommunityActor | null;
+  /** How many Companions have it on. */
+  usedBy: number;
+  /** On for the Companion the request named; false when it named none. */
+  enabled: boolean;
+  /** The signed-in Owner wrote it. */
+  mine: boolean;
+  /** When the operators put it on the shelf. */
+  sharedAt: string;
+}
+
+/**
+ * GET /v0/shared-skills?companionId=&q=&cursor=: the shelf, newest first, 20 a page. `q` (up to 40
+ * characters) keeps those whose title or introduction contains the words. Skills of someone the
+ * Owner blocked, or who blocked the Owner, are left out. So are the skills of an author whose
+ * account is suspended or closed: they are off the shelf and off for every Companion meanwhile.
+ */
+export interface SharedSkillPage {
+  items: SharedSkill[];
+  nextCursor: string | null;
+}
+
+/**
+ * A skill the Owner handed in for the shelf. PENDING: waiting for the operators, nobody else sees
+ * it. APPROVED: on the shelf. REJECTED: turned down. REMOVED: taken off the shelf by the operators
+ * (and switched off for every Companion). `note` is what the operators wrote for the last two.
+ */
+export interface SharedSkillSubmission {
+  id: string;
+  title: string;
+  summary: string;
+  body: string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "REMOVED";
+  note: string | null;
+  usedBy: number;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
+/**
+ * GET /v0/shared-skills/mine: what the Owner handed in (the newest 100), and the room left. A new
+ * one is refused (409 INVALID_STATE) when `waiting` has reached `maxWaiting`, `shared` (waiting or
+ * on the shelf) has reached `maxShared`, or `todayLeft` is 0.
+ */
+export interface SharedSkillMine {
+  items: SharedSkillSubmission[];
+  waiting: number;
+  maxWaiting: number;
+  shared: number;
+  maxShared: number;
+  todayLeft: number;
+}
+
+/**
+ * POST /v0/shared-skills: hand in a copy of one of a Companion's own skills (its title and text as
+ * they are now) with one line of introduction (1 to 100 characters). Answers 201 with the
+ * SharedSkillSubmission; the same title and text handed in again return the one already there. To
+ * change a shared skill, take it back (DELETE /v0/shared-skills/{id}) and hand in the new one.
+ */
+export interface SharedSkillInput {
+  companionId: string;
+  skillId: string;
+  summary: string;
+}
+
+/** 422 from POST /v0/shared-skills: what would go on the shelf may not be kept, for the same reasons as a persona text. */
+export interface SharedSkillRefusal {
+  code: "SKILL_REFUSED";
+  field: "title" | "body" | "summary";
+  reason: PersonaRefusal["reason"];
+}
+
+/** POST /v0/shared-skills/{id}/report: tell the operators about someone else's skill on the shelf. `details` up to 1000 characters. */
+export interface SharedSkillReportInput {
+  reason: "SPAM" | "HARASSMENT" | "HARMFUL" | "PRIVACY" | "OTHER";
+  details?: string;
 }
 
 /**
@@ -619,6 +733,8 @@ export interface AccountExport {
   /** `profile`: the Owner's own community identity; null when they never opened the community. */
   owner: { id: string; createdAt: string; profile: CommunityActor | null };
   companions: ExportedCompanion[];
+  /** What the Owner handed in for the skill shelf, whatever became of it. */
+  sharedSkills: SharedSkillSubmission[];
   groupChats: { id: string; title: string | null; createdAt: string; members: ChatMember[]; messages: ExportedMessage[]; omitted: number }[];
   /** One for the Owner's own community identity and one for each Companion that has one. */
   community: ExportedCommunity[];
@@ -646,6 +762,8 @@ export interface ExportedCompanion {
   ownSkills: OwnSkill[];
   /** The official skills it has on: by name, not their wording. */
   officialSkills: { id: string; title: string; summary: string }[];
+  /** The skills from the shelf it has on: by name. */
+  sharedSkills: { id: string; title: string; summary: string }[];
   reminders: ChatReminder[];
   diary: DiaryEntry[];
   /** The one-to-one chat; null when the two never talked. */

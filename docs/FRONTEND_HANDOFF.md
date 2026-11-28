@@ -21,7 +21,9 @@
 | 时间感知、称呼、家机主动做动作、自动记忆、动态带图 | 已上线，见第 22–23 节；"家机主动做动作"的开关还关着（第 22.3 节） |
 | 家机主动找你、到点提醒 | 已上线（2026-11-27），见第 28 节；提醒已经在用（不用改 App），"主动找你"要 App 加一个设置项才用得上 |
 | 示例对话、世界书、正则替换 | 已上线（2026-11-27），见第 30 节；都要 App 加页面才用得上，导入角色卡时会多出两种可勾选的内容 |
-| 人设模板、技能 | 已上线（2026-11-27），见第 31 节；线上自带 4 个模板和 4 个技能，运营可以在管理台改 |
+| 人设模板、技能 | 已上线（2026-11-27），见第 31 节；线上自带 4 个模板和 7 个技能（2026-11-28 加了塔罗占卜、MBTI 性格测试、星座运势），运营可以在管理台改 |
+| 技能广场（主人分享自己写的技能） | 2026-11-28 做好，合并部署后生效，见第 38 节；要 App 加页面才用得上 |
+| 自带 Key 回复失败时讲清原因 | 2026-11-28 做好，合并部署后生效，见第 39 节；App 显示 `connectionFailure` 才看得到 |
 | 数据导出 | 已上线（2026-11-27），见第 32 节：一个接口，返回主人全部数据的 JSON |
 | 通知全部已读、社区搜索、上传头像、账号注销 | 已上线（2026-11-28），见第 33–36 节；都要 App 接上才用得上 |
 | 点赞和 @ 通知、家机主动做动作 | 两个开关 2026-11-27 已打开（第 37.1 节） |
@@ -1269,7 +1271,7 @@ Key 是每个家机单独存的。主人给家机 A 配过自带 Key（或自建
 
 | 做什么 | 接口 |
 | --- | --- |
-| 看这个家机的技能 | `GET /v0/companions/{id}/skills`，返回 `{maxEnabled, official:[{id, title, summary, enabled}], own:[{id, title, body, enabled, createdAt, updatedAt}]}` |
+| 看这个家机的技能 | `GET /v0/companions/{id}/skills`，返回 `{maxEnabled, official:[{id, title, summary, enabled}], shared:[…], own:[{id, title, body, enabled, createdAt, updatedAt}]}`（`shared` 是从技能广场打开的，见第 38 节） |
 | 开关一个官方技能 | `PUT /v0/companions/{id}/skills/{skillId}`，body 是 `{enabled: true 或 false}`，返回最新的整份列表 |
 | 写一个自己的技能 | `POST /v0/companions/{id}/own-skills`，body 是 `{title, body, enabled?}`，返回 201 和这个技能 |
 | 改一个自己的技能 | `PUT /v0/companions/{id}/own-skills/{skillId}`，body 同上，整个替换 |
@@ -1462,3 +1464,82 @@ Key 是每个家机单独存的。主人给家机 A 配过自带 Key（或自建
 
 - **隐私政策用的数据处理事实**（收集什么、做什么用、存在哪、给了哪些第三方、怎么删）：后端会单独写一份给法务，这一批还没写。
 
+## 38. 技能广场：主人分享自己写的技能（2026-11-28）
+
+**状态：2026-11-28 做好，合并部署后生效（迁移 0084）。** 类型在 `contracts/chat.ts`：`SharedSkill`、`SharedSkillPage`、`SharedSkillSubmission`、`SharedSkillMine`、`SharedSkillInput`、`SharedSkillRefusal`、`SharedSkillReportInput`；`CompanionSkills` 多了一个 `shared`。
+
+### 38.1 是什么
+
+主人可以把**自己写的技能**（第 31.2 节）投稿到技能广场。运营在管理台读过、通过以后，所有主人都能在广场里看到它的**全文**，并给自己的家机打开。打开以后它和官方技能完全一样：每次聊天回复都带上，占"最多同时打开 5 个"里的一个名额。
+
+和官方技能有两点不同：广场里的技能**显示全文**（主人应该先看清楚自己的家机会被告诉什么），并且带作者。
+
+### 38.2 接口
+
+| 做什么 | 接口 |
+| --- | --- |
+| 逛广场 | `GET /v0/shared-skills?companionId=&q=&cursor=`，返回 `{items:[SharedSkill], nextCursor}`，新上架的在前，每页 20 个 |
+| 给家机打开 / 关掉 | 还是 `PUT /v0/companions/{id}/skills/{skillId}`，body `{enabled}`（和官方技能同一个接口），返回这个家机最新的整份技能列表 |
+| 看这个家机打开了哪些广场技能 | `GET /v0/companions/{id}/skills` 里的 `shared` |
+| 投稿 | `POST /v0/shared-skills`，body `{companionId, skillId, summary}`，返回 201 和 `SharedSkillSubmission` |
+| 我的投稿 | `GET /v0/shared-skills/mine`，返回 `{items:[SharedSkillSubmission], waiting, maxWaiting, shared, maxShared, todayLeft}` |
+| 撤回 | `DELETE /v0/shared-skills/{skillId}`，返回 `{deleted: true}` |
+| 举报 | `POST /v0/shared-skills/{skillId}/report`，body `{reason, details?}`，返回 `{reported: true}` |
+
+`SharedSkill`：`{id, title, summary, body, author, usedBy, enabled, mine, sharedAt}`。
+
+- `author` 是作者本人的社区身份（和社区接口里的 `CommunityActor` 一样，可以点进主页）；作者没有社区身份时是 `null`，请显示"匿名"。
+- `usedBy`：有多少个家机打开了它。`mine`：是不是自己投的。
+- `enabled`：请求里带了 `companionId` 时，表示这个家机有没有打开它；没带就都是 `false`。
+- `q`：按名称和一句话介绍搜，最多 40 字。
+- 互相拉黑的人看不到对方的广场技能（已经打开的仍在 `shared` 里，可以关掉）。
+
+### 38.3 投稿的规则
+
+- 投稿的是**某个家机的一个"自己写的技能"当时的名称和内容**，再加一句介绍 `summary`（1 到 100 字，不能换行）。投稿之后再改或删自己的那个技能，**不影响**已经投出去的那份。
+- 想改已经投稿的技能：先撤回，改好自己的技能，再投一次（要重新审核）。撤回会让所有打开它的家机立刻失去它。
+- 状态 `status`：`PENDING` 等待审核（别人看不到）、`APPROVED` 已上架、`REJECTED` 被退回、`REMOVED` 上架后被运营下架。后两种的 `note` 是运营写给作者的原因，请显示出来。
+- 审核结果现在**没有通知**，主人要到"我的投稿"里看。
+- 限制：同时最多 3 个在等审核；等审核和已上架的加起来最多 20 个；24 小时内最多投 5 次。超了返回 **409**。`mine` 接口里的 `waiting / maxWaiting / shared / maxShared / todayLeft` 可以提前算出能不能投，并告诉主人是哪一条限制。
+- 同样的名称和内容再投一次（比如重试），返回的是已经在等审核或已上架的那一个。
+- **422**：`{code:"SKILL_REFUSED", field:"title"|"body"|"summary", reason}`，原因和第 31.2 节一样。公开之前会把名称、内容、介绍再检查一遍。
+- 404：不是自己家机的技能。400：格式不对。
+
+### 38.4 打开、下架和举报
+
+- 打开第 6 个技能返回 409，和官方技能一样。
+- 运营下架或作者撤回后，这个技能会从广场和所有家机的 `shared` 里**直接消失**，对它 `PUT` 会返回 404。App 不需要特别处理，重新拉列表就行。
+- 作者的账号被封禁或注销期间，他的技能同样从广场和所有家机里消失，也不发给模型；解封后自动回来。
+- 举报 `reason`：`SPAM`、`HARASSMENT`、`HARMFUL`、`PRIVACY`、`OTHER`（和社区举报一样）；`details` 最多 1000 字，可以不填。不能举报自己的；同一个人对同一个技能只算一次；一天最多 20 次（超了 409）。
+- 数据导出（第 32 节）多了两处：最外层的 `sharedSkills`（自己的投稿），每个家机里的 `sharedSkills`（它打开的广场技能，只有名称和介绍）。
+
+### 38.5 页面建议
+
+- 家机的"技能"页加一个入口"技能广场"：列表显示名称、介绍、作者、多少家机在用；点开看全文，下面一个开关（带上当前家机的 `companionId` 请求，就知道每个开没开）。
+- "我写的技能"每一条加一个"投稿到广场"，填一句介绍后提交；另有"我的投稿"页看状态和被退回的原因。
+- 广场技能的详情页放一个"举报"。
+
+## 39. 自带 Key 的家机回复失败时，告诉主人原因（2026-11-28）
+
+**状态：2026-11-28 做好，合并部署后生效（迁移 0085）。** 类型在 `contracts/chat.ts`：`ConnectionFailure`；`ChatMessage` 多了一个可选字段 `connectionFailure`。
+
+以前，接了自己的 Key 或自己的 Agent 的家机回复失败时，主人看到的只是普通的"出错了，重试"。其实原因常常在主人自己那边（Key 失效、欠费），重试多少次都没用。现在失败的那条消息会带上原因。
+
+- 只在 `status: "FAILED"`、`failure: "ERROR"`，并且这个家机走的是主人自己的 Key 或 Agent 时，`connectionFailure` 才有值；其他情况是 `null`。`failure` 的取值**没有变**，原来的处理不用改。
+- 取值和建议的文案：
+
+| `connectionFailure` | 意思 | 建议显示 |
+| --- | --- | --- |
+| `AUTH_FAILED` | Key 或令牌被拒绝（401 / 403） | 你的 Key 失效了，或没有权限。去"接入方式"里换一把 |
+| `NO_BALANCE` | 账户没钱了（402） | 你的模型账户余额不足，充值后再试 |
+| `RATE_LIMITED` | 调用太频繁，或额度用完（429） | 你的 Key 被限流了，过一会儿再试 |
+| `NOT_FOUND` | 地址或模型名在那边不存在（404） | 模型名或地址不对，去"接入方式"里检查 |
+| `UNREACHABLE` | 没有按时回答，或对方服务出错（5xx、超时、连不上） | 你的模型服务暂时连不上，过一会儿再试 |
+| `BAD_ANSWER` | 回答了，但不是聊天回复的格式 | 你的服务回答的格式不对（要 OpenAI 的 chat/completions 格式） |
+| `BLOCKED_ADDRESS` | 地址现在指向服务器不允许访问的地方 | 这个地址不能用，去"接入方式"里换一个 |
+| `ERROR` | 其他拒绝 | 你的模型服务拒绝了这次请求 |
+
+- `retryable` 仍然是 `true`，可以保留"重试"按钮；建议同时给一个去"接入方式"页的入口。
+- 重试后这个原因会清掉；再失败会写上新的原因。
+- 没人等的回复（家机主动找你、群里可说可不说的那一轮）失败时本来就不显示，也就没有这个原因。
+- 平台模型的家机不会出现这个字段。平台这边另外加了备用 Key（第一把 Key 出问题时自动换一把），App 不用做任何事。
