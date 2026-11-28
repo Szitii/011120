@@ -356,6 +356,7 @@ paths:
                   connections: {type: boolean}
                   voiceInput: {type: boolean}
                   companionReach: {type: boolean}
+                  companionTools: {type: boolean, description: Companions may use the tools their Owners connected.}
         '401': *problem
         '403': *problem
   /companions/{companionId}/anniversary:
@@ -471,6 +472,151 @@ paths:
         '409': *problem
         '429':
           description: IMAGE_LIMIT - the day's pictures are used up; nothing was sent
+  /chats/{chatId}/tool-requests/{requestId}:
+    parameters:
+    - *chatId
+    - name: requestId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      operationId: answerToolRequest
+      summary: The Owner's answer to a call a Companion asked to make - CONFIRM makes it now, DECLINE does not
+      description: |
+        工具确认卡 - a reply may carry `toolRequest`, a call to a tool server that changes something
+        (create an order, cancel one). Nothing is done until the Owner confirms here, within 15
+        minutes. CONFIRM makes the call once (a second CONFIRM is a 409), keeps what the tool server
+        answered as `result`, and starts a turn in which the Companion tells the Owner (poll the chat
+        as after sending a message). The answer comes after the call returned, which can take up to
+        15 seconds. DECLINE only marks the request.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision: {type: string, enum: [CONFIRM, DECLINE]}
+      responses:
+        '200':
+          description: The request as it is now; after CONFIRM also whether the Companion is about to write
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request]
+                properties:
+                  request: {$ref: '#/components/schemas/ToolRequest'}
+                  typing: {$ref: '#/components/schemas/Typing'}
+                  replying: {$ref: '#/components/schemas/Replying'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '429':
+          description: TOOL_LIMIT - the day's tool calls are used up; the call was not made
+        '501':
+          description: TOOLS_UNAVAILABLE - this server cannot make tool calls
+  /tool-servers:
+    get:
+      operationId: listToolServers
+      summary: The tool servers a Companion can be connected to, from the platform's list
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: Tool servers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/ToolServer'}}
+        '401': *problem
+        '403': *problem
+  /companions/{companionId}/tools:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      operationId: listCompanionTools
+      summary: What the Companion is connected to, and the tools it may use there
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The Companion's tool connections
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionTools'}
+        '401': *problem
+        '403': *problem
+        '404': *problem
+  /companions/{companionId}/tools/{serverId}:
+    parameters:
+    - name: companionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: serverId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    put:
+      operationId: connectCompanionTool
+      summary: Connect the Companion to a tool server with the Owner's own token for it (or renew the token)
+      description: |
+        The API server first asks the tool server for its tools with this token; only a token that
+        works is kept, sealed. 422 TOOL_CONNECT_FAILED with the reason otherwise. 409 for a fourth
+        server. 429 TOOL_CONNECT_LIMIT after 10 tries in 10 minutes.
+      x-capability-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, consent]
+              properties:
+                token: {type: string, minLength: 8, maxLength: 512, description: The Owner's token for that server; no spaces.}
+                consent: {type: boolean, enum: [true], description: The Owner was told that the token is kept on the platform's server and used there to act for them.}
+      responses:
+        '200':
+          description: The Companion's tool connections as they are now
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionTools'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
+        '409': *problem
+        '422':
+          description: TOOL_CONNECT_FAILED - the tool server refused the token or could not be reached; nothing was saved
+        '429':
+          description: TOOL_CONNECT_LIMIT
+        '501':
+          description: TOOLS_UNAVAILABLE - this server cannot keep tokens
+    delete:
+      operationId: disconnectCompanionTool
+      summary: Disconnect; the token is deleted, and requests still waiting are answered with no
+      x-capability-status: implemented
+      responses:
+        '200':
+          description: The Companion's tool connections as they are now
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompanionTools'}
+        '400': *problem
+        '401': *problem
+        '403': *problem
+        '404': *problem
   /chats/{chatId}/messages/{messageId}/retry:
     parameters:
     - *chatId
@@ -1913,6 +2059,11 @@ components:
           required: [durationMs]
           properties:
             durationMs: {type: integer, minimum: 1}
+        toolRequest:
+          description: A call to a tool server this reply asks the Owner to confirm; null for every other message.
+          oneOf:
+          - {$ref: '#/components/schemas/ToolRequest'}
+          - {type: 'null'}
         images:
           type: array
           description: |
@@ -2222,6 +2373,51 @@ components:
         code: {type: string, enum: [SKILL_REFUSED]}
         field: {type: string, enum: [title, body]}
         reason: {type: string, enum: [CREDENTIAL, PRIVATE_DATA, INSTRUCTION, LINK]}
+    ToolServer:
+      type: object
+      required: [id, key, title, summary, url, tokenHelp]
+      properties:
+        id: {type: string, format: uuid}
+        key: {type: string}
+        title: {type: string}
+        summary: {type: string}
+        url: {type: string}
+        tokenHelp: {type: string, description: Where the Owner gets their own token for this server.}
+    CompanionTools:
+      type: object
+      required: [maxServers, items]
+      properties:
+        maxServers: {type: integer}
+        items:
+          type: array
+          items:
+            type: object
+            required: [server, available, tokenHint, connectedAt, tools]
+            properties:
+              server: {$ref: '#/components/schemas/ToolServer'}
+              available: {type: boolean, description: false - the platform switched this server off for now; the connection is kept.}
+              tokenHint: {type: string, description: The token's last 4 characters.}
+              connectedAt: {type: string, format: date-time}
+              tools:
+                type: array
+                items:
+                  type: object
+                  required: [name, description, confirm]
+                  properties:
+                    name: {type: string}
+                    description: {type: string}
+                    confirm: {type: boolean, description: Done only after the Owner says yes to that very call.}
+    ToolRequest:
+      type: object
+      required: [id, server, tool, arguments, status, result, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        server: {type: string, description: The tool server's name.}
+        tool: {type: string}
+        arguments: {type: object, description: Exactly what will be sent to the tool.}
+        status: {type: string, enum: [PENDING, EXPIRED, RUNNING, DONE, FAILED, DECLINED]}
+        result: {type: [string, 'null'], description: What the tool server answered - for DONE and FAILED.}
+        createdAt: {type: string, format: date-time}
     SharedSkill:
       type: object
       required: [id, title, summary, body, author, usedBy, enabled, mine, sharedAt]

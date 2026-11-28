@@ -27,6 +27,7 @@ import type {
 } from "./port.ts";
 import type { Pictures } from "./pictures.ts";
 import { ProviderError } from "./providers.ts";
+import type { Toolbox } from "../tools/box.ts";
 import { SpeechError, type Clip, type Emotion, type Voices } from "./voices.ts";
 
 /**
@@ -39,6 +40,9 @@ export type Answer =
   | { pass: true }
   | { refused: true }
   | { failed: "UNAVAILABLE" | "DISABLED" | "QUOTA" };
+
+/** Opens the Companion's toolbox for a turn; undefined when it has no tools to use now. */
+export type Toolboxes = (turn: ChatClaim, port: ChatPort) => Promise<Toolbox | undefined>;
 
 /** A chat picture with its bytes. */
 export interface AttachedPicture { path: string; picture: Picture }
@@ -99,6 +103,9 @@ export interface ReplyTrace {
   /** Pictures described for this turn, and pictures handed along for a model that takes them. Left out when none. */
   seen?: number;
   shown?: number;
+  /** Calls made to tool servers in this turn, and that the Owner was asked to confirm one. Left out when the turn had no tools. */
+  tools?: number;
+  asked?: true;
 }
 
 /**
@@ -137,10 +144,13 @@ export interface MemoryTrace {
  * says so with `backup`. A key or agent of the Owner's that gives no usable answer: ConnectionFailed.
  */
 export interface ChatModel {
-  /** `pictures`: the pictures of the last few messages themselves, for a model that takes pictures; others read their descriptions in the turn. */
+  /**
+   * `pictures`: the pictures of the last few messages themselves, for a model that takes pictures; others read their descriptions in the turn.
+   * `tools`: what the Companion may look up and do in this turn, for a model that calls functions; others answer without.
+   */
   reply(turn: ChatClaim, context: { port: ChatPort; signal: AbortSignal; via?: (channel: "BYOK" | "EXTERNAL") => void;
     searched?: (searches: number | "REFUSED", inputTokens: number) => void; backup?: () => void;
-    pictures?: readonly AttachedPicture[] }): Promise<Answer>;
+    pictures?: readonly AttachedPicture[]; tools?: Toolbox }): Promise<Answer>;
   /** Says what one picture the Owner sent shows, for the turn (it is booked with it). Without it, pictures stay unseen. */
   see?(job: SeeJob, context: { port: ChatPort; signal: AbortSignal }): Promise<SeeAnswer>;
   /** Writes a diary entry; without it, diary entries fail as UNAVAILABLE. */
@@ -244,6 +254,7 @@ export class ChatReplies {
   readonly #model: ChatModel | undefined;
   readonly #timeoutMs: number;
   readonly #lookTimeoutMs: number;
+  readonly #toolboxes: Toolboxes | undefined;
   readonly #voices: Voices | undefined;
   readonly #speechTimeoutMs: number;
   readonly #trace: (trace: ReplyTrace | MemoryTrace) => void;
@@ -258,8 +269,9 @@ export class ChatReplies {
    * and one per attempt at noting memories down.
    */
   constructor(model?: ChatModel, timeoutMs = MODEL_TIMEOUT_MS, voices?: Voices, speechTimeoutMs = SPEECH_TIMEOUT_MS,
-    trace: (trace: ReplyTrace | MemoryTrace) => void = () => undefined, lookTimeoutMs = LOOK_TIMEOUT_MS) {
+    trace: (trace: ReplyTrace | MemoryTrace) => void = () => undefined, lookTimeoutMs = LOOK_TIMEOUT_MS, toolboxes?: Toolboxes) {
     this.#model = model;
+    this.#toolboxes = toolboxes;
     this.#lookTimeoutMs = lookTimeoutMs;
     this.#timeoutMs = timeoutMs;
     this.#voices = voices;
@@ -550,10 +562,15 @@ export class ChatReplies {
     if (model === undefined) return [turn.optional ? "PASSED" : "UNAVAILABLE", null];
     try {
       const started = Date.now();
+      // The Companion's tools, where the turn may use them. Without them (none connected, or they cannot be read now) it answers as ever.
+      const tools = turn.canUseTools === true ? await this.#toolboxes?.(turn, port).catch(() => undefined) : undefined;
       const result = await this.#timed(signal => model.reply(turn, { port, signal, via: channel => { trace.channel = channel; },
         searched: (searches, inputTokens) => { trace.web = searches; trace.webTokens = inputTokens; },
-        backup: () => { trace.key = "BACKUP"; }, ...(pictures.length > 0 ? { pictures } : {}) }), spentMs)
-        .finally(() => { trace.modelMs = Date.now() - started; });
+        backup: () => { trace.key = "BACKUP"; }, ...(pictures.length > 0 ? { pictures } : {}), ...(tools === undefined ? {} : { tools }) }), spentMs)
+        .finally(() => {
+          trace.modelMs = Date.now() - started;
+          if (tools !== undefined) { trace.tools = tools.used.calls; if (tools.used.asked) trace.asked = true; }
+        });
       if ("pass" in result) return [turn.optional ? "PASSED" : "ERROR", null];
       if ("refused" in result) return ["BLOCKED", null];
       // An optional turn that cannot be made simply stays quiet; one that must answer says why.

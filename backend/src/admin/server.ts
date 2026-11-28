@@ -23,7 +23,8 @@ import { ledgerSheets } from "./ledger.ts";
 import { workbook } from "./xlsx.ts";
 import { withPending, feedbackPage, type FeedbackQueue, chatGatePage, chatPage, costSettingsPage, costsPage, costsYearPage, errorPage, statsPage, systemPage, type Activity, type SystemInfo, logPage, modelsPage, ownerPage, ownersPage, promptsPage, reportsPage, switchTargets, RESOLUTIONS, FEATURES,
   type CatalogEntry, type ChatList, type Costs, type ChatPage, type LogPage, type Models, type OwnerDetail, type OwnerList, type ReportQueue, type SavedPrompts,
-  type Feature, kitPage, type Kit } from "./pages.ts";
+  type Feature, kitPage, type Kit, type ToolServerRow } from "./pages.ts";
+import { checkUrl } from "../connections/guard.ts";
 
 /** On the tailnet: the console's machine name, and each allowed Tailscale login with their own database login. */
 export interface Tailnet {
@@ -189,7 +190,10 @@ export function createAdminServer(options: AdminServerOptions): Server {
       return costsPage(now(), costs, cap, done, fly, vendors);
     }
     if (path === "/prompts") return promptsPage(zone, now(), await db.call<SavedPrompts>("prompts"), done);
-    if (path === "/kit") return kitPage(zone, await db.call<Kit>("kit"), done);
+    if (path === "/kit") {
+      const [kit, servers] = await Promise.all([db.call<Kit>("kit"), db.call<ToolServerRow[]>("tool_servers")]);
+      return kitPage(zone, kit, done, servers);
+    }
     if (path === "/log") {
       const before = /^\d{1,15}$/.test(query.get("before") ?? "") ? Number(query.get("before")) : null;
       const owner = ROUTES.uuid.test(query.get("owner") ?? "") ? query.get("owner") : null;
@@ -297,6 +301,23 @@ export function createAdminServer(options: AdminServerOptions): Server {
         if (skillLine(text("title"), text("body")) === null) throw new AdminRefusal("名称里除了【】还要有别的字,不然这个技能不会发给模型。");
         await db.call("skill_set", ...shared, text("body"), ...tail);
       }
+    } else if (path === "/kit/tool") {
+      const text = (name: string) => (form[name] ?? "").replace(/\r\n?/g, "\n").trim();
+      const names = (name: string) => [...new Set(text(name).split(/[\s,，、]+/).filter(Boolean))];
+      const id = form.id === undefined || form.id === "" ? null : form.id;
+      const read = names("readTools"), confirm = names("confirmTools");
+      const address = checkUrl(text("url"));
+      if ((id !== null && !ROUTES.uuid.test(id)) || !/^[a-z][a-z0-9-]{1,30}$/.test(text("key")) || !/^\d{1,4}$/.test(form.position ?? "")
+        || Array.from(text("title")).length < 1 || Array.from(text("title")).length > 20 || Array.from(text("summary")).length < 1 || Array.from(text("summary")).length > 100
+        || Array.from(text("tokenHelp")).length < 1 || Array.from(text("tokenHelp")).length > 500) {
+        throw new AdminRefusal("代号(小写字母、数字和 -)、名称(最多 20 字)、一句话介绍(最多 100 字)、怎么拿令牌(最多 500 字)都要填,排序填 0 到 9999 的整数。");
+      }
+      if (typeof address === "string") throw new AdminRefusal("地址要是 https 开头的公网地址,不带账号密码、问号和 # 号。");
+      if ([...read, ...confirm].some(tool => !/^[A-Za-z0-9_.-]{1,64}$/.test(tool)) || read.some(tool => confirm.includes(tool)) || read.length + confirm.length > 60) {
+        throw new AdminRefusal("工具名用空格或换行分开,只能有字母、数字、点、- 和 _;同一个工具不能两边都写;两栏加起来最多 60 个。");
+      }
+      await db.call("tool_server_set", id, text("key"), text("title"), text("summary"), address.href.replace(/\/$/, ""), text("tokenHelp"), read, confirm,
+        Number(form.position), form.enabled === "on", reason);
     } else if (path === "/kit/shared") {
       // KEEP closes the reports this operator was shown: `seen` is the moment of the newest one on their page.
       const seen = form.decision === "KEEP" ? form.seen ?? "" : null;

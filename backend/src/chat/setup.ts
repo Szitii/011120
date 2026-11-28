@@ -11,6 +11,9 @@ import { ChatReplies, devChatModel, type ChatModel } from "./replies.ts";
 import { Voices } from "./voices.ts";
 import { ConnectedChatModel, Connections } from "../connections/model.ts";
 import { SecretBox } from "../connections/secret-box.ts";
+import { createPostRaw } from "../connections/guard.ts";
+import { openToolbox, Tools } from "../tools/box.ts";
+import type { ChatClaim, ChatPort } from "./port.ts";
 
 /**
  * With CONNECTION_SECRET_KEY set, Owners may also connect their own key or agent
@@ -27,8 +30,12 @@ export function chatFromEnvironment(mode: "stage1-mobile-dev" | "supabase-auth",
   const background = platform !== undefined || box !== undefined ? { platform: platform !== undefined } : undefined;
   // One line per turn in the server's log (see ReplyTrace): what to read when a reply came as text.
   // And one per attempt at noting memories down (MemoryTrace).
+  // Tools need the same server key as connections: an Owner's token for a tool server is sealed with it.
+  const tools = box === undefined ? undefined : new Tools(box, createPostRaw());
+  const toolboxes = tools === undefined ? undefined : (turn: ChatClaim, port: ChatPort) =>
+    openToolbox(port, tools.box, { replyId: turn.replyId, claimId: turn.claimId, companionId: turn.companion.companionId }, (url, token) => tools.session(url, token));
   const replies = (model: ChatModel | undefined) =>
-    new ChatReplies(model, undefined, voices, undefined, trace => console.log(JSON.stringify(trace)));
-  if (box === undefined) return { catalog, replies: replies(fallback), background };
-  return { catalog, replies: replies(new ConnectedChatModel(fallback, box)), connections: new Connections(box), background };
+    new ChatReplies(model, undefined, voices, undefined, trace => console.log(JSON.stringify(trace)), undefined, toolboxes);
+  if (box === undefined || tools === undefined) return { catalog, replies: replies(fallback), background };
+  return { catalog, replies: replies(new ConnectedChatModel(fallback, box)), connections: new Connections(box), tools, background };
 }

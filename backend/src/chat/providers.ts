@@ -6,6 +6,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CatalogModel, ChatCatalog } from "./models.ts";
 import type { Picture } from "./port.ts";
+import type { ToolSpec } from "../tools/box.ts";
 
 export interface ModelRequest {
   readonly system: string;
@@ -20,7 +21,21 @@ export interface ModelRequest {
   readonly web?: { readonly without: { readonly system: string; readonly user: string } };
   /** Pictures to go with the user text, in order, for a model that takes them (CatalogModel.options.vision). */
   readonly images?: readonly Picture[];
+  /**
+   * Functions the model may call instead of answering (CatalogModel.options.tools), and what was
+   * called and returned so far in this answer. `answerNow`: the tools stay declared, so the
+   * exchange still reads, but the model must answer in words. While tools are declared the
+   * provider's own web search is not (DeepSeek takes one kind or the other).
+   */
+  readonly tools?: readonly ToolSpec[];
+  readonly exchange?: readonly ToolRound[];
+  readonly answerNow?: boolean;
 }
+
+/** One call the model asked for: `arguments` is the JSON text it wrote. */
+export interface ToolCall { readonly id: string; readonly name: string; readonly arguments: string }
+/** The calls of one model answer and what each returned, in the same order. */
+export interface ToolRound { readonly calls: readonly ToolCall[]; readonly results: readonly string[] }
 
 export interface ModelResult {
   readonly text: string;
@@ -38,6 +53,8 @@ export interface ModelResult {
   readonly web?: number | "REFUSED";
   /** The provider's first key could not make this call; the backup key made it. */
   readonly backupKey?: true;
+  /** The model asked for these calls instead of answering (only when tools were declared). */
+  readonly toolCalls?: readonly ToolCall[];
 }
 
 /** A provider answered a call with an HTTP error. */
@@ -88,24 +105,34 @@ async function callClaude(client: ClaudeClient, model: CatalogModel, request: Mo
  */
 const DEEPSEEK_WEB_TOOLS = [{ type: "deepseek_web_search" }];
 
+/** What was called and returned so far, as chat messages: the model's calls, then one answer per call. */
+const exchanged = (rounds: readonly ToolRound[]): unknown[] => rounds.flatMap(round => [
+  { role: "assistant", content: null, tool_calls: round.calls.map(call => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })) },
+  ...round.calls.map((call, i) => ({ role: "tool", tool_call_id: call.id, content: round.results[i] ?? "" })),
+]);
+
 /** The user text, or the text with the pictures after it (as data: URLs, so nothing has to be reachable from outside). */
 const userContent = (text: string, images: readonly Picture[] | undefined): unknown => !images?.length ? text
   : [{ type: "text", text }, ...images.map(image => ({ type: "image_url", image_url: { url: `data:${image.mime};base64,${image.base64}` } }))];
 
 async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiKey: string, model: CatalogModel,
   request: ModelRequest): Promise<ModelResult> {
-  const web = request.web !== undefined && model.options?.webTools === "deepseek";
+  const functions = request.tools?.length ? request.tools : undefined;
+  const web = functions === undefined && request.web !== undefined && model.options?.webTools === "deepseek";
   const post = (tools: boolean) => fetcher(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
       model: model.model,
       messages: [{ role: "system", content: (web && !tools ? request.web!.without : request).system },
-        { role: "user", content: userContent((web && !tools ? request.web!.without : request).user, request.images) }],
+        { role: "user", content: userContent((web && !tools ? request.web!.without : request).user, request.images) },
+        ...(functions === undefined ? [] : exchanged(request.exchange ?? []))],
       [model.options?.maxTokensParam ?? "max_tokens"]: request.maxTokens,
       // DeepSeek thinks by default; a chat reply does not need it (slower, and the thinking is paid output).
       ...(model.options?.thinking === "disabled" ? { thinking: { type: "disabled" } } : {}),
       ...(tools ? { tools: DEEPSEEK_WEB_TOOLS } : {}),
+      ...(functions === undefined ? {} : { tools: functions.map(tool => ({ type: "function", function: tool })),
+        ...(request.answerNow ? { tool_choice: "none" } : {}) }),
     }),
     signal: request.signal,
   });
@@ -122,11 +149,17 @@ async function callOpenAiCompatible(fetcher: typeof fetch, baseUrl: string, apiK
 /** An OpenAI-style /chat/completions answer (also what Owners' own providers and agents return). */
 export function readCompletion(answer: unknown): ModelResult {
   const body = (answer ?? {}) as {
-    choices?: { message?: { content?: unknown }; finish_reason?: unknown }[];
+    choices?: { message?: { content?: unknown; tool_calls?: unknown }; finish_reason?: unknown }[];
     usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; server_tool_use?: { tool_search?: unknown } | null };
   };
   const choice = Array.isArray(body.choices) ? body.choices[0] : undefined;
   const searched = body.usage?.server_tool_use;
+  // Function calls, in the order asked for; one without an id, a name or arguments as text is not a call.
+  const calls = (Array.isArray(choice?.message?.tool_calls) ? choice.message.tool_calls : []).flatMap((call: unknown): ToolCall[] => {
+    const { id, function: asked } = (call ?? {}) as { id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+    return typeof id === "string" && typeof asked?.name === "string" && typeof asked.arguments === "string"
+      ? [{ id, name: asked.name, arguments: asked.arguments }] : [];
+  });
   return {
     text: typeof choice?.message?.content === "string" ? choice.message.content : "",
     inputTokens: count(body.usage?.prompt_tokens),
@@ -135,6 +168,7 @@ export function readCompletion(answer: unknown): ModelResult {
     cutOff: choice?.finish_reason === "length",
     // DeepSeek reports the searches it ran for the answer; other providers say nothing here.
     ...(searched && typeof searched === "object" ? { web: count(searched.tool_search) } : {}),
+    ...(calls.length > 0 ? { toolCalls: calls } : {}),
   };
 }
 

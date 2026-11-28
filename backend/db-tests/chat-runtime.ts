@@ -10,8 +10,12 @@ import { ChatCatalog } from "../src/chat/models.ts";
 import { PlatformChatModel } from "../src/chat/platform.ts";
 import { BackgroundScheduler } from "../src/chat/background-scheduler.ts";
 import type { ChatClaim, DiaryJob, MemoryJob } from "../src/chat/port.ts";
-import type { AccountExport, Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, CompanionSkills, DiaryPage, DiarySettings, DiaryWriteResult, VoiceList }
-  from "../../contracts/chat.ts";
+import type { AccountExport, Chat, ChatPage, ChatSendResult, ChatSettings, CompanionActionResult, CompanionSkills, CompanionTools, DiaryPage, DiarySettings,
+  DiaryWriteResult, ToolRequest, ToolServer, VoiceList } from "../../contracts/chat.ts";
+import { SecretBox } from "../src/connections/secret-box.ts";
+import { openToolbox } from "../src/tools/box.ts";
+import type { ModelResult } from "../src/chat/providers.ts";
+import type { ReplyTrace } from "../src/chat/replies.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || process.env.COMPANION_SOCIAL_DEV_DATABASE !== "1") throw Error("Disposable seeded development database required.");
@@ -114,7 +118,7 @@ try {
 
   // ---- group chats are paused at launch (feature switches, migration 0050) ----
   const setFeature = (key: string, on: boolean) => pool.query("update companion_private.feature_switches set enabled = $2 where key = $1", [key, on]);
-  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: false, groupChatSend: false, voiceInput: true, companionReach: true, connections: false });
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: false, groupChatSend: false, voiceInput: true, companionReach: true, companionTools: false, connections: false });
   assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion, second] }, "group-key-paused-001")).status, 409);
   assert.equal((await call(0, "chats", "POST", { companionIds: [A.companion] })).status, 200, "one-to-one chats are not paused");
   await setFeature("GROUP_CHAT_CREATE", true);
@@ -127,7 +131,7 @@ try {
   assert.equal((await call(0, `chats/${paused.id}/messages`, "POST", { body: "有人吗" })).status, 201);
   await settle(paused.id);
   assert.equal((await call(0, `chats/${paused.id}`, "DELETE")).status, 200);
-  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, voiceInput: true, companionReach: true, connections: false });
+  assert.deepEqual((await call(0, "features")).data, { groupChatCreate: true, groupChatSend: true, voiceInput: true, companionReach: true, companionTools: false, connections: false });
   passed("group chats paused by switch: no new group, no sending in an old one; one-to-one chats unaffected");
 
   const group = await call<Chat>(0, "chats", "POST", { companionIds: [A.companion, second], title: "一家人" }, "group-key-0000000001");
@@ -989,6 +993,150 @@ try {
   assert.deepEqual([(await pool.query("select count(*)::int as n from companion_private.chat_images")).rows[0]!.n, await remove(A.subject, note), await remove(A.subject, noodles)], [0, 1, 1]);
   await pool.query("delete from storage.objects where bucket_id = 'media' and name like 'chat/%'");
   passed("pictures in chat: own uploads only, 1 to 4 with a message, described once for the Companion's turn, a daily limit, read by their Owner alone");
+  }
+
+  {
+  // ---- 工具 (migration 0087): the directory, a Companion's connection, a turn that uses tools, and a call the Owner confirms ----
+  const box = new SecretBox(Buffer.alloc(32, 9));
+  const portB = new PostgresChatAdapter(new PgOwnerExecutor(pool, B.subject));
+  const chat = direct.data.id;
+  const servers = (await call<{ items: ToolServer[] }>(0, "tool-servers")).data.items;
+  assert.deepEqual(servers.map(s => [s.key, s.title, s.url]), [["mcdonalds-cn", "麦当劳", "https://mcp.mcd.cn"]], "the first server comes with the migration");
+  const mcd = servers[0]!.id;
+  const listed = ["query-meals", "create-order", "draw-lottery"].map(name => ({ name, description: `${name} 的说明`, inputSchema: { type: "object" } }));
+  assert.equal((await call(0, `companions/${A.companion}/tools/${mcd}`, "PUT", { token: "member-token-1234", consent: true })).status, 501,
+    "the dev host has no key to seal tokens with");
+  const connected = await portA.saveCompanionTool(A.companion, mcd, box.seal("member-token-1234", A.companion), "1234", listed) as CompanionTools;
+  assert.deepEqual(connected.items.map(i => [i.server.key, i.available, i.tokenHint, i.tools]), [["mcdonalds-cn", true, "1234",
+    [{ name: "query-meals", description: "query-meals 的说明", confirm: false }, { name: "create-order", description: "create-order 的说明", confirm: true }]]],
+  "of what the server listed, only the tools on the operators' two lists; the lottery is on neither");
+  assert.deepEqual((await call<CompanionTools>(0, `companions/${A.companion}/tools`)).data, connected);
+  await assert.rejects(portB.saveCompanionTool(A.companion, mcd, box.seal("x".repeat(12), A.companion), "xxxx", listed), { code: "NOT_FOUND" });
+  await assert.rejects(portA.saveCompanionTool(A.companion, randomUUID(), box.seal("x".repeat(12), A.companion), "xxxx", listed), { code: "NOT_FOUND" });
+  await assert.rejects(portB.companionToolSecrets(A.companion), { code: "NOT_FOUND" });
+
+  // While the operators' switch is off nothing is used: no tools for a turn, and the app is told so.
+  type Secrets = { left: number; servers: { id: string; key: string; url: string; secret: string; tools: { name: string; confirm: boolean }[] }[] };
+  assert.deepEqual(await portA.companionToolSecrets(A.companion), { left: 100, servers: [] });
+  await settle(chat);
+  await portA.send(chat, "关着的时候", [], keyHash());
+  const offTurn = (await portA.claim(chat))!;
+  assert.equal(offTurn.canUseTools, false);
+  await portA.finish(offTurn.replyId, offTurn.claimId, "SENT", ["嗯"]);
+  await pool.query("update companion_private.feature_switches set enabled = true where key = 'COMPANION_TOOLS'");
+  const secrets = await portA.companionToolSecrets(A.companion) as Secrets;
+  assert.deepEqual([secrets.left, secrets.servers.map(s => [s.key, s.url, box.open(s.secret, A.companion), s.tools.map(t => [t.name, t.confirm])])],
+    [100, [["mcdonalds-cn", "https://mcp.mcd.cn", "member-token-1234", [["query-meals", false], ["create-order", true]]]]]);
+
+  // A turn through a platform model and the real ledger, with the real toolbox over a stand-in tool server: the model
+  // looks the menu up, asks for the order, and answers. Three answers of the model, each booked on its own.
+  const hands = new ChatCatalog({ defaultModel: "hands", decisionModel: null, providers: { handp: { kind: "openai-compatible", baseUrl: "https://hands.example/v1", apiKeyEnv: "HAND_KEY" } },
+    models: [{ id: "hands", name: "Hands", provider: "handp", model: "hands-1", tier: "ECONOMY", inputPerMTok: 1, outputPerMTok: 1, enabled: true, options: { tools: true } }] }, { HAND_KEY: "k" });
+  const script: Partial<ModelResult>[] = [
+    { toolCalls: [{ id: "c1", name: "mcdonalds-cn__query-meals", arguments: '{"store":"S1"}' }] },
+    { toolCalls: [{ id: "c2", name: "mcdonalds-cn__create-order", arguments: '{"store":"S1","items":["BM"]}' }] },
+    { text: "巨无霸 25 元，帮你下这一单，点一下确认" }];
+  const exchanged: number[] = [];
+  const engine = new PlatformChatModel(hands, async (_model, request) => {
+    exchanged.push(request.exchange?.length ?? -1);
+    return { text: "", inputTokens: 400, outputTokens: 15, refused: false, cutOff: false, ...script.shift() };
+  });
+  const toolCalls: string[] = [];
+  const sessions = () => ({ tools: async () => [], call: async (name: string) => { toolCalls.push(name); return { ok: true, text: "巨无霸 25 元" }; } });
+  const traces: ReplyTrace[] = [];
+  const withTools = new ChatReplies(engine, undefined, undefined, undefined, trace => traces.push(trace as ReplyTrace), undefined,
+    (turn, port) => openToolbox(port, box, { replyId: turn.replyId, claimId: turn.claimId, companionId: turn.companion.companionId }, sessions));
+  await settle(chat);
+  await portA.send(chat, "帮我点个巨无霸", [], keyHash());
+  assert.equal(await withTools.drain(chat, portA), 1);
+  const asked = (await settle(chat)).items[0]!;
+  assert.deepEqual([asked.status, asked.body, exchanged, toolCalls, traces[0]!.tools, traces[0]!.asked], ["SENT", "巨无霸 25 元，帮你下这一单，点一下确认", [0, 1, 2], ["query-meals"], 1, true],
+    "the menu was looked up; the order was not made");
+  const request = asked.toolRequest!;
+  assert.deepEqual([request.server, request.tool, request.arguments, request.status, request.result], ["麦当劳", "create-order", { store: "S1", items: ["BM"] }, "PENDING", null]);
+  assert.deepEqual((await pool.query<{ s: string }>(`select string_agg(e.status, '>' order by e.sequence) as s from public.compute_transactions x
+      join public.compute_ledger_entries e on e.transaction_id = x.id where x.provider_id = 'handp' group by x.id`)).rows.map(row => row.s),
+  ["RESERVED>STARTED>SUCCEEDED", "RESERVED>STARTED>SUCCEEDED", "RESERVED>STARTED>SUCCEEDED"]);
+  assert.deepEqual((await pool.query("select server_key, tool, ok from companion_private.tool_calls where companion_id = $1", [A.companion])).rows,
+    [{ server_key: "mcdonalds-cn", tool: "query-meals", ok: true }], "what was called is noted; never what was sent or returned");
+
+  // The Owner says yes: the request is taken once, by its Owner; the result is kept and the Companion gets a turn to tell it.
+  await assert.rejects(portB.toolRequestTake(chat, request.id), { code: "NOT_FOUND" });
+  await assert.rejects(portB.toolRequestDecline(chat, request.id), { code: "NOT_FOUND" });
+  const taken = await portA.toolRequestTake(chat, request.id) as { tool: string; url: string; secret: string; arguments: unknown; serverKey: string; companionId: string };
+  assert.deepEqual([taken.tool, taken.url, box.open(taken.secret, A.companion), taken.arguments, taken.serverKey, taken.companionId],
+    ["create-order", "https://mcp.mcd.cn", "member-token-1234", { store: "S1", items: ["BM"] }, "mcdonalds-cn", A.companion]);
+  await assert.rejects(portA.toolRequestTake(chat, request.id), { code: "INVALID_STATE" }, "a second yes makes no second order");
+  await assert.rejects(portA.toolRequestDecline(chat, request.id), { code: "INVALID_STATE" });
+  assert.equal((await settle(chat)).items[0]!.toolRequest!.status, "RUNNING");
+  await assert.rejects(portB.toolRequestFinish(request.id, true, "别人写的"), { code: "INVALID_STATE" });
+  const finished = await portA.toolRequestFinish(request.id, true, "订单 A1，支付链接 https://pay.example/a1") as { request: ToolRequest; replying: boolean };
+  assert.deepEqual([finished.request.status, finished.request.result, finished.replying], ["DONE", "订单 A1，支付链接 https://pay.example/a1", true]);
+  await assert.rejects(portA.toolRequestFinish(request.id, true, "again"), { code: "INVALID_STATE" });
+  const telling = (await portA.claim(chat))!;
+  assert.deepEqual([telling.canUseTools, telling.replyTo, telling.history.at(-1)!.toolRequest],
+    [true, "OWNER", { server: "麦当劳", tool: "create-order", status: "DONE", result: "订单 A1，支付链接 https://pay.example/a1", createdAt: request.createdAt }]);
+  await portA.finish(telling.replyId, telling.claimId, "SENT", ["下好了，点这个链接付款：https://pay.example/a1"]);
+
+  // A request is kept only for the turn being written, for a confirm tool of a connected server. The Owner can say no; a
+  // request nobody answers in 15 minutes is no longer one.
+  await settle(chat);
+  await portA.send(chat, "再来一单", [], keyHash());
+  const again = (await portA.claim(chat))!;
+  await assert.rejects(portA.toolRequestOpen(again.replyId, randomUUID(), mcd, "create-order", { n: 1 }), { code: "INVALID_STATE" }, "not the claim");
+  await assert.rejects(portB.toolRequestOpen(again.replyId, again.claimId, mcd, "create-order", { n: 1 }), { code: "INVALID_STATE" });
+  await assert.rejects(portA.toolRequestOpen(again.replyId, again.claimId, mcd, "query-meals", { n: 1 }), { code: "INVALID_INPUT" }, "a tool that needs no yes");
+  await assert.rejects(portA.toolRequestOpen(again.replyId, again.claimId, mcd, "draw-lottery", { n: 1 }), { code: "INVALID_INPUT" }, "a tool on neither list");
+  await portA.toolRequestOpen(again.replyId, again.claimId, mcd, "create-order", { n: 1 });
+  const second2 = await portA.toolRequestOpen(again.replyId, again.claimId, mcd, "create-order", { n: 2 }) as { id: string };
+  await portA.finish(again.replyId, again.claimId, "SENT", ["再下一单，确认一下"]);
+  assert.deepEqual((await settle(chat)).items[0]!.toolRequest!.arguments, { n: 2 }, "one request per reply: the last one asked for");
+  const no = await call<{ request: ToolRequest }>(0, `chats/${chat}/tool-requests/${second2.id}`, "POST", { decision: "DECLINE" });
+  assert.deepEqual([no.status, no.data.request.status], [200, "DECLINED"]);
+  assert.equal((await call(0, `chats/${chat}/tool-requests/${second2.id}`, "POST", { decision: "DECLINE" })).status, 409);
+  assert.equal((await call(0, `chats/${chat}/tool-requests/${second2.id}`, "POST", { decision: "CONFIRM" })).status, 501, "the dev host makes no calls");
+  await portA.send(chat, "那这一单呢", [], keyHash());
+  const third = (await portA.claim(chat))!;
+  const late = await portA.toolRequestOpen(third.replyId, third.claimId, mcd, "create-order", { n: 3 }) as { id: string };
+  await portA.finish(third.replyId, third.claimId, "SENT", ["确认一下"]);
+  await settle(chat);
+  await pool.query("update companion_private.tool_requests set created_at = now() - interval '16 minutes' where id = $1", [late.id]);
+  assert.equal((await settle(chat)).items[0]!.toolRequest!.status, "EXPIRED");
+  await assert.rejects(portA.toolRequestTake(chat, late.id), { code: "INVALID_STATE" });
+
+  // The day's calls: counted per Owner; with none left a yes is refused before anything is called.
+  await pool.query("update companion_private.tool_requests set created_at = now() where id = $1", [late.id]);
+  await pool.query("update companion_private.chat_quota set daily_tool_calls = 1");
+  assert.equal((await portA.companionToolSecrets(A.companion) as Secrets).left, 0);
+  await assert.rejects(portA.toolRequestTake(chat, late.id), (error: unknown) => (error as Error).message === "tool call limit reached");
+  await pool.query("update companion_private.chat_quota set daily_tool_calls = 100");
+  // The operators take the tool off the list, or the server off the directory: it is not offered, and a waiting yes does nothing.
+  await pool.query("update companion_private.tool_servers set confirm_tools = array_remove(confirm_tools, 'create-order') where id = $1", [mcd]);
+  assert.deepEqual((await portA.companionToolSecrets(A.companion) as Secrets).servers[0]!.tools.map(t => t.name), ["query-meals"]);
+  await assert.rejects(portA.toolRequestTake(chat, late.id), { code: "INVALID_STATE" });
+  await pool.query("update companion_private.tool_servers set confirm_tools = confirm_tools || 'create-order'::text, enabled = false where id = $1", [mcd]);
+  assert.deepEqual([(await portA.companionToolSecrets(A.companion) as Secrets).servers, (await call<{ items: unknown[] }>(0, "tool-servers")).data.items,
+    (await portA.companionTools(A.companion) as CompanionTools).items.map(i => [i.available, i.tools])], [[], [], [[false, []]]], "the connection is kept for when it is offered again");
+  await pool.query("update companion_private.tool_servers set enabled = true where id = $1", [mcd]);
+
+  // Three servers per Companion; disconnecting deletes the token and answers what was waiting with no.
+  const extra = (await pool.query<{ id: string }>(`insert into companion_private.tool_servers(key, title, summary, url, token_help)
+    select 'extra-' || n, '多的' || n, '测试', 'https://tools.example/' || n, '说明' from generate_series(1, 3) n returning id`)).rows.map(row => row.id);
+  for (const id of extra.slice(0, 2)) await portA.saveCompanionTool(A.companion, id, box.seal("x".repeat(12), A.companion), "xxxx", []);
+  await assert.rejects(portA.saveCompanionTool(A.companion, extra[2]!, box.seal("x".repeat(12), A.companion), "xxxx", []), { code: "INVALID_STATE" }, "a fourth");
+  await portA.saveCompanionTool(A.companion, mcd, box.seal("renewed-token-5678", A.companion), "5678", listed);
+  assert.equal((await portA.companionTools(A.companion) as CompanionTools).items.find(i => i.server.key === "mcdonalds-cn")!.tokenHint, "5678", "the same server again renews the token");
+  const left = await call<CompanionTools>(0, `companions/${A.companion}/tools/${mcd}`, "DELETE");
+  assert.deepEqual([left.status, left.data.items.length, (await settle(chat)).items[0]!.toolRequest!.status], [200, 2, "DECLINED"]);
+  assert.equal((await call(0, `companions/${A.companion}/tools/${mcd}`, "DELETE")).status, 404);
+  // A deleted Companion lets go of its tokens.
+  assert.equal((await pool.query("select count(*)::int as n from companion_private.companion_tools where companion_id = $1", [A.companion])).rows[0]!.n, 2);
+  await pool.query("update public.companions set status = 'DELETED' where id = $1", [A.companion]);
+  assert.equal((await pool.query("select count(*)::int as n from companion_private.companion_tools where companion_id = $1", [A.companion])).rows[0]!.n, 0);
+  await pool.query("update public.companions set status = 'ACTIVE' where id = $1", [A.companion]);
+  await pool.query("delete from companion_private.tool_servers where key like 'extra-%'");
+  await pool.query("update companion_private.feature_switches set enabled = false where key = 'COMPANION_TOOLS'");
+  passed("tools: the operators' lists decide what a Companion may call; what changes something waits for its Owner's yes, is made once, and its result comes back into the talk");
   }
 
   {

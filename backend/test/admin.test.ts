@@ -772,9 +772,19 @@ it("shows the templates and skills on offer, and saves one only when an Owner's 
     ],
     ownSkills: 7,
   };
-  const { send, calls } = await start({ kit });
+  const tool_servers = [
+    { id: id(88), key: "mcdonalds-cn", title: "麦当劳", summary: `查菜单、下外卖单${NASTY}`, url: "https://mcp.mcd.cn", tokenHelp: "去 open.mcd.cn/mcp 拿令牌", readTools: ["query-meals", "calculate-price"],
+      confirmTools: ["create-order"], enabled: true, position: 10, updatedAt: AT, connected: 12, calls: 3456, failed: 7 },
+    { id: id(89), key: "luckin", title: "瑞幸", summary: "点咖啡", url: "https://tools.example/mcp", tokenHelp: "h", readTools: [], confirmTools: [], enabled: false, position: 20, updatedAt: AT,
+      connected: 0, calls: 0, failed: 0 }];
+  const { send, calls } = await start({ kit, tool_servers });
   const page = await send("/kit");
-  assert.deepEqual(calls, [["kit"]]);
+  assert.deepEqual(calls, [["kit"], ["tool_servers"]]);
+  // The directory of tool servers: what each may do is the two lists of names, in sight.
+  assert.match(page.body, /<b>麦当劳<\/b> <span class="tag good">提供中<\/span>\s*<span class="muted">mcdonalds-cn · 12 个家机接了 · 最近 7 天调用 3,456 次,其中 7 次没成功/);
+  assert.match(page.body, /<dt>直接可用<\/dt><dd>query-meals calculate-price<\/dd><dt>要主人确认<\/dt><dd>create-order<\/dd>/);
+  assert.match(page.body, /<b>瑞幸<\/b> <span class="tag bad">已停用<\/span>[^]*<dt>直接可用<\/dt><dd>\(无\)<\/dd>/);
+  assert.equal(page.body.split('action="/kit/tool"').length - 1, 3, "a form for each server and one for a new one");
   assert.match(page.body, /<a href="\/kit" class="on"[^>]*><svg[^>]*><path[^>]*\/><\/svg>模板与技能<\/a>/);
   assert.match(page.body, /<b>温柔的倾听者<\/b> <span class="tag good">上架中<\/span> <span class="muted">默认名字:小满 · 排序 10/);
   assert.match(page.body, /<b>下架的<\/b> <span class="tag bad">已下架<\/span>/);
@@ -795,7 +805,7 @@ it("shows the templates and skills on offer, and saves one only when an Owner's 
   assert.equal(page.body.split('name="seen"').length - 1, 1, "only where reports are closed");
   assert.match(page.body, /<b>好的<\/b>[^]*?作者账号被封禁,技能暂不显示[^]*<b>退回的<\/b>[^]*?作者账号已注销,技能暂不显示/);
   const empty = await (await start({ kit: { templates: [], skills: [], shared: [], ownSkills: 0 } })).send("/kit");
-  assert.match(empty.body, /还没有模板。[^]*还没有技能。[^]*还没有人投稿。/);
+  assert.match(empty.body, /还没有模板。[^]*还没有技能。[^]*还没有工具服务器。[^]*还没有人投稿。/);
 
   const template = { title: " 元气的搭子 ", summary: "爱聊吃的玩的", name: "阿橙", description: "精力充沛\r\n爱聊新鲜事", personality: "", example: "主人：周末干嘛\n阿橙：出门！", position: "20", enabled: "on" };
   calls.length = 0;
@@ -830,6 +840,20 @@ it("shows the templates and skills on offer, and saves one only when an Owner's 
   assert.equal((await send("/kit/skill/delete", { form: change({ id: id(83) }) })).status, 303);
   assert.equal((await send("/kit/template/delete", { form: change({ id: id(81) }) })).status, 303);
   assert.deepEqual(calls, [["skill_delete", id(83), "because"], ["template_delete", id(81), "because"]]);
+  calls.length = 0;
+  const tool = { key: "luckin", title: " 瑞幸 ", summary: "点咖啡", url: "https://Tools.Example/mcp/", tokenHelp: "去开放平台拿令牌", readTools: "search-stores  search-products\nsearch-stores",
+    confirmTools: "create-order，cancel-order", position: "20", enabled: "on" };
+  assert.equal((await send("/kit/tool", { form: change(tool) })).status, 303);
+  assert.equal((await send("/kit/tool", { form: change({ ...tool, id: id(89), readTools: "", confirmTools: "", enabled: "" }) })).status, 303);
+  assert.deepEqual(calls, [["tool_server_set", null, "luckin", "瑞幸", "点咖啡", "https://tools.example/mcp", "去开放平台拿令牌", ["search-stores", "search-products"], ["create-order", "cancel-order"], 20, true, "because"],
+    ["tool_server_set", id(89), "luckin", "瑞幸", "点咖啡", "https://tools.example/mcp", "去开放平台拿令牌", [], [], 20, false, "because"]],
+  "names split on spaces, line breaks and commas, each once; a list left empty gives the Companion nothing there");
+  for (const bad of [{ key: "Luckin" }, { key: "" }, { title: "" }, { summary: "" }, { tokenHelp: "" }, { url: "http://tools.example/mcp" }, { url: "https://10.0.0.1/mcp" },
+    { url: "https://tools.example/mcp?key=1" }, { readTools: "create-order" }, { readTools: "bad name!" }, { position: "x" }, { id: "nope" },
+    { readTools: Array.from({ length: 61 }, (_, i) => `t${i}`).join(" "), confirmTools: "" }]) {
+    assert.equal((await send("/kit/tool", { form: change({ ...tool, ...bad }) })).status, 409, JSON.stringify(bad).slice(0, 50));
+  }
+  assert.equal(calls.length, 2, "nothing refused reaches the database");
   calls.length = 0;
   assert.equal((await send("/kit/shared", { form: change({ id: id(84), decision: "REJECT", back: "/kit" }) })).status, 303);
   assert.equal((await send("/kit/shared", { form: change({ id: id(85), decision: "REMOVE" }) })).status, 303);

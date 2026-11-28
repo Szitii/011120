@@ -743,6 +743,31 @@ select public.test_assert(
       or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
   'templates, skills and the world book are reachable only through functions, each by the role it is for'
 );
+-- Tools: Owners read the directory and their Companion's connections, disconnect and say no; connecting (the token is
+-- sealed first), a turn's secrets, noting calls and everything about making a confirmed call are the API server's;
+-- the directory is the operators'.
+select public.test_assert(
+  has_function_privilege('authenticated', 'public.tool_server_list()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.companion_tool_list(uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.companion_tool_delete(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'public.tool_request_decline(uuid,uuid)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'public.tool_server_list()'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('public.companion_tool_save(uuid,uuid,text,text,jsonb)'), ('public.companion_tool_secrets(uuid)'),
+      ('public.tool_call_note(uuid,text,text,boolean)'), ('public.tool_request_open(uuid,uuid,uuid,text,jsonb)'),
+      ('public.tool_request_take(uuid,uuid)'), ('public.tool_request_finish(uuid,boolean,text)')) f(name)
+    where has_function_privilege('authenticated', f.name::regprocedure, 'EXECUTE') or has_function_privilege('anon', f.name::regprocedure, 'EXECUTE')
+      or not has_function_privilege('companion_api', f.name::regprocedure, 'EXECUTE'))
+  and has_function_privilege('companion_admin', 'companion_admin.tool_servers()'::regprocedure, 'EXECUTE')
+  and has_function_privilege('companion_admin', 'companion_admin.tool_server_set(uuid,text,text,text,text,text,text[],text[],integer,boolean,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('authenticated', 'companion_admin.tool_server_set(uuid,text,text,text,text,text,text[],text[],integer,boolean,text)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('companion_api', 'companion_admin.tool_server_set(uuid,text,text,text,text,text,text[],text[],integer,boolean,text)'::regprocedure, 'EXECUTE')
+  and not exists(select 1 from (values ('companion_private.tool_servers'), ('companion_private.companion_tools'), ('companion_private.tool_requests'),
+      ('companion_private.tool_calls')) t(name)
+    cross join (values ('anon'), ('authenticated'), ('companion_api'), ('companion_admin')) r(role)
+    where has_table_privilege(r.role, t.name, 'SELECT') or has_table_privilege(r.role, t.name, 'INSERT')
+      or has_table_privilege(r.role, t.name, 'UPDATE') or has_table_privilege(r.role, t.name, 'DELETE')),
+  'tools are reachable only through functions, each by the role it is for; an Owner''s sealed token is read by the API server alone'
+);
 -- Chat pictures: what was seen in one is noted by the API server alone; the table is reachable only through functions.
 select public.test_assert(
   has_function_privilege('companion_api', 'public.chat_image_seen(text,text)'::regprocedure, 'EXECUTE')

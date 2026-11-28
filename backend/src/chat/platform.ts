@@ -14,7 +14,8 @@ import type { Booking, ChatClaim, ChatPort, DiaryJob, MemoryJob, Picture, PostJo
 import { decisionPrompt, diaryPrompt, memoryPrompt, parseDecision, parseMemories, parsePost, parseReply, parseSeen, postPrompt, replyPrompt, seePrompt,
   withPictures } from "./prompt.ts";
 import { usablePromptTexts, type PromptTexts } from "./prompt-texts.ts";
-import type { CallModel, ModelResult } from "./providers.ts";
+import type { CallModel, ModelRequest, ModelResult, ToolRound } from "./providers.ts";
+import type { Toolbox } from "../tools/box.ts";
 import type { Answer, ChatModel, DiaryAnswer, MemoryAnswer, PostAnswer, SeeAnswer, SeeJob } from "./replies.ts";
 
 /** Within the ledger's limits for these reasons (16000 input; 2000 reply, 100 decision, 2000 diary output tokens). */
@@ -30,6 +31,9 @@ const MEMORY_TOKENS = 300;
 const SEE_TOKENS = 400;
 /** The most a provider bills for one picture (DeepSeek: 1024 tokens; booked as that, settled as used). */
 const PICTURE_TOKENS = 1_024;
+/** How often the model may ask for tool calls before it has to answer, and how many calls one of its answers may ask for. */
+const TOOL_ROUNDS = 4;
+const CALLS_PER_ROUND = 4;
 
 type Failed = { failed: "DISABLED" | "QUOTA" };
 /** Books one call in the ledger, for a chat turn or a diary entry. */
@@ -91,11 +95,11 @@ export class PlatformChatModel implements ChatModel {
     this.#call = call;
   }
 
-  async reply(turn: ChatClaim, { port, signal, searched, backup, pictures = [] }: Parameters<ChatModel["reply"]>[1]): Promise<Answer> {
+  async reply(turn: ChatClaim, { port, signal, searched, backup, pictures = [], tools }: Parameters<ChatModel["reply"]>[1]): Promise<Answer> {
     const model = this.#catalog.pick(turn.companion.settings.model);
     if (model === undefined) return { failed: "UNAVAILABLE" };
-    const book = (purpose: "REPLY" | "DECIDE"): Book => booking =>
-      port.reserve({ ...booking, replyId: turn.replyId, claimId: turn.claimId, purpose, traceId: turn.replyId });
+    const book = (purpose: "REPLY" | "DECIDE", step?: string): Book => booking =>
+      port.reserve({ ...booking, replyId: turn.replyId, claimId: turn.claimId, purpose, traceId: turn.replyId, ...(step === undefined ? {} : { step }) });
     // A turn that answers nobody has nothing to be judged against: the reply model itself decides whether to write.
     const judge = turn.optional && !turn.reach ? this.#catalog.decisionModel() : undefined;
     if (judge !== undefined) {
@@ -116,6 +120,12 @@ export class PlatformChatModel implements ChatModel {
     const sees = (m: CatalogModel): boolean => m.options?.vision === true && pictures.length > 0;
     const result = await this.#withFallback(model, m => {
       const read = sees(m) ? withPictures(turn, pictures.map(picture => picture.path)) : turn;
+      // Tools, for a model that calls functions. Then the provider's own web search is not declared: it takes one or the other.
+      if (tools !== undefined && m.options?.tools === true) {
+        return this.#withTools(port, round => book("REPLY", round === 0 ? undefined : `tool:${round}`), m,
+          replyPrompt(read, memories, texts, undefined, { world, skills, tools: true }), signal, tools,
+          sees(m) ? pictures.map(picture => picture.picture) : undefined);
+      }
       return this.#run(port, book("REPLY"), m,
         replyPrompt(read, memories, texts, undefined, { web: browses(m), world, skills }), REPLY_TOKENS, signal, MAX_INPUT_TOKENS,
         browses(m) ? replyPrompt(read, memories, texts, undefined, { world, skills }) : undefined,
@@ -166,6 +176,27 @@ export class PlatformChatModel implements ChatModel {
     return result.refused ? { refused: true } : { memories: parseMemories(result.text, prompt.numbered) };
   }
 
+  /**
+   * A reply with tools. The model may ask for calls instead of answering; they are made (or, for a
+   * call the Owner has to confirm, kept as a request) and what they returned is given back to it,
+   * a few times at most, after which it must answer in words. Each answer of the model is a call
+   * of its own in the ledger (`book(round)`: the first as the reply itself, the later ones by round).
+   */
+  async #withTools(port: ChatPort, book: (round: number) => Book, model: CatalogModel, prompt: { system: string; user: string }, signal: AbortSignal,
+    box: Toolbox, images: readonly Picture[] | undefined): Promise<ModelResult | Failed> {
+    let exchange: ToolRound[] = [];
+    for (let round = 0; ; round += 1) {
+      const answerNow = round >= TOOL_ROUNDS;
+      const result = await this.#run(port, book(round), model, prompt, REPLY_TOKENS, signal, MAX_INPUT_TOKENS, undefined, images,
+        { tools: box.specs, exchange, answerNow });
+      if ("failed" in result || result.refused || answerNow || !result.toolCalls?.length) return result;
+      const calls = result.toolCalls.slice(0, CALLS_PER_ROUND);
+      const results: string[] = [];
+      for (const call of calls) results.push(await box.call(call.name, call.arguments, signal));
+      exchange = [...exchange, { calls, results }];
+    }
+  }
+
   /** One booked call for a diary entry or a post, with the Companion's model or the default. */
   async #write(chosen: string | null, port: ChatPort, book: Book, prompt: { system: string; user: string }, maxTokens: number,
     signal: AbortSignal): Promise<ModelResult | Failed | { failed: "UNAVAILABLE" }> {
@@ -194,14 +225,17 @@ export class PlatformChatModel implements ChatModel {
    * real usage, also when that is more: the day's budget then shrinks by what was really used, a
    * wallet is charged no more than was held for it, and the trace carries the number (`webTokens`).
    *
-   * `images`: pictures that go with the user text, for a model that takes them.
+   * `images`: pictures that go with the user text, for a model that takes them. `functions`: the
+   * tools declared for this answer and what was called so far (see #withTools).
    */
   async #run(port: ChatPort, book: Book, model: CatalogModel, prompt: { system: string; user: string }, maxTokens: number,
     signal: AbortSignal, maxInput = MAX_INPUT_TOKENS, plain?: { system: string; user: string },
-    images?: readonly Picture[]): Promise<ModelResult | Failed> {
-    // About one token per character for Chinese, fewer for other text: a safe upper estimate. A picture counts as the most it can be billed.
+    images?: readonly Picture[], functions?: Pick<ModelRequest, "tools" | "exchange" | "answerNow">): Promise<ModelResult | Failed> {
+    // About one token per character for Chinese, fewer for other text: a safe upper estimate. A picture counts as the
+    // most it can be billed; the tools and what they returned so far count as the text they are sent as.
     const inputTokens = plain ? maxInput
-      : Math.min(maxInput, prompt.system.length + prompt.user.length + PICTURE_TOKENS * (images?.length ?? 0));
+      : Math.min(maxInput, prompt.system.length + prompt.user.length + PICTURE_TOKENS * (images?.length ?? 0)
+        + (functions === undefined ? 0 : JSON.stringify([functions.tools, functions.exchange]).length));
     const costMinor = Math.ceil(this.#catalog.cost(model, inputTokens, maxTokens));
     const booked = await book({
       provider: model.provider, model: model.model, pricingVersion: PRICING_VERSION, inputTokens, outputTokens: maxTokens, costMinor,
@@ -211,7 +245,7 @@ export class PlatformChatModel implements ChatModel {
     let result: ModelResult;
     try {
       result = await this.#call(model, { ...prompt, maxTokens, signal, ...(plain ? { web: { without: plain } } : {}),
-        ...(images?.length ? { images } : {}) });
+        ...(images?.length ? { images } : {}), ...functions });
     } catch (error) {
       await port.settle(booked.transactionId, inputTokens, maxTokens, costMinor, false);
       throw error;

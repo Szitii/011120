@@ -80,16 +80,26 @@ export interface PostResult {
 
 export type PostJson = (url: URL, headers: Record<string, string>, body: unknown, options: { signal: AbortSignal; timeoutMs: number }) => Promise<PostResult>;
 
+/** An answer as it came: the status, its headers (names in lower case) and the body as text. */
+export interface RawResult {
+  readonly status: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly text: string;
+}
+
+/** Like PostJson, for a caller that reads the answer itself (headers, or a body that is not one JSON document). */
+export type PostRaw = (url: URL, headers: Record<string, string>, body: unknown, options: { signal: AbortSignal; timeoutMs: number }) => Promise<RawResult>;
+
 const MAX_ANSWER_BYTES = 512 * 1024;
 
 /** POSTs JSON to a checked URL through publicLookup. Rejects on a blocked address, timeout, abort or oversized answer. */
-export function createPostJson(resolve: Lookup = dnsLookup): PostJson {
+export function createPostRaw(resolve: Lookup = dnsLookup): PostRaw {
   const lookup = publicLookup(resolve);
-  return (url, headers, body, { signal, timeoutMs }) => new Promise<PostResult>((resolvePost, reject) => {
+  return (url, headers, body, { signal, timeoutMs }) => new Promise<RawResult>((resolvePost, reject) => {
     const payload = Buffer.from(JSON.stringify(body));
     const call = request({
       protocol: "https:", hostname: url.hostname.replace(/^\[|\]$/g, ""), port: 443, path: `${url.pathname}`, method: "POST",
-      headers: { ...headers, "content-type": "application/json", "content-length": String(payload.length), accept: "application/json" },
+      headers: { accept: "application/json", ...headers, "content-type": "application/json", "content-length": String(payload.length) },
       lookup, signal, timeout: timeoutMs, agent: false,
     }, response => {
       const chunks: Buffer[] = [];
@@ -100,9 +110,9 @@ export function createPostJson(resolve: Lookup = dnsLookup): PostJson {
         chunks.push(chunk);
       });
       response.on("end", () => {
-        let parsed: unknown;
-        try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { parsed = undefined; }
-        resolvePost({ status: response.statusCode ?? 0, body: parsed });
+        const seen = Object.fromEntries(Object.entries(response.headers).flatMap(([name, value]) =>
+          (value === undefined ? [] : [[name.toLowerCase(), Array.isArray(value) ? value.join(", ") : value]])));
+        resolvePost({ status: response.statusCode ?? 0, headers: seen, text: Buffer.concat(chunks).toString("utf8") });
       });
       response.on("error", reject);
     });
@@ -110,4 +120,15 @@ export function createPostJson(resolve: Lookup = dnsLookup): PostJson {
     call.on("error", reject);
     call.end(payload);
   });
+}
+
+/** The same call, for an answer that is one JSON document. */
+export function createPostJson(resolve: Lookup = dnsLookup): PostJson {
+  const post = createPostRaw(resolve);
+  return async (url, headers, body, options) => {
+    const answer = await post(url, headers, body, options);
+    let parsed: unknown;
+    try { parsed = JSON.parse(answer.text); } catch { parsed = undefined; }
+    return { status: answer.status, body: parsed };
+  };
 }

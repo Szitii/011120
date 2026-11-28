@@ -11,6 +11,7 @@ import type { AuthenticatedOwnerSession, MvpHttpRequest, OwnerApiPort } from "..
 import { MvpApiBoundary } from "../src/http/mvp-api.ts";
 import { PostgresPersistenceError, type SqlExecutor } from "../src/persistence/postgres/types.ts";
 import type { Connections } from "../src/connections/model.ts";
+import type { Tools } from "../src/tools/box.ts";
 
 const ownerId = "00000000-0000-0000-0000-0000000001a1";
 const chatId = "00000000-0000-0000-0000-00000000c001";
@@ -76,6 +77,9 @@ function fakePort(turns: ChatClaim[] = [], replying = false) {
     },
     failNote: async (...args) => { calls.push(["failNote", ...args]); return { noted: true }; },
     imageSeen: async (...args) => { calls.push(["imageSeen", ...args]); return { noted: true }; },
+    toolServers: async () => ({ items: [] }), companionTools: async () => ({ maxServers: 3, items: [] }), saveCompanionTool: async () => ({}),
+    removeCompanionTool: async () => ({}), companionToolSecrets: async () => ({ left: 0, servers: [] }), toolCallNote: async () => undefined,
+    toolRequestOpen: async () => ({}), toolRequestTake: async () => ({}), toolRequestFinish: async () => ({}), toolRequestDecline: async () => ({}),
     reachBegin: async (...args) => { calls.push(["reachBegin", ...args]); return { status: "NOT_DUE" }; },
     reminders: async (...args) => { calls.push(["reminders", ...args]); return { items: [] }; },
     cancelReminder: async (...args) => { calls.push(["cancelReminder", ...args]); return { deleted: true }; },
@@ -215,11 +219,16 @@ it("routes read state, badges and the anniversary", async () => {
 it("tells the app which features it may offer", async () => {
   const { port, calls } = fakePort();
   const off = await handleChatRequest(request("features"), session(port), "trace", replies);
-  assert.deepEqual(off?.body, { groupChatCreate: false, groupChatSend: true, voiceInput: false, connections: false });
+  assert.deepEqual(off?.body, { groupChatCreate: false, groupChatSend: true, voiceInput: false, companionTools: false, connections: false });
   const on = await handleChatRequest(request("features"), session(port), "trace", replies, undefined, {} as Connections);
-  assert.deepEqual(on?.body, { groupChatCreate: false, groupChatSend: true, voiceInput: false, connections: true });
+  assert.deepEqual(on?.body, { groupChatCreate: false, groupChatSend: true, voiceInput: false, companionTools: false, connections: true });
   assert.equal(await refusal(port, request("features", "POST")), "NOT_FOUND");
   assert.deepEqual(calls, [["features"], ["features"]]);
+  // Tools: the operators' switch, and a server that can keep an Owner's token for a tool server. Either one missing: off.
+  const switched: ChatPort = { ...port, features: async () => ({ groupChatCreate: false, groupChatSend: true, companionTools: true }) };
+  const tools = async (service: Tools | undefined, p: ChatPort) =>
+    ((await handleChatRequest(request("features"), session(p), "trace", replies, undefined, undefined, service))!.body as { companionTools: boolean }).companionTools;
+  assert.deepEqual([await tools({} as Tools, switched), await tools(undefined, switched), await tools({} as Tools, port)], [true, false, false]);
 });
 
 it("routes the wallet", async () => {

@@ -16,6 +16,86 @@ import type { CommunityActor, CommunityComment, CommunityPost } from "./communit
 export type ConnectionFailure = "AUTH_FAILED" | "NO_BALANCE" | "RATE_LIMITED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER" | "BLOCKED_ADDRESS" | "ERROR";
 
 /**
+ * 工具: a tool server a Companion can be connected to (GET /v0/tool-servers), from the platform's
+ * list. `tokenHelp` tells the Owner where to get their own token for it.
+ */
+export interface ToolServer {
+  id: string;
+  key: string;
+  title: string;
+  summary: string;
+  url: string;
+  tokenHelp: string;
+}
+
+/**
+ * GET /v0/companions/{id}/tools: what the Companion is connected to (at most `maxServers`). For
+ * each server the token's last characters and the tools the Companion may use there now;
+ * `confirm`: it is only done after the Owner says yes to that very call. `available` false: the
+ * platform has switched this server off for now (the connection is kept).
+ */
+export interface CompanionTools {
+  maxServers: number;
+  items: {
+    server: ToolServer;
+    available: boolean;
+    tokenHint: string;
+    connectedAt: string;
+    tools: { name: string; description: string; confirm: boolean }[];
+  }[];
+}
+
+/**
+ * PUT /v0/companions/{id}/tools/{serverId}: connect the Companion with the Owner's own token for
+ * that server (or renew it). `consent` must be true: the Owner was told that the token is kept,
+ * sealed, on the platform's server and used there to act for them. Answers the CompanionTools.
+ */
+export interface ToolConnectInput {
+  token: string;
+  consent: true;
+}
+
+/**
+ * 422 from the PUT: the tool server could not be used with this token. AUTH: it refused the token.
+ * RATE_LIMITED: too many calls for now. NOT_FOUND / UNREACHABLE / BAD_ANSWER: the server's address
+ * changed, it cannot be reached, or it did not answer as a tool server.
+ */
+export interface ToolConnectRefusal {
+  code: "TOOL_CONNECT_FAILED";
+  reason: "AUTH" | "RATE_LIMITED" | "NOT_FOUND" | "UNREACHABLE" | "BAD_ANSWER";
+}
+
+/**
+ * A call the Companion wants made and the Owner has to confirm. `server` is the tool server's name,
+ * `tool` the tool, `arguments` exactly what will be sent. PENDING: waiting for the Owner (15
+ * minutes, then EXPIRED). RUNNING: confirmed, the call is being made. DONE / FAILED: it was made;
+ * `result` is what the tool server answered (text, up to 4000 characters), and the Companion writes
+ * a message about it. DECLINED: the Owner said no.
+ * Answer with POST /v0/chats/{chatId}/tool-requests/{id} { decision: "CONFIRM" | "DECLINE" }.
+ */
+export interface ToolRequest {
+  id: string;
+  server: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  status: "PENDING" | "EXPIRED" | "RUNNING" | "DONE" | "FAILED" | "DECLINED";
+  result: string | null;
+  createdAt: string;
+}
+
+/**
+ * The answer to the POST. CONFIRM: `request` as it ended (DONE or FAILED), and typing / replying
+ * as after sending a message (the Companion is about to tell the Owner). DECLINE: `request` only.
+ * 409: the request is no longer waiting (answered already, expired, or the tool was taken away).
+ * 429 TOOL_LIMIT: the day's tool calls are used up.
+ */
+export interface ToolRequestResult {
+  request: ToolRequest;
+  typing?: string[];
+  replying?: boolean;
+}
+
+/**
  * A picture on a chat message. `path` is its file in the Storage bucket "media" ("chat/<uuid>.jpg");
  * only the Owner who sent it can read it there. `seen`: true once the Companion knows what is in the
  * picture, false when it could not be read (say so: "TA 看不到这张图"), null while it has not been
@@ -105,6 +185,13 @@ export interface ChatMessage {
    */
   reminder?: ChatReminder | null;
   /**
+   * A call to a tool server this reply asks the Owner to confirm (下单、取消订单…): show it as a card
+   * under the message with 确认 and 取消. null for every other message. What the Companion says is
+   * not proof that anything was done; this field is.
+   * Always sent; optional here so app code written before it still compiles.
+   */
+  toolRequest?: ToolRequest | null;
+  /**
    * Why the Companion wrote without being written to. GREETING: on its own (ChatSettings.proactive).
    * REMINDER: it is delivering a reminder. null: an ordinary reply. Show these as ordinary messages;
    * the app may mark a REMINDER (⏰). Always sent; optional here so app code written before it still compiles.
@@ -170,6 +257,8 @@ export interface PlatformFeatures {
    * sent or set, whatever the setting says, so hide the setting. Optional here for older app code.
    */
   companionReach?: boolean;
+  /** Companions may use the tools their Owners connected (工具). Off: the tools pages can be hidden; connections are kept. */
+  companionTools?: boolean;
 }
 
 /** GET /v0/badges: every unread count for the tab badges. */

@@ -243,6 +243,47 @@ export class PostgresChatAdapter implements ChatPort {
     return this.#object("select public.chat_fail_note($1,$2) as payload", [replyId, reason]);
   }
 
+  toolServers(): Promise<unknown> {
+    return this.#object("select public.tool_server_list() as payload", []);
+  }
+
+  companionTools(companionId: string): Promise<unknown> {
+    return this.#object("select public.companion_tool_list($1) as payload", [companionId]);
+  }
+
+  saveCompanionTool(companionId: string, serverId: string, sealedToken: string, hint: string, tools: unknown): Promise<unknown> {
+    return this.#object("select public.companion_tool_save($1,$2,$3,$4,$5::jsonb) as payload", [companionId, serverId, sealedToken, hint, JSON.stringify(tools)]);
+  }
+
+  removeCompanionTool(companionId: string, serverId: string): Promise<unknown> {
+    return this.#object("select public.companion_tool_delete($1,$2) as payload", [companionId, serverId]);
+  }
+
+  companionToolSecrets(companionId: string): Promise<unknown> {
+    return this.#object("select public.companion_tool_secrets($1) as payload", [companionId]);
+  }
+
+  async toolCallNote(companionId: string, serverKey: string, tool: string, ok: boolean): Promise<unknown> {
+    await this.#payload("select public.tool_call_note($1,$2,$3,$4) as payload", [companionId, serverKey, tool, ok]);
+    return undefined;
+  }
+
+  toolRequestOpen(replyId: string, claimId: string, serverId: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.#object("select public.tool_request_open($1,$2,$3,$4,$5::jsonb) as payload", [replyId, claimId, serverId, tool, JSON.stringify(args)]);
+  }
+
+  toolRequestTake(chatId: string, requestId: string): Promise<unknown> {
+    return this.#object("select public.tool_request_take($1,$2) as payload", [chatId, requestId]);
+  }
+
+  toolRequestFinish(requestId: string, ok: boolean, result: string): Promise<unknown> {
+    return this.#object("select public.tool_request_finish($1,$2,$3) as payload", [requestId, ok, result]);
+  }
+
+  toolRequestDecline(chatId: string, requestId: string): Promise<unknown> {
+    return this.#object("select public.tool_request_decline($1,$2) as payload", [chatId, requestId]);
+  }
+
   async reachBegin(companionId: string): Promise<ReachStart> {
     return await this.#object("select public.chat_reach_begin($1) as payload", [companionId]) as ReachStart;
   }

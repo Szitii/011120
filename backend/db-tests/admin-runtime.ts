@@ -557,6 +557,33 @@ try {
   passed("operators add, shelve, reword and delete templates and official skills in the console, each with a reason and a before in the log");
 
   {
+  // ---- 工具服务器: the operators' directory decides which tools a Companion may use ----
+  const directory = async () => await admin(one, "tool_servers") as unknown as Json[];
+  assert.deepEqual((await directory()).map(s => [s.key, s.enabled, s.connected, s.confirmTools.includes("create-order"), s.readTools.includes("query-meals"), s.readTools.includes("draw-lottery")]),
+    [["mcdonalds-cn", true, 0, true, true, false]], "McDonald's comes with the migration: ordering needs a yes, the lottery is not offered");
+  assert.ok((await web("/kit")).body.includes("工具服务器"));
+  assert.equal((await web("/kit/tool", why("A second server", { key: "luckin", title: "瑞幸", summary: "点咖啡", url: "https://tools.example/mcp", tokenHelp: "去开放平台拿令牌",
+    readTools: "search-stores search-products", confirmTools: "create-order", position: "20", enabled: "on" }))).status, 303);
+  const added = (await directory()).find(s => s.key === "luckin")!;
+  assert.deepEqual([added.url, added.readTools, added.confirmTools, added.enabled], ["https://tools.example/mcp", ["search-stores", "search-products"], ["create-order"], true]);
+  assert.equal((await web("/kit/tool", why("Off for now", { id: added.id, key: "luckin", title: "瑞幸", summary: "点咖啡", url: "https://tools.example/mcp", tokenHelp: "去开放平台拿令牌",
+    readTools: "search-stores", confirmTools: "", position: "20" }))).status, 303);
+  assert.deepEqual([(await directory()).find(s => s.key === "luckin")!.enabled, (await directory()).find(s => s.key === "luckin")!.readTools], [false, ["search-stores"]]);
+  assert.equal((await web("/kit/tool", why("Not an address the server may call", { key: "inside", title: "内网", summary: "x", url: "https://10.0.0.8/mcp", tokenHelp: "x", position: "0" }))).status, 409);
+  await assert.rejects(admin(two, "tool_server_set", null, "bad key!", "x", "y", "https://tools.example/a", "h", [], [], 0, true, "Bad key"), code("23514"));
+  await assert.rejects(admin(two, "tool_server_set", null, "both", "x", "y", "https://tools.example/a", "h", ["t"], ["t"], 0, true, "A tool on both lists"), code("23514"));
+  await assert.rejects(admin(two, "tool_server_set", randomUUID(), "gone", "x", "y", "https://tools.example/a", "h", [], [], 0, true, "No such server"), code("P0001"));
+  await assert.rejects(admin(two, "tool_server_set", null, "noreason", "x", "y", "https://tools.example/a", "h", [], [], 0, true, " "), code("22023"));
+  assert.deepEqual((await pool.query(`select operator, action, reason, detail->'before'->>'enabled' as was, detail->>'enabled' as enabled, detail->'readTools' as read
+    from companion_private.admin_log where action = 'TOOL_SERVER_SET' order by id`)).rows, [
+    { operator: "admin_test_one", action: "TOOL_SERVER_SET", reason: "A second server", was: null, enabled: "true", read: ["search-stores", "search-products"] },
+    { operator: "admin_test_one", action: "TOOL_SERVER_SET", reason: "Off for now", was: "true", enabled: "false", read: ["search-stores"] }], "every change is logged with the lists as they were set");
+  assert.ok((await web("/log")).body.includes("保存工具服务器"));
+  await pool.query("delete from companion_private.tool_servers where key = 'luckin'");
+  passed("operators keep the directory of tool servers: an address, how to get a token, and the two lists of tools, each change with a reason");
+  }
+
+  {
   // ---- 技能分享: an Owner hands in a skill, an operator reads it, then everyone can switch it on ----
   const author = new PostgresChatAdapter(viewer);
   const readerSubject = (await pool.query<{ s: string }>("select auth_user_id as s from public.owners where id = $1", [B.owner])).rows[0]!.s;

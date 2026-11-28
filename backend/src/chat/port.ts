@@ -26,7 +26,11 @@ export interface ChatClaim {
     voice?: boolean;
     /** The pictures the Owner sent with it; null or left out: none. */
     images?: HistoryImage[] | null;
+    /** A call the Companion asked the Owner to confirm with this reply, and what became of it; null or left out: none. */
+    toolRequest?: { server: string; tool: string; status: "PENDING" | "EXPIRED" | "RUNNING" | "DONE" | "FAILED" | "DECLINED"; result: string | null } | null;
   }[];
+  /** The Companion may use the tools its Owner connected in this turn (the operators' switch, a one-to-one chat, answering the Owner). */
+  canUseTools?: boolean;
   /** The Owner's time zone (an IANA name); left out by an older database: Asia/Shanghai. */
   timeZone?: string;
   /** What the Companion calls the Owner: the chat setting, else their community name; null or left out: no name. */
@@ -270,6 +274,25 @@ export interface ChatPort {
     action?: CompanionAction, reminders?: ReminderChange): Promise<boolean>;
   /** Server only: a reply that just failed did so because the Owner's own key or agent gave no usable answer, and why. */
   failNote(replyId: string, reason: ConnectionFailure): Promise<unknown>;
+  /** The tool servers on offer ({ items }). */
+  toolServers(): Promise<unknown>;
+  /** What the Companion is connected to, and the tools it may use there ({ maxServers, items }). */
+  companionTools(companionId: string): Promise<unknown>;
+  /** Server only (the API server reached the tool server with the token first): connects, or renews the token and the tools. */
+  saveCompanionTool(companionId: string, serverId: string, sealedToken: string, hint: string, tools: unknown): Promise<unknown>;
+  removeCompanionTool(companionId: string, serverId: string): Promise<unknown>;
+  /** Server only: what a turn needs to use the Companion's tools ({ left, servers: [{ id, key, title, url, secret, tools }] }). */
+  companionToolSecrets(companionId: string): Promise<unknown>;
+  /** Server only: one call to a tool server was made for the Companion. */
+  toolCallNote(companionId: string, serverKey: string, tool: string, ok: boolean): Promise<unknown>;
+  /** Server only, during a turn: keeps a call the Owner has to confirm, on the reply being written. */
+  toolRequestOpen(replyId: string, claimId: string, serverId: string, tool: string, args: Record<string, unknown>): Promise<unknown>;
+  /** Server only: the Owner confirmed; takes the waiting request to make its call ({ id, companionId, serverKey, url, secret, tool, arguments }). */
+  toolRequestTake(chatId: string, requestId: string): Promise<unknown>;
+  /** Server only: the call came back; keeps the result and gives the Companion a turn ({ request, typing, replying }). */
+  toolRequestFinish(requestId: string, ok: boolean, result: string): Promise<unknown>;
+  /** The Owner says no to a waiting request. */
+  toolRequestDecline(chatId: string, requestId: string): Promise<unknown>;
   /** Server only: queue a turn of the Companion's own (a reminder that is due, or writing first) if one is due. */
   reachBegin(companionId: string): Promise<ReachStart>;
   /** The reminders the Companion still has to deliver, soonest first ({ items }). */

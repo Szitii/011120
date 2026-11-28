@@ -10,7 +10,8 @@ export type AdminFunction = "reports" | "report_resolve" | "owners" | "owner_det
   | "spend" | "log" | "features" | "feature_set" | "spend_cap_set" | "wallet_policy_set" | "wallet_adjust"
   | "costs" | "fixed_cost_set" | "voice_prices_set" | "activity" | "system" | "prompts" | "prompt_set"
   | "feedback" | "feedback_reply" | "feedback_close"
-  | "kit" | "template_set" | "template_delete" | "skill_set" | "skill_delete" | "shared_skill_review";
+  | "kit" | "template_set" | "template_delete" | "skill_set" | "skill_delete" | "shared_skill_review"
+  | "tool_servers" | "tool_server_set";
 
 export interface AdminDb {
   /** Calls one console function and returns its JSON (undefined for the ones that return nothing). */
@@ -44,6 +45,7 @@ const KNOWN: readonly (readonly [RegExp, string])[] = [
   [/^invalid feedback$/, "回复不能是空的,最多 2000 个字。"],
   [/^template not found$/, "没有找到这个模板,可能已经被删掉了。"],
   [/^skill not found$/, "没有找到这个技能,可能已经被删掉了。"],
+  [/^tool server not found$/, "没有找到这个工具服务器。"],
   [/^skill is not in that state$/, "这个技能现在不是能这样处理的状态(可能作者刚撤回,或者另一位管理员刚处理过),这次没有执行。"],
   [/^permission denied/, "这个数据库账号没有管理权限(需要属于 companion_admin)。"],
 ];

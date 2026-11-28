@@ -51,6 +51,8 @@ export interface CatalogModel {
     readonly webTools?: "deepseek";
     /** The model takes pictures in a request (JPEG, PNG, WebP), next to the text. */
     readonly vision?: true;
+    /** openai-compatible: the model calls functions declared in `tools` (so a Companion on it can use tools). */
+    readonly tools?: true;
   };
 }
 
@@ -98,6 +100,9 @@ function check(file: CatalogFile): CatalogFile {
     if (typeof model.enabled !== "boolean") fail(`model ${model.id} needs enabled.`);
     if (model.options?.webTools !== undefined && (model.options.webTools !== "deepseek" || file.providers[model.provider]!.kind !== "openai-compatible")) {
       fail(`model ${model.id} has webTools its provider cannot serve.`);
+    }
+    if (model.options?.tools !== undefined && file.providers[model.provider]!.kind !== "openai-compatible") {
+      fail(`model ${model.id} has tools its provider cannot serve.`);
     }
   }
   if (!ids.has(file.defaultModel)) fail("defaultModel is not in models.");
